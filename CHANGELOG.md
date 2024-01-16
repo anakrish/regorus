@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.2](https://github.com/anakrish/regorus/compare/v0.1.0-alpha.1...v0.1.0-alpha.2) - 2024-01-16
+
+### Other
+- - Document Location, Expression, QueryResult ([#109](https://github.com/anakrish/regorus/pull/109))
+
 ## [0.1.0-alpha.1](https://github.com/microsoft/regorus/releases/tag/v0.1.0-alpha.1) - 2024-01-15
 
 ### Fixed

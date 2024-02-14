@@ -68,7 +68,7 @@ full-opa = [
 opa-testutil = []
 
 [dependencies]
-anyhow = {version = "1.0.66", features = ["backtrace"] }
+anyhow = {version = "1.0.58"  }
 serde = {version = "1.0.150", features = ["derive", "rc"] }
 serde_json = {version = "1.0.89", features = ["arbitrary_precision"] }
 serde_yaml = {version = "0.9.16", optional = true }
@@ -94,11 +94,11 @@ semver = {version = "1.0.20", optional = true}
 wax = { version = "0.6.0", features = [], default-features = false, optional = true }
 url = { version = "2.5.0", optional = true }
 uuid = { version = "1.6.1", features = ["v4", "fast-rng"], optional = true }
-jsonschema = { version = "0.17.1", default-features = false, optional = true }
+jsonschema = { version = "0.16.1", default-features = false, optional = true }
 chrono = { version = "0.4.31", optional = true }
 chrono-tz = { version = "0.8.5", optional = true }
 compact-rc = "0.5.2"
-jsonwebtoken = { version = "9.2.0", optional = true }
+jsonwebtoken = { version = "8.0.0", optional = true }
 itertools = "0.12.1"
 
 [dev-dependencies]

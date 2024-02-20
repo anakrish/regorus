@@ -16,6 +16,7 @@ fn rego_eval(
     let mut engine = regorus::Engine::new();
 
     engine.set_strict_builtin_errors(!non_strict);
+    engine.enable_statement_traces(enable_tracing);
 
     #[cfg(feature = "coverage")]
     engine.set_enable_coverage(coverage);
@@ -84,6 +85,12 @@ fn rego_eval(
     let prints = engine.take_prints()?;
     for p in prints.into_iter() {
         println!("{p}");
+    }
+
+    // Rule failure traces
+    let traces = engine.take_statement_traces()?;
+    for t in traces.into_iter() {
+        println!("{t}");
     }
 
     Ok(())

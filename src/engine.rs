@@ -624,4 +624,12 @@ impl Engine {
     pub fn take_prints(&mut self) -> Result<Vec<String>> {
         self.interpreter.take_prints()
     }
+
+    pub fn enable_statement_traces(&mut self, enable: bool) {
+        self.interpreter.enable_statement_traces(enable)
+    }
+
+    pub fn take_statement_traces(&mut self) -> Result<Vec<String>> {
+        self.interpreter.take_statement_traces()
+    }
 }

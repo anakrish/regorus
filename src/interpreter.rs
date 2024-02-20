@@ -74,6 +74,9 @@ pub struct Interpreter {
     #[cfg(feature = "coverage")]
     enable_coverage: bool,
     prints: Vec<String>,
+
+    trace_statements: bool,
+    statement_traces: Vec<String>,
 }
 
 impl Default for Interpreter {
@@ -193,6 +196,9 @@ impl Interpreter {
             enable_coverage: false,
 
             prints: Vec::new(),
+
+            trace_statements: false,
+            statement_traces: Vec::new(),
         }
     }
 
@@ -1333,6 +1339,22 @@ impl Interpreter {
         } else {
             Ok(false)
         };
+
+        if self.trace_statements {
+            let level = self.active_rules.len() + self.contexts.len();
+            let indent = "  ".repeat(level);
+            self.statement_traces.push(format!(
+                "{indent}{}:{}: {}  {}",
+                stmt.span.source.file(),
+                stmt.span.line,
+                if matches!(&r, Ok(true)) {
+                    "TRUE "
+                } else {
+                    "FALSE "
+                },
+                stmt.span.text()
+            ));
+        }
 
         self.restore_state(saved_state)?;
 
@@ -3722,5 +3744,16 @@ impl Interpreter {
 
     pub fn take_prints(&mut self) -> Result<Vec<String>> {
         Ok(std::mem::take(&mut self.prints))
+    }
+
+    pub fn enable_statement_traces(&mut self, enable: bool) {
+        if self.trace_statements != enable {
+            self.trace_statements = enable;
+            self.statement_traces.clear();
+        }
+    }
+
+    pub fn take_statement_traces(&mut self) -> Result<Vec<String>> {
+        Ok(std::mem::take(&mut self.statement_traces))
     }
 }

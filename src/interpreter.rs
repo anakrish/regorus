@@ -73,6 +73,7 @@ pub struct Interpreter {
     coverage: HashMap<Source, Vec<bool>>,
     #[cfg(feature = "coverage")]
     enable_coverage: bool,
+    prints: Vec<String>,
 }
 
 impl Default for Interpreter {
@@ -190,6 +191,8 @@ impl Interpreter {
             coverage: HashMap::new(),
             #[cfg(feature = "coverage")]
             enable_coverage: false,
+
+            prints: Vec::new(),
         }
     }
 
@@ -2062,6 +2065,7 @@ impl Interpreter {
             }
         }
 
+
         let v = match builtin.0(span, params, &args[..], self.strict_builtin_errors) {
             Ok(v) => v,
             // Ignore errors if we are not evaluating in strict mode.
@@ -2076,6 +2080,9 @@ impl Interpreter {
                 traces.push(msg.clone());
                 return Ok(Value::Bool(true));
             }
+        } else if name == "print" {
+            self.prints.push(v.as_string()?.as_ref().to_string());
+            v = Value::Bool(true);
         }
 
         if let Some(name) = cache {
@@ -3711,5 +3718,9 @@ impl Interpreter {
     #[cfg(feature = "coverage")]
     pub fn clear_coverage_data(&mut self) {
         self.coverage = HashMap::new();
+    }
+
+    pub fn take_prints(&mut self) -> Result<Vec<String>> {
+        Ok(std::mem::take(&mut self.prints))
     }
 }

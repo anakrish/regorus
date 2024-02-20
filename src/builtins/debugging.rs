@@ -37,5 +37,15 @@ fn print(span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -> R
     if !msg.is_empty() {
         eprintln!("{}", &msg[1..]);
     }
-    Ok(Value::Bool(true))
+
+    // Log the message so that it will be recorded in the logging stream (if any).
+    log::info!("{}:{}: {}", span.source.file(), span.line, &msg[1..]);
+
+    // Return the printed message so that it can be aggregated.
+    Ok(Value::from(format!(
+        "{}:{}: {}",
+        span.source.file(),
+        span.line,
+        &msg[1..]
+    )))
 }

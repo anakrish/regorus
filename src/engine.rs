@@ -620,4 +620,8 @@ impl Engine {
     pub fn clear_coverage_data(&mut self) {
         self.interpreter.clear_coverage_data()
     }
+
+    pub fn take_prints(&mut self) -> Result<Vec<String>> {
+        self.interpreter.take_prints()
+    }
 }

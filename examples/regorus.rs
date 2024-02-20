@@ -80,6 +80,12 @@ fn rego_eval(
         println!("{}", report.to_colored_string()?);
     }
 
+    // Emit prints
+    let prints = engine.take_prints()?;
+    for p in prints.into_iter() {
+        println!("{p}");
+    }
+
     Ok(())
 }
 

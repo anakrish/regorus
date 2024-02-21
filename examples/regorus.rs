@@ -11,6 +11,7 @@ fn rego_eval(
     enable_tracing: bool,
     non_strict: bool,
     #[cfg(feature = "coverage")] coverage: bool,
+    #[cfg(feature = "debugger")] debug: bool,
 ) -> Result<()> {
     // Create engine.
     let mut engine = regorus::Engine::new();
@@ -19,6 +20,9 @@ fn rego_eval(
 
     #[cfg(feature = "coverage")]
     engine.set_enable_coverage(coverage);
+
+    #[cfg(feature = "debugger")]
+    engine.set_debug(true);
 
     // Load files from given bundles.
     for dir in bundles.iter() {
@@ -155,6 +159,11 @@ enum RegorusCommand {
         #[cfg(feature = "coverage")]
         #[arg(long, short)]
         coverage: bool,
+
+        // Launch debugger
+        #[cfg(feature = "debugger")]
+        #[arg(long, short)]
+        debug: bool,
     },
 
     /// Tokenize a Rego policy.
@@ -200,6 +209,8 @@ fn main() -> Result<()> {
             non_strict,
             #[cfg(feature = "coverage")]
             coverage,
+            #[cfg(feature = "debugger")]
+            debug,
         } => rego_eval(
             &bundles,
             &data,
@@ -209,6 +220,8 @@ fn main() -> Result<()> {
             non_strict,
             #[cfg(feature = "coverage")]
             coverage,
+            #[cfg(feature = "debugger")]
+            debug,
         ),
         RegorusCommand::Lex { file, verbose } => rego_lex(file, verbose),
         RegorusCommand::Parse { file } => rego_parse(file),

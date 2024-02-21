@@ -8,6 +8,8 @@ use serde::Serialize;
 
 mod ast;
 mod builtins;
+#[cfg(feature = "debugger")]
+mod debugger;
 mod engine;
 mod interpreter;
 mod lexer;

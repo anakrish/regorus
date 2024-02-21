@@ -468,4 +468,9 @@ impl Engine {
     pub fn clear_coverage_data(&mut self) {
         self.interpreter.clear_coverage_data()
     }
+
+    #[cfg(feature = "debugger")]
+    pub fn set_debug(&mut self, b: bool) {
+        self.interpreter.set_debug(b)
+    }
 }

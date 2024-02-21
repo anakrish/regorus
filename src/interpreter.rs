@@ -71,6 +71,11 @@ pub struct Interpreter {
     coverage: HashMap<Source, Vec<bool>>,
     #[cfg(feature = "coverage")]
     enable_coverage: bool,
+
+    #[cfg(feature = "debugger")]
+    debugger: crate::debugger::Debugger,
+    #[cfg(feature = "debugger")]
+    debug: bool,
 }
 
 impl Default for Interpreter {
@@ -187,6 +192,11 @@ impl Interpreter {
             coverage: HashMap::new(),
             #[cfg(feature = "coverage")]
             enable_coverage: false,
+
+            #[cfg(feature = "debugger")]
+            debugger: crate::debugger::Debugger::default(),
+            #[cfg(feature = "debugger")]
+            debug: false,
         }
     }
 
@@ -2618,7 +2628,14 @@ impl Interpreter {
             }
         }
 
-        match expr.as_ref() {
+        #[cfg(feature = "debugger")]
+        if self.debug {
+            let mut debugger = std::mem::take(&mut self.debugger);
+            debugger.pre_eval_expr(expr, self);
+            self.debugger = debugger;
+        }
+
+        let r = match expr.as_ref() {
             Expr::Null(_) => Ok(Value::Null),
             Expr::True(_) => Ok(Value::Bool(true)),
             Expr::False(_) => Ok(Value::Bool(false)),
@@ -2672,7 +2689,18 @@ impl Interpreter {
             Expr::Call { span, fcn, params } => {
                 self.eval_call(span, expr, fcn, params, None, false)
             }
+        };
+
+        #[cfg(feature = "debugger")]
+        if self.debug {
+            if let Ok(v) = &r {
+                let mut debugger = std::mem::take(&mut self.debugger);
+                debugger.post_eval_expr(expr, v, self);
+                self.debugger = debugger;
+            }
         }
+
+        r
     }
 
     fn make_rule_context(&self, head: &RuleHead) -> Result<(Context, Vec<Span>)> {
@@ -3630,5 +3658,10 @@ impl Interpreter {
     #[cfg(feature = "coverage")]
     pub fn clear_coverage_data(&mut self) {
         self.coverage = HashMap::new();
+    }
+
+    #[cfg(feature = "debugger")]
+    pub fn set_debug(&mut self, b: bool) {
+        self.debug = b;
     }
 }

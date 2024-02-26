@@ -41,7 +41,10 @@ fn eval_test_case(dir: &Path, case: &TestCase) -> Result<Value> {
         }
     }
 
-    let query_results = engine.eval_query(case.query.clone(), false)?;
+    let mut engine_td = engine.clone();
+    let query_results = engine.eval_query(case.query.clone(), true)?;
+    let query_results_td = engine_td.eval_query_top_down(case.query.clone(), true)?;
+    assert_eq!(query_results, query_results_td);
 
     let mut values = vec![];
     for qr in query_results.result {

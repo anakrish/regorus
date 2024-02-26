@@ -83,7 +83,13 @@ fn eval_test_case(case: &TestCase) -> Result<Value> {
 
     engine.set_strict_builtin_errors(case.strict_error.unwrap_or_default());
 
-    let query_results = engine.eval_query(case.query.clone(), true)?;
+    let mut engine_td = engine.clone();
+    let mut query_results = engine.eval_query(case.query.clone(), true)?;
+    let qr_td = engine_td.eval_query_top_down(case.query.clone(), true)?;
+    if qr_td != query_results {
+        println!("{}", serde_yaml::to_string(case)?);
+        query_results = qr_td;
+    }
 
     let mut values = vec![];
     for qr in query_results.result {

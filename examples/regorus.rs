@@ -71,7 +71,7 @@ fn rego_eval(
     }
 
     // Evaluate query.
-    let results = engine.eval_query(query, enable_tracing)?;
+    let results = engine.eval_query_top_down(query, enable_tracing)?;
     println!("{}", serde_json::to_string_pretty(&results)?);
 
     #[cfg(feature = "coverage")]

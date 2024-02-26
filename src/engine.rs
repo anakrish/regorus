@@ -346,6 +346,39 @@ impl Engine {
         !matches!(self.eval_bool_query(query, enable_tracing), Ok(false))
     }
 
+    pub fn eval_query_top_down(
+        &mut self,
+        query: String,
+        enable_tracing: bool,
+    ) -> Result<QueryResults> {
+        self.prepare_for_eval(enable_tracing)?;
+        self.interpreter.clean_internal_evaluation_state();
+
+        self.interpreter.create_rule_prefixes()?;
+        let query_module = {
+            let source = Source::new(
+                "<query_module.rego>".to_owned(),
+                "package __internal_query_module".to_owned(),
+            );
+            Ref::new(Parser::new(&source)?.parse()?)
+        };
+
+        // Parse the query.
+        let query_source = Source::new("<query.rego>".to_string(), query);
+        let mut parser = Parser::new(&query_source)?;
+        let query_node = parser.parse_user_query()?;
+        if query_node.span.text() == "data" {
+            self.eval_modules(enable_tracing)?;
+        }
+        let query_schedule = Analyzer::new().analyze_query_snippet(&self.modules, &query_node)?;
+        self.interpreter.eval_user_query(
+            &query_module,
+            &query_node,
+            &query_schedule,
+            enable_tracing,
+        )
+    }
+
     #[doc(hidden)]
     fn prepare_for_eval(&mut self, enable_tracing: bool) -> Result<()> {
         self.interpreter.set_traces(enable_tracing);

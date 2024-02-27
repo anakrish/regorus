@@ -3517,7 +3517,10 @@ impl Interpreter {
                             // Warn redundant import of input. Ignore it.
                             eprintln!(
                                 "{}",
-                                import.refr.span().error("redundant import of `input`")
+                                import
+                                    .refr
+                                    .span()
+                                    .message("warning", "redundant import of `input`")
                             );
                             continue;
                         }

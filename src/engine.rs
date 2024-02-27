@@ -301,6 +301,21 @@ impl Engine {
         }
     }
 
+    pub fn eval_bool_query_top_down(
+        &mut self,
+        query: String,
+        enable_tracing: bool,
+    ) -> Result<bool> {
+        let results = self.eval_query_top_down(query, enable_tracing)?;
+        match results.result.len() {
+            0 => bail!("query did not produce any values"),
+            1 if results.result[0].expressions.len() == 1 => {
+                results.result[0].expressions[0].value.as_bool().copied()
+            }
+            _ => bail!("query produced more than one value"),
+        }
+    }
+
     /// Evaluate an `allow` query.
     ///
     /// This is a wrapper over [`Engine::eval_bool_query`] that returns true only if the

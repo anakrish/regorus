@@ -1,9 +1,16 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+extern crate alloc;
+use alloc::{
+    fmt::format,
+    string::{String, ToString},
+    vec::Vec,
+};
+
+use core::cmp::{Ord, Ordering};
 use core::fmt::{Debug, Formatter};
-use std::cmp::{Ord, Ordering};
-use std::str::FromStr;
+use core::str::FromStr;
 
 use anyhow::{anyhow, bail, Result};
 
@@ -61,7 +68,7 @@ pub enum Number {
 }
 
 impl Debug for Number {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
         match self {
             Number::Big(b) => b.d.fmt(f),
         }
@@ -125,7 +132,7 @@ impl From<i64> for Number {
 impl From<f64> for Number {
     fn from(n: f64) -> Self {
         // Reading from float is not precise. Therefore, serialize to string and read.
-        match Self::from_str(&format!("{n}")) {
+        match Self::from_str(&format(format_args!("{n}"))) {
             Ok(v) => v,
             _ => BigFloat::ZERO.into(),
         }
@@ -418,19 +425,19 @@ impl Number {
 
     pub fn format_bin(&self) -> String {
         self.ensure_integer()
-            .map(|a| format!("{:b}", a))
+            .map(|a| format(format_args!("{:b}", a)))
             .unwrap_or("".to_string())
     }
 
     pub fn format_octal(&self) -> String {
         self.ensure_integer()
-            .map(|a| format!("{:o}", a))
+            .map(|a| format(format_args!("{:o}", a)))
             .unwrap_or("".to_string())
     }
 
     pub fn format_scientific(&self) -> String {
         match self {
-            Big(b) => format!("{}", b.d),
+            Big(b) => format(format_args!("{}", b.d)),
         }
     }
 
@@ -443,7 +450,7 @@ impl Number {
             f.to_string()
         } else {
             let s = match self {
-                Big(b) => format!("{}", b.d),
+                Big(b) => format(format_args!("{}", b.d)),
             };
 
             // Remove trailing e0
@@ -484,13 +491,13 @@ impl Number {
 
     pub fn format_hex(&self) -> String {
         self.ensure_integer()
-            .map(|a| format!("{:x}", a))
+            .map(|a| format(format_args!("{:x}", a)))
             .unwrap_or("".to_string())
     }
 
     pub fn format_big_hex(&self) -> String {
         self.ensure_integer()
-            .map(|a| format!("{:X}", a))
+            .map(|a| format(format_args!("{:X}", a)))
             .unwrap_or("".to_string())
     }
 }

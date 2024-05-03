@@ -1,31 +1,47 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#![cfg_attr(not(feature = "std"), no_std)]
 // Use README.md as crate documentation.
 #![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 use serde::Serialize;
+extern crate alloc;
 
+#[cfg(feature = "std")]
 mod ast;
+#[cfg(feature = "std")]
 mod builtins;
+#[cfg(feature = "std")]
 mod engine;
+#[cfg(feature = "std")]
 mod interpreter;
+#[cfg(feature = "std")]
 mod lexer;
 mod number;
+#[cfg(feature = "std")]
 mod parser;
+#[cfg(feature = "std")]
 mod scheduler;
+#[cfg(feature = "std")]
 mod utils;
+#[cfg(feature = "std")]
 mod value;
 
+#[cfg(feature = "std")]
 pub use engine::Engine;
+#[cfg(feature = "std")]
 pub use value::Value;
 
 #[cfg(feature = "arc")]
-use std::sync::Arc as Rc;
+use alloc::sync::Arc as Rc;
 
 #[cfg(not(feature = "arc"))]
-use std::rc::Rc;
+use alloc::rc::Rc;
+
+#[cfg(feature = "no_std")]
+use foo;
 
 /// Location of an [`Expression`] in a Rego query.
 ///
@@ -69,6 +85,7 @@ pub struct Location {
 /// # }
 /// ```
 /// See also [`QueryResult`].
+#[cfg(feature = "std")]
 #[derive(Debug, Clone, Serialize, Eq, PartialEq)]
 pub struct Expression {
     /// Computed value of the expression.
@@ -157,6 +174,7 @@ pub struct Expression {
 /// # Ok(())
 /// # }
 /// ```
+#[cfg(feature = "std")]
 #[derive(Debug, Clone, Serialize, Eq, PartialEq)]
 pub struct QueryResult {
     /// Expressions in the query.
@@ -170,6 +188,7 @@ pub struct QueryResult {
     pub bindings: Value,
 }
 
+#[cfg(feature = "std")]
 impl Default for QueryResult {
     fn default() -> Self {
         Self {
@@ -296,6 +315,7 @@ impl Default for QueryResult {
 /// ```
 ///
 /// See [QueryResult] for examples of different kinds of results.
+#[cfg(feature = "std")]
 #[derive(Debug, Clone, Default, Serialize, Eq, PartialEq)]
 pub struct QueryResults {
     /// Collection of results of evaluting a query.
@@ -306,6 +326,7 @@ pub struct QueryResults {
 /// A user defined builtin function implementation.
 ///
 /// It is not necessary to implement this trait directly.
+#[cfg(feature = "std")]
 pub trait Extension: FnMut(Vec<Value>) -> anyhow::Result<Value> + Send + Sync {
     /// Fn, FnMut etc are not sized and cannot be cloned in their boxed form.
     /// clone_box exists to overcome that.
@@ -315,6 +336,7 @@ pub trait Extension: FnMut(Vec<Value>) -> anyhow::Result<Value> + Send + Sync {
 }
 
 /// Automatically make matching closures a valid [`Extension`].
+#[cfg(feature = "std")]
 impl<F> Extension for F
 where
     F: FnMut(Vec<Value>) -> anyhow::Result<Value> + Clone + Send + Sync,
@@ -328,18 +350,21 @@ where
 }
 
 /// Implement clone for a boxed extension using [`Extension::clone_box`].
+#[cfg(feature = "std")]
 impl<'a> Clone for Box<dyn 'a + Extension> {
     fn clone(&self) -> Self {
         (**self).clone_box()
     }
 }
 
+#[cfg(feature = "std")]
 impl std::fmt::Debug for dyn Extension {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         f.write_fmt(format_args!("<extension>"))
     }
 }
 
+#[cfg(feature = "std")]
 #[cfg(feature = "coverage")]
 #[cfg_attr(docsrs, doc(cfg(feature = "coverage")))]
 pub mod coverage {
@@ -404,6 +429,7 @@ pub mod coverage {
 }
 
 /// Items in `unstable` are likely to change.
+#[cfg(feature = "std")]
 #[doc(hidden)]
 pub mod unstable {
     pub use crate::ast::*;

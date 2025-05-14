@@ -37,6 +37,13 @@ enum FunctionModifier {
 }
 
 #[derive(Debug, Clone)]
+struct Optimized {
+    data: Value,
+    processed: BTreeSet<Ref<Rule>>,
+    processed_paths: Value,
+}
+
+#[derive(Debug, Clone)]
 pub struct Interpreter {
     modules: Vec<Ref<Module>>,
     module: Option<Ref<Module>>,
@@ -73,6 +80,8 @@ pub struct Interpreter {
     gather_prints: bool,
     prints: Vec<String>,
     rule_paths: Set<String>,
+    is_constant_folding: bool,
+    optimized: Option<Optimized>,
 }
 
 impl Default for Interpreter {
@@ -197,6 +206,8 @@ impl Interpreter {
             gather_prints: false,
             prints: Vec::default(),
             rule_paths: Set::new(),
+            is_constant_folding: false,
+            optimized: None,
         }
     }
 
@@ -255,9 +266,16 @@ impl Interpreter {
     }
 
     pub fn clean_internal_evaluation_state(&mut self) {
-        self.data = self.init_data.clone();
-        self.processed.clear();
-        self.processed_paths = Value::new_object();
+        if let Some(optimized) = &self.optimized {
+            self.data = optimized.data.clone();
+            // TODO: Check use of processed and processed_paths
+            self.processed = optimized.processed.clone();
+            self.processed_paths = optimized.processed_paths.clone();
+        } else {
+            self.data = self.init_data.clone();
+            self.processed.clear();
+            self.processed_paths = Value::new_object();
+        }
         self.loop_var_values.clear();
         self.scopes = vec![Scope::new()];
         self.contexts = vec![];
@@ -1281,6 +1299,7 @@ impl Interpreter {
                         // Mark modified rules as processed.
                         if let Some(rules) = self.rules.get(&target) {
                             for r in rules {
+                                // TODO: check if this is correct for constant folding
                                 self.processed.insert(r.clone());
                             }
                         }
@@ -1437,7 +1456,7 @@ impl Interpreter {
                         Self::clear_scope(self.current_scope_mut()?);
                         if let Some(ctx) = self.contexts.last_mut() {
                             ctx.result.clone_from(&query_result);
-                            if ctx.early_return {
+                            if ctx.early_return || self.is_constant_folding {
                                 break;
                             }
                         }
@@ -1464,7 +1483,7 @@ impl Interpreter {
                         Self::clear_scope(self.current_scope_mut()?);
                         if let Some(ctx) = self.contexts.last_mut() {
                             ctx.result.clone_from(&query_result);
-                            if ctx.early_return {
+                            if ctx.early_return || self.is_constant_folding {
                                 break;
                             }
                         }
@@ -1489,7 +1508,7 @@ impl Interpreter {
                         Self::clear_scope(self.current_scope_mut()?);
                         if let Some(ctx) = self.contexts.last_mut() {
                             ctx.result.clone_from(&query_result);
-                            if ctx.early_return {
+                            if ctx.early_return || self.is_constant_folding {
                                 break;
                             }
                         }
@@ -1506,6 +1525,13 @@ impl Interpreter {
             }
 
             self.scopes.pop();
+
+            // When constant folding, evaluate one iteration of the loop so as to
+            // fold constants within the loop body. But return false to prevent
+            // the loop itself from ptentially being treated as a constant.
+            if self.is_constant_folding {
+                return Ok(false);
+            }
 
             // Return true if at least on iteration returned true
             Ok(result)
@@ -2144,6 +2170,11 @@ impl Interpreter {
             }
         }
 
+        // TODO: Allow builtins that can be constant folded
+        if self.is_constant_folding {
+            return Ok(Value::Undefined);
+        }
+
         let v = match builtin.0(span, params, &args[..], self.strict_builtin_errors) {
             Ok(v) => v,
             // Ignore errors if we are not evaluating in strict mode.
@@ -2344,6 +2375,11 @@ impl Interpreter {
         }
 
         if let Some((nargs, ext)) = extension {
+            if self.is_constant_folding {
+                // Extensions are not supported in constant folding.
+                return Ok(Value::Undefined);
+            }
+
             if param_values.len() != *nargs as usize {
                 bail!(span.error("incorrect number of parameters supplied to extension"));
             }
@@ -2660,6 +2696,12 @@ impl Interpreter {
 
     fn mark_processed(&mut self, path: &[&str]) -> Result<()> {
         let obj = self.processed_paths.make_or_get_value_mut(path)?;
+
+        if self.is_constant_folding && obj == &Value::Undefined {
+            // If constant folding, then do not register undefined values.
+            return Ok(());
+        }
+
         if obj == &Value::Undefined {
             *obj = Value::new_object();
         }
@@ -2677,6 +2719,10 @@ impl Interpreter {
 
         // Handle input.
         if name.text() == "input" {
+            if self.is_constant_folding {
+                // When constant folding, expressions cannot depend on input.
+                return Ok(Value::Undefined);
+            }
             return Ok(Self::get_value_chained(self.input.clone(), fields));
         }
 
@@ -3208,6 +3254,7 @@ impl Interpreter {
             };
 
             self.scopes = scopes;
+            // TODO: Default rules are safe to constant fold
             self.processed.insert(rule.clone());
         }
 
@@ -3314,7 +3361,15 @@ impl Interpreter {
                                 }
                             }
                         }
-                        self.processed.insert(rule.clone());
+
+                        if self.is_constant_folding {
+                            if value != Value::Undefined {
+                                // When constant folding, record only those rules that have successfully evaluated.
+                                self.processed.insert(rule.clone());
+                            }
+                        } else {
+                            self.processed.insert(rule.clone());
+                        }
                     }
                     RuleHead::Func {
                         refr, args, assign, ..
@@ -3483,6 +3538,30 @@ impl Interpreter {
             Ok(_) => Ok(results),
             Err(e) => Err(e),
         }
+    }
+
+    pub fn constant_fold(&mut self) -> Result<()> {
+        self.is_constant_folding = true;
+        self.optimized = None;
+        self.clean_internal_evaluation_state();
+        // TODO: Maybe use scheduler information to determine which rules to evaluate and in which order.
+        for module in &self.modules.clone() {
+            for rule in &module.policy {
+                if let Rule::Spec { head, .. } = rule.as_ref() {
+                    if matches!(&head, RuleHead::Compr { .. } | RuleHead::Set { .. }) {
+                        // Evaluate rule and ignore any errors.
+                        let _ = self.eval_rule(module, rule);
+                    }
+                }
+            }
+        }
+        self.is_constant_folding = false;
+        self.optimized = Some(Optimized {
+            data: self.data.clone(),
+            processed: self.processed.clone(),
+            processed_paths: self.processed_paths.clone(),
+        });
+        Ok(())
     }
 
     fn get_rule_path_components(mut refr: &Ref<Expr>) -> Result<Vec<Rc<str>>> {

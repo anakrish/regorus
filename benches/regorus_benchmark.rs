@@ -1,6 +1,6 @@
 use std::hint::black_box;
 
-use regorus::Engine;
+use regorus::{Engine, Value};
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use serde_json::json;
@@ -93,9 +93,34 @@ fn allow_with_simple_membership(c: &mut Criterion) {
     group.finish();
 }
 
+fn aci_simple(c: &mut Criterion) {
+    c.bench_function("sime aci rule: data.policy.mount-device", |b| {
+        let mut engine = Engine::new();
+        engine.set_rego_v0(true);
+        engine.add_policy_from_file("tests/aci/api.rego").unwrap();
+        engine
+            .add_policy_from_file("tests/aci/framework.rego")
+            .unwrap();
+        engine
+            .add_policy_from_file("tests/aci/policy.rego")
+            .unwrap();
+        engine
+            .add_data(Value::from_json_file("tests/aci/data.json").unwrap())
+            .unwrap();
+        let input = Value::from_json_file("tests/aci/input.json").unwrap();
+        engine.set_input(input);
+        b.iter(|| {
+            engine
+                .eval_rule("data.policy.mount_device".to_string())
+                .unwrap()
+        });
+    });
+}
+
 criterion_group!(
     benches,
     allow_with_simple_equality,
-    allow_with_simple_membership
+    allow_with_simple_membership,
+    aci_simple,
 );
 criterion_main!(benches);

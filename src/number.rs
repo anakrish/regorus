@@ -4,66 +4,30 @@
 use alloc::str::FromStr;
 use core::cmp::{Ord, Ordering};
 use core::fmt::{Debug, Formatter};
+use rust_decimal::MathematicalOps;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 
 use serde::ser::Serializer;
 use serde::Serialize;
 
 use crate::*;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 
 pub type BigInt = i128;
 
-type BigFloat = scientific::Scientific;
-const PRECISION: scientific::Precision = scientific::Precision::Digits(100);
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct BigDecimal {
-    d: BigFloat,
-}
-
-impl AsRef<BigFloat> for BigDecimal {
-    fn as_ref(&self) -> &BigFloat {
-        &self.d
-    }
-}
-
-impl AsMut<BigFloat> for BigDecimal {
-    fn as_mut(&mut self) -> &mut BigFloat {
-        &mut self.d
-    }
-}
-
-impl From<BigFloat> for BigDecimal {
-    fn from(value: BigFloat) -> Self {
-        BigDecimal { d: value }
-    }
-}
-
-impl From<i128> for BigDecimal {
-    fn from(value: i128) -> Self {
-        BigDecimal {
-            d: Into::<BigFloat>::into(value),
-        }
-    }
-}
-
-impl BigDecimal {
-    fn is_integer(&self) -> bool {
-        self.d.decimals() <= 0
-    }
-}
+type BigDecimal = rust_decimal::Decimal;
 
 #[derive(Clone)]
 pub enum Number {
     // TODO: maybe specialize for u64, i64, f64
-    Big(Rc<BigDecimal>),
+    Big(BigDecimal),
 }
 
 impl Debug for Number {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
         match self {
-            Number::Big(b) => b.d.fmt(f),
+            Number::Big(b) => b.fmt(f),
         }
     }
 }
@@ -86,48 +50,41 @@ impl Serialize for Number {
 
 use Number::*;
 
-impl From<BigFloat> for Number {
-    fn from(n: BigFloat) -> Self {
-        Self::Big(BigDecimal::from(n).into())
-    }
-}
-
 impl From<u64> for Number {
     fn from(n: u64) -> Self {
-        BigFloat::from(n).into()
+        Big(BigDecimal::from(n))
     }
 }
 
 impl From<usize> for Number {
     fn from(n: usize) -> Self {
-        BigFloat::from(n).into()
+        Big(BigDecimal::from(n))
     }
 }
 
 impl From<u128> for Number {
     fn from(n: u128) -> Self {
-        BigFloat::from(n).into()
+        Big(BigDecimal::from(n))
     }
 }
 
 impl From<i128> for Number {
     fn from(n: i128) -> Self {
-        BigFloat::from(n).into()
+        Big(BigDecimal::from(n))
     }
 }
 
 impl From<i64> for Number {
     fn from(n: i64) -> Self {
-        BigFloat::from(n).into()
+        Big(BigDecimal::from(n))
     }
 }
 
 impl From<f64> for Number {
     fn from(n: f64) -> Self {
-        // Reading from float is not precise. Therefore, serialize to string and read.
-        match Self::from_str(&format!("{n}")) {
-            Ok(v) => v,
-            _ => BigFloat::ZERO.into(),
+        match BigDecimal::from_f64(n) {
+            Some(v) => Big(v),
+            None => Big(BigDecimal::ZERO), // Fallback to zero if conversion fails
         }
     }
 }
@@ -135,54 +92,35 @@ impl From<f64> for Number {
 impl Number {
     pub fn as_u128(&self) -> Option<u128> {
         match self {
-            Big(b) if b.is_integer() => u128::try_from(&b.d).ok(),
+            Big(b) if b.is_integer() => b.to_u128(),
             _ => None,
         }
     }
 
     pub fn as_i128(&self) -> Option<i128> {
         match self {
-            Big(b) if b.is_integer() => i128::try_from(&b.d).ok(),
+            Big(b) if b.is_integer() => b.to_i128(),
             _ => None,
         }
     }
 
     pub fn as_u64(&self) -> Option<u64> {
         match self {
-            Big(b) if b.is_integer() => u64::try_from(&b.d).ok(),
+            Big(b) if b.is_integer() => b.to_u64(),
             _ => None,
         }
     }
 
     pub fn as_i64(&self) -> Option<i64> {
         match self {
-            Big(b) if b.is_integer() => i64::try_from(&b.d).ok(),
+            Big(b) if b.is_integer() => b.to_i64(),
             _ => None,
         }
     }
 
     pub fn as_f64(&self) -> Option<f64> {
         match self {
-            Big(b) => {
-                let f = f64::from(&b.d);
-                match BigFloat::try_from(f) {
-                    Ok(bf) if bf == b.d => Some(f),
-                    _ => None,
-                }
-            }
-        }
-    }
-
-    pub fn as_big(&self) -> Option<Rc<BigDecimal>> {
-        Some(match self {
-            Big(b) => b.clone(),
-        })
-    }
-
-    pub fn to_big(&self) -> Result<Rc<BigDecimal>> {
-        match self.as_big() {
-            Some(b) => Ok(b),
-            _ => bail!("Number::to_big failed"),
+            Big(b) => b.to_f64(),
         }
     }
 }
@@ -194,8 +132,8 @@ impl FromStr for Number {
     type Err = ParseNumberError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Ok(v) = BigFloat::from_str(s) {
-            return Ok(v.into());
+        if let Ok(v) = BigDecimal::from_str(s) {
+            return Ok(Big(v));
         }
         Ok(f64::from_str(s).map_err(|_| ParseNumberError)?.into())
     }
@@ -206,7 +144,7 @@ impl Eq for Number {}
 impl PartialEq for Number {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Big(a), Big(b)) => a.d == b.d,
+            (Big(a), Big(b)) => a == b,
         }
     }
 }
@@ -214,7 +152,7 @@ impl PartialEq for Number {
 impl Ord for Number {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
-            (Big(a), Big(b)) => a.d.cmp(&b.d),
+            (Big(a), Big(b)) => a.cmp(b),
         }
     }
 }
@@ -233,7 +171,13 @@ impl Number {
 
     pub fn add(&self, rhs: &Self) -> Result<Number> {
         match (self, rhs) {
-            (Big(a), Big(b)) => Ok(Big(BigDecimal::from(&a.d + &b.d).into())),
+            (Big(a), Big(b)) => {
+                if let Some(c) = a.checked_add(*b) {
+                    Ok(Big(c.into()))
+                } else {
+                    bail!("Overflow in addition of big numbers")
+                }
+            }
         }
     }
 
@@ -244,7 +188,13 @@ impl Number {
 
     pub fn sub(&self, rhs: &Self) -> Result<Number> {
         match (self, rhs) {
-            (Big(a), Big(b)) => Ok(Big(BigDecimal::from(&a.d - &b.d).into())),
+            (Big(a), Big(b)) => {
+                if let Some(c) = a.checked_sub(*b) {
+                    Ok(Big(c.into()))
+                } else {
+                    bail!("Overflow in subtraction of big numbers")
+                }
+            }
         }
     }
 
@@ -255,17 +205,24 @@ impl Number {
 
     pub fn mul(&self, rhs: &Self) -> Result<Number> {
         match (self, rhs) {
-            (Big(a), Big(b)) => Ok(Big(BigDecimal::from(&a.d * &b.d).into())),
+            (Big(a), Big(b)) => {
+                if let Some(c) = a.checked_mul(*b) {
+                    Ok(Big(c.into()))
+                } else {
+                    bail!("Overflow in multiplication of big numbers")
+                }
+            }
         }
     }
 
     pub fn divide(self, rhs: &Self) -> Result<Number> {
         match (self, rhs) {
             (Big(a), Big(b)) => {
-                let c =
-                    a.d.div_truncate(&b.d, PRECISION)
-                        .map_err(|e| anyhow!("{e}"))?;
-                Ok(Big(BigDecimal::from(c).into()))
+                if let Some(c) = a.checked_div(*b) {
+                    Ok(Big(c.into()))
+                } else {
+                    bail!("Failure in division of big numbers")
+                }
             }
         }
     }
@@ -273,8 +230,11 @@ impl Number {
     pub fn modulo(self, rhs: &Self) -> Result<Number> {
         match (self, rhs) {
             (Big(a), Big(b)) => {
-                let (_, c) = a.d.div_rem(&b.d).map_err(|e| anyhow!("{e}"))?;
-                Ok(Big(BigDecimal::from(c).into()))
+                if let Some(c) = a.checked_rem(*b) {
+                    Ok(Big(c.into()))
+                } else {
+                    bail!("Failure in modulo of big numbers")
+                }
             }
         }
     }
@@ -287,15 +247,15 @@ impl Number {
 
     pub fn is_positive(&self) -> bool {
         match self {
-            Big(b) => b.d.is_sign_positive(),
+            Big(b) => b.is_sign_positive(),
         }
     }
 
     fn ensure_integers(a: &Number, b: &Number) -> Option<(BigInt, BigInt)> {
         match (a, b) {
             (Big(a), Big(b)) if a.is_integer() && b.is_integer() => {
-                match (BigInt::try_from(&a.d), BigInt::try_from(&b.d)) {
-                    (Ok(a), Ok(b)) => Some((a, b)),
+                match (a.to_i128(), b.to_i128()) {
+                    (Some(a), Some(b)) => Some((a, b)),
                     _ => None,
                 }
             }
@@ -305,7 +265,7 @@ impl Number {
 
     fn ensure_integer(&self) -> Option<BigInt> {
         match self {
-            Big(a) if a.is_integer() => BigInt::try_from(&a.d).ok(),
+            Big(a) if a.is_integer() => a.to_i128(),
             _ => None,
         }
     }
@@ -351,53 +311,41 @@ impl Number {
 
     pub fn abs(&self) -> Number {
         match self {
-            Big(b) => b.d.clone().abs().into(),
+            Big(b) => Big(b.abs()),
         }
     }
 
     pub fn floor(&self) -> Number {
         match self {
-            Big(b) => Big(BigDecimal::from(b.d.round(
-                scientific::Precision::Decimals(0),
-                scientific::Rounding::RoundDown,
-            ))
-            .into()),
+            Big(b) => Big(b.floor()),
         }
     }
 
     pub fn ceil(&self) -> Number {
         match self {
-            Big(b) => Big(BigDecimal::from(b.d.round(
-                scientific::Precision::Decimals(0),
-                scientific::Rounding::RoundUp,
-            ))
-            .into()),
+            Big(b) => Big(b.ceil()),
         }
     }
 
     pub fn round(&self) -> Number {
         match self {
-            Big(b) => Big(BigDecimal::from(b.d.round(
-                scientific::Precision::Decimals(0),
-                scientific::Rounding::RoundHalfAwayFromZero,
-            ))
-            .into()),
+            Big(b) => Big(b.round()),
         }
     }
 
     pub fn two_pow(e: i32) -> Result<Number> {
-        if e >= 0 {
-            Ok(BigFloat::from(2).powi(e as usize).into())
+        if let Some(v) = BigDecimal::from(2).checked_powi(e as i64) {
+            Ok(Big(v))
         } else {
-            Number::from(1u64).divide(&BigFloat::from(2).powi(-e as usize).into())
+            bail!("overflow in pow of big number")
         }
     }
 
     pub fn ten_pow(e: i32) -> Result<Number> {
-        if e >= 0 {
-            Ok(BigFloat::from(10).powi(e as usize).into())
+        if let Some(v) = BigDecimal::from(10).checked_powi(e as i64) {
+            Ok(Big(v))
         } else {
-            Number::from(1u64).divide(&BigFloat::from(10).powi(-e as usize).into())
+            bail!("overflow in pow of big number")
         }
     }
 
@@ -415,7 +363,7 @@ impl Number {
 
     pub fn format_scientific(&self) -> String {
         match self {
-            Big(b) => format!("{}", b.d),
+            Big(b) => format!("{}", b),
         }
     }
 
@@ -428,27 +376,27 @@ impl Number {
             f.to_string()
         } else {
             let s = match self {
-                Big(b) => format!("{}", b.d),
+                Big(b) => format!("{}", b),
             };
 
             // Remove trailing e0
-            if s.ends_with("e0") {
-                return s[..s.len() - 2].to_string();
-            }
+            //if s.ends_with("e0") {
+            //    return s[..s.len() - 2].to_string();
+            //}
 
             // Avoid e notation if full mantissa is written out.
-            let parts: Vec<&str> = s.split('e').collect();
+            /*let parts: Vec<&str> = s.split('e').collect();
             match self {
                 Big(b) => {
-                    if b.d.is_sign_positive() {
-                        if parts[0].len() == b.d.exponent1() as usize + 2 {
+                    if b.is_sign_positive() {
+                        if parts[0].len() == b.exponent1() as usize + 2 {
                             return parts[0].replace('.', "");
                         }
                     } else if parts[0].len() == b.d.exponent1() as usize + 3 {
                         return parts[0].replace('.', "");
                     }
                 }
-            }
+            }*/
 
             s
         }
@@ -457,12 +405,8 @@ impl Number {
     pub fn format_decimal_with_width(&self, d: u32) -> String {
         match self {
             Big(b) => {
-                let n = Big(BigDecimal::from(b.d.round(
-                    scientific::Precision::Decimals(d as isize),
-                    scientific::Rounding::RoundHalfAwayFromZero,
-                ))
-                .into());
-                n.format_decimal()
+                let n = b.round_dp(d);
+                format!("{}", n)
             }
         }
     }

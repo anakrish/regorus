@@ -279,7 +279,6 @@ struct YamlTest {
 fn yaml_test_impl(file: &str) -> Result<()> {
     let yaml_str = std::fs::read_to_string(file)?;
     let test: YamlTest = serde_yaml::from_str(&yaml_str)?;
-
     #[cfg(not(feature = "std"))]
     {
         // Skip tests that depend on bultins that need std feature.
@@ -392,14 +391,7 @@ fn yaml_test(file: &str) -> Result<()> {
         return Ok(());
     }
 
-    match yaml_test_impl(file) {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            // If Err is returned, it doesn't always get printed by cargo test.
-            // Therefore, panic with the error.
-            panic!("{e}");
-        }
-    }
+    yaml_test_impl(file)
 }
 
 #[test]

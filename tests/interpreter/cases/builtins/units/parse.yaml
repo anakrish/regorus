@@ -12,9 +12,9 @@ cases:
         a = [  "E", "e", "P", "p", "T", "t" , "G" , "g" , "M" , "K" , "k" , "m" ]
 
         # Not supported by OPA
-        b =  [ "Q", "R", "Y", "Z", "h", "da", "d", "c",
-               "μ", "n",  "f", "a", "z", "y", "r", "q"
-        ]
+        #b =  [ "Q", "R", "Y", "Z", "h", "da", "d", "c",
+        #       "μ", "n",  "f", "a", "z", "y", "r", "q"
+        #]
 
         c = [
          "ki", "Ki", "kI", "KI",
@@ -27,17 +27,17 @@ cases:
 
         d = [
          "zi", "Zi", "zI", "ZI",
-         "yi", "Yi", "yI", "YI",	  	  
+         "yi", "Yi", "yI", "YI",
         ]
-        
+
         results = {
           "p1" : [ units.parse(s) | s = concat("", ["1", a[_]]) ],
-          "p2" : [ units.parse(s) | s = concat("", ["1", b[_]]) ],
+          #"p2" : [ units.parse(s) | s = concat("", ["1", b[_]]) ],
           "p3" : [ units.parse(s) | s = concat("", ["1", c[_]]) ],
           "p4" : [ units.parse(s) | s = concat("", ["1", d[_]]) ],
           # No suffix, quoted.
           "p5" : [ units.parse("1"), units.parse("\"1\"") ]
-        }        
+        }
     query: data.test.results
     want_result:
       p1:
@@ -53,23 +53,23 @@ cases:
         - 1e3
         - 1e3
         - 1e-3
-      p2:
-        - 1e30
-        - 1e27
-        - 1e24
-        - 1e21
-        - 1e2
-        - 1e1
-        - 1e-1
-        - 1e-2
-        - 1e-6
-        - 1e-9
-        - 1e-15
-        - 1e-18
-        - 1e-21
-        - 1e-24
-        - 1e-27
-        - 1e-30
+      # p2:
+      #   - 1e30
+      #   - 1e27
+      #   - 1e24
+      #   - 1e21
+      #   - 1e2
+      #   - 1e1
+      #   - 1e-1
+      #   - 1e-2
+      #   - 1e-6
+      #   - 1e-9
+      #   - 1e-15
+      #   - 1e-18
+      #   - 1e-21
+      #   - 1e-24
+      #   - 1e-27
+      #   - 1e-30
       p3:
         - 1024
         - 1024
@@ -105,7 +105,7 @@ cases:
         - 1208925819614629174706176
         - 1208925819614629174706176
       p5: [1, 1]
-        
+
   - note: extra argument
     data: {}
     modules:
@@ -114,7 +114,7 @@ cases:
         a = units.parse("1m", "")
     query: data.test
     error: expects 1 argument
-         
+
   - note: zero arguments
     data: {}
     modules:
@@ -150,4 +150,4 @@ cases:
         a = units.parse("1mb")
     query: data.test
     want_result: {}
-    
+

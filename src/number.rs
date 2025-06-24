@@ -14,7 +14,6 @@ use serde::Serialize;
 use crate::*;
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 
-pub type BigInt = i128;
 
 type BigDecimal = rust_decimal::Decimal;
 
@@ -62,18 +61,6 @@ impl From<usize> for Number {
     }
 }
 
-impl From<u128> for Number {
-    fn from(n: u128) -> Self {
-        Big(BigDecimal::from(n))
-    }
-}
-
-impl From<i128> for Number {
-    fn from(n: i128) -> Self {
-        Big(BigDecimal::from(n))
-    }
-}
-
 impl From<i64> for Number {
     fn from(n: i64) -> Self {
         Big(BigDecimal::from(n))
@@ -85,6 +72,19 @@ impl From<f64> for Number {
         match BigDecimal::from_f64(n) {
             Some(v) => Big(v),
             None => Big(BigDecimal::ZERO), // Fallback to zero if conversion fails
+        }
+    }
+}
+
+impl Number {
+    pub fn try_from_i128(n: i128) -> Option<Self> {
+        BigDecimal::try_from_i128_with_scale(n, 0).ok().map(Big)
+    }
+
+    pub fn try_from_u128(n: u128) -> Option<Self> {
+        match i128::try_from(n) {
+            Ok(i) => Self::try_from_i128(i),
+            _ => None,
         }
     }
 }
@@ -132,7 +132,7 @@ impl FromStr for Number {
     type Err = ParseNumberError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Ok(v) = BigDecimal::from_str(s) {
+        if let Ok(v) = BigDecimal::from_str_exact(s) {
             return Ok(Big(v));
         }
         Ok(f64::from_str(s).map_err(|_| ParseNumberError)?.into())
@@ -251,10 +251,10 @@ impl Number {
         }
     }
 
-    fn ensure_integers(a: &Number, b: &Number) -> Option<(BigInt, BigInt)> {
+    fn ensure_integers(a: &Number, b: &Number) -> Option<(i64, i64)> {
         match (a, b) {
             (Big(a), Big(b)) if a.is_integer() && b.is_integer() => {
-                match (a.to_i128(), b.to_i128()) {
+                match (a.to_i64(), b.to_i64()) {
                     (Some(a), Some(b)) => Some((a, b)),
                     _ => None,
                 }
@@ -263,9 +263,9 @@ impl Number {
         }
     }
 
-    fn ensure_integer(&self) -> Option<BigInt> {
+    fn ensure_integer(&self) -> Option<i64> {
         match self {
-            Big(a) if a.is_integer() => a.to_i128(),
+            Big(a) if a.is_integer() => a.to_i64(),
             _ => None,
         }
     }

@@ -470,12 +470,15 @@ impl From<u128> for Value {
     /// # use regorus::*;
     /// # fn main() -> anyhow::Result<()> {
     /// assert_eq!(
-    ///   Value::from(340_282_366_920_938_463_463_374_607_431_768_211_455u128).as_u128()?,
-    ///   340_282_366_920_938_463_463_374_607_431_768_211_455u128);
+    ///   Value::from(39614081257132168796771975168u128).as_u128()?, // 2^95
+    ///   39614081257132168796771975168u128);
     /// # Ok(())
     /// # }
     fn from(n: u128) -> Self {
-        Value::Number(Number::from(n))
+        match Number::try_from_u128(n) {
+            Some(num) => Value::Number(num),
+            _ => Value::Undefined,
+        }
     }
 }
 
@@ -485,12 +488,15 @@ impl From<i128> for Value {
     /// # use regorus::*;
     /// # fn main() -> anyhow::Result<()> {
     /// assert_eq!(
-    ///   Value::from(-170141183460469231731687303715884105728i128).as_i128()?,
-    ///   -170141183460469231731687303715884105728i128);
+    ///   Value::from(-39614081257132168796771975168i128).as_i128()?, // 2^95
+    ///   -39614081257132168796771975168i128);
     /// # Ok(())
     /// # }
     fn from(n: i128) -> Self {
-        Value::Number(Number::from(n))
+        match Number::try_from_i128(n) {
+            Some(num) => Value::Number(num),
+            _ => Value::Undefined,
+        }
     }
 }
 
@@ -1082,7 +1088,7 @@ impl Value {
 
     /// Cast value to [`& f64`] if [`Value::Number`].
     /// Error is raised if the value is not a number or if the numeric value
-    /// does not fit in a i64.
+    /// does not fit in a f64.
     ///
     /// ```
     /// # use regorus::*;
@@ -1090,8 +1096,8 @@ impl Value {
     /// let v = Value::from(-10);
     /// assert_eq!(v.as_f64()?, -10f64);
     ///
-    /// let v = Value::from(79228162514264337593543950336u128); // 2^95
-    /// assert!(v.as_i64().is_err());
+    /// let v = Value::from(39614081257132168796771975168u128); // 2^95
+    /// assert!(v.as_f64().is_ok()); // Value is truncated.
     /// # Ok(())
     /// # }
     pub fn as_f64(&self) -> Result<f64> {

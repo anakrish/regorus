@@ -14,9 +14,13 @@ mod tests {
     mod effect;
     mod resource;
 <<<<<<< HEAD
+<<<<<<< HEAD
     mod target;
 =======
 >>>>>>> 89c76a0 (feat: Add Schema Registry and Validation Framework (#456))
+=======
+    mod target;
+>>>>>>> 7268ceb (feat: Complete target system with C# bindings and resource inference)
 }
 
 /// Errors that can occur when interacting with a Registry.
@@ -171,11 +175,17 @@ impl<T> Registry<T> {
 pub type SchemaRegistry = Registry<crate::Schema>;
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 /// Type alias for Target registry
 pub type TargetRegistry = Registry<crate::target::Target>;
 
 =======
 >>>>>>> 89c76a0 (feat: Add Schema Registry and Validation Framework (#456))
+=======
+/// Type alias for Target registry
+pub type TargetRegistry = Registry<crate::target::Target>;
+
+>>>>>>> 7268ceb (feat: Complete target system with C# bindings and resource inference)
 /// Global registry instances
 pub mod instances {
     use super::*;
@@ -190,13 +200,19 @@ pub mod instances {
         pub static ref EFFECT_SCHEMA_REGISTRY: Registry<crate::Schema> = Registry::new("EFFECT_SCHEMA_REGISTRY");
     }
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 7268ceb (feat: Complete target system with C# bindings and resource inference)
 
     lazy_static::lazy_static! {
         /// Global singleton instance of targets registry.
         pub static ref TARGET_REGISTRY: Registry<crate::target::Target> = Registry::new("TARGET_REGISTRY");
     }
+<<<<<<< HEAD
 =======
 >>>>>>> 89c76a0 (feat: Add Schema Registry and Validation Framework (#456))
+=======
+>>>>>>> 7268ceb (feat: Complete target system with C# bindings and resource inference)
 }
 
 /// Macro to generate helper functions for registry operations.
@@ -306,6 +322,9 @@ pub mod schemas {
     );
 }
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 7268ceb (feat: Complete target system with C# bindings and resource inference)
 
 /// Helper functions for target registry operations.
 pub mod targets {
@@ -353,5 +372,8 @@ pub mod targets {
         TARGET_REGISTRY.clear();
     }
 }
+<<<<<<< HEAD
 =======
 >>>>>>> 89c76a0 (feat: Add Schema Registry and Validation Framework (#456))
+=======
+>>>>>>> 7268ceb (feat: Complete target system with C# bindings and resource inference)

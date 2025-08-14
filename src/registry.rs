@@ -13,7 +13,10 @@ mod tests {
     mod core;
     mod effect;
     mod resource;
+<<<<<<< HEAD
     mod target;
+=======
+>>>>>>> 89c76a0 (feat: Add Schema Registry and Validation Framework (#456))
 }
 
 /// Errors that can occur when interacting with a Registry.
@@ -167,9 +170,12 @@ impl<T> Registry<T> {
 /// Type alias for Schema registry
 pub type SchemaRegistry = Registry<crate::Schema>;
 
+<<<<<<< HEAD
 /// Type alias for Target registry
 pub type TargetRegistry = Registry<crate::target::Target>;
 
+=======
+>>>>>>> 89c76a0 (feat: Add Schema Registry and Validation Framework (#456))
 /// Global registry instances
 pub mod instances {
     use super::*;
@@ -183,11 +189,14 @@ pub mod instances {
         /// Global singleton instance of effect schemas registry.
         pub static ref EFFECT_SCHEMA_REGISTRY: Registry<crate::Schema> = Registry::new("EFFECT_SCHEMA_REGISTRY");
     }
+<<<<<<< HEAD
 
     lazy_static::lazy_static! {
         /// Global singleton instance of targets registry.
         pub static ref TARGET_REGISTRY: Registry<crate::target::Target> = Registry::new("TARGET_REGISTRY");
     }
+=======
+>>>>>>> 89c76a0 (feat: Add Schema Registry and Validation Framework (#456))
 }
 
 /// Macro to generate helper functions for registry operations.
@@ -296,6 +305,7 @@ pub mod schemas {
         "effect schemas"
     );
 }
+<<<<<<< HEAD
 
 /// Helper functions for target registry operations.
 pub mod targets {
@@ -343,3 +353,5 @@ pub mod targets {
         TARGET_REGISTRY.clear();
     }
 }
+=======
+>>>>>>> 89c76a0 (feat: Add Schema Registry and Validation Framework (#456))

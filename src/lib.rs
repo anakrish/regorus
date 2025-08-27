@@ -26,9 +26,13 @@ mod ast;
 mod builtins;
 mod compile;
 mod compiled_policy;
+mod database_parser;
 mod engine;
 mod indexchecker;
 mod interpreter;
+mod kql_codegen;
+mod kql_ir;
+mod kql_translator;
 mod lexer;
 mod lookup;
 mod number;
@@ -36,6 +40,7 @@ mod parser;
 mod policy_info;
 #[cfg(feature = "azure_policy")]
 pub mod registry;
+mod rego_to_kql_ir;
 mod scheduler;
 #[cfg(feature = "azure_policy")]
 mod schema;
@@ -461,8 +466,13 @@ pub mod coverage {
 #[doc(hidden)]
 pub mod unstable {
     pub use crate::ast::*;
+    pub use crate::database_parser::*;
+    pub use crate::kql_codegen::*;
+    pub use crate::kql_ir::*;
+    pub use crate::kql_translator::*;
     pub use crate::lexer::*;
     pub use crate::parser::*;
+    pub use crate::rego_to_kql_ir::*;
 }
 
 #[cfg(test)]

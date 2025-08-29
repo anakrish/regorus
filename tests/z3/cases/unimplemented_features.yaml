@@ -1,0 +1,71 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  # TODO: Re-enable these tests once the corresponding features are implemented to panic properly
+  
+  # - note: unknown functions - should panic
+  #   effects: ["deny"]
+  #   policies:
+  #     - |
+  #       package test1.functions
+  #       
+  #       deny[{"reason": "Unknown function"}] if {
+  #         input.type == "Microsoft.Compute/virtualMachines"
+  #         unknown_builtin_function(input.sku.name)
+  #       }
+  #   panic_expected: true
+  #   panic_message: "Function not implemented"
+
+  # - note: set operations - should panic
+  #   effects: ["deny"]
+  #   policies:
+  #     - |
+  #       package test2.setops
+  #       
+  #       deny[{"reason": "Set operations"}] if {
+  #         input.type == "Microsoft.Compute/virtualMachines"
+  #         input.allowedSizes & {"Standard_D4s", "Standard_E8s"} != set()
+  #       }
+  #   panic_expected: true
+  #   panic_message: "Set operations not implemented"
+
+  # - note: comprehensions - should panic
+  #   effects: ["deny"]
+  #   policies:
+  #     - |
+  #       package test3.comprehensions
+  #       
+  #       deny[{"reason": "Comprehension"}] if {
+  #         input.type == "Microsoft.Compute/virtualMachines"
+  #         sizes := [s | s := input.availableSizes[_]]
+  #       }
+  #   panic_expected: true
+  #   panic_message: "Comprehensions not implemented"
+
+  # - note: some/every quantifiers - should panic
+  #   effects: ["deny"]
+  #   policies:
+  #     - |
+  #       package test4.quantifiers
+  #       
+  #       deny[{"reason": "Quantifiers"}] if {
+  #         input.type == "Microsoft.Compute/virtualMachines"
+  #         some i
+  #         input.sizes[i] == "Standard_GS5"
+  #       }
+  #   panic_expected: true
+  #   panic_message: "Quantifiers not implemented"
+
+  # TODO: Add a working test case that demonstrates when the system should panic
+  - note: placeholder test - no panic expected
+    effects: ["deny"]
+    policies:
+      - |
+        package test.working
+        
+        deny[{"reason": "Simple working test"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name == "Standard_D4s"
+        }
+    conflict_expected: false

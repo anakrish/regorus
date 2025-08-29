@@ -16,6 +16,9 @@ worktrees/
 # build folders
 **/build
 
+# Downloaded dependencies
+vendor/
+
 # Generated C# bindings
 **/*.g.cs
 

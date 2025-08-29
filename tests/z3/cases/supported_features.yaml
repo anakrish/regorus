@@ -1,0 +1,64 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  - note: basic comparison - should work
+    effects: ["deny"]
+    policies:
+      - |
+        package supported1.basic
+        
+        deny[{"reason": "Basic comparison"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name == "Standard_GS5"
+        }
+    conflict_expected: false
+
+  - note: simple in operator - should work
+    effects: ["deny"]
+    policies:
+      - |
+        package supported2.inop
+        
+        deny[{"reason": "Simple in operator"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name in ["Standard_GS5", "Standard_M128s"]
+        }
+    conflict_expected: false
+
+  - note: boolean expressions - should work
+    effects: ["deny"]
+    policies:
+      - |
+        package supported3.boolean
+        
+        deny[{"reason": "Boolean logic"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name == "Standard_GS5"
+          input.location != "eastus"
+        }
+    conflict_expected: false
+
+  - note: nested object access - should work
+    effects: ["deny"]
+    policies:
+      - |
+        package supported4.nested
+        
+        deny[{"reason": "Nested access"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.properties.osProfile.adminUsername == "admin"
+        }
+    conflict_expected: false
+
+  - note: array indexing - should work
+    effects: ["deny"]
+    policies:
+      - |
+        package supported5.indexing
+        
+        deny[{"reason": "Array indexing"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.tags["environment"] == "production"
+        }
+    conflict_expected: false

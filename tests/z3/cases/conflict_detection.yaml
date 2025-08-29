@@ -1,0 +1,318 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  # ========================================
+  # CONFLICT SCENARIOS
+  # ========================================
+  
+  - note: real conflict - contradictory effects
+    effects: ["deny", "allow"]
+    policies:
+      - |
+        package policy1.azure
+        
+        deny[{"reason": "VM size not allowed"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name in ["Standard_GS5", "Standard_M128s"]
+        }
+      - |
+        package policy2.azure
+        
+        allow[{"reason": "AI workload exception"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name in ["Standard_M128s"]
+          input.tags.workload == "ai"
+        }
+    conflict_expected: true
+    expected_conflicts:
+      - policy1_rule: "Policy 1 Rule 1 (effect: deny)"
+        policy2_rule: "Policy 2 Rule 1 (effect: allow)"
+        conflict_type: "contradictory effects"
+        expected_conflicting_input: |
+          {
+            "type": "Microsoft.Compute/virtualMachines",
+            "sku": {"name": "Standard_M128s"},
+            "tags": {"workload": "ai"}
+          }
+
+  - note: conflict detection - different expression order
+    effects: ["deny", "allow"]
+    policies:
+      - |
+        package policy8.azure
+        
+        deny[{"reason": "VM size not allowed"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name in ["Standard_GS5", "Standard_M128s"]
+          input.location == "eastus"
+        }
+      - |
+        package policy9.azure
+        
+        allow[{"reason": "Special exception"}] if {
+          input.location == "eastus"
+          input.sku.name in ["Standard_M128s"]
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.tags.approved == "yes"
+        }
+    conflict_expected: true
+    expected_conflicts:
+      - policy1_rule: "Policy 1 Rule 1 (effect: deny)"
+        policy2_rule: "Policy 2 Rule 1 (effect: allow)"
+        conflict_type: "contradictory effects"
+        expected_conflicting_input: |
+          {
+            "type": "Microsoft.Compute/virtualMachines",
+            "sku": {"name": "Standard_M128s"},
+            "location": "eastus",
+            "tags": {"approved": "yes"}
+          }
+
+  - note: conflict with subset conditions
+    effects: ["deny", "allow"]
+    policies:
+      - |
+        package policy12.azure
+        
+        deny[{"reason": "VM size not allowed"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name in ["Standard_M128s"]
+        }
+      - |
+        package policy13.azure
+        
+        allow[{"reason": "Development environment exception"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name in ["Standard_M128s"]
+          input.tags.environment == "development"
+          input.tags.approved == "yes"
+        }
+    conflict_expected: true
+    expected_conflicts:
+      - policy1_rule: "Policy 1 Rule 1 (effect: deny)"
+        policy2_rule: "Policy 2 Rule 1 (effect: allow)"
+        conflict_type: "contradictory effects"
+        expected_conflicting_input: |
+          {
+            "type": "Microsoft.Compute/virtualMachines",
+            "sku": {"name": "Standard_M128s"},
+            "tags": {"environment": "development", "approved": "yes"}
+          }
+
+  - note: conflict with rule dependency
+    effects: ["deny", "allow"]
+    policies:
+      - |
+        package policy14.azure
+        
+        # Helper rule that checks if VM is expensive
+        is_expensive_vm if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name in ["Standard_M128s", "Standard_GS5"]
+        }
+        
+        deny[{"reason": "Expensive VM not allowed"}] if {
+          is_expensive_vm
+        }
+      - |
+        package policy15.azure
+        
+        allow[{"reason": "Research team exception"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name in ["Standard_M128s"]
+          input.tags.team == "research"
+        }
+    conflict_expected: true
+    expected_conflicts:
+      - policy1_rule: "Policy 1 Rule 2 (effect: deny)"
+        policy2_rule: "Policy 2 Rule 1 (effect: allow)"
+        conflict_type: "contradictory effects"
+        expected_conflicting_input: |
+          {
+            "type": "Microsoft.Compute/virtualMachines",
+            "sku": {
+              "name": "Standard_M128s"
+            },
+            "tags": {
+              "team": "research"
+            }
+          }
+
+  - note: conflict with multi-level rule dependency
+    effects: ["deny", "allow"]
+    policies:
+      - |
+        package policy16.azure
+        
+        # Level 1: Base resource type check
+        is_compute_resource if {
+          input.type == "Microsoft.Compute/virtualMachines"
+        }
+        
+        # Level 2: Size classification using Level 1
+        is_large_vm if {
+          is_compute_resource
+          input.sku.name in ["Standard_M128s", "Standard_GS5", "Standard_D64s"]
+        }
+        
+        # Level 3: Cost control policy using Level 2
+        deny[{"reason": "Large VM blocked by cost control"}] if {
+          is_large_vm
+          not input.tags.costCenter
+        }
+      - |
+        package policy17.azure
+        
+        allow[{"reason": "Special project exception"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name in ["Standard_M128s"]
+          input.tags.project == "ai-research"
+        }
+    conflict_expected: true
+    expected_conflicts:
+      - policy1_rule: "Policy 1 Rule 3 (effect: deny)"
+        policy2_rule: "Policy 2 Rule 1 (effect: allow)"
+        conflict_type: "contradictory effects"
+        expected_conflicting_input: |
+          {
+            "type": "Microsoft.Compute/virtualMachines",
+            "sku": {
+              "name": "Standard_M128s"
+            },
+            "tags": {
+              "project": "ai-research"
+            }
+          }
+
+  - note: conflict with equivalent expressions using different syntax
+    effects: ["deny", "allow"]
+    policies:
+      - |
+        package policy18.azure
+        
+        deny[{"reason": "Large VM not allowed in production"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name in ["Standard_M128s", "Standard_GS5"]
+          input.tags.environment == "production"
+        }
+      - |
+        package policy19.azure
+        
+        # Same constraint expressed differently
+        allow[{"reason": "Exception for certified teams"}] if {
+          "Microsoft.Compute/virtualMachines" == input.type
+          "Standard_M128s" == input.sku.name
+          "production" == input.tags.environment
+          input.tags.certified == "yes"
+        }
+    conflict_expected: true
+    expected_conflicts:
+      - policy1_rule: "Policy 1 Rule 1 (effect: deny)"
+        policy2_rule: "Policy 2 Rule 1 (effect: allow)"
+        conflict_type: "contradictory effects"
+        expected_conflicting_input: |
+          {
+            "type": "Microsoft.Compute/virtualMachines",
+            "sku": {
+              "name": "Standard_M128s"
+            },
+            "tags": {
+              "environment": "production",
+              "certified": "yes"
+            }
+          }
+
+  # ========================================
+  # NO CONFLICT SCENARIOS
+  # ========================================
+
+  - note: no conflict - multiple policies with same effect
+    effects: ["deny"]
+    policies:
+      - |
+        package policy3.azure
+        
+        deny[{"reason": "VM size not allowed"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name in ["Standard_GS5", "Standard_M128s"]
+        }
+      - |
+        package policy4.azure
+        
+        deny[{"reason": "Another denial"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name in ["Standard_M128s", "Standard_D4s"]
+        }
+    conflict_expected: false
+
+  - note: no conflict - mutually exclusive conditions
+    effects: ["deny", "allow"]
+    policies:
+      - |
+        package policy10.azure
+        
+        deny[{"reason": "VM size not allowed"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name in ["Standard_M128s"]
+          input.location == "eastus"
+        }
+      - |
+        package policy11.azure
+        
+        allow[{"reason": "West region exception"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name in ["Standard_M128s"]
+          input.location == "westus"
+        }
+    conflict_expected: false
+
+  - note: no conflict - disjoint SKU arrays
+    effects: ["deny"]
+    policies:
+      - |
+        package policy5.azure
+        
+        deny[{"reason": "VM size not allowed"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name in ["Standard_GS5", "Standard_M128s"]
+        }
+      - |
+        package policy6.azure
+        
+        deny[{"reason": "Another denial"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name in ["Standard_D4s", "Standard_E8s"]
+        }
+    conflict_expected: false
+
+  - note: no conflict - different resource types
+    effects: ["deny"]
+    policies:
+      - |
+        package policy7.azure
+        
+        deny[{"reason": "VM size not allowed"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name in ["Standard_GS5"]
+        }
+      - |
+        package policy8.storage
+        
+        deny[{"reason": "Storage account denied"}] if {
+          input.type == "Microsoft.Storage/storageAccounts"
+          input.sku.name in ["Standard_GS5"]
+        }
+    conflict_expected: false
+
+  - note: no conflict - single policy
+    effects: ["deny"]
+    policies:
+      - |
+        package policy9.single
+        
+        deny[{"reason": "VM size not allowed"}] if {
+          input.type == "Microsoft.Compute/virtualMachines"
+          input.sku.name in ["Standard_GS5", "Standard_M128s"]
+        }
+    conflict_expected: false

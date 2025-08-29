@@ -19,7 +19,7 @@ keywords = ["interpreter", "no_std", "opa", "policy-as-code", "rego"]
 doctest = false
 
 [features]
-default = ["full-opa", "arc"]
+default = ["full-opa", "arc", "z3"]
 
 arc = ["scientific/arc"]
 ast = []
@@ -86,6 +86,9 @@ opa-no-std = [
 # Rego language extensions
 rego-extensions = []
 
+# Z3 theorem prover integration
+z3 = ["dep:z3"]
+
 # This feature enables some testing utils for OPA tests.
 opa-testutil = []
 rand = ["dep:rand"]
@@ -112,6 +115,9 @@ chrono-tz = { version = "0.10.1", optional = true }
 serde_yaml = {version = "0.9.16", default-features = false, optional = true }
 # Specify thread_rng for in order to use random_range
 rand = { version = "0.9.0", default-features = false, features = ["thread_rng"], optional = true }
+
+# Z3 theorem prover for advanced policy analysis and verification
+z3 = { version = "0.16.2", optional = true, features = ["gh-release"] }
 
 # Causes the project to link with the Spectre-mitigated CRT and libs.
 msvc_spectre_libs = { version = "0.1", features = ["error"], optional = true }
@@ -179,6 +185,12 @@ harness = false
 
 [[example]]
 name="regorus"
+harness=false
+test=false
+doctest=false
+
+[[example]]
+name="z3_examples"
 harness=false
 test=false
 doctest=false

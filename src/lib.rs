@@ -44,6 +44,9 @@ pub mod target;
 mod utils;
 mod value;
 
+#[cfg(feature = "z3")]
+pub mod z3_integration;
+
 #[cfg(feature = "azure_policy")]
 pub use {
     compile::compile_policy_for_target,
@@ -57,6 +60,12 @@ pub use engine::Engine;
 pub use lexer::Source;
 pub use policy_info::PolicyInfo;
 pub use value::Value;
+
+// Z3 integration re-exports
+#[cfg(feature = "z3")]
+pub use z3_integration::{
+    ConsistencyResult, CounterExample, RegoToZ3Converter, TestCase, Z3PolicyVerifier,
+};
 
 #[cfg(feature = "arc")]
 pub use alloc::sync::Arc as Rc;

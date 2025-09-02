@@ -55,6 +55,16 @@ pub enum Instruction {
         value: bool,
     },
 
+    /// Load global data object into register
+    LoadData {
+        dest: u16,
+    },
+
+    /// Load global input object into register
+    LoadInput {
+        dest: u16,
+    },
+
     /// Move value from one register to another
     Move {
         dest: u16,
@@ -258,6 +268,8 @@ impl Instruction {
             Instruction::LoadFalse { dest } => format!("LOAD_FALSE R({})", dest),
             Instruction::LoadNull { dest } => format!("LOAD_NULL R({})", dest),
             Instruction::LoadBool { dest, value } => format!("LOAD_BOOL R({}) {}", dest, value),
+            Instruction::LoadData { dest } => format!("LOAD_DATA R({})", dest),
+            Instruction::LoadInput { dest } => format!("LOAD_INPUT R({})", dest),
             Instruction::Move { dest, src } => format!("MOVE R({}) R({})", dest, src),
             Instruction::Add { dest, left, right } => {
                 format!("ADD R({}) R({}) R({})", dest, left, right)

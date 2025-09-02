@@ -33,6 +33,16 @@ impl CompiledPolicy {
     pub(crate) fn new(inner: Rc<CompiledPolicyData>) -> Self {
         Self { inner }
     }
+
+    /// Get access to the rules in the compiled policy for RVM compilation
+    pub fn get_rules(&self) -> &Map<String, Vec<Ref<Rule>>> {
+        &self.inner.rules
+    }
+
+    /// Get access to the modules in the compiled policy
+    pub fn get_modules(&self) -> &Vec<Ref<Module>> {
+        &self.inner.modules
+    }
 }
 
 impl CompiledPolicy {

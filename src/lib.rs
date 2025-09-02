@@ -36,6 +36,7 @@ mod parser;
 mod policy_info;
 #[cfg(feature = "azure_policy")]
 pub mod registry;
+pub mod rvm;
 mod scheduler;
 #[cfg(feature = "azure_policy")]
 mod schema;

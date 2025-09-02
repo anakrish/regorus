@@ -1581,11 +1581,6 @@ impl<'a> Compiler<'a> {
             *loop_end = actual_loop_end;
         }
 
-        self.instructions.push(Instruction::LoopNext {
-            body_start,
-            loop_end: (self.instructions.len() + 1) as u16,
-        });
-
         Ok(result_reg)
     }
 
@@ -1617,7 +1612,7 @@ impl<'a> Compiler<'a> {
         let result_reg = self.alloc_register();
 
         let body_start = (self.instructions.len() + 1) as u16;
-        let loop_end = body_start + 10;
+        let loop_start_idx = self.instructions.len();
 
         self.instructions.push(Instruction::LoopStart {
             mode: LoopMode::ObjectComprehension,
@@ -1626,7 +1621,7 @@ impl<'a> Compiler<'a> {
             value_reg,
             result_reg,
             body_start,
-            loop_end,
+            loop_end: 0, // Will be updated below
         });
 
         // Store loop variables in scope (hardcoded for now)
@@ -1643,10 +1638,18 @@ impl<'a> Compiler<'a> {
             key: Some(key_result_reg),
         });
 
+        let actual_loop_end = (self.instructions.len() + 1) as u16;
         self.instructions.push(Instruction::LoopNext {
             body_start,
-            loop_end: (self.instructions.len() + 1) as u16,
+            loop_end: actual_loop_end,
         });
+
+        // Update the LoopStart instruction with the correct loop_end
+        if let Some(Instruction::LoopStart { loop_end, .. }) =
+            self.instructions.get_mut(loop_start_idx)
+        {
+            *loop_end = actual_loop_end;
+        }
 
         Ok(result_reg)
     }

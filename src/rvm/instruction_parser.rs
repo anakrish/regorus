@@ -1,6 +1,5 @@
 use crate::rvm::instructions::{Instruction, LoopMode};
 use crate::value::Value;
-use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use anyhow::{anyhow, bail, Result};

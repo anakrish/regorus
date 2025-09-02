@@ -395,6 +395,7 @@ impl RegoVM {
                 }
 
                 Instruction::Return { value } => {
+                    std::dbg!(("return", &self.registers[value as usize]));
                     return Ok(self.registers[value as usize].clone());
                 }
 
@@ -442,6 +443,7 @@ impl RegoVM {
 
                 Instruction::ArrayPush { arr, value } => {
                     let value_to_push = self.registers[value as usize].clone();
+                    std::dbg!(("Pushing value to array", &arr, &value_to_push));
 
                     // Swap the value from the register with Null, modify it, and put it back
                     let mut arr_value =
@@ -449,6 +451,7 @@ impl RegoVM {
 
                     if let Ok(arr_mut) = arr_value.as_array_mut() {
                         arr_mut.push(value_to_push);
+                        std::dbg!(&arr_value);
                         self.registers[arr as usize] = arr_value;
                     } else {
                         // Restore the original value and bail
@@ -788,6 +791,7 @@ impl RegoVM {
         loop_end: u16,
     ) -> Result<()> {
         // Initialize result container based on mode
+        std::dbg!(("loop start", &result_reg));
         let initial_result = match mode {
             LoopMode::Existential | LoopMode::Universal => Value::Bool(false),
             LoopMode::ArrayComprehension => Value::new_array(),
@@ -866,13 +870,18 @@ impl RegoVM {
     }
 
     /// Execute LoopNext instruction
-    fn execute_loop_next(&mut self, body_start: u16, loop_end: u16) -> Result<()> {
-        std::println!(
-            "Debug: LoopNext - body_start={}, loop_end={}",
-            body_start,
-            loop_end
-        );
+    fn execute_loop_next(&mut self, _body_start: u16, _loop_end: u16) -> Result<()> {
+        // Ignore the parameters and use the loop context instead
         if let Some(mut loop_ctx) = self.loop_stack.pop() {
+            let body_start = loop_ctx.body_start;
+            let loop_end = loop_ctx.loop_end;
+
+            std::println!(
+                "Debug: LoopNext - body_start={}, loop_end={} (from context)",
+                body_start,
+                loop_end
+            );
+
             loop_ctx.total_iterations += 1;
             std::println!(
                 "Debug: LoopNext - total_iterations={}",
@@ -971,7 +980,7 @@ impl RegoVM {
             std::println!(
                 "Debug: LoopNext - no active loop (empty collection), jumping past loop_end"
             );
-            self.pc = loop_end as usize; // Jump past LoopNext instruction
+            self.pc = _loop_end as usize; // Jump past LoopNext instruction
             Ok(())
         }
     }

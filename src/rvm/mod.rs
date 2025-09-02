@@ -6,7 +6,16 @@ pub mod instructions;
 pub mod vm;
 
 #[cfg(test)]
+mod instruction_parser;
+
+#[cfg(test)]
+mod test_optimization;
+
+#[cfg(test)]
 pub mod tests;
+
+#[cfg(test)]
+mod vm_tests;
 
 pub use compiler::Compiler;
 pub use instructions::Instruction;

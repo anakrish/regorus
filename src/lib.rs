@@ -482,4 +482,4 @@ pub mod unstable {
 }
 
 #[cfg(test)]
-mod tests;
+pub mod tests;

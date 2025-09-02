@@ -578,12 +578,9 @@ impl RegoVM {
                                     }
                                 }
                             } else {
-                                // Outside of loop context, return appropriate value for failed assertion
-                                match value {
-                                    Value::Bool(false) => return Ok(Value::Bool(false)),
-                                    Value::Undefined => return Ok(Value::Undefined),
-                                    _ => unreachable!(),
-                                }
+                                // Outside of loop context, failed assertion means rule is undefined
+                                std::println!("Debug: AssertCondition failed outside loop - returning Undefined");
+                                return Ok(Value::Undefined);
                             }
                         }
                         Value::Null => {

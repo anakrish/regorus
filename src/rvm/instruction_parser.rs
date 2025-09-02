@@ -20,6 +20,8 @@ pub fn parse_instruction(text: &str) -> Result<Instruction> {
             "LoadFalse" => parse_load_false(params_text),
             "LoadNull" => parse_load_null(params_text),
             "LoadBool" => parse_load_bool(params_text),
+            "LoadData" => parse_load_data(params_text),
+            "LoadInput" => parse_load_input(params_text),
             "Move" => parse_move(params_text),
             "Add" => parse_add(params_text),
             "Sub" => parse_sub(params_text),
@@ -502,6 +504,18 @@ fn parse_load_bool(params_text: &str) -> Result<Instruction> {
     let dest = get_param_u16(&params, "dest")?;
     let value = get_param_bool(&params, "value")?;
     Ok(Instruction::LoadBool { dest, value })
+}
+
+fn parse_load_data(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let dest = get_param_u16(&params, "dest")?;
+    Ok(Instruction::LoadData { dest })
+}
+
+fn parse_load_input(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let dest = get_param_u16(&params, "dest")?;
+    Ok(Instruction::LoadInput { dest })
 }
 
 fn parse_mod(params_text: &str) -> Result<Instruction> {

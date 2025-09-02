@@ -77,6 +77,12 @@ pub struct RegoVM {
     /// The bytecode instructions
     instructions: Vec<Instruction>,
 
+    /// Global data object
+    data: Value,
+
+    /// Global input object
+    input: Value,
+
     /// Built-in functions
     builtins: BTreeMap<String, fn(&[Value]) -> Result<Value>>,
 
@@ -105,6 +111,8 @@ impl RegoVM {
             literals: Vec::new(),
             pc: 0,
             instructions: Vec::new(),
+            data: Value::Null,
+            input: Value::Null,
             builtins: BTreeMap::new(),
             loop_stack: Vec::new(),
             max_instructions: 5000, // Default maximum instruction limit
@@ -141,6 +149,16 @@ impl RegoVM {
     /// Set the maximum number of instructions that can be executed
     pub fn set_max_instructions(&mut self, max: usize) {
         self.max_instructions = max;
+    }
+
+    /// Set the global data object
+    pub fn set_data(&mut self, data: Value) {
+        self.data = data;
+    }
+
+    /// Set the global input object
+    pub fn set_input(&mut self, input: Value) {
+        self.input = input;
     }
 
     /// Execute the loaded instructions
@@ -207,6 +225,14 @@ impl RegoVM {
 
                 Instruction::LoadBool { dest, value } => {
                     self.registers[dest as usize] = Value::Bool(value);
+                }
+
+                Instruction::LoadData { dest } => {
+                    self.registers[dest as usize] = self.data.clone();
+                }
+
+                Instruction::LoadInput { dest } => {
+                    self.registers[dest as usize] = self.input.clone();
                 }
 
                 Instruction::Move { dest, src } => {

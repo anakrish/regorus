@@ -1,9 +1,11 @@
 use crate::rvm::instructions::{Instruction, LoopMode};
+use crate::rvm::program::Program;
 use crate::value::Value;
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
+use alloc::vec;
 use alloc::vec::Vec;
 use anyhow::{bail, Result};
 
@@ -34,12 +36,13 @@ enum IterationState {
     },
     Object {
         obj: Arc<BTreeMap<Value, Value>>,
-        keys: Vec<Value>,
-        index: usize,
+        current_key: Option<Value>,
+        first_iteration: bool,
     },
     Set {
-        items: Vec<Value>,
-        index: usize,
+        items: Arc<std::collections::BTreeSet<Value>>,
+        current_item: Option<Value>,
+        first_iteration: bool,
     },
 }
 
@@ -49,8 +52,16 @@ impl IterationState {
             IterationState::Array { index, .. } => {
                 *index += 1;
             }
-            IterationState::Object { index, .. } => *index += 1,
-            IterationState::Set { index, .. } => *index += 1,
+            IterationState::Object {
+                first_iteration, ..
+            } => {
+                *first_iteration = false;
+            }
+            IterationState::Set {
+                first_iteration, ..
+            } => {
+                *first_iteration = false;
+            }
         }
     }
 }
@@ -68,14 +79,14 @@ pub struct RegoVM {
     /// Registers for storing values during execution
     registers: Vec<Value>,
 
-    /// Literal table
-    literals: Vec<Value>,
-
     /// Program counter
     pc: usize,
 
-    /// The bytecode instructions
-    instructions: Vec<Instruction>,
+    /// The compiled program containing instructions, literals, and metadata
+    program: Option<Arc<Program>>,
+
+    /// Rule execution cache: rule_index -> (computed: bool, result: Value)
+    rule_cache: Vec<(bool, Value)>,
 
     /// Global data object
     data: Value,
@@ -108,9 +119,9 @@ impl RegoVM {
                 }
                 regs
             },
-            literals: Vec::new(),
             pc: 0,
-            instructions: Vec::new(),
+            program: None,
+            rule_cache: Vec::new(),
             data: Value::Null,
             input: Value::Null,
             builtins: BTreeMap::new(),
@@ -124,24 +135,21 @@ impl RegoVM {
         vm
     }
 
-    /// Load instructions into the VM
-    pub fn load(&mut self, instructions: Vec<Instruction>) {
-        self.instructions = instructions;
-        self.literals = Vec::new();
-        self.pc = 0;
-        self.executed_instructions = 0; // Reset instruction counter
-    }
-
-    /// Load a complete program with instructions and literals
-    pub fn load_program(&mut self, instructions: Vec<Instruction>, literals: Vec<Value>) {
-        self.instructions = instructions;
-        self.literals = literals.clone();
-        self.pc = 0;
+    /// Load a complete program for execution
+    pub fn load_program(&mut self, program: Arc<Program>) {
+        self.program = Some(program.clone());
+        
+        // Initialize rule cache
+        self.rule_cache = vec![(false, Value::Undefined); program.rule_entry_points.len()];
+        
+        // Set PC to main entry point
+        self.pc = program.main_entry_point;
         self.executed_instructions = 0; // Reset instruction counter
 
-        // Debug: Print the literals received by VM
-        std::println!("Debug: VM received {} literals:", self.literals.len());
-        for (i, literal) in self.literals.iter().enumerate() {
+        // Debug: Print the program received by VM
+        std::println!("Debug: VM received program with {} instructions, {} literals, {} rules:", 
+                     program.instructions.len(), program.literals.len(), program.rule_info.len());
+        for (i, literal) in program.literals.iter().enumerate() {
             std::println!("  VM literal_idx {}: {:?}", i, literal);
         }
     }
@@ -161,13 +169,18 @@ impl RegoVM {
         self.input = input;
     }
 
-    /// Execute the loaded instructions
+    /// Execute the loaded program
     pub fn execute(&mut self) -> Result<Value> {
+        // Ensure we have a program loaded
+        let program = self.program.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No program loaded"))?
+            .clone();
+
         // Reset execution state for each execution
         self.executed_instructions = 0;
-        self.pc = 0;
+        self.pc = program.main_entry_point;
 
-        while self.pc < self.instructions.len() {
+        while self.pc < program.instructions.len() {
             // Check instruction execution limit
             if self.executed_instructions >= self.max_instructions {
                 bail!(
@@ -177,7 +190,7 @@ impl RegoVM {
             }
 
             self.executed_instructions += 1;
-            let instruction = self.instructions[self.pc].clone();
+            let instruction = program.instructions[self.pc].clone();
 
             // Debug excessive instruction execution
             if self.executed_instructions > 4990 {
@@ -191,7 +204,7 @@ impl RegoVM {
 
             match instruction {
                 Instruction::Load { dest, literal_idx } => {
-                    if let Some(value) = self.literals.get(literal_idx as usize) {
+                    if let Some(value) = program.literals.get(literal_idx as usize) {
                         std::println!(
                             "Debug: Load instruction - dest={}, literal_idx={}, value={:?}",
                             dest,
@@ -397,6 +410,15 @@ impl RegoVM {
                 Instruction::Return { value } => {
                     std::dbg!(("return", &self.registers[value as usize]));
                     return Ok(self.registers[value as usize].clone());
+                }
+
+                Instruction::JumpRule { dest, rule_index } => {
+                    self.execute_jump_rule(dest, rule_index, &program)?;
+                }
+
+                Instruction::RuleReturn { value: _ } => {
+                    // This should not be reached in main execution - it's handled in execute_jump_rule
+                    bail!("RuleReturn instruction encountered in main execution");
                 }
 
                 Instruction::ObjectNew { dest } => {
@@ -639,6 +661,107 @@ impl RegoVM {
         self.builtins.insert(String::from("sum"), builtin_sum);
     }
 
+    /// Execute JumpRule instruction with caching
+    fn execute_jump_rule(&mut self, dest: u16, rule_index: u32, program: &Program) -> Result<()> {
+        let rule_idx = rule_index as usize;
+        
+        // Check bounds
+        if rule_idx >= self.rule_cache.len() {
+            bail!("Rule index {} out of bounds", rule_index);
+        }
+        
+        // Check cache first
+        let (computed, cached_result) = &self.rule_cache[rule_idx];
+        if *computed {
+            // Cache hit - return cached result
+            self.registers[dest as usize] = cached_result.clone();
+            return Ok(());
+        }
+        
+        // Cache miss - execute the rule
+        let result = self.execute_rule_at_entry_point(rule_idx, program)?;
+        
+        // Cache the result
+        self.rule_cache[rule_idx] = (true, result.clone());
+        
+        // Store result in destination register
+        self.registers[dest as usize] = result;
+        
+        Ok(())
+    }
+    
+    /// Execute rule starting at specific entry point
+    fn execute_rule_at_entry_point(&mut self, rule_index: usize, program: &Program) -> Result<Value> {
+        // Check bounds
+        if rule_index >= program.rule_entry_points.len() {
+            bail!("Rule entry point {} not found", rule_index);
+        }
+        
+        // Save current PC
+        let saved_pc = self.pc;
+        
+        // Jump to rule entry point
+        self.pc = program.rule_entry_points[rule_index];
+        
+        // Execute until we hit a RuleReturn instruction or end of program
+        while self.pc < program.instructions.len() {
+            // Check instruction execution limit
+            if self.executed_instructions >= self.max_instructions {
+                bail!("Execution stopped: exceeded maximum instruction limit");
+            }
+            
+            self.executed_instructions += 1;
+            let instruction = program.instructions[self.pc].clone();
+            
+            match instruction {
+                Instruction::RuleReturn { value } => {
+                    // Rule completed - restore PC and return result
+                    self.pc = saved_pc;
+                    return Ok(self.registers[value as usize].clone());
+                }
+                
+                // Handle all other instructions normally (reuse main execution logic)
+                _ => {
+                    self.handle_single_instruction(instruction, program)?;
+                }
+            }
+            
+            self.pc += 1;
+        }
+        
+        // If we reach here, rule didn't have explicit return
+        self.pc = saved_pc;
+        Ok(Value::Undefined)
+    }
+    
+    /// Handle a single instruction (extracted from main execute loop)
+    fn handle_single_instruction(&mut self, instruction: Instruction, program: &Program) -> Result<()> {
+        match instruction {
+            // Handle all existing instructions except JumpRule and RuleReturn
+            Instruction::JumpRule { .. } => {
+                bail!("Nested JumpRule not allowed during rule execution");
+            }
+            Instruction::RuleReturn { .. } => {
+                // This should not be reached as it's handled in execute_rule_at_entry_point
+                bail!("RuleReturn should be handled in rule execution context");
+            }
+            
+            Instruction::Load { dest, literal_idx } => {
+                if let Some(value) = program.literals.get(literal_idx as usize) {
+                    self.registers[dest as usize] = value.clone();
+                } else {
+                    bail!("Literal index {} out of bounds", literal_idx);
+                }
+            }
+            
+            // For now, implement basic instructions and extend as needed
+            _ => {
+                bail!("Instruction {:?} not yet supported in rule execution", instruction);
+            }
+        }
+        Ok(())
+    }
+
     /// Add two values
     fn add_values(&self, a: &Value, b: &Value) -> Result<Value> {
         match (a, b) {
@@ -816,11 +939,10 @@ impl RegoVM {
                     self.handle_empty_collection(mode, result_reg, loop_end)?;
                     return Ok(());
                 }
-                let keys: Vec<Value> = obj.keys().cloned().collect();
                 IterationState::Object {
                     obj: obj.clone(),
-                    keys,
-                    index: 0,
+                    current_key: None,
+                    first_iteration: true,
                 }
             }
             Value::Set(set) => {
@@ -828,8 +950,11 @@ impl RegoVM {
                     self.handle_empty_collection(mode, result_reg, loop_end)?;
                     return Ok(());
                 }
-                let items: Vec<Value> = set.iter().cloned().collect();
-                IterationState::Set { items, index: 0 }
+                IterationState::Set {
+                    items: set.clone(),
+                    current_item: None,
+                    first_iteration: true,
+                }
             }
             _ => {
                 bail!("Cannot iterate over {:?}", collection_value);
@@ -920,6 +1045,25 @@ impl RegoVM {
             }
 
             // Advance to next iteration
+            // Store current key/item before advancing for Object and Set iteration
+            if let IterationState::Object {
+                ref mut current_key,
+                ..
+            } = &mut loop_ctx.iteration_state
+            {
+                // Get the key from the key register to store as current_key
+                if loop_ctx.key_reg != u16::MAX {
+                    *current_key = Some(self.registers[loop_ctx.key_reg as usize].clone());
+                }
+            } else if let IterationState::Set {
+                ref mut current_item,
+                ..
+            } = &mut loop_ctx.iteration_state
+            {
+                // Get the item from the value register to store as current_item
+                *current_item = Some(self.registers[loop_ctx.value_reg as usize].clone());
+            }
+
             loop_ctx.iteration_state.advance();
             std::println!("Debug: LoopNext - advanced to next iteration");
             let has_next = self.setup_next_iteration(
@@ -1068,29 +1212,82 @@ impl RegoVM {
                     Ok(false)
                 }
             }
-            IterationState::Object { obj, keys, index } => {
-                if *index < keys.len() {
-                    let key = &keys[*index];
-                    if key_reg != u16::MAX {
-                        self.registers[key_reg as usize] = key.clone();
+            IterationState::Object {
+                obj,
+                current_key,
+                first_iteration,
+            } => {
+                if *first_iteration {
+                    // First iteration: get the first key-value pair
+                    if let Some((key, value)) = obj.iter().next() {
+                        if key_reg != u16::MAX {
+                            self.registers[key_reg as usize] = key.clone();
+                        }
+                        self.registers[value_reg as usize] = value.clone();
+                        Ok(true)
+                    } else {
+                        Ok(false)
                     }
-                    self.registers[value_reg as usize] = obj[key].clone();
-                    Ok(true)
                 } else {
-                    Ok(false)
+                    // Subsequent iterations: use range starting after current_key
+                    if let Some(ref current) = current_key {
+                        // Use range to get next key after current
+                        let mut range_iter = obj.range((
+                            std::ops::Bound::Excluded(current),
+                            std::ops::Bound::Unbounded,
+                        ));
+                        if let Some((key, value)) = range_iter.next() {
+                            if key_reg != u16::MAX {
+                                self.registers[key_reg as usize] = key.clone();
+                            }
+                            self.registers[value_reg as usize] = value.clone();
+                            Ok(true)
+                        } else {
+                            Ok(false)
+                        }
+                    } else {
+                        Ok(false)
+                    }
                 }
             }
-            IterationState::Set { items, index } => {
-                if *index < items.len() {
-                    let value = &items[*index];
-                    if key_reg != u16::MAX {
-                        // For sets, key and value are the same
-                        self.registers[key_reg as usize] = value.clone();
+            IterationState::Set {
+                items,
+                current_item,
+                first_iteration,
+            } => {
+                if *first_iteration {
+                    // First iteration: get the first item
+                    if let Some(item) = items.iter().next() {
+                        if key_reg != u16::MAX {
+                            // For sets, key and value are the same
+                            self.registers[key_reg as usize] = item.clone();
+                        }
+                        self.registers[value_reg as usize] = item.clone();
+                        Ok(true)
+                    } else {
+                        Ok(false)
                     }
-                    self.registers[value_reg as usize] = value.clone();
-                    Ok(true)
                 } else {
-                    Ok(false)
+                    // Subsequent iterations: use range starting after current_item
+                    if let Some(ref current) = current_item {
+                        // Use range to get next item after current
+                        let mut range_iter = items.range((
+                            std::ops::Bound::Excluded(current),
+                            std::ops::Bound::Unbounded,
+                        ));
+                        if let Some(item) = range_iter.next() {
+                            if key_reg != u16::MAX {
+                                // For sets, key and value are the same
+                                self.registers[key_reg as usize] = item.clone();
+                            }
+                            self.registers[value_reg as usize] = item.clone();
+                            Ok(true)
+                        } else {
+                            Ok(false)
+                        }
+                    } else {
+                        Ok(false)
+                    }
                 }
             }
         }

@@ -3,13 +3,14 @@
 
 pub mod compiler;
 pub mod instructions;
+pub mod program;
 pub mod vm;
 
 #[cfg(test)]
 mod instruction_parser;
 
 #[cfg(test)]
-mod test_optimization;
+mod program_test;
 
 #[cfg(test)]
 pub mod tests;
@@ -19,4 +20,5 @@ mod vm_tests;
 
 pub use compiler::Compiler;
 pub use instructions::Instruction;
+pub use program::Program;
 pub use vm::RegoVM;

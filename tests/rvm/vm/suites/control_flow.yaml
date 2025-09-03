@@ -32,7 +32,7 @@ cases:
       - "Gt { dest: 2, left: 0, right: 1 }" # Check if 10 > 15, store result in register 2
       - "AssertCondition { condition: 2 }"  # Assert the condition (should fail)
       - "Return { value: 0 }"               # Return the original value (never reached)
-    want_result: false  # VM should return false for failed assertion
+    want_result: "#undefined"  # VM should return undefined for failed assertion
 
   - note: complex_condition_and
     description: Test complex AND condition
@@ -68,7 +68,7 @@ cases:
       - "Or { dest: 5, left: 3, right: 4 }" # OR both conditions, store result in register 5
       - "AssertCondition { condition: 5 }"  # Assert the combined condition (should fail)
       - "Return { value: 0 }"               # Return the original value (never reached)
-    want_result: false  # VM should return false for failed assertion
+    want_result: "#undefined"  # VM should return undefined for failed assertion
 
   - note: conditional_value_selection
     description: Test conditional value selection

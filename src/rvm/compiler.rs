@@ -2,6 +2,7 @@ use super::instructions::LoopMode;
 use super::Instruction;
 use crate::ast::{Expr, Module, Ref, Rule, RuleHead};
 use crate::lexer::Span;
+use crate::rvm::program::{Program, SpanInfo};
 use crate::{CompiledPolicy, Value};
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -13,28 +14,6 @@ use std::sync::Arc;
 pub type Register = u16;
 pub type Result<T> = anyhow::Result<T>;
 type Scope = BTreeMap<String, Register>;
-
-/// Span information for debugging and source mapping
-#[derive(Debug, Clone)]
-pub struct SpanInfo {
-    pub source_file_idx: u32,
-    pub start: u32,
-    pub end: u32,
-    pub line: u32,
-    pub col: u32,
-}
-
-impl From<&Span> for SpanInfo {
-    fn from(span: &Span) -> Self {
-        SpanInfo {
-            source_file_idx: 0, // TODO: Extract from span.source
-            start: span.start,
-            end: span.end,
-            line: span.line,
-            col: span.col,
-        }
-    }
-}
 
 /// Result of compilation including instructions and their corresponding spans
 #[derive(Debug)]
@@ -166,8 +145,37 @@ impl<'a> Compiler<'a> {
             // Check if this rule exists in the policy
             let rules = policy.get_rules();
             if let Some(rule_variants) = rules.get(&rule_path) {
-                if let Some(rule_ref) = rule_variants.first() {
-                    // Recursively compile this rule to get its value
+                // Check if this is a set rule (has multiple variants with contains)
+                let is_set_rule = rule_variants.iter().any(|rule| {
+                    if let crate::ast::Rule::Spec { head, .. } = rule.as_ref() {
+                        matches!(head, crate::ast::RuleHead::Set { .. })
+                    } else {
+                        false
+                    }
+                });
+
+                if is_set_rule {
+                    // For set rules, compile all variants and create a set
+                    std::println!("Debug: Compiling set rule '{}' with {} variants", var_name, rule_variants.len());
+                    let dest = self.alloc_register();
+                    self.emit_instruction(Instruction::SetNew { dest }, span);
+
+                    for (i, rule_ref) in rule_variants.iter().enumerate() {
+                        std::println!("Debug: Compiling set rule variant {}", i);
+                        if let Some(value_reg) = self.compile_rule_reference(rule_ref, &rule_path)? {
+                            // Add the value to the set
+                            self.emit_instruction(
+                                Instruction::SetAdd {
+                                    set: dest,
+                                    value: value_reg,
+                                },
+                                span,
+                            );
+                        }
+                    }
+                    return Ok(dest);
+                } else if let Some(rule_ref) = rule_variants.first() {
+                    // For non-set rules, use the first variant as before
                     match self.compile_rule_reference(rule_ref, &rule_path)? {
                         Some(reg) => return Ok(reg),
                         None => {
@@ -197,25 +205,40 @@ impl<'a> Compiler<'a> {
     ) -> Result<Option<Register>> {
         match rule {
             crate::ast::Rule::Spec { head, bodies, .. } => {
-                // For head-only rules (simple assignments like x = 42)
-                if bodies.is_empty() {
-                    match head {
-                        crate::ast::RuleHead::Compr { assign, .. } => {
+                match head {
+                    crate::ast::RuleHead::Set { key, .. } => {
+                        // For set rules, extract the key value from the contains expression
+                        if let Some(key_expr) = key {
+                            std::println!("Debug: Compiling set rule key: {:?}", key_expr);
+                            let reg = self.compile_rego_expr(key_expr)?;
+                            return Ok(Some(reg));
+                        }
+                        return Ok(None);
+                    }
+                    crate::ast::RuleHead::Compr { assign, .. } => {
+                        // For head-only rules (simple assignments like x = 42)
+                        if bodies.is_empty() {
                             if let Some(assign) = assign {
                                 // Compile the assignment value directly
                                 let reg = self.compile_rego_expr(&assign.value)?;
                                 return Ok(Some(reg));
                             }
                         }
-                        _ => {
-                            // Other head types not implemented yet
-                            return Ok(None);
+                        // Rules with bodies would need more complex handling
+                        // For now, return None
+                        return Ok(None);
+                    }
+                    crate::ast::RuleHead::Func { assign, .. } => {
+                        // For function rules with assignment
+                        if bodies.is_empty() {
+                            if let Some(assign) = assign {
+                                let reg = self.compile_rego_expr(&assign.value)?;
+                                return Ok(Some(reg));
+                            }
                         }
+                        return Ok(None);
                     }
                 }
-                // Rules with bodies would need more complex handling
-                // For now, return None
-                Ok(None)
             }
             crate::ast::Rule::Default { value, .. } => {
                 // Compile the default value
@@ -237,20 +260,14 @@ impl<'a> Compiler<'a> {
     /// Emit an instruction with span tracking
     pub fn emit_instruction(&mut self, instruction: Instruction, span: &Span) {
         self.instructions.push(instruction);
-        self.spans.push(SpanInfo::from(span));
+        self.spans.push(SpanInfo::from_lexer_span(span, 0)); // Use source index 0 for now
     }
 
     pub fn finish(mut self, result_reg: Register) -> CompiledProgram {
         // Add return instruction
         self.instructions
             .push(Instruction::Return { value: result_reg });
-        self.spans.push(SpanInfo {
-            source_file_idx: 0,
-            start: 0,
-            end: 0,
-            line: 0,
-            col: 0,
-        });
+        self.spans.push(SpanInfo::new(0, 0, 0, 0)); // Default span for return instruction
 
         CompiledProgram {
             instructions: self.instructions,
@@ -625,8 +642,41 @@ impl<'a> Compiler<'a> {
         Ok(result_reg)
     }
 
-    /// Compile from a CompiledPolicy to RVM instructions
+    /// Compile from a CompiledPolicy to RVM Program
     pub fn compile_from_policy(
+        policy: &CompiledPolicy,
+        rule_name: &str,
+    ) -> Result<Arc<Program>> {
+        // First compile to the legacy format
+        let compiled_program = Self::compile_from_policy_legacy(policy, rule_name)?;
+        
+        // Convert to new Program format
+        let mut program = Program::new();
+        program.instructions = compiled_program.instructions;
+        program.literals = compiled_program.literals;
+        program.main_entry_point = 0;
+        
+        // Extract source contents from the policy modules
+        for module in policy.get_modules().iter() {
+            let source = &module.package.refr.span().source;
+            let source_path = source.get_path().to_string();
+            let source_content = source.get_contents().to_string();
+            
+            // Add source file to the program's source table
+            program.add_source(source_path, source_content);
+        }
+        
+        // TODO: Convert spans to new format and add to instruction_spans
+        program.instruction_spans = compiled_program.spans
+            .into_iter()
+            .map(|_span| None) // For now, don't convert old spans
+            .collect();
+        
+        Ok(Arc::new(program))
+    }
+
+    /// Legacy method that returns CompiledProgram (for backward compatibility)
+    pub fn compile_from_policy_legacy(
         policy: &CompiledPolicy,
         rule_name: &str,
     ) -> Result<CompiledProgram> {
@@ -880,7 +930,7 @@ impl<'a> Compiler<'a> {
     /// Compile all rules from a CompiledPolicy
     pub fn compile_all_rules_from_policy(
         policy: &CompiledPolicy,
-    ) -> Result<Vec<(String, CompiledProgram)>> {
+    ) -> Result<Vec<(String, Arc<Program>)>> {
         let mut compiled_rules = Vec::new();
         let rules = policy.get_rules();
 

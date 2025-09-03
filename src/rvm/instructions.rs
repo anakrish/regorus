@@ -1,8 +1,9 @@
 use alloc::format;
 use alloc::string::String;
+use serde::{Deserialize, Serialize};
 
 /// Loop execution modes for different Rego iteration constructs
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LoopMode {
     /// Existential quantification: some x in arr, x := arr[_], etc.
     /// Succeeds if ANY iteration succeeds, exits early on first success
@@ -26,7 +27,7 @@ pub enum LoopMode {
 }
 
 /// RVM Instructions - simplified enum-based design
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Instruction {
     /// Load literal value from literal table into register
     Load {
@@ -253,6 +254,20 @@ pub enum Instruction {
         key: Option<u16>,
     },
 
+    /// Jump to rule with caching - checks cache first, executes rule if needed
+    JumpRule {
+        /// Register to store result
+        dest: u16,
+        /// Rule index to execute
+        rule_index: u32,
+    },
+
+    /// Return from rule execution
+    RuleReturn {
+        /// Register containing return value
+        value: u16,
+    },
+
     /// Stop execution
     Halt,
 }
@@ -371,6 +386,12 @@ impl Instruction {
                 } else {
                     format!("LOOP_ACCUMULATE R({})", value)
                 }
+            }
+            Instruction::JumpRule { dest, rule_index } => {
+                format!("JUMP_RULE R({}) {}", dest, rule_index)
+            }
+            Instruction::RuleReturn { value } => {
+                format!("RULE_RETURN R({})", value)
             }
             Instruction::Halt => String::from("HALT"),
         }

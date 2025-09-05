@@ -1,26 +1,50 @@
 use super::instructions::LoopMode;
+use super::program::Program;
 use super::Instruction;
-use crate::ast::{Expr, Module, Ref, Rule, RuleHead};
+use crate::ast::{Expr, ExprRef, Rule, RuleHead};
 use crate::lexer::Span;
-use crate::rvm::program::{Program, SpanInfo};
+use crate::rvm::program::RuleType;
+use crate::rvm::program::SpanInfo;
 use crate::{CompiledPolicy, Value};
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 pub type Register = u16;
-pub type Result<T> = anyhow::Result<T>;
-type Scope = BTreeMap<String, Register>;
+use anyhow::{bail, Result};
 
-/// Result of compilation including instructions and their corresponding spans
-#[derive(Debug)]
-pub struct CompiledProgram {
-    pub instructions: Vec<Instruction>,
-    pub literals: Vec<Value>,
-    pub spans: Vec<SpanInfo>,
+#[derive(Debug, Clone, Default)]
+struct Scope {
+    bound_vars: BTreeMap<String, Register>,
+    unbound_vars: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ComprehensionType {
+    Array,
+    Object,
+    Set,
+}
+
+#[derive(Debug, Clone)]
+pub enum ContextType {
+    Comprehension(ComprehensionType),
+    Rule(RuleType),
+}
+
+/// Compilation context for handling different types of rule bodies and comprehensions
+#[derive(Debug, Clone)]
+pub struct CompilationContext {
+    context_type: ContextType,
+    dest_register: Register,
+    key_expr: Option<ExprRef>,
+    value_expr: Option<ExprRef>,
+    span: Span,
+    key_value_loops_hoisted: bool,
 }
 
 pub struct Compiler<'a> {
@@ -28,36 +52,35 @@ pub struct Compiler<'a> {
     literals: Vec<Value>,
     spans: Vec<SpanInfo>,
     register_counter: Register,
-    constants: HashMap<Value, Register>,
-    scopes: Vec<Scope>, // Stack of variable scopes (like the interpreter)
-    policy: Option<&'a CompiledPolicy>, // Reference to the compiled policy for rule lookup
-    current_package: String, // Current package path (e.g., "data.test")
+    scopes: Vec<Scope>,         // Stack of variable scopes (like the interpreter)
+    policy: &'a CompiledPolicy, // Reference to the compiled policy for rule lookup
+    current_package: String,    // Current package path (e.g., "data.test")
+    // Three-level hierarchy compilation fields
+    rule_index_map: HashMap<String, u16>, // Maps rule paths to their assigned rule indices
+    rule_worklist: Vec<String>,           // Rules that need to be compiled
+    rule_definitions: Vec<Vec<Vec<usize>>>, // rule_index -> Vec<definition> where definition is Vec<body_entry_point>
+    rule_types: Vec<RuleType>,              // rule_index -> true if set rule, false if regular rule
+    // Context stack for output expression handling
+    context_stack: Vec<CompilationContext>, // Stack of compilation contexts
+    loop_expr_register_map: BTreeMap<ExprRef, Register>, // Map from loop expressions to their allocated registers
 }
 
 impl<'a> Compiler<'a> {
-    pub fn new() -> Self {
-        Self {
-            instructions: Vec::new(),
-            literals: Vec::new(),
-            spans: Vec::new(),
-            register_counter: 1, // Reserve register 0 for special uses
-            constants: HashMap::new(),
-            scopes: vec![Scope::new()], // Start with one global scope
-            policy: None,
-            current_package: String::new(),
-        }
-    }
-
     pub fn with_policy(policy: &'a CompiledPolicy, package: String) -> Self {
         Self {
             instructions: Vec::new(),
             literals: Vec::new(),
             spans: Vec::new(),
             register_counter: 1,
-            constants: HashMap::new(),
-            scopes: vec![Scope::new()],
-            policy: Some(policy),
+            scopes: vec![Scope::default()],
+            policy,
             current_package: package,
+            rule_index_map: HashMap::new(),
+            rule_worklist: Vec::new(),
+            rule_definitions: Vec::new(),
+            rule_types: Vec::new(),
+            context_stack: vec![], // Default context
+            loop_expr_register_map: BTreeMap::new(),
         }
     }
 
@@ -70,6 +93,7 @@ impl<'a> Compiler<'a> {
     /// Add a literal value to the literal table, returning its index
     pub fn add_literal(&mut self, value: Value) -> u16 {
         // Check if literal already exists to avoid duplication
+        // TODO: Optimize lookup
         for (idx, existing) in self.literals.iter().enumerate() {
             if existing == &value {
                 return idx as u16;
@@ -83,13 +107,100 @@ impl<'a> Compiler<'a> {
 
     /// Push a new variable scope (like the interpreter)
     pub fn push_scope(&mut self) {
-        self.scopes.push(Scope::new());
+        self.scopes.push(Scope::default());
     }
 
     /// Pop the current variable scope (like the interpreter)
     pub fn pop_scope(&mut self) {
         if self.scopes.len() > 1 {
             self.scopes.pop();
+        }
+    }
+
+    /// Push a new compilation context onto the context stack
+    pub fn push_context(&mut self, context: CompilationContext) {
+        self.context_stack.push(context);
+    }
+
+    /// Pop the current compilation context from the context stack
+    pub fn pop_context(&mut self) -> Option<CompilationContext> {
+        // Don't pop the last context (default RegularRule)
+        if self.context_stack.len() > 1 {
+            self.context_stack.pop()
+        } else {
+            None
+        }
+    }
+
+    /// Emit the appropriate instruction for yielding a value in the current context
+    pub fn emit_context_yield(&mut self) -> Result<()> {
+        if let Some(context) = self.context_stack.last().cloned() {
+            let dest_register = context.dest_register;
+            let span = &context.span;
+            let value_register = match context.value_expr {
+                Some(expr) => self.compile_rego_expr(&expr)?,
+                None => {
+                    let value_reg = self.alloc_register();
+                    self.emit_instruction(
+                        Instruction::LoadBool {
+                            dest: value_reg,
+                            value: true,
+                        },
+                        span,
+                    );
+                    value_reg
+                }
+            };
+
+            let key_register = context
+                .key_expr
+                .map(|key_expr| self.compile_rego_expr(&key_expr))
+                .unwrap_or(Ok(value_register))?;
+
+            match context.context_type {
+                ContextType::Comprehension(ComprehensionType::Array) => {
+                    self.emit_instruction(
+                        Instruction::ArrayPush {
+                            arr: dest_register,
+                            value: value_register,
+                        },
+                        span,
+                    );
+                }
+                ContextType::Comprehension(ComprehensionType::Set)
+                | ContextType::Rule(RuleType::PartialSet) => {
+                    self.emit_instruction(
+                        Instruction::SetAdd {
+                            set: dest_register,
+                            value: value_register,
+                        },
+                        span,
+                    );
+                }
+                ContextType::Comprehension(ComprehensionType::Object)
+                | ContextType::Rule(RuleType::PartialObject) => {
+                    self.emit_instruction(
+                        Instruction::ObjectSet {
+                            obj: dest_register,
+                            key: key_register,
+                            value: value_register,
+                        },
+                        span,
+                    );
+                }
+                ContextType::Rule(RuleType::Complete) => {
+                    self.emit_instruction(
+                        Instruction::Move {
+                            dest: dest_register,
+                            src: value_register,
+                        },
+                        span,
+                    );
+                }
+            }
+            Ok(())
+        } else {
+            bail!("internal: missing context for yield")
         }
     }
 
@@ -103,24 +214,65 @@ impl<'a> Compiler<'a> {
         if var_name != "_" {
             // Don't store anonymous variables
             self.current_scope_mut()
+                .bound_vars
                 .insert(var_name.to_string(), register);
         }
     }
 
     /// Look up a variable in all scopes starting from innermost (like interpreter's lookup_local_var)
     pub fn lookup_local_var(&self, var_name: &str) -> Option<Register> {
-        for scope in self.scopes.iter().rev() {
-            if let Some(register) = scope.get(var_name) {
-                return Some(*register);
-            }
-        }
-        None
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.bound_vars.get(var_name).copied())
+    }
+
+    pub fn add_unbound_variable(&mut self, var_name: &str) {
+        self.current_scope_mut()
+            .unbound_vars
+            .insert(var_name.to_string());
+    }
+
+    pub fn is_unbound_var(&self, var_name: &str) -> bool {
+        self.lookup_local_var(var_name).is_none()
+            && self
+                .scopes
+                .iter()
+                .rev()
+                .any(|scope| scope.unbound_vars.contains(var_name))
     }
 
     /// Store a variable mapping (backward compatibility)
     /// Look up a variable, first in local scope, then as a rule reference
     fn resolve_variable(&mut self, var_name: &str, span: &Span) -> Result<Register> {
         std::println!("Debug: resolve_variable called for '{}'", var_name);
+
+        // Handle special built-in variables first
+        match var_name {
+            "input" => {
+                let dest = self.alloc_register();
+                self.emit_instruction(Instruction::LoadInput { dest }, span);
+                std::println!(
+                    "Debug: Variable 'input' resolved to LoadInput instruction, register {}",
+                    dest
+                );
+                return Ok(dest);
+            }
+            "data" => {
+                // TODO: Fully qualified rule paths.
+                // TODO: data overrides rule in same path
+                let dest = self.alloc_register();
+                self.emit_instruction(Instruction::LoadData { dest }, span);
+                std::println!(
+                    "Debug: Variable 'data' resolved to LoadData instruction, register {}",
+                    dest
+                );
+                return Ok(dest);
+            }
+            _ => {
+                // Continue with normal variable resolution
+            }
+        }
 
         // First check local variables
         if let Some(var_reg) = self.lookup_variable(var_name) {
@@ -137,114 +289,97 @@ impl<'a> Compiler<'a> {
             var_name
         );
 
-        // If not found locally, check if it's a rule reference
-        if let Some(policy) = self.policy {
-            // Construct potential rule path: current_package.var_name
-            let rule_path = format!("{}.{}", self.current_package, var_name);
+        let rule_path = format!("{}.{}", &self.current_package, var_name);
 
-            // Check if this rule exists in the policy
-            let rules = policy.get_rules();
-            if let Some(rule_variants) = rules.get(&rule_path) {
-                // Check if this is a set rule (has multiple variants with contains)
-                let is_set_rule = rule_variants.iter().any(|rule| {
-                    if let crate::ast::Rule::Spec { head, .. } = rule.as_ref() {
-                        matches!(head, crate::ast::RuleHead::Set { .. })
-                    } else {
-                        false
-                    }
-                });
-
-                if is_set_rule {
-                    // For set rules, compile all variants and create a set
-                    std::println!("Debug: Compiling set rule '{}' with {} variants", var_name, rule_variants.len());
-                    let dest = self.alloc_register();
-                    self.emit_instruction(Instruction::SetNew { dest }, span);
-
-                    for (i, rule_ref) in rule_variants.iter().enumerate() {
-                        std::println!("Debug: Compiling set rule variant {}", i);
-                        if let Some(value_reg) = self.compile_rule_reference(rule_ref, &rule_path)? {
-                            // Add the value to the set
-                            self.emit_instruction(
-                                Instruction::SetAdd {
-                                    set: dest,
-                                    value: value_reg,
-                                },
-                                span,
-                            );
-                        }
-                    }
-                    return Ok(dest);
-                } else if let Some(rule_ref) = rule_variants.first() {
-                    // For non-set rules, use the first variant as before
-                    match self.compile_rule_reference(rule_ref, &rule_path)? {
-                        Some(reg) => return Ok(reg),
-                        None => {
-                            // Rule exists but returned no value, load null
-                            let dest = self.alloc_register();
-                            let literal_idx = self.add_literal(Value::Null);
-                            self.emit_instruction(Instruction::Load { dest, literal_idx }, span);
-                            return Ok(dest);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Variable not found anywhere, load null
+        // Always emit CallRule for all rules.
+        // TODO: Inline rules
+        let rule_index = self.get_or_assign_rule_index(&rule_path)?;
         let dest = self.alloc_register();
-        let literal_idx = self.add_literal(Value::Null);
-        self.emit_instruction(Instruction::Load { dest, literal_idx }, span);
+
+        self.emit_instruction(Instruction::CallRule { dest, rule_index }, span);
         Ok(dest)
     }
 
-    /// Compile a rule reference and return the register containing its value
-    fn compile_rule_reference(
-        &mut self,
-        rule: &crate::ast::Rule,
-        _rule_path: &str,
-    ) -> Result<Option<Register>> {
-        match rule {
-            crate::ast::Rule::Spec { head, bodies, .. } => {
-                match head {
-                    crate::ast::RuleHead::Set { key, .. } => {
-                        // For set rules, extract the key value from the contains expression
-                        if let Some(key_expr) = key {
-                            std::println!("Debug: Compiling set rule key: {:?}", key_expr);
-                            let reg = self.compile_rego_expr(key_expr)?;
-                            return Ok(Some(reg));
-                        }
-                        return Ok(None);
-                    }
-                    crate::ast::RuleHead::Compr { assign, .. } => {
-                        // For head-only rules (simple assignments like x = 42)
-                        if bodies.is_empty() {
-                            if let Some(assign) = assign {
-                                // Compile the assignment value directly
-                                let reg = self.compile_rego_expr(&assign.value)?;
-                                return Ok(Some(reg));
+    fn compute_rule_type(&self, rule_path: &str) -> Result<RuleType> {
+        let Some(definitions) = self.policy.inner.rules.get(rule_path) else {
+            panic!(
+                "internal: no definitions found for rule path '{}'",
+                rule_path
+            );
+            //bail!("{rule_path} is not a valid rule path");
+        };
+
+        let rule_types: BTreeSet<RuleType> = definitions
+            .iter()
+            .map(|def| {
+                if let crate::ast::Rule::Spec { head, .. } = def.as_ref() {
+                    let result = match head {
+                        crate::ast::RuleHead::Set { .. } => RuleType::PartialSet,
+                        crate::ast::RuleHead::Compr { refr, assign, .. } => match refr.as_ref() {
+                            crate::ast::Expr::RefBrack { .. } if assign.is_some() => {
+                                RuleType::PartialObject
                             }
-                        }
-                        // Rules with bodies would need more complex handling
-                        // For now, return None
-                        return Ok(None);
-                    }
-                    crate::ast::RuleHead::Func { assign, .. } => {
-                        // For function rules with assignment
-                        if bodies.is_empty() {
-                            if let Some(assign) = assign {
-                                let reg = self.compile_rego_expr(&assign.value)?;
-                                return Ok(Some(reg));
-                            }
-                        }
-                        return Ok(None);
-                    }
+                            crate::ast::Expr::RefBrack { .. } => RuleType::PartialSet,
+                            _ => RuleType::Complete,
+                        },
+                        _ => RuleType::Complete,
+                    };
+                    std::println!(
+                        "Debug: Rule '{}' head type: {:?}, is_set: {:?}",
+                        rule_path,
+                        head,
+                        result
+                    );
+                    result
+                } else {
+                    std::println!("Debug: Rule '{}' is not a Spec rule", rule_path);
+                    RuleType::Complete
                 }
+            })
+            .collect();
+
+        if rule_types.len() > 1 {
+            bail!(
+                "internal: rule '{}' has multiple types: {:?}",
+                rule_path,
+                rule_types
+            );
+        }
+
+        rule_types
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("internal: no rule type found for '{}'", rule_path))
+    }
+
+    /// Get or assign a rule index for CallRule instructions
+    fn get_or_assign_rule_index(&mut self, rule_path: &str) -> Result<u16> {
+        if let Some(&index) = self.rule_index_map.get(rule_path) {
+            Ok(index)
+        } else {
+            let rule_type = self.compute_rule_type(rule_path)?;
+
+            // Start rule indices from 1 (0 is reserved for main entrypoint)
+            // TODO: Revisit this
+            let index = (self.rule_index_map.len() + 0) as u16;
+
+            self.rule_index_map.insert(rule_path.to_string(), index);
+            self.rule_worklist.push(rule_path.to_string());
+
+            // Initialize rule definitions structure
+            // Ensure rule_definitions has enough capacity
+            while self.rule_definitions.len() <= index as usize {
+                self.rule_definitions.push(Vec::new());
             }
-            crate::ast::Rule::Default { value, .. } => {
-                // Compile the default value
-                let reg = self.compile_rego_expr(value)?;
-                Ok(Some(reg))
+
+            // Ensure rule_types has enough capacity and record the rule type
+            while self.rule_types.len() <= index as usize {
+                self.rule_types.push(RuleType::Complete); // Default to non-set rule
             }
+            self.rule_types[index as usize] = rule_type;
+
+            std::println!("Debug: Assigned rule index {} to '{}'", index, rule_path);
+            Ok(index)
         }
     }
 
@@ -263,32 +398,112 @@ impl<'a> Compiler<'a> {
         self.spans.push(SpanInfo::from_lexer_span(span, 0)); // Use source index 0 for now
     }
 
-    pub fn finish(mut self, result_reg: Register) -> CompiledProgram {
+    pub fn emit_return(&mut self, result_reg: Register) {
         // Add return instruction
         self.instructions
             .push(Instruction::Return { value: result_reg });
         self.spans.push(SpanInfo::new(0, 0, 0, 0)); // Default span for return instruction
+    }
 
-        CompiledProgram {
-            instructions: self.instructions,
-            literals: self.literals,
-            spans: self.spans,
+    pub fn finish(self) -> crate::rvm::program::Program {
+        // Convert to Program
+        let mut program = Program::new();
+        program.instructions = self.instructions;
+        program.literals = self.literals;
+        program.main_entry_point = 0;
+
+        // Set the rule definitions from the compiler
+        let mut rule_infos_map = BTreeMap::new();
+        for (rule_path, &rule_index) in &self.rule_index_map {
+            let definitions = self.rule_definitions[rule_index as usize].clone();
+            let rule_type = self.rule_types[rule_index as usize].clone();
+            let rule_info = crate::rvm::program::RuleInfo::new(
+                rule_path.clone(),
+                rule_type,
+                crate::Rc::new(definitions),
+            );
+            rule_infos_map.insert(rule_index as usize, rule_info);
         }
+
+        program.rule_infos = rule_infos_map.into_values().collect();
+
+        // Debug: Print rule definitions
+        std::println!("Debug: Rule definitions in program:");
+        for (rule_idx, rule_info) in program.rule_infos.iter().enumerate() {
+            std::println!(
+                "  Rule {}: {} definitions",
+                rule_idx,
+                rule_info.definitions.len()
+            );
+            for (def_idx, bodies) in rule_info.definitions.iter().enumerate() {
+                std::println!(
+                    "    Definition {}: {} bodies at entry points {:?}",
+                    def_idx,
+                    bodies.len(),
+                    bodies
+                );
+            }
+        }
+
+        // Add worklist rules to the mapping (they use 1-based indices)
+        for (rule_path, &rule_index) in &self.rule_index_map {
+            program
+                .rule_name_to_index
+                .insert(rule_path.clone(), rule_index as usize);
+        }
+
+        // Extract source contents from the policy modules
+        for module in self.policy.get_modules().iter() {
+            let source = &module.package.refr.span().source;
+            let source_path = source.get_path().to_string();
+            let source_content = source.get_contents().to_string();
+            program.add_source(source_path, source_content);
+        }
+
+        // Convert spans
+        program.instruction_spans = self.spans.into_iter().map(|_span| None).collect();
+
+        std::println!(
+            "Debug: Final program has {} instructions, {} rule infos",
+            program.instructions.len(),
+            program.rule_infos.len()
+        );
+
+        program
     }
 
     /// Compile a Rego expression to RVM instructions
-    pub fn compile_rego_expr(&mut self, expr: &Expr) -> Result<Register> {
+    pub fn compile_rego_expr(&mut self, expr: &ExprRef) -> Result<Register> {
         self.compile_rego_expr_with_span(expr, &expr.span(), false)
     }
 
     /// Compile a Rego expression to RVM instructions with span tracking
     pub fn compile_rego_expr_with_span(
         &mut self,
-        expr: &Expr,
+        expr: &ExprRef,
         span: &Span,
         assert_condition: bool,
     ) -> Result<Register> {
-        let result_reg = match expr {
+        // TODO: If expr is a loop expr or a loop var, look up.
+        if let Some(reg) = self.loop_expr_register_map.get(expr).cloned() {
+            std::println!(
+                "Debug: Found loop expression in map, using register {}",
+                reg
+            );
+            let result_reg = reg;
+            // If this expression should be asserted as a condition, emit AssertCondition
+            if assert_condition {
+                self.emit_instruction(
+                    Instruction::AssertCondition {
+                        condition: result_reg,
+                    },
+                    span,
+                );
+            }
+            return Ok(result_reg);
+        }
+
+        let result_reg = match expr.as_ref() {
             Expr::Number { value, .. } => {
                 let dest = self.alloc_register();
                 let literal_idx = self.add_literal(value.clone());
@@ -385,6 +600,7 @@ impl<'a> Compiler<'a> {
             }
             Expr::ArithExpr { lhs, op, rhs, .. } => {
                 // Don't assert conditions for operands
+                // TODO: Determine assertion
                 let lhs_reg = self.compile_rego_expr_with_span(lhs, &lhs.span(), false)?;
                 let rhs_reg = self.compile_rego_expr_with_span(rhs, &rhs.span(), false)?;
                 let dest = self.alloc_register();
@@ -474,6 +690,26 @@ impl<'a> Compiler<'a> {
                             span,
                         );
                     }
+                    crate::ast::BoolOp::Ge => {
+                        self.emit_instruction(
+                            Instruction::Ge {
+                                dest,
+                                left: lhs_reg,
+                                right: rhs_reg,
+                            },
+                            span,
+                        );
+                    }
+                    crate::ast::BoolOp::Le => {
+                        self.emit_instruction(
+                            Instruction::Le {
+                                dest,
+                                left: lhs_reg,
+                                right: rhs_reg,
+                            },
+                            span,
+                        );
+                    }
                     _ => {
                         // For other operations, return true for now
                         let literal_idx = self.add_literal(Value::Bool(true));
@@ -483,6 +719,7 @@ impl<'a> Compiler<'a> {
                 dest
             }
             Expr::AssignExpr { lhs, rhs, .. } => {
+                // TODO: Really complex. Look at interpreter, esp make_bindings
                 // Handle variable assignment like x := 10
                 // First compile the right-hand side value (don't assert - this is assignment)
                 let rhs_reg = self.compile_rego_expr_with_span(rhs, &rhs.span(), false)?;
@@ -532,6 +769,7 @@ impl<'a> Compiler<'a> {
                 self.emit_instruction(Instruction::Load { dest, literal_idx }, span);
                 dest
             }
+            // TODO: chained ref dot from interpreter
             Expr::RefDot { refr, field, .. } => {
                 // Compile the object reference (don't assert)
                 let obj_reg = self.compile_rego_expr_with_span(refr, &refr.span(), false)?;
@@ -643,44 +881,8 @@ impl<'a> Compiler<'a> {
     }
 
     /// Compile from a CompiledPolicy to RVM Program
-    pub fn compile_from_policy(
-        policy: &CompiledPolicy,
-        rule_name: &str,
-    ) -> Result<Arc<Program>> {
-        // First compile to the legacy format
-        let compiled_program = Self::compile_from_policy_legacy(policy, rule_name)?;
-        
-        // Convert to new Program format
-        let mut program = Program::new();
-        program.instructions = compiled_program.instructions;
-        program.literals = compiled_program.literals;
-        program.main_entry_point = 0;
-        
-        // Extract source contents from the policy modules
-        for module in policy.get_modules().iter() {
-            let source = &module.package.refr.span().source;
-            let source_path = source.get_path().to_string();
-            let source_content = source.get_contents().to_string();
-            
-            // Add source file to the program's source table
-            program.add_source(source_path, source_content);
-        }
-        
-        // TODO: Convert spans to new format and add to instruction_spans
-        program.instruction_spans = compiled_program.spans
-            .into_iter()
-            .map(|_span| None) // For now, don't convert old spans
-            .collect();
-        
-        Ok(Arc::new(program))
-    }
-
-    /// Legacy method that returns CompiledProgram (for backward compatibility)
-    pub fn compile_from_policy_legacy(
-        policy: &CompiledPolicy,
-        rule_name: &str,
-    ) -> Result<CompiledProgram> {
-        // Extract package name from rule_name (e.g., "data.test.main" -> "data.test")
+    pub fn compile_from_policy(policy: &CompiledPolicy, rule_name: &str) -> Result<Arc<Program>> {
+        // Extract package name from rule_name
         let package = if let Some(last_dot) = rule_name.rfind('.') {
             rule_name[..last_dot].to_string()
         } else {
@@ -688,418 +890,679 @@ impl<'a> Compiler<'a> {
         };
 
         let mut compiler = Compiler::with_policy(policy, package);
-
-        // Access the compiled policy rules
         let rules = policy.get_rules();
 
-        // Debug: Print available rules
         std::println!("Debug: Available rules in policy:");
         for (key, rule_list) in rules.iter() {
             std::println!("  Rule key: '{}' ({} variants)", key, rule_list.len());
         }
         std::println!("Debug: Looking for rule: '{}'", rule_name);
 
-        // Find the specified rule in the compiled policy
-        if let Some(rule_list) = rules.get(rule_name) {
-            if let Some(rule) = rule_list.first() {
-                std::println!("Debug: Found rule, analyzing structure...");
-                let mut last_result_reg = 0;
-
-                // Compile based on rule type
-                match rule.as_ref() {
-                    Rule::Spec { head, bodies, .. } => {
-                        std::println!("Debug: Rule is a Spec with {} bodies", bodies.len());
-
-                        // Compile rule bodies first
-                        for (i, body) in bodies.iter().enumerate() {
-                            std::println!("Debug: Processing body {}", i);
-
-                            // If there's an assignment in the body, compile it
-                            if let Some(assign) = &body.assign {
-                                std::println!("Debug: Found assignment in body");
-                                last_result_reg = compiler.compile_rego_expr(&assign.value)?;
-                            }
-
-                            // Check if this body starts with a SomeIn loop
-                            if let Some((some_in_idx, some_in_stmt)) =
-                                body.query.stmts.iter().enumerate().find(|(_, stmt)| {
-                                    matches!(&stmt.literal, crate::ast::Literal::SomeIn { .. })
-                                })
-                            {
-                                // Process statements before the SomeIn normally
-                                for (j, stmt) in
-                                    body.query.stmts.iter().enumerate().take(some_in_idx)
-                                {
-                                    std::println!(
-                                        "Debug: Processing statement {} in body {} (before SomeIn)",
-                                        j,
-                                        i
-                                    );
-                                    if let crate::ast::Literal::Expr { expr, .. } = &stmt.literal {
-                                        std::println!("Debug: Found expression literal");
-                                        let _condition_reg = compiler
-                                            .compile_rego_expr_with_span(expr, &stmt.span, true)?;
-                                    }
-                                }
-
-                                // Handle the SomeIn with remaining statements as loop body
-                                if let crate::ast::Literal::SomeIn {
-                                    key,
-                                    value,
-                                    collection,
-                                    ..
-                                } = &some_in_stmt.literal
-                                {
-                                    std::println!("Debug: Found SomeIn at position {}, compiling as loop with remaining {} statements", 
-                                                 some_in_idx, body.query.stmts.len() - some_in_idx - 1);
-
-                                    // Get the statements that come after the SomeIn (these form the loop body)
-                                    let loop_body_stmts = &body.query.stmts[some_in_idx + 1..];
-                                    last_result_reg = compiler.compile_some_in_loop_with_body(
-                                        key.as_ref().map(|k| k.as_ref()),
-                                        value.as_ref(),
-                                        collection.as_ref(),
-                                        loop_body_stmts,
-                                    )?;
-                                }
-                                continue; // Skip normal processing for this body
-                            }
-
-                            // Check if this body starts with an Every loop
-                            if let Some((every_idx, every_stmt)) =
-                                body.query.stmts.iter().enumerate().find(|(_, stmt)| {
-                                    matches!(&stmt.literal, crate::ast::Literal::Every { .. })
-                                })
-                            {
-                                // Process statements before the Every normally
-                                for (j, stmt) in body.query.stmts.iter().enumerate().take(every_idx)
-                                {
-                                    std::println!(
-                                        "Debug: Processing statement {} in body {} (before Every)",
-                                        j,
-                                        i
-                                    );
-                                    if let crate::ast::Literal::Expr { expr, .. } = &stmt.literal {
-                                        std::println!("Debug: Found expression literal");
-                                        let _condition_reg = compiler
-                                            .compile_rego_expr_with_span(expr, &stmt.span, true)?;
-                                    }
-                                }
-
-                                // Handle the Every loop with remaining statements executed after loop
-                                if let crate::ast::Literal::Every {
-                                    key,
-                                    value,
-                                    domain,
-                                    query,
-                                    ..
-                                } = &every_stmt.literal
-                                {
-                                    std::println!("Debug: Found Every at position {}, compiling with remaining {} statements after loop", 
-                                                 every_idx, body.query.stmts.len() - every_idx - 1);
-
-                                    // Get the statements that come after the Every (these execute after loop completes)
-                                    let remaining_stmts = &body.query.stmts[every_idx + 1..];
-                                    last_result_reg = compiler.compile_every_loop_with_remaining(
-                                        key.as_ref(),
-                                        value,
-                                        domain.as_ref(),
-                                        query.as_ref(),
-                                        remaining_stmts,
-                                    )?;
-                                }
-                                continue; // Skip normal processing for this body
-                            }
-
-                            // No loops found, process statements normally
-                            for (j, stmt) in body.query.stmts.iter().enumerate() {
-                                std::println!("Debug: Processing statement {} in body {}", j, i);
-                                match &stmt.literal {
-                                    crate::ast::Literal::Expr { expr, .. } => {
-                                        std::println!("Debug: Found expression literal");
-                                        // This is a bare expression/condition - assert it's truthy
-                                        let _condition_reg = compiler
-                                            .compile_rego_expr_with_span(expr, &stmt.span, true)?;
-                                    }
-                                    crate::ast::Literal::SomeIn { .. }
-                                    | crate::ast::Literal::Every { .. } => {
-                                        return Err(anyhow::anyhow!(
-                                            "Unexpected loop statement in normal processing"
-                                        ));
-                                    }
-                                    crate::ast::Literal::SomeVars { .. }
-                                    | crate::ast::Literal::NotExpr { .. } => {
-                                        std::println!("Debug: Found complex literal (skipped)");
-                                        // For complex literals, we'd need more sophisticated handling
-                                        // For now, skip these
-                                    }
-                                }
-                            }
-                        }
-
-                        // Compile head based on its type
-                        std::println!("Debug: Processing rule head");
-                        match head {
-                            RuleHead::Compr { refr, assign, .. } => {
-                                std::println!("Debug: Rule head is Compr");
-
-                                // For comprehensions, only compile if NOT already a comprehension expression
-                                // Check if the assignment value is already a comprehension
-                                if let Some(assign) = assign {
-                                    match &*assign.value {
-                                        Expr::ArrayCompr { .. }
-                                        | Expr::SetCompr { .. }
-                                        | Expr::ObjectCompr { .. } => {
-                                            std::println!("Debug: Compr has comprehension assignment - compiling directly");
-                                            // This is a comprehension, compile it directly
-                                            last_result_reg =
-                                                compiler.compile_rego_expr(&assign.value)?;
-                                        }
-                                        _ => {
-                                            std::println!(
-                                                "Debug: Compr has non-comprehension assignment"
-                                            );
-                                            // For non-comprehension assignments, compile the reference first
-                                            last_result_reg = compiler.compile_rego_expr(refr)?;
-                                            std::println!(
-                                                "Debug: Assignment value: {:?}",
-                                                assign.value
-                                            );
-                                            last_result_reg =
-                                                compiler.compile_rego_expr(&assign.value)?;
-                                        }
-                                    }
-                                } else {
-                                    // No assignment, just compile the reference
-                                    last_result_reg = compiler.compile_rego_expr(refr)?;
-                                }
-                            }
-                            RuleHead::Set { refr, key, .. } => {
-                                std::println!("Debug: Rule head is Set");
-                                // For set rules, compile the key if present, otherwise the reference
-                                if let Some(key_expr) = key {
-                                    last_result_reg = compiler.compile_rego_expr(key_expr)?;
-                                } else {
-                                    last_result_reg = compiler.compile_rego_expr(refr)?;
-                                }
-                            }
-                            RuleHead::Func { refr, assign, .. } => {
-                                std::println!("Debug: Rule head is Func");
-                                // For function rules, compile the reference
-                                last_result_reg = compiler.compile_rego_expr(refr)?;
-
-                                // If there's an assignment, compile the value
-                                if let Some(assign) = assign {
-                                    std::println!("Debug: Func has assignment");
-                                    last_result_reg = compiler.compile_rego_expr(&assign.value)?;
-                                }
-                            }
-                        }
-                    }
-                    Rule::Default { value, .. } => {
-                        // For default rules, compile the default value
-                        last_result_reg = compiler.compile_rego_expr(value)?;
-                    }
-                }
-
-                // If no expressions found, return null
-                if last_result_reg == 0 {
-                    let null_reg = compiler.alloc_register();
-                    let literal_idx = compiler.add_literal(Value::Null);
-                    compiler.instructions.push(Instruction::Load {
-                        dest: null_reg,
-                        literal_idx,
-                    });
-                    last_result_reg = null_reg;
-                }
-
-                return Ok(compiler.finish(last_result_reg));
-            }
-        }
-
-        // If rule not found, return empty program that returns null
-        let null_reg = compiler.alloc_register();
-        let literal_idx = compiler.add_literal(Value::Null);
-        compiler.instructions.push(Instruction::Load {
-            dest: null_reg,
-            literal_idx,
+        // Emit CallRule instruction for the main entry point
+        let result_reg = compiler.alloc_register();
+        let rule_idx = compiler.get_or_assign_rule_index(rule_name)?;
+        compiler.instructions.push(Instruction::CallRule {
+            dest: result_reg,
+            rule_index: rule_idx,
         });
-        Ok(compiler.finish(null_reg))
+
+        // Add Return instruction for main execution
+        compiler
+            .instructions
+            .push(Instruction::Return { value: result_reg });
+
+        compiler.compile_worklist_rules(rules)?;
+
+        Ok(Arc::new(compiler.finish()))
     }
 
-    /// Compile all rules from a CompiledPolicy
-    pub fn compile_all_rules_from_policy(
-        policy: &CompiledPolicy,
-    ) -> Result<Vec<(String, Arc<Program>)>> {
-        let mut compiled_rules = Vec::new();
-        let rules = policy.get_rules();
-
-        for (rule_name, _rule_list) in rules.iter() {
-            let program = Self::compile_from_policy(policy, rule_name)?;
-            compiled_rules.push((rule_name.clone(), program));
+    fn compile_worklist_rules(
+        &mut self,
+        rules: &HashMap<String, Vec<crate::ast::NodeRef<Rule>>>,
+    ) -> Result<()> {
+        // Now compile all rules in the worklist (set rules referenced via CallRule)
+        while !self.rule_worklist.is_empty() {
+            let rule_to_compile = self.rule_worklist.remove(0);
+            std::println!("Debug: Compiling worklist rule: '{}'", rule_to_compile);
+            self.compile_worklist_rule(&rule_to_compile, rules)?;
         }
-
-        Ok(compiled_rules)
+        Ok(())
     }
 
-    /// Compile a specific rule from modules directly
-    pub fn compile_rule_from_modules(
-        modules: &[Ref<Module>],
+    /// Compile a set rule from the worklist - each variant gets its own entry point
+    fn compile_worklist_rule(
+        &mut self,
         rule_path: &str,
-    ) -> Result<CompiledProgram> {
-        let mut compiler = Compiler::new();
+        rules: &HashMap<String, Vec<crate::ast::NodeRef<Rule>>>,
+    ) -> Result<()> {
+        std::println!("Debug: Compiling worklist rule: '{}'", rule_path);
 
-        // Parse the rule path (e.g., "data.package.rule_name")
-        let parts: Vec<&str> = rule_path.split('.').collect();
-        if parts.len() < 3 {
-            return Ok(compiler.finish(0)); // Invalid path
-        }
+        if let Some(rule_definitions) = rules.get(rule_path) {
+            let rule_index = self.rule_index_map.get(rule_path).copied().unwrap_or(1);
+            let rule_type = self.rule_types[rule_index as usize].clone();
+            let dest_register = self.alloc_register();
 
-        let package_path = &parts[1..parts.len() - 1].join(".");
-        let rule_name = parts[parts.len() - 1];
+            std::println!(
+                "Debug: Rule '{}' has {} definitions",
+                rule_path,
+                rule_definitions.len()
+            );
 
-        // Find the module with matching package
-        for module in modules {
-            let module_package = &module.package.refr;
+            // Ensure rule_definitions vec has space for this rule
+            while self.rule_definitions.len() <= rule_index as usize {
+                self.rule_definitions.push(Vec::new());
+            }
 
-            // Check if this module matches the package we're looking for
-            if let Expr::Var { value, .. } = module_package.as_ref() {
-                if let Value::String(pkg_name) = value {
-                    if pkg_name.as_ref() == package_path {
-                        // Found the right module, now find the rule
-                        for rule in &module.policy {
-                            // Extract rule name from the rule reference
-                            let rule_matches = match rule.as_ref() {
-                                Rule::Spec { head, .. } => {
-                                    // For Spec rules, check the head reference
-                                    match head {
-                                        RuleHead::Compr { refr, .. }
-                                        | RuleHead::Set { refr, .. }
-                                        | RuleHead::Func { refr, .. } => {
-                                            if let Expr::Var { value, .. } = refr.as_ref() {
-                                                if let Value::String(name) = value {
-                                                    name.as_ref() == rule_name
-                                                } else {
-                                                    false
-                                                }
-                                            } else {
-                                                false
-                                            }
-                                        }
-                                    }
+            // Compile each definition (Rule::Spec)
+            for (def_idx, rule_ref) in rule_definitions.iter().enumerate() {
+                if let Rule::Spec { head, bodies, span } = rule_ref.as_ref() {
+                    std::println!(
+                        "Debug: Compiling definition {} with {} bodies",
+                        def_idx,
+                        bodies.len()
+                    );
+
+                    let (key_expr, value_expr) = match head {
+                        RuleHead::Compr { refr, assign, .. } => {
+                            let output_expr = assign.as_ref().map(|assign| assign.value.clone());
+                            let key_expr = match refr.as_ref() {
+                                Expr::RefBrack { index, .. } => {
+                                    // For RefBrack, the index is the key expression
+                                    Some(index.clone())
                                 }
-                                Rule::Default { refr, .. } => {
-                                    if let Expr::Var { value, .. } = refr.as_ref() {
-                                        if let Value::String(name) = value {
-                                            name.as_ref() == rule_name
-                                        } else {
-                                            false
-                                        }
-                                    } else {
-                                        false
-                                    }
+                                _ => {
+                                    // For non-RefBrack, no key expression
+                                    None
                                 }
                             };
+                            (key_expr, output_expr)
+                        }
+                        RuleHead::Set { key, .. } => {
+                            // For set rules, no separate key_expr, output_expr is the key
+                            (None, key.clone())
+                        }
+                        _ => unimplemented!("rule head type"),
+                    };
 
-                            if rule_matches {
-                                // Found the rule, compile it
-                                let mut last_result_reg = 0;
+                    let span = match (&key_expr, &value_expr) {
+                        (_, Some(expr)) => expr.span().clone(),
+                        (Some(expr), _) => expr.span().clone(),
+                        _ => span.clone(),
+                    };
 
-                                // Compile based on rule type
-                                match rule.as_ref() {
-                                    Rule::Spec { head, bodies, .. } => {
-                                        // Compile rule bodies
-                                        for body in bodies {
-                                            // If there's an assignment in the body, compile it
-                                            if let Some(assign) = &body.assign {
-                                                last_result_reg =
-                                                    compiler.compile_rego_expr(&assign.value)?;
-                                            }
+                    let context = CompilationContext {
+                        dest_register,
+                        context_type: ContextType::Rule(rule_type.clone()),
+                        key_expr,
+                        value_expr,
+                        span,
+                        key_value_loops_hoisted: false,
+                    };
+                    self.push_context(context);
+                    let mut body_entry_points = Vec::new();
 
-                                            // Compile expressions in the query
-                                            for stmt in &body.query.stmts {
-                                                match &stmt.literal {
-                                                    crate::ast::Literal::Expr { expr, .. } => {
-                                                        let _condition_reg = compiler
-                                                            .compile_rego_expr_with_span(
-                                                                expr, &stmt.span, true,
-                                                            )?;
-                                                    }
-                                                    _ => {
-                                                        // Skip other literal types for now
-                                                    }
-                                                }
-                                            }
-                                        }
+                    // Compile each body within this definition
+                    for (body_idx, body) in bodies.iter().enumerate() {
+                        let body_entry_point = self.instructions.len();
+                        body_entry_points.push(body_entry_point);
 
-                                        // Compile head expressions
-                                        match head {
-                                            RuleHead::Compr { refr, assign, .. } => {
-                                                last_result_reg =
-                                                    compiler.compile_rego_expr(refr)?;
-                                                if let Some(assign) = assign {
-                                                    last_result_reg = compiler
-                                                        .compile_rego_expr(&assign.value)?;
-                                                }
-                                            }
-                                            RuleHead::Set { refr, key, .. } => {
-                                                if let Some(key_expr) = key {
-                                                    last_result_reg =
-                                                        compiler.compile_rego_expr(key_expr)?;
-                                                } else {
-                                                    last_result_reg =
-                                                        compiler.compile_rego_expr(refr)?;
-                                                }
-                                            }
-                                            RuleHead::Func { refr, assign, .. } => {
-                                                last_result_reg =
-                                                    compiler.compile_rego_expr(refr)?;
-                                                if let Some(assign) = assign {
-                                                    last_result_reg = compiler
-                                                        .compile_rego_expr(&assign.value)?;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Rule::Default { value, .. } => {
-                                        last_result_reg = compiler.compile_rego_expr(value)?;
-                                    }
-                                }
+                        std::println!(
+                            "Debug: Compiling body {} at entry point {}",
+                            body_idx,
+                            body_entry_point
+                        );
 
-                                if last_result_reg == 0 {
-                                    let null_reg = compiler.alloc_register();
-                                    let literal_idx = compiler.add_literal(Value::Null);
-                                    compiler.instructions.push(Instruction::Load {
-                                        dest: null_reg,
-                                        literal_idx,
-                                    });
-                                    last_result_reg = null_reg;
-                                }
+                        self.emit_instruction(
+                            Instruction::RuleInit {
+                                result_reg: dest_register,
+                                rule_index,
+                            },
+                            &body.span,
+                        );
 
-                                return Ok(compiler.finish(last_result_reg));
-                            }
+                        // 1. Compile the query (with proper loop hoisting)
+                        if !body.query.stmts.is_empty() {
+                            self.compile_query(&body.query)?;
+                        }
+
+                        // 2. Emit Rule Return
+                        self.emit_instruction(Instruction::RuleReturn {}, &body.span);
+                    }
+
+                    // Store the body entry points for this definition
+                    self.rule_definitions[rule_index as usize].push(body_entry_points);
+
+                    std::println!(
+                        "Debug: Definition {} compiled with {} bodies",
+                        def_idx,
+                        bodies.len()
+                    );
+                }
+            }
+
+            std::println!(
+                "Debug: Rule '{}' compiled with {} definitions",
+                rule_path,
+                rule_definitions.len()
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Compile a query (statements with proper loop hoisting, similar to interpreter's eval_stmts)
+    fn compile_query(&mut self, query: &crate::ast::Query) -> Result<()> {
+        self.hoist_loops_and_compile_statements(&query.stmts)
+    }
+
+    /// Hoist loops from statements and compile them with proper sequencing (similar to interpreter's eval_stmts)
+    fn hoist_loops_and_compile_statements(
+        &mut self,
+        stmts: &[crate::ast::LiteralStmt],
+    ) -> Result<()> {
+        std::println!(
+            "Debug: Compiling {} statements with loop hoisting",
+            stmts.len()
+        );
+
+        for (idx, stmt) in stmts.iter().enumerate() {
+            std::println!("Debug: Processing statement {} of {}", idx + 1, stmts.len());
+
+            // Hoist loops from this statement (like interpreter)
+            let loop_exprs = self.hoist_loops_from_literal(&stmt.literal)?;
+
+            if !loop_exprs.is_empty() {
+                std::println!(
+                    "Debug: Found {} loop expressions in statement {}",
+                    loop_exprs.len(),
+                    idx
+                );
+                // If there are hoisted loop expressions, execute subsequent statements within loops
+                return self.compile_hoisted_loops(&stmts[idx..], &loop_exprs);
+            }
+
+            // No loops, compile statement normally
+            self.compile_single_statement(stmt)?;
+        }
+
+        self.hoist_loops_and_emit_context_yield()
+    }
+
+    /// TODO: Share code with interpreter
+    /// Hoist loops from a literal (similar to interpreter's hoist_loops)
+    fn hoist_loops_from_literal(&self, literal: &crate::ast::Literal) -> Result<Vec<HoistedLoop>> {
+        let mut loops = Vec::new();
+
+        use crate::ast::Literal::*;
+        match literal {
+            SomeIn {
+                key,
+                value,
+                collection,
+                ..
+            } => {
+                std::println!("Debug: Found SomeIn literal - creating loop");
+                if let Some(key) = key {
+                    self.hoist_loops_from_expr(key, &mut loops)?;
+                }
+                self.hoist_loops_from_expr(value, &mut loops)?;
+                self.hoist_loops_from_expr(collection, &mut loops)?;
+                loops.push(HoistedLoop {
+                    loop_expr: None,
+                    key: key.clone(),
+                    value: value.clone(),
+                    collection: collection.clone(),
+                    loop_type: LoopType::SomeIn,
+                });
+            }
+            Expr { expr, .. } => {
+                // Hoist loops from expressions (like array[_] patterns)
+                self.hoist_loops_from_expr(expr, &mut loops)?;
+            }
+            Every {
+                key: _key,
+                value: _value,
+                domain: _domain,
+                ..
+            } => {
+                self.hoist_loops_from_expr(_domain, &mut loops)?;
+                std::println!("Debug: Found Every literal - creating universal loop: TODO");
+            }
+            _ => {
+                // Other literal types don't have loops to hoist
+            }
+        }
+
+        Ok(loops)
+    }
+
+    /// Hoist loops from expressions (like array[_] patterns)
+    fn hoist_loops_from_expr(&self, expr: &ExprRef, loops: &mut Vec<HoistedLoop>) -> Result<()> {
+        use crate::ast::Expr::*;
+        match expr.as_ref() {
+            // Primitive types - no loops to hoist
+            String { .. }
+            | RawString { .. }
+            | Number { .. }
+            | Bool { .. }
+            | Null { .. }
+            | Var { .. } => {
+                // No sub-expressions to process
+            }
+
+            // Collection types - hoist from items
+            Array { items, .. } => {
+                for item in items {
+                    self.hoist_loops_from_expr(item, loops)?;
+                }
+            }
+            Set { items, .. } => {
+                for item in items {
+                    self.hoist_loops_from_expr(item, loops)?;
+                }
+            }
+            Object { fields, .. } => {
+                for (_, key_expr, value_expr) in fields {
+                    self.hoist_loops_from_expr(key_expr, loops)?;
+                    self.hoist_loops_from_expr(value_expr, loops)?;
+                }
+            }
+
+            // Comprehensions - hoist from term and query
+            ArrayCompr { .. } | SetCompr { .. } | ObjectCompr { .. } => {
+                // Will be hoisted by their queries
+            }
+
+            // Function calls - hoist from function and parameters
+            Call { fcn, params, .. } => {
+                self.hoist_loops_from_expr(fcn, loops)?;
+                for param in params {
+                    self.hoist_loops_from_expr(param, loops)?;
+                }
+            }
+
+            // Unary expressions - hoist from operand
+            UnaryExpr { expr, .. } => {
+                self.hoist_loops_from_expr(expr, loops)?;
+            }
+
+            // Reference expressions - check for array[_] patterns
+            RefDot { refr, .. } => {
+                self.hoist_loops_from_expr(refr, loops)?;
+            }
+            RefBrack { refr, index, .. } => {
+                // Recursively hoist from sub-expressions
+                self.hoist_loops_from_expr(refr, loops)?;
+                self.hoist_loops_from_expr(index, loops)?;
+
+                // Check if this is an array[_] pattern
+                if let Var { value, .. } = index.as_ref() {
+                    if let Value::String(var_name) = value {
+                        if var_name.as_ref() == "_" || self.is_unbound_var(var_name.as_ref()) {
+                            std::println!(
+                                "Debug: Found array[_] pattern - creating iteration loop"
+                            );
+                            // This is array[_] - create a loop to iterate over the array
+                            loops.push(HoistedLoop {
+                                loop_expr: Some(expr.clone()),
+                                key: None,
+                                value: index.clone(), // The _ variable
+                                collection: refr.clone(),
+                                loop_type: LoopType::IndexIteration,
+                            });
+                            return Ok(());
                         }
                     }
                 }
             }
-        }
 
-        // Rule not found
-        let null_reg = compiler.alloc_register();
-        let literal_idx = compiler.add_literal(Value::Null);
-        compiler.instructions.push(Instruction::Load {
-            dest: null_reg,
-            literal_idx,
-        });
-        Ok(compiler.finish(null_reg))
+            // Binary expressions - hoist from both operands
+            BinExpr { lhs, rhs, .. } => {
+                self.hoist_loops_from_expr(lhs, loops)?;
+                self.hoist_loops_from_expr(rhs, loops)?;
+            }
+            BoolExpr { lhs, rhs, .. } => {
+                self.hoist_loops_from_expr(lhs, loops)?;
+                self.hoist_loops_from_expr(rhs, loops)?;
+            }
+            ArithExpr { lhs, rhs, .. } => {
+                self.hoist_loops_from_expr(lhs, loops)?;
+                self.hoist_loops_from_expr(rhs, loops)?;
+            }
+            AssignExpr { lhs, rhs, .. } => {
+                self.hoist_loops_from_expr(lhs, loops)?;
+                self.hoist_loops_from_expr(rhs, loops)?;
+            }
+
+            // Membership expressions - hoist from key, value, and collection
+            Membership {
+                key,
+                value,
+                collection,
+                ..
+            } => {
+                if let Some(key_expr) = key {
+                    self.hoist_loops_from_expr(key_expr, loops)?;
+                }
+                self.hoist_loops_from_expr(value, loops)?;
+                self.hoist_loops_from_expr(collection, loops)?;
+            }
+
+            // Handle conditionally compiled expression types
+            #[cfg(feature = "rego-extensions")]
+            OrExpr { lhs, rhs, .. } => {
+                self.hoist_loops_from_expr(lhs, loops)?;
+                self.hoist_loops_from_expr(rhs, loops)?;
+            }
+        }
+        Ok(())
     }
 
-    /// Compile SomeIn loop construct (existential quantification)
+    /// Compile statements within loops (similar to interpreter's eval_stmts_in_loop)
+    fn compile_hoisted_loops(
+        &mut self,
+        stmts: &[crate::ast::LiteralStmt],
+        loops: &[HoistedLoop],
+    ) -> Result<()> {
+        if loops.is_empty() {
+            // No more loops, compile the current statement.
+            if !stmts.is_empty() {
+                self.compile_single_statement(&stmts[0])?;
+                // Remaining statements may have loops, so compile them recursively.
+                return self.hoist_loops_and_compile_statements(&stmts[1..]);
+            } else {
+                self.hoist_loops_and_emit_context_yield()?;
+            }
+        }
+
+        let current_loop = &loops[0];
+        let remaining_loops = &loops[1..];
+
+        std::println!("Debug: Compiling loop of type {:?}", current_loop.loop_type);
+
+        match current_loop.loop_type {
+            LoopType::SomeIn => {
+                // Compile SomeIn loop with remaining statements as body
+                self.compile_some_in_loop_with_remaining_statements(
+                    &current_loop.key,
+                    &current_loop.value,
+                    &current_loop.collection,
+                    stmts,
+                    remaining_loops,
+                )?;
+                Ok(())
+            }
+            LoopType::IndexIteration => {
+                // Compile index iteration loop
+                self.compile_index_iteration_loop(
+                    &current_loop.loop_expr,
+                    &current_loop.key,
+                    &current_loop.value,
+                    &current_loop.collection,
+                    stmts,
+                    remaining_loops,
+                )?;
+                Ok(())
+            }
+            LoopType::Every => {
+                // Compile Every loop (universal quantification)
+                self.compile_every_loop_with_remaining_statements(
+                    &current_loop.key,
+                    &current_loop.value,
+                    &current_loop.collection,
+                    stmts,
+                    remaining_loops,
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    fn hoist_loops_and_emit_context_yield(&mut self) -> Result<(), anyhow::Error> {
+        if let Some(context) = self.context_stack.last_mut() {
+            if context.key_value_loops_hoisted {
+                // Loops already hoisted, emit context yield
+                return self.emit_context_yield();
+            } else {
+                // Need to hoist loops from key/value expressions first
+                let mut key_value_loops = Vec::new();
+
+                // Clone expressions to avoid borrowing issues
+                let key_expr = context.key_expr.clone();
+                let value_expr = context.value_expr.clone();
+
+                // Collect loops from key expression
+                if let Some(ref expr) = key_expr {
+                    self.hoist_loops_from_expr(expr, &mut key_value_loops)?;
+                }
+
+                // Collect loops from value expression
+                if let Some(ref expr) = value_expr {
+                    self.hoist_loops_from_expr(expr, &mut key_value_loops)?;
+                }
+
+                if !key_value_loops.is_empty() {
+                    // Mark that we've hoisted loops to prevent infinite recursion
+                    self.context_stack
+                        .last_mut()
+                        .unwrap()
+                        .key_value_loops_hoisted = true;
+
+                    // Recursively compile the hoisted loops
+                    return self.compile_hoisted_loops(&[], &key_value_loops);
+                } else {
+                    // No loops to hoist, emit context yield
+                    return self.emit_context_yield();
+                }
+            }
+        } else {
+            // No context, emit context yield
+            return self.emit_context_yield();
+        }
+    }
+
+    /// Compile a single statement without loops
+    fn compile_single_statement(&mut self, stmt: &crate::ast::LiteralStmt) -> Result<()> {
+        match &stmt.literal {
+            crate::ast::Literal::Expr { expr, .. } => {
+                // Compile the condition and assert it must be true
+                let _condition_reg = self.compile_rego_expr_with_span(expr, &stmt.span, true)?;
+            }
+            crate::ast::Literal::SomeIn { .. } => {
+                // Should have been handled by loop hoisting
+                return Err(anyhow::anyhow!("SomeIn should have been hoisted as a loop"));
+            }
+            crate::ast::Literal::Every { .. } => {
+                // Should have been handled by loop hoisting
+                return Err(anyhow::anyhow!("Every should have been hoisted as a loop"));
+            }
+            crate::ast::Literal::SomeVars { span, vars } => {
+                std::println!(
+                    "Debug: Compiling SomeVars statement with {:?} variables at span {:?}",
+                    vars.iter().map(|v| v.text()),
+                    span
+                );
+                // Add each variable to the current scope's unbound variables
+                for var in vars {
+                    self.add_unbound_variable(var.text());
+                }
+            }
+            _ => {
+                std::println!("Debug: Skipping complex literal: {:?}", stmt.literal);
+                // For other literal types, skip for now
+            }
+        }
+        Ok(())
+    }
+
+    /// Compile index iteration loop (for patterns like collection[_], collection[idx], etc.)
+    fn compile_index_iteration_loop(
+        &mut self,
+        loop_expr: &Option<ExprRef>,
+        key_var: &Option<ExprRef>,
+        _value_var: &ExprRef,
+        collection: &ExprRef,
+        remaining_stmts: &[crate::ast::LiteralStmt],
+        remaining_loops: &[HoistedLoop],
+    ) -> Result<()> {
+        std::println!("Debug: Compiling index iteration loop");
+
+        // Compile the collection expression
+        let collection_reg = self.compile_rego_expr(collection)?;
+
+        // Allocate registers for loop variables
+        let key_reg = self.alloc_register(); // index
+        let value_reg = self.alloc_register(); // element
+        let result_reg = self.alloc_register();
+
+        if let Some(loop_expr) = loop_expr {
+            self.loop_expr_register_map
+                .insert(loop_expr.clone(), value_reg);
+        }
+
+        if let Some(key_var) = key_var {
+            // Store loop variable in scope (extract variable name from key_var)
+            if let crate::ast::Expr::Var { value, .. } = key_var.as_ref() {
+                let var_name = match value {
+                    Value::String(s) => {
+                        if s.as_ref() == "_" {
+                            // For underscore, we'll use the value (array element), not the index
+                            "".to_string() // Will be handled specially
+                        } else {
+                            s.to_string()
+                        }
+                    }
+                    _ => value.to_string(),
+                };
+                if !var_name.is_empty() && var_name != "_" {
+                    self.store_variable(var_name, value_reg);
+                }
+            }
+            self.loop_expr_register_map.insert(key_var.clone(), key_reg);
+        }
+
+        // Generate loop start instruction
+        let loop_start_idx = self.instructions.len();
+        self.instructions.push(Instruction::LoopStart {
+            mode: LoopMode::Existential, // For array iteration in set rules
+            collection: collection_reg,
+            key_reg,
+            value_reg,
+            result_reg,
+            body_start: 0, // Will be updated
+            loop_end: 0,   // Will be updated
+        });
+
+        let body_start = self.instructions.len() as u16;
+
+        // Include the first statement as part of the loop body, then compile remaining statements.
+        let body_stmts = &remaining_stmts[0..];
+
+        // Compile remaining loops and statements as loop body
+        self.compile_hoisted_loops(body_stmts, remaining_loops)?;
+
+        // Add LoopNext instruction
+        self.instructions.push(Instruction::LoopNext {
+            body_start,
+            loop_end: 0, // Will be updated
+        });
+
+        let loop_end = self.instructions.len() as u16;
+
+        // Update the LoopStart instruction
+        if let Instruction::LoopStart {
+            body_start: ref mut start,
+            loop_end: ref mut end,
+            ..
+        } = &mut self.instructions[loop_start_idx]
+        {
+            *start = body_start;
+            *end = loop_end;
+        }
+
+        // Update the LoopNext instruction
+        let loop_next_idx = self.instructions.len() - 1;
+        if let Instruction::LoopNext {
+            loop_end: ref mut end,
+            ..
+        } = &mut self.instructions[loop_next_idx]
+        {
+            *end = loop_end;
+        }
+
+        std::println!(
+            "Debug: Array iteration loop compiled - body_start={}, loop_end={}",
+            body_start,
+            loop_end
+        );
+
+        Ok(())
+    }
+
+    /// Compile SomeIn with remaining statements
+    fn compile_some_in_loop_with_remaining_statements(
+        &mut self,
+        key: &Option<ExprRef>,
+        value: &ExprRef,
+        collection: &ExprRef,
+        remaining_stmts: &[crate::ast::LiteralStmt],
+        _remaining_loops: &[HoistedLoop],
+    ) -> Result<Register> {
+        // Use the existing compile_some_in_loop_with_body method but with proper statement handling
+        // Skip the first statement (which is the SomeIn) and use the rest as loop body
+        let loop_body_stmts = &remaining_stmts[1..];
+        let result_reg =
+            self.compile_some_in_loop_with_body(key, value, collection, loop_body_stmts)?;
+        Ok(result_reg)
+    }
+
+    /// Compile Every with remaining statements
+    fn compile_every_loop_with_remaining_statements(
+        &mut self,
+        _key: &Option<ExprRef>,
+        _value: &ExprRef,
+        _domain: &ExprRef,
+        remaining_stmts: &[crate::ast::LiteralStmt],
+        _remaining_loops: &[HoistedLoop],
+    ) -> Result<()> {
+        // For Every loops, we need to extract the query from the Every literal
+        // This is a simplified implementation - in practice, Every has its own query
+        std::println!("Debug: Every loop compilation not fully implemented yet");
+
+        // TODO: this is wrong
+        // For now, just compile the remaining statements
+        let body_stmts = &remaining_stmts[1..];
+        for stmt in body_stmts {
+            self.compile_single_statement(stmt)?;
+        }
+
+        Ok(())
+    }
+}
+
+/// Helper types for loop hoisting
+#[derive(Debug, Clone)]
+struct HoistedLoop {
+    loop_expr: Option<ExprRef>,
+    key: Option<ExprRef>,
+    value: ExprRef,
+    collection: ExprRef,
+    loop_type: LoopType,
+}
+
+#[derive(Debug, Clone)]
+enum LoopType {
+    SomeIn,
+    IndexIteration,
+    Every,
+}
+
+impl<'a> Compiler<'a> {
     fn compile_some_in_loop_with_body(
         &mut self,
-        key: Option<&Expr>,
-        value: &Expr,
-        collection: &Expr,
+        key: &Option<ExprRef>,
+        value: &ExprRef,
+        collection: &ExprRef,
         loop_body_stmts: &[crate::ast::LiteralStmt],
     ) -> Result<Register> {
         // Compile collection expression
@@ -1110,12 +1573,16 @@ impl<'a> Compiler<'a> {
         let value_reg = self.alloc_register();
         let result_reg = self.alloc_register();
 
+        // Initialize result register as empty set
+        self.instructions
+            .push(Instruction::SetNew { dest: result_reg });
+
         // Start the existential loop - we'll calculate the correct loop_end after compiling the body
         let loop_start_idx = self.instructions.len();
 
         // Add placeholder LoopStart instruction (we'll update loop_end later)
         self.instructions.push(Instruction::LoopStart {
-            mode: LoopMode::Existential,
+            mode: LoopMode::SetComprehension, // Use SetComprehension for set rules with some...in
             collection: collection_reg,
             key_reg,
             value_reg,
@@ -1131,7 +1598,7 @@ impl<'a> Compiler<'a> {
         if let Some(key_expr) = key {
             if let crate::ast::Expr::Var {
                 value: var_name, ..
-            } = key_expr
+            } = key_expr.as_ref()
             {
                 std::println!(
                     "Debug: Storing loop key variable '{}' at register {}",
@@ -1144,7 +1611,7 @@ impl<'a> Compiler<'a> {
 
         if let crate::ast::Expr::Var {
             value: var_name, ..
-        } = value
+        } = value.as_ref()
         {
             std::println!("Debug: Variable name value: {:?}", var_name);
 
@@ -1182,27 +1649,7 @@ impl<'a> Compiler<'a> {
         }
 
         // Compile the loop body statements
-        for (i, stmt) in loop_body_stmts.iter().enumerate() {
-            std::println!("Debug: Compiling loop body statement {}", i);
-            std::println!("Debug: Statement literal type: {:?}", stmt.literal);
-            match &stmt.literal {
-                crate::ast::Literal::Expr { expr, .. } => {
-                    std::println!("Debug: Compiling expression in loop body: {:?}", expr);
-                    let _condition_reg =
-                        self.compile_rego_expr_with_span(&*expr, &stmt.span, true)?;
-                }
-                _ => {
-                    std::println!(
-                        "Debug: Non-expression literal in loop body: {:?}",
-                        stmt.literal
-                    );
-                    return Err(anyhow::anyhow!(
-                        "Complex literals in loop body not yet supported: {:?}",
-                        stmt.literal
-                    ));
-                }
-            }
-        }
+        self.hoist_loops_and_compile_statements(loop_body_stmts)?;
 
         // Add LoopNext instruction to continue to next iteration
         self.instructions.push(Instruction::LoopNext {
@@ -1258,255 +1705,15 @@ impl<'a> Compiler<'a> {
         Ok(result_reg)
     }
 
-    fn compile_some_in_loop(
-        &mut self,
-        key: Option<&Expr>,
-        value: &Expr,
-        collection: &Expr,
-    ) -> Result<Register> {
-        // Compile collection expression
-        let collection_reg = self.compile_rego_expr(collection)?;
-
-        // Allocate registers for loop variables
-        let key_reg = self.alloc_register();
-        let value_reg = self.alloc_register();
-        let result_reg = self.alloc_register();
-
-        // Store loop variables in scope BEFORE generating LoopStart
-        // This makes them available for subsequent statements in the body
-        if let Some(key_expr) = key {
-            if let crate::ast::Expr::Var { value, .. } = key_expr {
-                std::println!(
-                    "Debug: Storing loop key variable '{}' at register {}",
-                    value,
-                    key_reg
-                );
-                self.store_variable(value.to_string(), key_reg);
-            }
-        }
-
-        if let crate::ast::Expr::Var { value, .. } = value {
-            std::println!(
-                "Debug: Storing loop value variable '{}' at register {}",
-                value,
-                value_reg
-            );
-            self.store_variable(value.to_string(), value_reg);
-        }
-
-        // Start the existential loop
-        let body_start = self.instructions.len() as u16 + 1;
-        let loop_end = body_start + 10; // Placeholder, will be updated later
-
-        self.instructions.push(Instruction::LoopStart {
-            mode: LoopMode::Existential,
-            collection: collection_reg,
-            key_reg,
-            value_reg,
-            result_reg,
-            body_start,
-            loop_end,
-        });
-
-        // Return the result register so the caller knows where the result will be
-        Ok(result_reg)
-    }
-
-    /// Compile Every loop construct (universal quantification)
-    fn compile_every_loop(
-        &mut self,
-        key: Option<&Span>,
-        value: &Span,
-        domain: &Expr,
-        query: &crate::ast::Query,
-    ) -> Result<Register> {
-        // Compile domain expression
-        let collection_reg = self.compile_rego_expr(domain)?;
-
-        // Allocate registers for loop variables
-        let key_reg = self.alloc_register();
-        let value_reg = self.alloc_register();
-        let result_reg = self.alloc_register();
-
-        // Start the universal loop - we'll calculate the correct loop_end after compiling the body
-        let loop_start_idx = self.instructions.len();
-
-        // Add placeholder LoopStart instruction (we'll update body_start and loop_end later)
-        self.instructions.push(Instruction::LoopStart {
-            mode: LoopMode::Universal,
-            collection: collection_reg,
-            key_reg,
-            value_reg,
-            result_reg,
-            body_start: 0, // Will be calculated after adding LoopStart
-            loop_end: 0,   // Placeholder
-        });
-
-        // Calculate body_start after adding LoopStart instruction
-        let body_start = self.instructions.len() as u16;
-
-        // Store loop variables in scope for body compilation
-        if let Some(key_span) = key {
-            let key_name = key_span.text();
-            std::println!(
-                "Debug: Storing loop key variable '{}' at register {}",
-                key_name,
-                key_reg
-            );
-            self.store_variable(key_name.to_string(), key_reg);
-        }
-
-        // Extract variable name from value span
-        let value_name = value.text();
-        std::println!(
-            "Debug: Storing loop value variable '{}' at register {}",
-            value_name,
-            value_reg
-        );
-        self.store_variable(value_name.to_string(), value_reg);
-
-        // Compile the query body statements
-        for (i, stmt) in query.stmts.iter().enumerate() {
-            std::println!("Debug: Compiling Every loop body statement {}", i);
-            std::println!("Debug: Statement literal type: {:?}", stmt.literal);
-            match &stmt.literal {
-                crate::ast::Literal::Expr { expr, .. } => {
-                    std::println!("Debug: Compiling expression in Every loop body: {:?}", expr);
-                    let _condition_reg =
-                        self.compile_rego_expr_with_span(&*expr, &stmt.span, true)?;
-                }
-                _ => {
-                    std::println!(
-                        "Debug: Non-expression literal in Every loop body: {:?}",
-                        stmt.literal
-                    );
-                    return Err(anyhow::anyhow!(
-                        "Complex literals in Every loop body not yet supported: {:?}",
-                        stmt.literal
-                    ));
-                }
-            }
-        }
-
-        // Add LoopNext instruction to continue to next iteration
-        self.instructions.push(Instruction::LoopNext {
-            body_start,
-            loop_end: 0, // Will be updated
-        });
-
-        // Calculate the correct loop_end (points to instruction after LoopNext)
-        let loop_end = self.instructions.len() as u16;
-
-        // Update the LoopStart instruction with the correct body_start and loop_end
-        if let Instruction::LoopStart {
-            body_start: ref mut start,
-            loop_end: ref mut end,
-            ..
-        } = &mut self.instructions[loop_start_idx]
-        {
-            *start = body_start;
-            *end = loop_end;
-        }
-
-        // Update the LoopNext instruction with the correct loop_end
-        let loop_next_idx = self.instructions.len() - 1;
-        if let Instruction::LoopNext {
-            loop_end: ref mut end,
-            ..
-        } = &mut self.instructions[loop_next_idx]
-        {
-            *end = loop_end;
-        }
-
-        std::println!(
-            "Debug: Every loop compiled - body_start={}, loop_end={}",
-            body_start,
-            loop_end
-        );
-
-        // Debug: Print all instructions generated for this loop
-        std::println!(
-            "Debug: Generated {} instructions for Every loop:",
-            self.instructions.len()
-        );
-        for (i, instr) in self.instructions.iter().enumerate() {
-            std::println!("  {}: {:?}", i, instr);
-        }
-
-        // Debug: Print literals table
-        std::println!("Debug: Literals table:");
-        for (i, literal) in self.literals.iter().enumerate() {
-            std::println!("  literal_idx {}: {:?}", i, literal);
-        }
-
-        Ok(result_reg)
-    }
-
-    /// Compile Every loop construct with statements to execute after loop completes
-    fn compile_every_loop_with_remaining(
-        &mut self,
-        key: Option<&Span>,
-        value: &Span,
-        domain: &Expr,
-        query: &crate::ast::Query,
-        remaining_stmts: &[crate::ast::LiteralStmt],
-    ) -> Result<Register> {
-        // First compile the Every loop itself using the working method
-        let loop_result_reg = self.compile_every_loop(key, value, domain, query)?;
-
-        std::println!(
-            "Debug: Every loop completed, now compiling {} remaining statements",
-            remaining_stmts.len()
-        );
-
-        // Now compile the statements that should execute after the Every loop completes
-        let mut last_result_reg = loop_result_reg;
-        for (i, stmt) in remaining_stmts.iter().enumerate() {
-            std::println!("Debug: Compiling remaining statement {} after Every", i);
-            std::println!("Debug: Statement literal type: {:?}", stmt.literal);
-            match &stmt.literal {
-                crate::ast::Literal::Expr { expr, .. } => {
-                    std::println!("Debug: Compiling expression after Every: {:?}", expr);
-                    last_result_reg =
-                        self.compile_rego_expr_with_span(&*expr, &stmt.span, false)?;
-                }
-                _ => {
-                    std::println!(
-                        "Debug: Non-expression literal after Every: {:?}",
-                        stmt.literal
-                    );
-                    return Err(anyhow::anyhow!(
-                        "Complex literals after Every not yet supported: {:?}",
-                        stmt.literal
-                    ));
-                }
-            }
-        }
-
-        // Debug: Print all instructions generated
-        std::println!(
-            "Debug: Generated {} instructions total after Every with remaining:",
-            self.instructions.len()
-        );
-        for (i, instr) in self.instructions.iter().enumerate() {
-            std::println!("  {}: {:?}", i, instr);
-        }
-
-        Ok(last_result_reg)
-    }
-
     /// Compile array comprehension [term | query]
     fn compile_array_comprehension(
         &mut self,
-        term: &Expr,
+        term: &ExprRef,
         query: &crate::ast::Query,
         span: &Span,
     ) -> Result<Register> {
-        // Extract collection and variable from query
-        // For now, create a simple array to iterate over
-        // In a full implementation, we'd parse the query to extract the iteration pattern
-
-        // Create a hardcoded collection for testing - this should be extracted from query
+        // For array comprehension, we need to parse the query to extract loop patterns
+        // For now, create a simple hardcoded collection for testing
         let collection_reg = self.alloc_register();
         let literal_idx = self.add_literal(Value::Array(Arc::new(vec![
             Value::Number(1i64.into()),
@@ -1528,7 +1735,7 @@ impl<'a> Compiler<'a> {
 
         // Start the array comprehension loop
         let body_start = (self.instructions.len() + 1) as u16;
-        let loop_start_idx = self.instructions.len(); // Remember where LoopStart is
+        let loop_start_idx = self.instructions.len();
 
         // Add LoopStart with placeholder loop_end
         self.instructions.push(Instruction::LoopStart {
@@ -1541,8 +1748,13 @@ impl<'a> Compiler<'a> {
             loop_end: 0, // Will be updated below
         });
 
-        // Store the loop variable in scope (hardcoded as 'x' for now)
+        // Store the loop variable in scope
         self.store_variable("x".to_string(), value_reg);
+
+        // Compile the query conditions first
+        if !query.stmts.is_empty() {
+            self.compile_query(query)?;
+        }
 
         // Compile the term expression
         let term_reg = self.compile_rego_expr(term)?;
@@ -1573,7 +1785,7 @@ impl<'a> Compiler<'a> {
     /// Compile set comprehension {term | query}
     fn compile_set_comprehension(
         &mut self,
-        term: &Expr,
+        term: &ExprRef,
         query: &crate::ast::Query,
         span: &Span,
     ) -> Result<Register> {
@@ -1611,6 +1823,11 @@ impl<'a> Compiler<'a> {
 
         self.store_variable("x".to_string(), value_reg);
 
+        // Compile the query conditions first
+        if !query.stmts.is_empty() {
+            self.compile_query(query)?;
+        }
+
         let term_reg = self.compile_rego_expr(term)?;
 
         self.instructions.push(Instruction::LoopAccumulate {
@@ -1637,8 +1854,8 @@ impl<'a> Compiler<'a> {
     /// Compile object comprehension {key: value | query}
     fn compile_object_comprehension(
         &mut self,
-        key: &Expr,
-        value: &Expr,
+        key: &ExprRef,
+        value: &ExprRef,
         query: &crate::ast::Query,
         span: &Span,
     ) -> Result<Register> {
@@ -1677,6 +1894,11 @@ impl<'a> Compiler<'a> {
         // Store loop variables in scope (hardcoded for now)
         self.store_variable("k".to_string(), key_reg); // key variable
         self.store_variable("v".to_string(), value_reg); // value variable
+
+        // Compile the query conditions first
+        if !query.stmts.is_empty() {
+            self.compile_query(query)?;
+        }
 
         // Compile the key and value expressions
         let key_result_reg = self.compile_rego_expr(key)?;

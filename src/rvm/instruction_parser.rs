@@ -176,7 +176,7 @@ fn parse_params(text: &str) -> Result<Vec<(String, String)>> {
     let inner = &text[1..text.len() - 1];
     let mut params = Vec::new();
     let mut current = String::new();
-    let mut in_value = false;
+    let in_value = false;
     let mut colon_pos = None;
 
     for ch in inner.chars() {

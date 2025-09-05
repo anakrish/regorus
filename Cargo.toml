@@ -133,6 +133,10 @@ num_cpus = "1.16"
 [build-dependencies]
 anyhow = "1.0"
 
+[profile.dev]
+debug = true
+incremental = true
+
 [profile.release]
 debug = true
 lto = true

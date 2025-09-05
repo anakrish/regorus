@@ -74,6 +74,18 @@ enum LoopAction {
     Continue,
 }
 
+#[allow(unused)]
+#[derive(Debug, Clone)]
+struct CallRuleContext {
+    return_pc: usize,
+    dest_reg: u16,
+    result_reg: u16,
+    rule_index: u16,
+    rule_type: crate::rvm::program::RuleType,
+    current_definition_index: usize,
+    current_body_index: usize,
+}
+
 /// The RVM Virtual Machine
 pub struct RegoVM {
     /// Registers for storing values during execution
@@ -83,7 +95,7 @@ pub struct RegoVM {
     pc: usize,
 
     /// The compiled program containing instructions, literals, and metadata
-    program: Option<Arc<Program>>,
+    program: Arc<Program>,
 
     /// Rule execution cache: rule_index -> (computed: bool, result: Value)
     rule_cache: Vec<(bool, Value)>,
@@ -99,6 +111,9 @@ pub struct RegoVM {
 
     /// Loop execution stack
     loop_stack: Vec<LoopContext>,
+
+    /// Call rule execution stack for managing nested rule calls
+    call_rule_stack: Vec<CallRuleContext>,
 
     /// Maximum number of instructions to execute (default: 5000)
     max_instructions: usize,
@@ -120,12 +135,13 @@ impl RegoVM {
                 regs
             },
             pc: 0,
-            program: None,
+            program: Arc::new(Program::default()),
             rule_cache: Vec::new(),
             data: Value::Null,
             input: Value::Null,
             builtins: BTreeMap::new(),
             loop_stack: Vec::new(),
+            call_rule_stack: Vec::new(),
             max_instructions: 5000, // Default maximum instruction limit
             executed_instructions: 0,
         };
@@ -137,20 +153,42 @@ impl RegoVM {
 
     /// Load a complete program for execution
     pub fn load_program(&mut self, program: Arc<Program>) {
-        self.program = Some(program.clone());
-        
+        self.program = program.clone();
+
         // Initialize rule cache
-        self.rule_cache = vec![(false, Value::Undefined); program.rule_entry_points.len()];
-        
+        self.rule_cache = vec![(false, Value::Undefined); program.rule_infos.len()];
+
         // Set PC to main entry point
         self.pc = program.main_entry_point;
         self.executed_instructions = 0; // Reset instruction counter
 
         // Debug: Print the program received by VM
-        std::println!("Debug: VM received program with {} instructions, {} literals, {} rules:", 
-                     program.instructions.len(), program.literals.len(), program.rule_info.len());
+        std::println!(
+            "Debug: VM received program with {} instructions, {} literals, {} rules:",
+            program.instructions.len(),
+            program.literals.len(),
+            program.rule_infos.len()
+        );
         for (i, literal) in program.literals.iter().enumerate() {
             std::println!("  VM literal_idx {}: {:?}", i, literal);
+        }
+
+        // Debug: Print rule definitions
+        std::println!("Debug: VM rule infos:");
+        for (rule_idx, rule_info) in program.rule_infos.iter().enumerate() {
+            std::println!(
+                "  VM Rule {}: {} definitions",
+                rule_idx,
+                rule_info.definitions.len()
+            );
+            for (def_idx, bodies) in rule_info.definitions.iter().enumerate() {
+                std::println!(
+                    "    VM Definition {}: {} bodies at entry points {:?}",
+                    def_idx,
+                    bodies.len(),
+                    bodies
+                );
+            }
         }
     }
 
@@ -169,17 +207,18 @@ impl RegoVM {
         self.input = input;
     }
 
-    /// Execute the loaded program
     pub fn execute(&mut self) -> Result<Value> {
-        // Ensure we have a program loaded
-        let program = self.program.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No program loaded"))?
-            .clone();
-
         // Reset execution state for each execution
         self.executed_instructions = 0;
-        self.pc = program.main_entry_point;
+        self.pc = 0;
 
+        self.jump_to(0)
+    }
+
+    /// Execute the loaded program
+    pub fn jump_to(&mut self, target: usize) -> Result<Value> {
+        let program = self.program.clone();
+        self.pc = target;
         while self.pc < program.instructions.len() {
             // Check instruction execution limit
             if self.executed_instructions >= self.max_instructions {
@@ -412,13 +451,19 @@ impl RegoVM {
                     return Ok(self.registers[value as usize].clone());
                 }
 
-                Instruction::JumpRule { dest, rule_index } => {
-                    self.execute_jump_rule(dest, rule_index, &program)?;
+                Instruction::CallRule { dest, rule_index } => {
+                    self.execute_call_rule(dest, rule_index)?;
                 }
 
-                Instruction::RuleReturn { value: _ } => {
-                    // This should not be reached in main execution - it's handled in execute_jump_rule
-                    bail!("RuleReturn instruction encountered in main execution");
+                Instruction::RuleInit {
+                    result_reg,
+                    rule_index,
+                } => {
+                    self.execute_rule_init(result_reg, rule_index)?;
+                }
+
+                Instruction::RuleReturn {} => {
+                    self.execute_rule_return()?;
                 }
 
                 Instruction::ObjectNew { dest } => {
@@ -661,104 +706,159 @@ impl RegoVM {
         self.builtins.insert(String::from("sum"), builtin_sum);
     }
 
-    /// Execute JumpRule instruction with caching
-    fn execute_jump_rule(&mut self, dest: u16, rule_index: u32, program: &Program) -> Result<()> {
+    /// Execute CallRule instruction with caching and call stack support
+    fn execute_call_rule(&mut self, dest: u16, rule_index: u16) -> Result<()> {
+        std::println!(
+            "Debug: CallRule execution - dest={}, rule_index={}",
+            dest,
+            rule_index
+        );
         let rule_idx = rule_index as usize;
-        
+
         // Check bounds
         if rule_idx >= self.rule_cache.len() {
             bail!("Rule index {} out of bounds", rule_index);
         }
-        
+
         // Check cache first
         let (computed, cached_result) = &self.rule_cache[rule_idx];
         if *computed {
             // Cache hit - return cached result
+            std::println!(
+                "Debug: Cache hit for rule {} - result: {:?}",
+                rule_index,
+                cached_result
+            );
             self.registers[dest as usize] = cached_result.clone();
             return Ok(());
         }
-        
-        // Cache miss - execute the rule
-        let result = self.execute_rule_at_entry_point(rule_idx, program)?;
-        
-        // Cache the result
+
+        let rule_info = self
+            .program
+            .rule_infos
+            .get(rule_idx)
+            .ok_or_else(|| anyhow::anyhow!("Rule index {} has no info", rule_index))?
+            .clone();
+
+        let rule_type = rule_info.rule_type.clone();
+        let rule_definitions = rule_info.definitions.clone();
+
+        if rule_definitions.len() == 0 {
+            // No definitions - return undefined
+            std::println!(
+                "Debug: Rule {} has no definitions - returning Undefined",
+                rule_index
+            );
+            let result = Value::Undefined;
+            self.rule_cache[rule_idx] = (true, result.clone());
+            self.registers[dest as usize] = result;
+            return Ok(());
+        }
+
+        // Save current PC to return to after rule execution
+        self.call_rule_stack.push(CallRuleContext {
+            return_pc: self.pc,
+            dest_reg: dest,
+            result_reg: dest,
+            rule_index,
+            rule_type,
+            current_definition_index: 0,
+            current_body_index: 0,
+        });
+        self.registers[dest as usize] = Value::Undefined; // Initialize destination register
+
+        std::println!(
+            "Debug: CallRule executing rule {} with {} definitions",
+            rule_index,
+            rule_definitions.len()
+        );
+
+        for (def_idx, definition_bodies) in rule_definitions.iter().enumerate() {
+            for (body_entry_point_idx, body_entry_point) in definition_bodies.iter().enumerate() {
+                std::println!(
+                    "Debug: Executing rule definition {} at body {}, entry point {}",
+                    def_idx,
+                    body_entry_point_idx,
+                    body_entry_point
+                );
+
+                // Execute the body
+                match self.jump_to(*body_entry_point as usize) {
+                    Ok(_) => {
+                        std::println!("Debug:  Body {} completed", body_entry_point_idx);
+                    }
+                    Err(e) => {
+                        std::println!("Debug:  Body {} failed: {:?}", body_entry_point_idx, e);
+                        // Body failed - skip this definition
+                        continue;
+                    }
+                }
+                self.call_rule_stack.last_mut().map(|ctx| {
+                    ctx.current_body_index = body_entry_point_idx;
+                    ctx.current_definition_index = def_idx;
+                });
+            }
+        }
+
+        // Return from the call
+        let call_context = self.call_rule_stack.pop().expect("Call stack underflow");
+        self.pc = call_context.return_pc;
+        std::println!(
+            "Debug: CallRule returning from rule {} to PC {}",
+            rule_index,
+            self.pc
+        );
+
+        // Cache the final result
+        let result = self.registers[dest as usize].clone();
+        std::println!("Debug: Set rule final result: {:?}", result);
         self.rule_cache[rule_idx] = (true, result.clone());
-        
-        // Store result in destination register
-        self.registers[dest as usize] = result;
-        
+
+        std::println!(
+            "Debug: CallRule completed - dest register {} set to {:?}",
+            dest,
+            self.registers[dest as usize]
+        );
         Ok(())
     }
-    
-    /// Execute rule starting at specific entry point
-    fn execute_rule_at_entry_point(&mut self, rule_index: usize, program: &Program) -> Result<Value> {
-        // Check bounds
-        if rule_index >= program.rule_entry_points.len() {
-            bail!("Rule entry point {} not found", rule_index);
-        }
-        
-        // Save current PC
-        let saved_pc = self.pc;
-        
-        // Jump to rule entry point
-        self.pc = program.rule_entry_points[rule_index];
-        
-        // Execute until we hit a RuleReturn instruction or end of program
-        while self.pc < program.instructions.len() {
-            // Check instruction execution limit
-            if self.executed_instructions >= self.max_instructions {
-                bail!("Execution stopped: exceeded maximum instruction limit");
+
+    /// Execute RuleInit instruction
+    fn execute_rule_init(&mut self, result_reg: u16, _rule_index: u16) -> Result<()> {
+        let current_ctx = self
+            .call_rule_stack
+            .last_mut()
+            .expect("Call stack underflow");
+        current_ctx.result_reg = result_reg;
+        match current_ctx.rule_type {
+            crate::rvm::program::RuleType::Complete => {
+                self.registers[result_reg as usize] = Value::Undefined;
             }
-            
-            self.executed_instructions += 1;
-            let instruction = program.instructions[self.pc].clone();
-            
-            match instruction {
-                Instruction::RuleReturn { value } => {
-                    // Rule completed - restore PC and return result
-                    self.pc = saved_pc;
-                    return Ok(self.registers[value as usize].clone());
-                }
-                
-                // Handle all other instructions normally (reuse main execution logic)
-                _ => {
-                    self.handle_single_instruction(instruction, program)?;
+            crate::rvm::program::RuleType::PartialSet => {
+                if current_ctx.current_definition_index == 0 && current_ctx.current_body_index == 0
+                {
+                    self.registers[result_reg as usize] = Value::new_set();
                 }
             }
-            
-            self.pc += 1;
+            crate::rvm::program::RuleType::PartialObject => {
+                if current_ctx.current_definition_index == 0 && current_ctx.current_body_index == 0
+                {
+                    self.registers[result_reg as usize] = Value::new_object();
+                }
+                self.registers[result_reg as usize] = Value::Array(Arc::new(Vec::new()));
+            }
         }
-        
-        // If we reach here, rule didn't have explicit return
-        self.pc = saved_pc;
-        Ok(Value::Undefined)
+        Ok(())
     }
-    
-    /// Handle a single instruction (extracted from main execute loop)
-    fn handle_single_instruction(&mut self, instruction: Instruction, program: &Program) -> Result<()> {
-        match instruction {
-            // Handle all existing instructions except JumpRule and RuleReturn
-            Instruction::JumpRule { .. } => {
-                bail!("Nested JumpRule not allowed during rule execution");
-            }
-            Instruction::RuleReturn { .. } => {
-                // This should not be reached as it's handled in execute_rule_at_entry_point
-                bail!("RuleReturn should be handled in rule execution context");
-            }
-            
-            Instruction::Load { dest, literal_idx } => {
-                if let Some(value) = program.literals.get(literal_idx as usize) {
-                    self.registers[dest as usize] = value.clone();
-                } else {
-                    bail!("Literal index {} out of bounds", literal_idx);
-                }
-            }
-            
-            // For now, implement basic instructions and extend as needed
-            _ => {
-                bail!("Instruction {:?} not yet supported in rule execution", instruction);
-            }
-        }
+
+    /// Execute RuleReturn
+    fn execute_rule_return(&mut self) -> Result<()> {
+        let current_ctx = self
+            .call_rule_stack
+            .last_mut()
+            .expect("Call stack underflow");
+        let result_reg = current_ctx.result_reg;
+        let dest_reg = current_ctx.dest_reg;
+        self.registers[dest_reg as usize] = self.registers[result_reg as usize].clone();
         Ok(())
     }
 

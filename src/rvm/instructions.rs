@@ -254,19 +254,25 @@ pub enum Instruction {
         key: Option<u16>,
     },
 
-    /// Jump to rule with caching - checks cache first, executes rule if needed
-    JumpRule {
-        /// Register to store result
+    /// Call rule with caching - checks cache first, executes rule if needed, supports call stack
+    CallRule {
+        /// Destination register to store the result of the rule call
         dest: u16,
         /// Rule index to execute
-        rule_index: u32,
+        rule_index: u16,
+    },
+
+    /// Initialize a rule
+    RuleInit {
+        /// The register where rule's result is accumulated.
+        result_reg: u16,
+
+        /// The rule number of the rule
+        rule_index: u16,
     },
 
     /// Return from rule execution
-    RuleReturn {
-        /// Register containing return value
-        value: u16,
-    },
+    RuleReturn {},
 
     /// Stop execution
     Halt,
@@ -387,11 +393,18 @@ impl Instruction {
                     format!("LOOP_ACCUMULATE R({})", value)
                 }
             }
-            Instruction::JumpRule { dest, rule_index } => {
-                format!("JUMP_RULE R({}) {}", dest, rule_index)
+            Instruction::CallRule { dest, rule_index } => {
+                format!("CALL_RULE R({}) {}", dest, rule_index)
             }
-            Instruction::RuleReturn { value } => {
-                format!("RULE_RETURN R({})", value)
+            Instruction::RuleReturn {} => {
+                format!("RULE_RETURN")
+            }
+
+            Instruction::RuleInit {
+                result_reg,
+                rule_index,
+            } => {
+                format!("RULE_INIT R({}) {}", result_reg, rule_index)
             }
             Instruction::Halt => String::from("HALT"),
         }

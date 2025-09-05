@@ -25,7 +25,7 @@ pub(crate) type InferredResourceTypes = BTreeMap<Ref<Query>, ResourceTypeInfo>;
 /// Wrapper around CompiledPolicyData that holds an Rc reference.
 #[derive(Debug, Clone)]
 pub struct CompiledPolicy {
-    inner: Rc<CompiledPolicyData>,
+    pub(crate) inner: Rc<CompiledPolicyData>,
 }
 
 impl CompiledPolicy {

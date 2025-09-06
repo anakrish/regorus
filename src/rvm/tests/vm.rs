@@ -215,10 +215,7 @@ mod tests {
 
         // Test array parsing
         let array_val = parse_value("Array([Number(1), Number(2), Number(3)])")?;
-        let mut expected_vec = Vec::new();
-        expected_vec.push(Value::from(1.0));
-        expected_vec.push(Value::from(2.0));
-        expected_vec.push(Value::from(3.0));
+        let expected_vec = vec![Value::from(1.0), Value::from(2.0), Value::from(3.0)];
         let expected_array = Value::Array(Arc::new(expected_vec));
         assert_eq!(array_val, expected_array);
 
@@ -228,15 +225,15 @@ mod tests {
     #[test]
     fn test_simple_vm_execution() -> Result<()> {
         // Test a simple Load + Return sequence
-        let mut instructions = Vec::new();
-        instructions.push(crate::rvm::instructions::Instruction::Load {
-            dest: 0,
-            literal_idx: 0,
-        });
-        instructions.push(crate::rvm::instructions::Instruction::Return { value: 0 });
+        let instructions = vec![
+            crate::rvm::instructions::Instruction::Load {
+                dest: 0,
+                literal_idx: 0,
+            },
+            crate::rvm::instructions::Instruction::Return { value: 0 },
+        ];
 
-        let mut literals = Vec::new();
-        literals.push(Value::from(42.0));
+        let literals = vec![Value::from(42.0)];
 
         let result = execute_vm_instructions(instructions, literals, None, None)?;
         assert_eq!(result, Value::from(42.0));
@@ -247,25 +244,24 @@ mod tests {
     #[test]
     fn test_arithmetic_vm_execution() -> Result<()> {
         // Test basic arithmetic: 10 + 5 = 15
-        let mut instructions = Vec::new();
-        instructions.push(crate::rvm::instructions::Instruction::Load {
-            dest: 0,
-            literal_idx: 0,
-        });
-        instructions.push(crate::rvm::instructions::Instruction::Load {
-            dest: 1,
-            literal_idx: 1,
-        });
-        instructions.push(crate::rvm::instructions::Instruction::Add {
-            dest: 2,
-            left: 0,
-            right: 1,
-        });
-        instructions.push(crate::rvm::instructions::Instruction::Return { value: 2 });
+        let instructions = vec![
+            crate::rvm::instructions::Instruction::Load {
+                dest: 0,
+                literal_idx: 0,
+            },
+            crate::rvm::instructions::Instruction::Load {
+                dest: 1,
+                literal_idx: 1,
+            },
+            crate::rvm::instructions::Instruction::Add {
+                dest: 2,
+                left: 0,
+                right: 1,
+            },
+            crate::rvm::instructions::Instruction::Return { value: 2 },
+        ];
 
-        let mut literals = Vec::new();
-        literals.push(Value::from(10.0));
-        literals.push(Value::from(5.0));
+        let literals = vec![Value::from(10.0), Value::from(5.0)];
 
         let result = execute_vm_instructions(instructions, literals, None, None)?;
         assert_eq!(result, Value::from(15.0));

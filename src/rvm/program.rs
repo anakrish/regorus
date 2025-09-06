@@ -190,7 +190,7 @@ impl Program {
         }
 
         // Check magic number
-        if &data[0..4] != &Self::MAGIC {
+        if data[0..4] != Self::MAGIC {
             return Err("Invalid file format - magic number mismatch".to_string());
         }
 
@@ -228,7 +228,7 @@ impl Program {
         }
 
         // Check magic number
-        if &data[0..4] != &Self::MAGIC {
+        if data[0..4] != Self::MAGIC {
             return Ok(false);
         }
 
@@ -247,7 +247,7 @@ impl Program {
             return Err("Data too short for header".to_string());
         }
 
-        if &data[0..4] != &Self::MAGIC {
+        if data[0..4] != Self::MAGIC {
             return Err("Invalid file format".to_string());
         }
 

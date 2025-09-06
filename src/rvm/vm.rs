@@ -13,7 +13,7 @@ extern crate alloc;
 
 /// Loop execution context for managing iteration state
 #[derive(Debug, Clone)]
-struct LoopContext {
+pub struct LoopContext {
     mode: LoopMode,
     iteration_state: IterationState,
     key_reg: u16,
@@ -76,14 +76,27 @@ enum LoopAction {
 
 #[allow(unused)]
 #[derive(Debug, Clone)]
-struct CallRuleContext {
-    return_pc: usize,
-    dest_reg: u16,
+pub struct CallRuleContext {
+    pub return_pc: usize,
+    pub dest_reg: u16,
+    pub result_reg: u16,
+    pub rule_index: u16,
+    pub rule_type: crate::rvm::program::RuleType,
+    pub current_definition_index: usize,
+    pub current_body_index: usize,
+}
+
+/// Type alias for built-in function signature
+type BuiltinFunction = fn(&[Value]) -> Result<Value>;
+
+/// Parameters for loop execution
+struct LoopParams {
+    collection: u16,
+    key_reg: u16,
+    value_reg: u16,
     result_reg: u16,
-    rule_index: u16,
-    rule_type: crate::rvm::program::RuleType,
-    current_definition_index: usize,
-    current_body_index: usize,
+    body_start: u16,
+    loop_end: u16,
 }
 
 /// The RVM Virtual Machine
@@ -107,7 +120,7 @@ pub struct RegoVM {
     input: Value,
 
     /// Built-in functions
-    builtins: BTreeMap<String, fn(&[Value]) -> Result<Value>>,
+    builtins: BTreeMap<String, BuiltinFunction>,
 
     /// Loop execution stack
     loop_stack: Vec<LoopContext>,
@@ -120,6 +133,16 @@ pub struct RegoVM {
 
     /// Current count of executed instructions
     executed_instructions: usize,
+
+    /// Interactive debugger for step-by-step execution analysis
+    #[cfg(feature = "rvm-debug")]
+    debugger: crate::rvm::debugger::InteractiveDebugger,
+}
+
+impl Default for RegoVM {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RegoVM {
@@ -144,6 +167,8 @@ impl RegoVM {
             call_rule_stack: Vec::new(),
             max_instructions: 5000, // Default maximum instruction limit
             executed_instructions: 0,
+            #[cfg(feature = "rvm-debug")]
+            debugger: crate::rvm::debugger::InteractiveDebugger::new(),
         };
 
         // Register built-in functions
@@ -215,6 +240,23 @@ impl RegoVM {
         self.jump_to(0)
     }
 
+    // Public getters for visualization
+    pub fn get_pc(&self) -> usize {
+        self.pc
+    }
+
+    pub fn get_registers(&self) -> &Vec<Value> {
+        &self.registers
+    }
+
+    pub fn get_program(&self) -> &Arc<Program> {
+        &self.program
+    }
+
+    pub fn get_call_stack(&self) -> &Vec<CallRuleContext> {
+        &self.call_rule_stack
+    }
+
     /// Execute the loaded program
     pub fn jump_to(&mut self, target: usize) -> Result<Value> {
         let program = self.program.clone();
@@ -230,6 +272,21 @@ impl RegoVM {
 
             self.executed_instructions += 1;
             let instruction = program.instructions[self.pc].clone();
+
+            // Debugger integration
+            #[cfg(feature = "rvm-debug")]
+            {
+                let debug_ctx = crate::rvm::debugger::DebugContext {
+                    pc: self.pc,
+                    instruction: &instruction,
+                    registers: &self.registers,
+                    call_rule_stack: &self.call_rule_stack,
+                    loop_stack: &self.loop_stack,
+                    executed_instructions: self.executed_instructions,
+                    program: &program,
+                };
+                self.debugger.debug_prompt(&debug_ctx);
+            }
 
             // Debug excessive instruction execution
             if self.executed_instructions > 4990 {
@@ -447,7 +504,6 @@ impl RegoVM {
                 }
 
                 Instruction::Return { value } => {
-                    std::dbg!(("return", &self.registers[value as usize]));
                     return Ok(self.registers[value as usize].clone());
                 }
 
@@ -510,7 +566,6 @@ impl RegoVM {
 
                 Instruction::ArrayPush { arr, value } => {
                     let value_to_push = self.registers[value as usize].clone();
-                    std::dbg!(("Pushing value to array", &arr, &value_to_push));
 
                     // Swap the value from the register with Null, modify it, and put it back
                     let mut arr_value =
@@ -518,7 +573,6 @@ impl RegoVM {
 
                     if let Ok(arr_mut) = arr_value.as_array_mut() {
                         arr_mut.push(value_to_push);
-                        std::dbg!(&arr_value);
                         self.registers[arr as usize] = arr_value;
                     } else {
                         // Restore the original value and bail
@@ -623,6 +677,8 @@ impl RegoVM {
                                         if let Some(loop_ctx_mut) = self.loop_stack.last_mut() {
                                             loop_ctx_mut.current_iteration_failed = true;
                                         }
+                                        std::println!("Debug: AssertCondition failed in Existential loop - jumping to loop_end={}", loop_end);
+
                                         // Jump directly to the LoopNext instruction
                                         self.pc = loop_next_pc as usize - 1; // -1 because PC will be incremented
                                     }
@@ -672,9 +728,15 @@ impl RegoVM {
                     body_start,
                     loop_end,
                 } => {
-                    self.execute_loop_start(
-                        &mode, collection, key_reg, value_reg, result_reg, body_start, loop_end,
-                    )?;
+                    let params = LoopParams {
+                        collection,
+                        key_reg,
+                        value_reg,
+                        result_reg,
+                        body_start,
+                        loop_end,
+                    };
+                    self.execute_loop_start(&mode, params)?;
                 }
 
                 Instruction::LoopNext {
@@ -743,7 +805,7 @@ impl RegoVM {
         let rule_type = rule_info.rule_type.clone();
         let rule_definitions = rule_info.definitions.clone();
 
-        if rule_definitions.len() == 0 {
+        if rule_definitions.is_empty() {
             // No definitions - return undefined
             std::println!(
                 "Debug: Rule {} has no definitions - returning Undefined",
@@ -783,7 +845,7 @@ impl RegoVM {
                 );
 
                 // Execute the body
-                match self.jump_to(*body_entry_point as usize) {
+                match self.jump_to(*body_entry_point) {
                     Ok(_) => {
                         std::println!("Debug:  Body {} completed", body_entry_point_idx);
                     }
@@ -793,10 +855,10 @@ impl RegoVM {
                         continue;
                     }
                 }
-                self.call_rule_stack.last_mut().map(|ctx| {
+                if let Some(ctx) = self.call_rule_stack.last_mut() {
                     ctx.current_body_index = body_entry_point_idx;
                     ctx.current_definition_index = def_idx;
-                });
+                }
             }
         }
 
@@ -1000,33 +1062,23 @@ impl RegoVM {
     }
 
     /// Execute LoopStart instruction
-    fn execute_loop_start(
-        &mut self,
-        mode: &LoopMode,
-        collection: u16,
-        key_reg: u16,
-        value_reg: u16,
-        result_reg: u16,
-        body_start: u16,
-        loop_end: u16,
-    ) -> Result<()> {
+    fn execute_loop_start(&mut self, mode: &LoopMode, params: LoopParams) -> Result<()> {
         // Initialize result container based on mode
-        std::dbg!(("loop start", &result_reg));
         let initial_result = match mode {
             LoopMode::Existential | LoopMode::Universal => Value::Bool(false),
             LoopMode::ArrayComprehension => Value::new_array(),
             LoopMode::SetComprehension => Value::new_set(),
             LoopMode::ObjectComprehension => Value::Object(Arc::new(BTreeMap::new())),
         };
-        self.registers[result_reg as usize] = initial_result;
+        self.registers[params.result_reg as usize] = initial_result;
 
-        let collection_value = self.registers[collection as usize].clone();
+        let collection_value = self.registers[params.collection as usize].clone();
 
         // Validate collection is iterable and create iteration state
         let iteration_state = match &collection_value {
             Value::Array(items) => {
                 if items.is_empty() {
-                    self.handle_empty_collection(mode, result_reg, loop_end)?;
+                    self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
                     return Ok(());
                 }
                 IterationState::Array {
@@ -1036,7 +1088,7 @@ impl RegoVM {
             }
             Value::Object(obj) => {
                 if obj.is_empty() {
-                    self.handle_empty_collection(mode, result_reg, loop_end)?;
+                    self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
                     return Ok(());
                 }
                 IterationState::Object {
@@ -1047,7 +1099,7 @@ impl RegoVM {
             }
             Value::Set(set) => {
                 if set.is_empty() {
-                    self.handle_empty_collection(mode, result_reg, loop_end)?;
+                    self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
                     return Ok(());
                 }
                 IterationState::Set {
@@ -1062,24 +1114,25 @@ impl RegoVM {
         };
 
         // Set up first iteration
-        let has_next = self.setup_next_iteration(&iteration_state, key_reg, value_reg)?;
+        let has_next =
+            self.setup_next_iteration(&iteration_state, params.key_reg, params.value_reg)?;
         if !has_next {
-            self.pc = loop_end as usize;
+            self.pc = params.loop_end as usize;
             return Ok(());
         }
 
         // Create loop context
         // The LoopNext instruction is positioned immediately before loop_end
-        let loop_next_pc = loop_end - 1;
+        let loop_next_pc = params.loop_end - 1;
 
         let loop_context = LoopContext {
             mode: mode.clone(),
             iteration_state,
-            key_reg,
-            value_reg,
-            result_reg,
-            body_start,
-            loop_end,
+            key_reg: params.key_reg,
+            value_reg: params.value_reg,
+            result_reg: params.result_reg,
+            body_start: params.body_start,
+            loop_end: params.loop_end,
             loop_next_pc,
             success_count: 0,
             total_iterations: 0,
@@ -1087,7 +1140,7 @@ impl RegoVM {
         };
 
         self.loop_stack.push(loop_context);
-        self.pc = body_start as usize - 1; // -1 because PC will be incremented after instruction
+        self.pc = params.body_start as usize - 1; // -1 because PC will be incremented after instruction
         Ok(())
     }
 

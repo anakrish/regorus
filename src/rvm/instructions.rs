@@ -278,10 +278,9 @@ pub enum Instruction {
     Halt,
 }
 
-impl Instruction {
-    /// Get a human-readable representation of the instruction
-    pub fn to_string(&self) -> String {
-        match self {
+impl std::fmt::Display for Instruction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
             Instruction::Load { dest, literal_idx } => {
                 format!("LOAD R({}) L({})", dest, literal_idx)
             }
@@ -396,9 +395,7 @@ impl Instruction {
             Instruction::CallRule { dest, rule_index } => {
                 format!("CALL_RULE R({}) {}", dest, rule_index)
             }
-            Instruction::RuleReturn {} => {
-                format!("RULE_RETURN")
-            }
+            Instruction::RuleReturn {} => String::from("RULE_RETURN"),
 
             Instruction::RuleInit {
                 result_reg,
@@ -407,6 +404,7 @@ impl Instruction {
                 format!("RULE_INIT R({}) {}", result_reg, rule_index)
             }
             Instruction::Halt => String::from("HALT"),
-        }
+        };
+        write!(f, "{}", text)
     }
 }

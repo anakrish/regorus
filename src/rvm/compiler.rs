@@ -361,7 +361,7 @@ impl<'a> Compiler<'a> {
 
             // Start rule indices from 1 (0 is reserved for main entrypoint)
             // TODO: Revisit this
-            let index = (self.rule_index_map.len() + 0) as u16;
+            let index = self.rule_index_map.len() as u16;
 
             self.rule_index_map.insert(rule_path.to_string(), index);
             self.rule_worklist.push(rule_path.to_string());
@@ -474,7 +474,7 @@ impl<'a> Compiler<'a> {
 
     /// Compile a Rego expression to RVM instructions
     pub fn compile_rego_expr(&mut self, expr: &ExprRef) -> Result<Register> {
-        self.compile_rego_expr_with_span(expr, &expr.span(), false)
+        self.compile_rego_expr_with_span(expr, expr.span(), false)
     }
 
     /// Compile a Rego expression to RVM instructions with span tracking
@@ -536,7 +536,7 @@ impl<'a> Compiler<'a> {
                 // Add each item to the array
                 for item in items {
                     // Don't assert conditions for array items
-                    let item_reg = self.compile_rego_expr_with_span(item, &item.span(), false)?;
+                    let item_reg = self.compile_rego_expr_with_span(item, item.span(), false)?;
 
                     // Push the item to the array
                     self.emit_instruction(
@@ -558,7 +558,7 @@ impl<'a> Compiler<'a> {
                 // Add each item to the set
                 for item in items {
                     // Don't assert conditions for set items
-                    let item_reg = self.compile_rego_expr_with_span(item, &item.span(), false)?;
+                    let item_reg = self.compile_rego_expr_with_span(item, item.span(), false)?;
 
                     // Add the item to the set
                     self.emit_instruction(
@@ -581,9 +581,9 @@ impl<'a> Compiler<'a> {
                 for (_, key_expr, value_expr) in fields {
                     // Compile key and value
                     let key_reg =
-                        self.compile_rego_expr_with_span(key_expr, &key_expr.span(), false)?;
+                        self.compile_rego_expr_with_span(key_expr, key_expr.span(), false)?;
                     let value_reg =
-                        self.compile_rego_expr_with_span(value_expr, &value_expr.span(), false)?;
+                        self.compile_rego_expr_with_span(value_expr, value_expr.span(), false)?;
 
                     // Set the field in the object
                     self.emit_instruction(
@@ -601,8 +601,8 @@ impl<'a> Compiler<'a> {
             Expr::ArithExpr { lhs, op, rhs, .. } => {
                 // Don't assert conditions for operands
                 // TODO: Determine assertion
-                let lhs_reg = self.compile_rego_expr_with_span(lhs, &lhs.span(), false)?;
-                let rhs_reg = self.compile_rego_expr_with_span(rhs, &rhs.span(), false)?;
+                let lhs_reg = self.compile_rego_expr_with_span(lhs, lhs.span(), false)?;
+                let rhs_reg = self.compile_rego_expr_with_span(rhs, rhs.span(), false)?;
                 let dest = self.alloc_register();
 
                 match op {
@@ -655,8 +655,8 @@ impl<'a> Compiler<'a> {
             }
             Expr::BoolExpr { lhs, op, rhs, .. } => {
                 // Don't assert conditions for operands
-                let lhs_reg = self.compile_rego_expr_with_span(lhs, &lhs.span(), false)?;
-                let rhs_reg = self.compile_rego_expr_with_span(rhs, &rhs.span(), false)?;
+                let lhs_reg = self.compile_rego_expr_with_span(lhs, lhs.span(), false)?;
+                let rhs_reg = self.compile_rego_expr_with_span(rhs, rhs.span(), false)?;
                 let dest = self.alloc_register();
 
                 match op {
@@ -722,32 +722,34 @@ impl<'a> Compiler<'a> {
                 // TODO: Really complex. Look at interpreter, esp make_bindings
                 // Handle variable assignment like x := 10
                 // First compile the right-hand side value (don't assert - this is assignment)
-                let rhs_reg = self.compile_rego_expr_with_span(rhs, &rhs.span(), false)?;
+                let rhs_reg = self.compile_rego_expr_with_span(rhs, rhs.span(), false)?;
 
                 // Then bind the variable if lhs is a variable
-                if let Expr::Var { value, .. } = lhs.as_ref() {
-                    if let Value::String(var_name) = value {
-                        // Allocate a NEW register for the LHS variable
-                        let lhs_reg = self.alloc_register();
+                if let Expr::Var {
+                    value: Value::String(var_name),
+                    ..
+                } = lhs.as_ref()
+                {
+                    // Allocate a NEW register for the LHS variable
+                    let lhs_reg = self.alloc_register();
 
-                        // Copy the value from RHS to LHS register
-                        self.instructions.push(Instruction::Move {
-                            dest: lhs_reg,
-                            src: rhs_reg,
-                        });
+                    // Copy the value from RHS to LHS register
+                    self.instructions.push(Instruction::Move {
+                        dest: lhs_reg,
+                        src: rhs_reg,
+                    });
 
-                        // Store the variable binding to the NEW register
-                        std::println!(
-                            "Debug: Assignment '{}' := value from register {} to new register {}",
-                            var_name,
-                            rhs_reg,
-                            lhs_reg
-                        );
-                        self.add_variable(var_name.as_ref(), lhs_reg);
+                    // Store the variable binding to the NEW register
+                    std::println!(
+                        "Debug: Assignment '{}' := value from register {} to new register {}",
+                        var_name,
+                        rhs_reg,
+                        lhs_reg
+                    );
+                    self.add_variable(var_name.as_ref(), lhs_reg);
 
-                        // Return the register containing the assigned value
-                        return Ok(lhs_reg);
-                    }
+                    // Return the register containing the assigned value
+                    return Ok(lhs_reg);
                 }
 
                 // Return the register containing the assigned value
@@ -772,7 +774,7 @@ impl<'a> Compiler<'a> {
             // TODO: chained ref dot from interpreter
             Expr::RefDot { refr, field, .. } => {
                 // Compile the object reference (don't assert)
-                let obj_reg = self.compile_rego_expr_with_span(refr, &refr.span(), false)?;
+                let obj_reg = self.compile_rego_expr_with_span(refr, refr.span(), false)?;
 
                 // The field is a (Span, Value) tuple - get the value
                 let field_value = &field.1;
@@ -803,10 +805,10 @@ impl<'a> Compiler<'a> {
             }
             Expr::RefBrack { refr, index, .. } => {
                 // Compile the object reference (don't assert)
-                let obj_reg = self.compile_rego_expr_with_span(refr, &refr.span(), false)?;
+                let obj_reg = self.compile_rego_expr_with_span(refr, refr.span(), false)?;
 
                 // Compile the index expression (don't assert)
-                let key_reg = self.compile_rego_expr_with_span(index, &index.span(), false)?;
+                let key_reg = self.compile_rego_expr_with_span(index, index.span(), false)?;
 
                 // Get the field value using the dynamic key
                 let dest = self.alloc_register();
@@ -825,11 +827,11 @@ impl<'a> Compiler<'a> {
                 value, collection, ..
             } => {
                 // Compile the value to check (don't assert)
-                let value_reg = self.compile_rego_expr_with_span(value, &value.span(), false)?;
+                let value_reg = self.compile_rego_expr_with_span(value, value.span(), false)?;
 
                 // Compile the collection (don't assert)
                 let collection_reg =
-                    self.compile_rego_expr_with_span(collection, &collection.span(), false)?;
+                    self.compile_rego_expr_with_span(collection, collection.span(), false)?;
 
                 // Check membership using a specialized instruction
                 let dest = self.alloc_register();
@@ -1196,22 +1198,22 @@ impl<'a> Compiler<'a> {
                 self.hoist_loops_from_expr(index, loops)?;
 
                 // Check if this is an array[_] pattern
-                if let Var { value, .. } = index.as_ref() {
-                    if let Value::String(var_name) = value {
-                        if var_name.as_ref() == "_" || self.is_unbound_var(var_name.as_ref()) {
-                            std::println!(
-                                "Debug: Found array[_] pattern - creating iteration loop"
-                            );
-                            // This is array[_] - create a loop to iterate over the array
-                            loops.push(HoistedLoop {
-                                loop_expr: Some(expr.clone()),
-                                key: None,
-                                value: index.clone(), // The _ variable
-                                collection: refr.clone(),
-                                loop_type: LoopType::IndexIteration,
-                            });
-                            return Ok(());
-                        }
+                if let Var {
+                    value: Value::String(var_name),
+                    ..
+                } = index.as_ref()
+                {
+                    if var_name.as_ref() == "_" || self.is_unbound_var(var_name.as_ref()) {
+                        std::println!("Debug: Found array[_] pattern - creating iteration loop");
+                        // This is array[_] - create a loop to iterate over the array
+                        loops.push(HoistedLoop {
+                            loop_expr: Some(expr.clone()),
+                            key: None,
+                            value: index.clone(), // The _ variable
+                            collection: refr.clone(),
+                            loop_type: LoopType::IndexIteration,
+                        });
+                        return Ok(());
                     }
                 }
             }
@@ -1304,17 +1306,6 @@ impl<'a> Compiler<'a> {
                 )?;
                 Ok(())
             }
-            LoopType::Every => {
-                // Compile Every loop (universal quantification)
-                self.compile_every_loop_with_remaining_statements(
-                    &current_loop.key,
-                    &current_loop.value,
-                    &current_loop.collection,
-                    stmts,
-                    remaining_loops,
-                )?;
-                Ok(())
-            }
         }
     }
 
@@ -1322,7 +1313,7 @@ impl<'a> Compiler<'a> {
         if let Some(context) = self.context_stack.last_mut() {
             if context.key_value_loops_hoisted {
                 // Loops already hoisted, emit context yield
-                return self.emit_context_yield();
+                self.emit_context_yield()
             } else {
                 // Need to hoist loops from key/value expressions first
                 let mut key_value_loops = Vec::new();
@@ -1349,15 +1340,15 @@ impl<'a> Compiler<'a> {
                         .key_value_loops_hoisted = true;
 
                     // Recursively compile the hoisted loops
-                    return self.compile_hoisted_loops(&[], &key_value_loops);
+                    self.compile_hoisted_loops(&[], &key_value_loops)
                 } else {
                     // No loops to hoist, emit context yield
-                    return self.emit_context_yield();
+                    self.emit_context_yield()
                 }
             }
         } else {
             // No context, emit context yield
-            return self.emit_context_yield();
+            self.emit_context_yield()
         }
     }
 
@@ -1515,29 +1506,6 @@ impl<'a> Compiler<'a> {
             self.compile_some_in_loop_with_body(key, value, collection, loop_body_stmts)?;
         Ok(result_reg)
     }
-
-    /// Compile Every with remaining statements
-    fn compile_every_loop_with_remaining_statements(
-        &mut self,
-        _key: &Option<ExprRef>,
-        _value: &ExprRef,
-        _domain: &ExprRef,
-        remaining_stmts: &[crate::ast::LiteralStmt],
-        _remaining_loops: &[HoistedLoop],
-    ) -> Result<()> {
-        // For Every loops, we need to extract the query from the Every literal
-        // This is a simplified implementation - in practice, Every has its own query
-        std::println!("Debug: Every loop compilation not fully implemented yet");
-
-        // TODO: this is wrong
-        // For now, just compile the remaining statements
-        let body_stmts = &remaining_stmts[1..];
-        for stmt in body_stmts {
-            self.compile_single_statement(stmt)?;
-        }
-
-        Ok(())
-    }
 }
 
 /// Helper types for loop hoisting
@@ -1554,7 +1522,6 @@ struct HoistedLoop {
 enum LoopType {
     SomeIn,
     IndexIteration,
-    Every,
 }
 
 impl<'a> Compiler<'a> {

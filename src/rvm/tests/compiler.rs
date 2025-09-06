@@ -1,5 +1,12 @@
 #[cfg(test)]
 mod tests {
+    //! RVM (Regorus Virtual Machine) test suite
+    //!
+    //! This module tests the RVM compiler and execution engine by comparing
+    //! RVM results against the reference interpreter.
+    //!
+    //! Set TEST_CASE_FILTER=pattern to run specific test cases
+
     use crate::rvm::compiler::Compiler;
     use crate::rvm::vm::RegoVM;
     use crate::tests::common::{check_output, value_or_vec_to_vec, YamlTest};
@@ -11,6 +18,16 @@ mod tests {
 
     extern crate alloc;
     extern crate std;
+
+    /// Environment variable to run only specific test cases
+    /// Set TEST_CASE_FILTER=<case_name> to run only matching test cases
+    fn should_run_test_case(case_note: &str) -> bool {
+        if let Ok(filter) = std::env::var("TEST_CASE_FILTER") {
+            case_note.contains(&filter)
+        } else {
+            true
+        }
+    }
 
     /// Compile a CompiledPolicy to RVM bytecode and execute it
     fn compile_and_run_rvm(
@@ -47,7 +64,42 @@ mod tests {
 
         // Run the VM
         let result = vm.execute()?;
+
         std::println!("Debug: VM result: {:?}", result);
+        Ok(result)
+    }
+
+    #[cfg(feature = "rvm-debug")]
+    fn compile_and_run_rvm_with_debug(
+        compiled_policy: &crate::CompiledPolicy,
+        entrypoint: &str,
+        data: &Value,
+        input: &Value,
+    ) -> anyhow::Result<Value> {
+        std::println!(
+            "🔍 Debug: Compiling entrypoint with debugger: {}",
+            entrypoint
+        );
+
+        // Compile the policy to RVM instructions
+        let program = Compiler::compile_from_policy(compiled_policy, entrypoint)?;
+
+        // Create a VM and load the program
+        let mut vm = RegoVM::new();
+        vm.load_program(program);
+
+        // Set data and input in the VM
+        vm.set_data(data.clone());
+        vm.set_input(input.clone());
+
+        // Enable debugger environment variables for this run
+        std::env::set_var("RVM_INTERACTIVE_DEBUG", "1");
+        std::env::set_var("RVM_STEP_MODE", "1");
+
+        // Run the VM with debugger enabled
+        let result = vm.execute()?;
+
+        std::println!("🔍 Debug: VM result with debugger: {:?}", result);
         Ok(result)
     }
 
@@ -57,13 +109,30 @@ mod tests {
 
         std::println!("running {file}");
 
+        // Check if we're filtering test cases
+        if let Ok(filter) = std::env::var("TEST_CASE_FILTER") {
+            std::println!("🔍 Test case filter active: '{}'", filter);
+        }
+
+        let mut executed_count = 0;
+        let mut skipped_count = 0;
+
         for case in test.cases {
+            if !should_run_test_case(&case.note) {
+                std::println!("case {} filtered out", case.note);
+                skipped_count += 1;
+                continue;
+            }
+
             std::print!("case {} ", case.note);
 
             if case.skip == Some(true) {
                 std::println!("skipped");
+                skipped_count += 1;
                 continue;
             }
+
+            executed_count += 1;
 
             // Create and compile the Rego policy
             let mut engine = crate::Engine::new();
@@ -112,6 +181,36 @@ mod tests {
                             match &interpreter_result {
                                 Ok(interpreter_value) => {
                                     if actual_result != *interpreter_value {
+                                        // Mismatch detected!
+                                        std::println!(
+                                            "🔍 RVM result does not match interpreter result for case '{}':\nRVM result: {:?}\nInterpreter result: {:?}",
+                                            case.note, actual_result, interpreter_value
+                                        );
+
+                                        #[cfg(feature = "rvm-debug")]
+                                        {
+                                            // Launch debugger on mismatch if enabled
+                                            if std::env::var("RVM_DEBUG_ON_MISMATCH").is_ok() {
+                                                std::println!(
+                                                    "🚀 Launching debugger for investigation..."
+                                                );
+                                                // Re-run with debugger enabled
+                                                if let Err(debug_error) =
+                                                    compile_and_run_rvm_with_debug(
+                                                        &compiled_policy,
+                                                        &case.query,
+                                                        &data,
+                                                        &input_value,
+                                                    )
+                                                {
+                                                    std::println!(
+                                                        "⚠️ Debugger execution failed: {}",
+                                                        debug_error
+                                                    );
+                                                }
+                                            }
+                                        }
+
                                         panic!(
                                             "RVM result does not match interpreter result for case '{}':\nRVM result: {:?}\nInterpreter result: {:?}",
                                             case.note, actual_result, interpreter_value
@@ -221,11 +320,61 @@ mod tests {
             std::println!("passed");
         }
 
+        std::println!(
+            "📊 Test Summary for {}: {} executed, {} skipped",
+            file,
+            executed_count,
+            skipped_count
+        );
+
         Ok(())
     }
 
     #[test_resources("tests/rvm/compiler/cases/*.yaml")]
     fn run_compiler_test_file(file: &str) {
         yaml_test_impl(file).unwrap()
+    }
+
+    /// Convenience test for running a specific test case interactively
+    /// Use: cargo test test_specific_case -- --nocapture
+    /// And set environment variables as needed
+    #[test]
+    fn test_specific_case() {
+        // This test is meant to be run with environment variables set
+        // Example usage:
+        // TEST_CASE_FILTER="simple assignment" cargo test test_specific_case  -- --nocapture
+
+        if std::env::var("TEST_CASE_FILTER").is_err() {
+            std::println!("💡 Specific case test skipped - no TEST_CASE_FILTER set");
+            std::println!("   Usage examples:");
+            std::println!("   TEST_CASE_FILTER=\"simple assignment\" cargo test test_specific_case -- --nocapture");
+            std::println!(
+                "   TEST_CASE_FILTER=\"loop\" cargo test test_specific_case  -- --nocapture"
+            );
+            return;
+        }
+
+        // Run all test files but with filtering
+        let test_files = vec![
+            "tests/rvm/compiler/cases/test_cases.yaml",
+            "tests/rvm/compiler/cases/variables_and_rules.yaml",
+            "tests/rvm/compiler/cases/loops_and_quantifiers.yaml",
+            "tests/rvm/compiler/cases/arithmetic.yaml",
+            "tests/rvm/compiler/cases/comparisons.yaml",
+            "tests/rvm/compiler/cases/arrays.yaml",
+            "tests/rvm/compiler/cases/objects.yaml",
+            "tests/rvm/compiler/cases/sets.yaml",
+            "tests/rvm/compiler/cases/set_rules.yaml",
+            "tests/rvm/compiler/cases/examples.yaml",
+        ];
+
+        for file in test_files {
+            if std::path::Path::new(file).exists() {
+                std::println!("\n🔍 Searching in file: {}", file);
+                if let Err(e) = yaml_test_impl(file) {
+                    std::println!("❌ Error in file {}: {}", file, e);
+                }
+            }
+        }
     }
 }

@@ -520,8 +520,7 @@ impl InteractiveDebugger {
     fn value_to_compact_json(&self, value: &Value) -> String {
         serde_json::to_string(value)
             .unwrap_or_else(|_| format!("{:?}", value))
-            .replace('\n', " ")
-            .replace('\r', " ")
+            .replace(['\n', '\r'], " ")
     }
 
     fn handle_debug_commands(&mut self, ctx: &DebugContext) {

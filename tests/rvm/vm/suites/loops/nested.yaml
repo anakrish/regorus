@@ -9,6 +9,22 @@ cases:
     literals:
       - 1
       - 2
+    instruction_params:
+      loop_params:
+        - mode: "ArrayComprehension"
+          collection: 0
+          key_reg: 7
+          value_reg: 8
+          result_reg: 12
+          body_start: 11
+          loop_end: 16
+        - mode: "ArrayComprehension"
+          collection: 3
+          key_reg: 9
+          value_reg: 10
+          result_reg: 11
+          body_start: 12
+          loop_end: 14
     instructions:
       - "ArrayNew { dest: 0 }"              # Create outer input array [1, 2]
       - "Load { dest: 1, literal_idx: 0 }"  # Load 1
@@ -20,17 +36,17 @@ cases:
       - "ArrayPush { arr: 3, value: 4 }"    # Push 1 to inner array
       - "Load { dest: 5, literal_idx: 1 }"  # Load 2
       - "ArrayPush { arr: 3, value: 5 }"    # Push 2 to inner array
-      - "LoopStart { mode: ArrayComprehension, collection: 0, key_reg: 6, value_reg: 7, result_reg: 8, body_start: 11, loop_end: 16 }"
+      - "LoopStart { params_index: 0 }"
       # Outer comprehension body starts at index 11
-      - "LoopStart { mode: ArrayComprehension, collection: 3, key_reg: 9, value_reg: 10, result_reg: 11, body_start: 12, loop_end: 14 }"
+      - "LoopStart { params_index: 1 }"
       # Inner comprehension body starts at index 12
       - "ArrayPush { arr: 11, value: 10 }"  # Index 12: Push x to inner result array (auto-created by VM)
       - "LoopNext { body_start: 12, loop_end: 14 }"  # Index 13: Continue inner loop
       # Inner loop ends at index 14, execution continues to index 14
-      - "ArrayPush { arr: 8, value: 11 }"   # Index 14: Push inner array result to outer result
+      - "ArrayPush { arr: 12, value: 11 }"   # Index 14: Push inner array result to outer result
       - "LoopNext { body_start: 11, loop_end: 16 }"  # Index 15: Continue outer loop  
       # Outer loop ends at index 16, execution continues to index 16
-      - "Return { value: 8 }"               # Index 16: Return final result
+      - "Return { value: 12 }"               # Index 16: Return final result
     want_result: [[1, 2], [1, 2]]
 
   - note: "some_nested_comprehension"
@@ -41,6 +57,22 @@ cases:
       - 1
       - 2
       - 3
+    instruction_params:
+      loop_params:
+        - mode: "Any"
+          collection: 0
+          key_reg: 7
+          value_reg: 8
+          result_reg: 9
+          body_start: 13
+          loop_end: 21
+        - mode: "ArrayComprehension"
+          collection: 3
+          key_reg: 10
+          value_reg: 11
+          result_reg: 12
+          body_start: 14
+          loop_end: 19
     instructions:
       - "ArrayNew { dest: 0 }"              # Create collection [1, 2]
       - "Load { dest: 1, literal_idx: 0 }"  # Load 1
@@ -54,9 +86,9 @@ cases:
       - "ArrayPush { arr: 3, value: 5 }"
       - "Load { dest: 6, literal_idx: 2 }"  # Load 3
       - "ArrayPush { arr: 3, value: 6 }"
-      - "LoopStart { mode: Existential, collection: 0, key_reg: 7, value_reg: 8, result_reg: 9, body_start: 13, loop_end: 21 }"
+      - "LoopStart { params_index: 0 }"
       # Outer some body
-      - "LoopStart { mode: ArrayComprehension, collection: 3, key_reg: 10, value_reg: 11, result_reg: 12, body_start: 14, loop_end: 19 }"
+      - "LoopStart { params_index: 1 }"
       # Inner comprehension body - check if x > 1
       - "Load { dest: 13, literal_idx: 0 }"  # Load 1 for comparison
       - "Gt { dest: 14, left: 11, right: 13 }"  # Check x > 1
@@ -77,6 +109,15 @@ cases:
       - 1
       - 2
       - 3
+    instruction_params:
+      loop_params:
+        - mode: "ArrayComprehension"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 6
+          body_start: 8
+          loop_end: 13
     instructions:
       - "ArrayNew { dest: 0 }"              # Create input array [1, 2, 3]
       - "Load { dest: 1, literal_idx: 0 }"  # Load 1
@@ -85,12 +126,12 @@ cases:
       - "ArrayPush { arr: 0, value: 2 }"    # Push 2 to array
       - "Load { dest: 3, literal_idx: 2 }"  # Load 3
       - "ArrayPush { arr: 0, value: 3 }"    # Push 3 to array
-      - "LoopStart { mode: ArrayComprehension, collection: 0, key_reg: 4, value_reg: 5, result_reg: 6, body_start: 8, loop_end: 13 }"
+      - "LoopStart { params_index: 0 }"
       # Comprehension body with condition (index 8)
       - "Load { dest: 7, literal_idx: 0 }"  # Load 1
       - "Gt { dest: 8, left: 5, right: 7 }" # x > 1
       - "AssertCondition { condition: 8 }" # Assert x > 1 (only add if true)
       - "ArrayPush { arr: 6, value: 5 }"    # Push x to result if condition true
-      - "LoopNext { body_start: 8, loop_end: 12 }"
+      - "LoopNext { body_start: 8, loop_end: 13 }"
       - "Return { value: 6 }"
     want_result: [2, 3]

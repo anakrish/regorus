@@ -269,7 +269,14 @@ fn bench_mixed_type_array(c: &mut Criterion) {
         }
     });
     let schema = Schema::from_serde_json_value(schema_json).unwrap();
-    let value = Value::from(json!(["hello", 42, true, "world", 99.5, false]));
+    let value = Value::from(json!([
+        "hello",
+        42,
+        true,
+        "world",
+        std::f64::consts::PI,
+        false
+    ]));
 
     c.bench_function("validate_mixed_type_array", |b| {
         b.iter(|| {

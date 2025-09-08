@@ -15,9 +15,18 @@ cases:
       # x > 0  # false - no elements to satisfy condition
     literals:
       - 0  # comparison value
+    instruction_params:
+      loop_params:
+        - mode: "Any"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 6
+          body_start: 2
+          loop_end: 6
     instructions:
       - "ArrayNew { dest: 0 }"              # Create empty array in register 0
-      - "LoopStart { mode: Existential, collection: 0, key_reg: 4, value_reg: 5, result_reg: 6, body_start: 2, loop_end: 6 }"
+      - "LoopStart { params_index: 0 }"
       - "Load { dest: 7, literal_idx: 0 }"  # Load comparison value 0
       - "Gt { dest: 8, left: 5, right: 7 }" # Check if current value > 0
       - "AssertCondition { condition: 8 }"  # Assert the condition
@@ -32,9 +41,18 @@ cases:
       # x > 0  # true - vacuously true (no elements to violate condition)
     literals:
       - 0  # comparison value
+    instruction_params:
+      loop_params:
+        - mode: "Every"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 6
+          body_start: 2
+          loop_end: 6
     instructions:
       - "ArrayNew { dest: 0 }"              # Create empty array in register 0
-      - "LoopStart { mode: Universal, collection: 0, key_reg: 4, value_reg: 5, result_reg: 6, body_start: 2, loop_end: 6 }"
+      - "LoopStart { params_index: 0 }"
       - "Load { dest: 7, literal_idx: 0 }"  # Load comparison value 0
       - "Gt { dest: 8, left: 5, right: 7 }" # Check if current value > 0
       - "AssertCondition { condition: 8 }"  # Assert the condition
@@ -49,10 +67,19 @@ cases:
       # Transform each element by adding 1
     literals:
       - 1  # value to add
+    instruction_params:
+      loop_params:
+        - mode: "ArrayComprehension"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 1
+          body_start: 3
+          loop_end: 8
     instructions:
       - "ArrayNew { dest: 0 }"              # Create empty input array in register 0
       - "ArrayNew { dest: 1 }"              # Create empty result array in register 1  
-      - "LoopStart { mode: ArrayComprehension, collection: 0, key_reg: 4, value_reg: 5, result_reg: 1, body_start: 3, loop_end: 8 }"
+      - "LoopStart { params_index: 0 }"
       - "Load { dest: 6, literal_idx: 0 }"  # Load 1 into register 6
       - "Add { dest: 7, left: 5, right: 6 }" # Add 1 to current value
       - "ArrayPush { arr: 1, value: 7 }"    # Push result to output array
@@ -69,10 +96,19 @@ cases:
       # Transform each element by adding 1 into a set
     literals:
       - 1  # value to add
+    instruction_params:
+      loop_params:
+        - mode: "SetComprehension"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 1
+          body_start: 3
+          loop_end: 8
     instructions:
       - "ArrayNew { dest: 0 }"              # Create empty input array in register 0
       - "SetNew { dest: 1 }"                # Create empty result set in register 1
-      - "LoopStart { mode: SetComprehension, collection: 0, key_reg: 4, value_reg: 5, result_reg: 1, body_start: 3, loop_end: 8 }"
+      - "LoopStart { params_index: 0 }"
       - "Load { dest: 6, literal_idx: 0 }"  # Load 1 into register 6
       - "Add { dest: 7, left: 5, right: 6 }" # Add 1 to current value
       - "SetAdd { set: 1, value: 7 }"       # Add result to output set
@@ -90,10 +126,19 @@ cases:
       # Transform each key-value pair 
     literals:
       - 1  # value to add
+    instruction_params:
+      loop_params:
+        - mode: "ObjectComprehension"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 1
+          body_start: 3
+          loop_end: 8
     instructions:
       - "ObjectNew { dest: 0 }"             # Create empty input object in register 0
       - "ObjectNew { dest: 1 }"             # Create empty result object in register 1
-      - "LoopStart { mode: ObjectComprehension, collection: 0, key_reg: 4, value_reg: 5, result_reg: 1, body_start: 3, loop_end: 8 }"
+      - "LoopStart { params_index: 0 }"
       - "Load { dest: 6, literal_idx: 0 }"  # Load 1 into register 6  
       - "Add { dest: 7, left: 5, right: 6 }" # Add 1 to current value
       - "ObjectSet { obj: 1, key: 4, value: 7 }" # Set key: (value + 1) in result object
@@ -110,9 +155,18 @@ cases:
       # x > 0  # false - no elements in set
     literals:
       - 0  # comparison value
+    instruction_params:
+      loop_params:
+        - mode: "Any"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 6
+          body_start: 2
+          loop_end: 6
     instructions:
       - "SetNew { dest: 0 }"                # Create empty set in register 0
-      - "LoopStart { mode: Existential, collection: 0, key_reg: 4, value_reg: 5, result_reg: 6, body_start: 2, loop_end: 6 }"
+      - "LoopStart { params_index: 0 }"
       - "Load { dest: 7, literal_idx: 0 }"  # Load comparison value 0
       - "Gt { dest: 8, left: 5, right: 7 }" # Check if current value > 0
       - "AssertCondition { condition: 8 }"  # Assert the condition
@@ -127,9 +181,18 @@ cases:
       # v > 0  # true - vacuously true (no key-value pairs to violate condition)
     literals:
       - 0  # comparison value
+    instruction_params:
+      loop_params:
+        - mode: "Every"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 6
+          body_start: 2
+          loop_end: 6
     instructions:
       - "ObjectNew { dest: 0 }"             # Create empty object in register 0
-      - "LoopStart { mode: Universal, collection: 0, key_reg: 4, value_reg: 5, result_reg: 6, body_start: 2, loop_end: 6 }"
+      - "LoopStart { params_index: 0 }"
       - "Load { dest: 7, literal_idx: 0 }"  # Load comparison value 0
       - "Gt { dest: 8, left: 5, right: 7 }" # Check if current value > 0
       - "AssertCondition { condition: 8 }"  # Assert the condition
@@ -143,14 +206,30 @@ cases:
       # [[y | y = []; true] | x = []; true]  # []
       # Nested array comprehension where both inner and outer collections are empty
     literals: []
+    instruction_params:
+      loop_params:
+        - mode: "ArrayComprehension"
+          collection: 0
+          key_reg: 2
+          value_reg: 3
+          result_reg: 1
+          body_start: 3
+          loop_end: 14
+        - mode: "ArrayComprehension"
+          collection: 6
+          key_reg: 8
+          value_reg: 9
+          result_reg: 7
+          body_start: 6
+          loop_end: 10
     instructions:
       - "ArrayNew { dest: 0 }"              # Create empty outer array in register 0
       - "ArrayNew { dest: 1 }"              # Create empty result array in register 1
-      - "LoopStart { mode: ArrayComprehension, collection: 0, key_reg: 4, value_reg: 5, result_reg: 1, body_start: 3, loop_end: 14 }"
+      - "LoopStart { params_index: 0 }"
       # Inner array comprehension (for each x in outer empty array)
       - "ArrayNew { dest: 6 }"              # Create empty inner array in register 6
       - "ArrayNew { dest: 7 }"              # Create result for inner comprehension in register 7
-      - "LoopStart { mode: ArrayComprehension, collection: 6, key_reg: 8, value_reg: 9, result_reg: 7, body_start: 6, loop_end: 10 }"
+      - "LoopStart { params_index: 0 }"
       - "ArrayPush { arr: 7, value: 9 }"    # Push inner value to inner result (never executes)
       - "LoadBool { dest: 10, value: true }" # Load true
       - "AssertCondition { condition: 10 }" # Assert true condition for inner loop

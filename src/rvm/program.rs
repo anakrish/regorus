@@ -312,20 +312,6 @@ impl Program {
         instruction.display_with_params(&self.instruction_data)
     }
 
-    /// Add a source file and return its index (checks for duplicates)
-    fn add_source_internal(&mut self, source_file: SourceFile) -> usize {
-        // Check if source already exists to avoid duplicates (by name)
-        for (i, existing) in self.sources.iter().enumerate() {
-            if existing.name == source_file.name {
-                return i;
-            }
-        }
-
-        let index = self.sources.len();
-        self.sources.push(source_file);
-        index
-    }
-
     /// Add a source file directly and return its index
     pub fn add_source_file(&mut self, source_file: SourceFile) -> usize {
         // Check if source already exists to avoid duplicates (by name)

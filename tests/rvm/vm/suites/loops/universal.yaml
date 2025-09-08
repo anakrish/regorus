@@ -18,6 +18,15 @@ cases:
       - 2
       - 3
       - 0  # comparison value
+    instruction_params:
+      loop_params:
+        - mode: "Every"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 6
+          body_start: 8
+          loop_end: 12
     instructions:
       - "ArrayNew { dest: 0 }"              # Create input array [1, 2, 3] in register 0
       - "Load { dest: 1, literal_idx: 0 }"  # Load 1 into register 1
@@ -26,7 +35,7 @@ cases:
       - "ArrayPush { arr: 0, value: 2 }"    # Push 2 to array
       - "Load { dest: 3, literal_idx: 2 }"  # Load 3 into register 3
       - "ArrayPush { arr: 0, value: 3 }"    # Push 3 to array
-      - "LoopStart { mode: Universal, collection: 0, key_reg: 4, value_reg: 5, result_reg: 6, body_start: 8, loop_end: 12 }"  # Start universal loop
+      - "LoopStart { params_index: 0 }"     # Start universal loop using parameter table index 0
       - "Load { dest: 7, literal_idx: 3 }"  # Load comparison value 0 into register 7
       - "Gt { dest: 8, left: 5, right: 7 }" # Check if current value > 0
       - "AssertCondition { condition: 8 }"  # Assert the condition result for universal logic
@@ -46,6 +55,15 @@ cases:
       - 2
       - 3
       - 1  # comparison value
+    instruction_params:
+      loop_params:
+        - mode: "Every"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 6
+          body_start: 8
+          loop_end: 12
     instructions:
       - "ArrayNew { dest: 0 }"              # Create input array [1, 2, 3] in register 0
       - "Load { dest: 1, literal_idx: 0 }"  # Load 1 into register 1
@@ -54,7 +72,7 @@ cases:
       - "ArrayPush { arr: 0, value: 2 }"    # Push 2 to array
       - "Load { dest: 3, literal_idx: 2 }"  # Load 3 into register 3
       - "ArrayPush { arr: 0, value: 3 }"    # Push 3 to array
-      - "LoopStart { mode: Universal, collection: 0, key_reg: 4, value_reg: 5, result_reg: 6, body_start: 8, loop_end: 12 }"  # Start universal loop
+      - "LoopStart { params_index: 0 }"     # Start universal loop using parameter table index 0
       - "Load { dest: 7, literal_idx: 3 }"  # Load comparison value 1 into register 7
       - "Gt { dest: 8, left: 5, right: 7 }" # Check if current value > 1
       - "AssertCondition { condition: 8 }"  # Assert the condition result for universal logic
@@ -71,9 +89,18 @@ cases:
       }
     literals:
       - 0  # comparison value
+    instruction_params:
+      loop_params:
+        - mode: "Every"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 6
+          body_start: 2
+          loop_end: 5
     instructions:
       - "ArrayNew { dest: 0 }"              # Create empty input array in register 0
-      - "LoopStart { mode: Universal, collection: 0, key_reg: 4, value_reg: 5, result_reg: 6, body_start: 2, loop_end: 5 }"  # Start universal loop
+      - "LoopStart { params_index: 0 }"     # Start universal loop
       - "Load { dest: 7, literal_idx: 0 }"  # Load comparison value 0 into register 7
       - "Gt { dest: 8, left: 5, right: 7 }" # Check if current value > 0
       - "LoopNext { body_start: 2, loop_end: 5 }"  # Continue to next iteration
@@ -90,6 +117,15 @@ cases:
     literals:
       - 2
       - 4
+    instruction_params:
+      loop_params:
+        - mode: "Every"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 6
+          body_start: 8
+          loop_end: 12
     instructions:
       - "ArrayNew { dest: 0 }"              # Create input array in register 0
       - "Load { dest: 1, literal_idx: 0 }"  # Load 2
@@ -98,7 +134,7 @@ cases:
       - "ArrayPush { arr: 0, value: 2 }"    # Push null to array
       - "Load { dest: 3, literal_idx: 1 }"  # Load 4
       - "ArrayPush { arr: 0, value: 3 }"    # Push 4 to array
-      - "LoopStart { mode: Universal, collection: 0, key_reg: 4, value_reg: 5, result_reg: 6, body_start: 8, loop_end: 12 }"  # Start universal loop
+      - "LoopStart { params_index: 0 }"     # Start universal loop
       - "LoadNull { dest: 7 }"              # Load null for comparison
       - "Ne { dest: 8, left: 5, right: 7 }" # Check if current value != null
       - "AssertCondition { condition: 8 }"  # Assert the condition result for universal logic

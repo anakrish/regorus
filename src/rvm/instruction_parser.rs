@@ -254,11 +254,16 @@ fn get_param_optional_u16(params: &[(String, String)], name: &str) -> Result<Opt
 
 fn parse_loop_mode(text: &str) -> Result<LoopMode> {
     match text {
-        "Existential" => Ok(LoopMode::Existential),
-        "Universal" => Ok(LoopMode::Universal),
+        "Any" => Ok(LoopMode::Any),
+        "Every" => Ok(LoopMode::Every),
+        "ForEach" => Ok(LoopMode::ForEach),
         "ArrayComprehension" => Ok(LoopMode::ArrayComprehension),
         "SetComprehension" => Ok(LoopMode::SetComprehension),
         "ObjectComprehension" => Ok(LoopMode::ObjectComprehension),
+        // Keep backwards compatibility for now
+        "Existential" => Ok(LoopMode::Any),
+        "Universal" => Ok(LoopMode::Every),
+        "Collect" => Ok(LoopMode::ForEach),
         _ => bail!("Invalid loop mode: {}", text),
     }
 }

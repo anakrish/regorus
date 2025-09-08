@@ -14,22 +14,22 @@ extern crate alloc;
 /// Loop execution context for managing iteration state
 #[derive(Debug, Clone)]
 pub struct LoopContext {
-    mode: LoopMode,
-    iteration_state: IterationState,
-    key_reg: u16,
-    value_reg: u16,
-    result_reg: u16,
-    body_start: u16,
-    loop_end: u16,
-    loop_next_pc: u16, // PC of the LoopNext instruction to avoid searching
-    success_count: usize,
-    total_iterations: usize,
-    current_iteration_failed: bool, // Track if current iteration had condition failures
+    pub mode: LoopMode,
+    pub iteration_state: IterationState,
+    pub key_reg: u16,
+    pub value_reg: u16,
+    pub result_reg: u16,
+    pub body_start: u16,
+    pub loop_end: u16,
+    pub loop_next_pc: u16, // PC of the LoopNext instruction to avoid searching
+    pub success_count: usize,
+    pub total_iterations: usize,
+    pub current_iteration_failed: bool, // Track if current iteration had condition failures
 }
 
 /// Iterator state for different collection types
 #[derive(Debug, Clone)]
-enum IterationState {
+pub enum IterationState {
     Array {
         items: Arc<Vec<Value>>,
         index: usize,
@@ -149,14 +149,7 @@ impl RegoVM {
     /// Create a new virtual machine
     pub fn new() -> Self {
         let mut vm = RegoVM {
-            registers: {
-                let mut regs = Vec::new();
-                for _ in 0..65536 {
-                    // u16 allows up to 65536 registers
-                    regs.push(Value::Null);
-                }
-                regs
-            },
+            registers: Vec::new(), // Start with no registers - will be resized when program is loaded
             pc: 0,
             program: Arc::new(Program::default()),
             rule_cache: Vec::new(),
@@ -180,6 +173,12 @@ impl RegoVM {
     pub fn load_program(&mut self, program: Arc<Program>) {
         self.program = program.clone();
 
+        // Resize registers to match program requirements
+        // Ensure at least 1 register is allocated for safety
+        let required_registers = std::cmp::max(1, program.num_registers);
+        self.registers.clear();
+        self.registers.resize(required_registers, Value::Null);
+
         // Initialize rule cache
         self.rule_cache = vec![(false, Value::Undefined); program.rule_infos.len()];
 
@@ -189,10 +188,11 @@ impl RegoVM {
 
         // Debug: Print the program received by VM
         std::println!(
-            "Debug: VM received program with {} instructions, {} literals, {} rules:",
+            "Debug: VM received program with {} instructions, {} literals, {} rules, {} registers:",
             program.instructions.len(),
             program.literals.len(),
-            program.rule_infos.len()
+            program.rule_infos.len(),
+            required_registers
         );
         for (i, literal) in program.literals.iter().enumerate() {
             std::println!("  VM literal_idx {}: {:?}", i, literal);
@@ -257,6 +257,10 @@ impl RegoVM {
         &self.call_rule_stack
     }
 
+    pub fn get_loop_stack(&self) -> &Vec<LoopContext> {
+        &self.loop_stack
+    }
+
     /// Execute the loaded program
     pub fn jump_to(&mut self, target: usize) -> Result<Value> {
         let program = self.program.clone();
@@ -275,7 +279,7 @@ impl RegoVM {
 
             // Debugger integration
             #[cfg(feature = "rvm-debug")]
-            {
+            if self.debugger.should_break(self.pc, &instruction) {
                 let debug_ctx = crate::rvm::debugger::DebugContext {
                     pc: self.pc,
                     instruction: &instruction,
@@ -520,6 +524,7 @@ impl RegoVM {
 
                 Instruction::RuleReturn {} => {
                     self.execute_rule_return()?;
+                    break;
                 }
 
                 Instruction::ObjectNew { dest } => {
@@ -672,17 +677,17 @@ impl RegoVM {
                                 };
 
                                 match loop_mode {
-                                    LoopMode::Existential => {
+                                    LoopMode::Any => {
                                         // For SomeIn (existential): mark iteration failed and continue to next iteration
                                         if let Some(loop_ctx_mut) = self.loop_stack.last_mut() {
                                             loop_ctx_mut.current_iteration_failed = true;
                                         }
-                                        std::println!("Debug: AssertCondition failed in Existential loop - jumping to loop_end={}", loop_end);
+                                        std::println!("Debug: AssertCondition failed in Any loop - jumping to loop_end={}", loop_end);
 
                                         // Jump directly to the LoopNext instruction
                                         self.pc = loop_next_pc as usize - 1; // -1 because PC will be incremented
                                     }
-                                    LoopMode::Universal => {
+                                    LoopMode::Every => {
                                         // For Every (universal): condition failure means entire loop fails
                                         // Jump beyond the loop body to loop_end
                                         std::println!("Debug: AssertCondition failed in Every loop - jumping to loop_end={}", loop_end);
@@ -837,6 +842,10 @@ impl RegoVM {
 
         for (def_idx, definition_bodies) in rule_definitions.iter().enumerate() {
             for (body_entry_point_idx, body_entry_point) in definition_bodies.iter().enumerate() {
+                if let Some(ctx) = self.call_rule_stack.last_mut() {
+                    ctx.current_body_index = body_entry_point_idx;
+                    ctx.current_definition_index = def_idx;
+                }
                 std::println!(
                     "Debug: Executing rule definition {} at body {}, entry point {}",
                     def_idx,
@@ -855,10 +864,12 @@ impl RegoVM {
                         continue;
                     }
                 }
-                if let Some(ctx) = self.call_rule_stack.last_mut() {
-                    ctx.current_body_index = body_entry_point_idx;
-                    ctx.current_definition_index = def_idx;
-                }
+                std::println!(
+                    "Debug: Body {} completed successfully for definition {} of {} definitions",
+                    body_entry_point_idx,
+                    def_idx,
+                    rule_definitions.len()
+                );
             }
         }
 
@@ -896,17 +907,18 @@ impl RegoVM {
                 self.registers[result_reg as usize] = Value::Undefined;
             }
             crate::rvm::program::RuleType::PartialSet => {
-                if current_ctx.current_definition_index == 0 && current_ctx.current_body_index == 0
-                {
+                if current_ctx.current_definition_index == 0 {
                     self.registers[result_reg as usize] = Value::new_set();
                 }
+                std::println!(
+                    "Debug: RuleInit for PartialSet - set value: {:?}",
+                    self.registers[result_reg as usize]
+                );
             }
             crate::rvm::program::RuleType::PartialObject => {
-                if current_ctx.current_definition_index == 0 && current_ctx.current_body_index == 0
-                {
+                if current_ctx.current_definition_index == 0 {
                     self.registers[result_reg as usize] = Value::new_object();
                 }
-                self.registers[result_reg as usize] = Value::Array(Arc::new(Vec::new()));
             }
         }
         Ok(())
@@ -1065,7 +1077,7 @@ impl RegoVM {
     fn execute_loop_start(&mut self, mode: &LoopMode, params: LoopParams) -> Result<()> {
         // Initialize result container based on mode
         let initial_result = match mode {
-            LoopMode::Existential | LoopMode::Universal => Value::Bool(false),
+            LoopMode::Any | LoopMode::Every | LoopMode::ForEach => Value::Bool(false),
             LoopMode::ArrayComprehension => Value::new_array(),
             LoopMode::SetComprehension => Value::new_set(),
             LoopMode::ObjectComprehension => Value::Object(Arc::new(BTreeMap::new())),
@@ -1238,17 +1250,26 @@ impl RegoVM {
                 std::println!("Debug: LoopNext - loop finished, calculating final result");
                 // Loop finished - determine final result
                 let final_result = match loop_ctx.mode {
-                    LoopMode::Existential => {
+                    LoopMode::Any => {
                         let result = Value::Bool(loop_ctx.success_count > 0);
                         std::println!(
-                            "Debug: LoopNext - Existential final result: {:?} (success_count={})",
+                            "Debug: LoopNext - Any final result: {:?} (success_count={})",
                             result,
                             loop_ctx.success_count
                         );
                         result
                     }
-                    LoopMode::Universal => {
+                    LoopMode::Every => {
                         Value::Bool(loop_ctx.success_count == loop_ctx.total_iterations)
+                    }
+                    LoopMode::ForEach => {
+                        let result = Value::Bool(loop_ctx.success_count > 0);
+                        std::println!(
+                            "Debug: LoopNext - ForEach final result: {:?} (success_count={})",
+                            result,
+                            loop_ctx.success_count
+                        );
+                        result
                     }
                     LoopMode::ArrayComprehension
                     | LoopMode::SetComprehension
@@ -1331,8 +1352,9 @@ impl RegoVM {
         loop_end: u16,
     ) -> Result<()> {
         let result = match mode {
-            LoopMode::Existential => Value::Bool(false),
-            LoopMode::Universal => Value::Bool(true), // Every element of empty set satisfies condition
+            LoopMode::Any => Value::Bool(false),
+            LoopMode::Every => Value::Bool(true), // Every element of empty set satisfies condition
+            LoopMode::ForEach => Value::Bool(false),
             LoopMode::ArrayComprehension => Value::new_array(),
             LoopMode::SetComprehension => Value::new_set(),
             LoopMode::ObjectComprehension => Value::Object(Arc::new(BTreeMap::new())),
@@ -1459,9 +1481,10 @@ impl RegoVM {
     /// Determine what action to take based on loop mode and iteration result
     fn determine_loop_action(&self, mode: &LoopMode, success: bool) -> LoopAction {
         match (mode, success) {
-            (LoopMode::Existential, true) => LoopAction::ExitWithSuccess,
-            (LoopMode::Universal, false) => LoopAction::ExitWithFailure,
-            // For comprehensions, let explicit accumulation instructions handle the results
+            (LoopMode::Any, true) => LoopAction::ExitWithSuccess,
+            (LoopMode::Every, false) => LoopAction::ExitWithFailure,
+            // For ForEach mode and comprehensions, let explicit accumulation instructions handle the results
+            (LoopMode::ForEach, _) => LoopAction::Continue,
             (LoopMode::ArrayComprehension, _) => LoopAction::Continue,
             (LoopMode::SetComprehension, _) => LoopAction::Continue,
             (LoopMode::ObjectComprehension, _) => LoopAction::Continue,

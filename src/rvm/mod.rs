@@ -1,6 +1,7 @@
 // RVM - Rego Virtual Machine
 // A register-based virtual machine for executing Rego policies
 
+pub mod analysis;
 pub mod compiler;
 pub mod debugger;
 pub mod instructions;

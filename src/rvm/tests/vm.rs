@@ -30,7 +30,18 @@ mod tests {
         #[serde(default)]
         instruction_params: Option<InstructionParamsSpec>,
         instructions: Vec<String>,
-        want_result: crate::Value,
+        #[serde(default, deserialize_with = "deserialize_optional_value")]
+        want_result: Option<crate::Value>,
+        #[serde(default)]
+        want_error: Option<String>,
+    }
+
+    fn deserialize_optional_value<'de, D>(deserializer: D) -> Result<Option<crate::Value>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // If the field is present, always return Some, even if the value is null
+        crate::Value::deserialize(deserializer).map(Some)
     }
 
     #[derive(Debug, Deserialize, Serialize, Default)]
@@ -147,36 +158,64 @@ mod tests {
                 instructions.push(instruction);
             }
 
-            // Parse expected result and process special encodings like sets
-            let expected_result = process_value(&test_case.want_result)?;
-
             // Execute the VM instructions
-            let actual_result = match execute_vm_instructions(
+            let execution_result = execute_vm_instructions(
                 instructions,
                 literals,
                 test_case.instruction_params,
                 test_case.data,
                 test_case.input,
-            ) {
-                Ok(result) => result,
-                Err(e) => {
-                    // Check if this was an assertion failure
-                    if std::format!("{}", e).contains("Assertion failed") {
-                        // Return undefined value for failed assertions
-                        Value::Undefined
-                    } else {
-                        // For other errors, propagate them
-                        return Err(e);
+            );
+
+            // Check if we expect an error
+            if let Some(expected_error) = &test_case.want_error {
+                match execution_result {
+                    Err(e) => {
+                        let error_msg = std::format!("{}", e);
+                        if !error_msg.contains(expected_error) {
+                            std::println!("Test case '{}' failed:", test_case.note);
+                            std::println!("  Expected error containing: '{}'", expected_error);
+                            std::println!("  Actual error: '{}'", error_msg);
+                            panic!("VM test case failed: {}", test_case.note);
+                        }
+                    }
+                    Ok(result) => {
+                        std::println!("Test case '{}' failed:", test_case.note);
+                        std::println!("  Expected error containing: '{}'", expected_error);
+                        std::println!("  But got successful result: {:?}", result);
+                        panic!("VM test case failed: {}", test_case.note);
                     }
                 }
-            };
+            } else if let Some(want_result) = &test_case.want_result {
+                // Parse expected result and process special encodings like sets
+                let expected_result = process_value(want_result)?;
 
-            // Compare results
-            if actual_result != expected_result {
-                std::println!("Test case '{}' failed:", test_case.note);
-                std::println!("  Expected: {:?}", expected_result);
-                std::println!("  Actual: {:?}", actual_result);
-                panic!("VM test case failed: {}", test_case.note);
+                let actual_result = match execution_result {
+                    Ok(result) => result,
+                    Err(e) => {
+                        // Check if this was an assertion failure
+                        if std::format!("{}", e).contains("Assertion failed") {
+                            // Return undefined value for failed assertions
+                            Value::Undefined
+                        } else {
+                            // For other errors, propagate them
+                            return Err(e);
+                        }
+                    }
+                };
+
+                // Compare results
+                if actual_result != expected_result {
+                    std::println!("Test case '{}' failed:", test_case.note);
+                    std::println!("  Expected: {:?}", expected_result);
+                    std::println!("  Actual: {:?}", actual_result);
+                    panic!("VM test case failed: {}", test_case.note);
+                }
+            } else {
+                panic!(
+                    "Test case '{}' must have either want_result or want_error",
+                    test_case.note
+                );
             }
 
             std::println!("✓ Test case '{}' passed", test_case.note);

@@ -16,6 +16,15 @@ cases:
       - 2
       - 3
       - 2  # multiplier
+    instruction_params:
+      loop_params:
+        - mode: "ArrayComprehension"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 7
+          body_start: 8
+          loop_end: 12
     instructions:
       - "ArrayNew { dest: 0 }"              # Create input array [1, 2, 3] in register 0
       - "Load { dest: 1, literal_idx: 0 }"  # Load 1 into register 1
@@ -24,7 +33,7 @@ cases:
       - "ArrayPush { arr: 0, value: 2 }"    # Push 2 to array
       - "Load { dest: 3, literal_idx: 2 }"  # Load 3 into register 3
       - "ArrayPush { arr: 0, value: 3 }"    # Push 3 to array
-      - "LoopStart { mode: ArrayComprehension, collection: 0, key_reg: 4, value_reg: 5, result_reg: 7, body_start: 8, loop_end: 12 }"  # Start array comprehension loop
+      - "LoopStart { params_index: 0 }"     # Start array comprehension loop
       - "Load { dest: 6, literal_idx: 3 }"  # Load multiplier 2 into register 6
       - "Mul { dest: 9, left: 5, right: 6 }" # Multiply current value by 2, store result in register 9
       - "ArrayPush { arr: 7, value: 9 }"    # Push transformed value to result array
@@ -39,9 +48,18 @@ cases:
       [x + 5 | x := [][_]]  # [] (empty array)
     literals:
       - 5  # addend
+    instruction_params:
+      loop_params:
+        - mode: "ArrayComprehension"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 7
+          body_start: 2
+          loop_end: 6
     instructions:
       - "ArrayNew { dest: 0 }"              # Create empty input array in register 0
-      - "LoopStart { mode: ArrayComprehension, collection: 0, key_reg: 4, value_reg: 5, result_reg: 7, body_start: 2, loop_end: 6 }"  # Start array comprehension loop
+      - "LoopStart { params_index: 0 }"     # Start array comprehension loop
       - "Load { dest: 6, literal_idx: 0 }"  # Load addend 5 into register 6
       - "Add { dest: 8, left: 5, right: 6 }" # Add 5 to current value, store result in register 8
       - "ArrayPush { arr: 7, value: 8 }"    # Push transformed value to result array
@@ -57,11 +75,20 @@ cases:
     literals:
       - 10
       - 1  # subtrahend
+    instruction_params:
+      loop_params:
+        - mode: "ArrayComprehension"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 7
+          body_start: 4
+          loop_end: 8
     instructions:
       - "ArrayNew { dest: 0 }"              # Create input array [10] in register 0
       - "Load { dest: 1, literal_idx: 0 }"  # Load 10 into register 1
       - "ArrayPush { arr: 0, value: 1 }"    # Push 10 to array
-      - "LoopStart { mode: ArrayComprehension, collection: 0, key_reg: 4, value_reg: 5, result_reg: 7, body_start: 4, loop_end: 8 }"  # Start array comprehension loop
+      - "LoopStart { params_index: 0 }"     # Start array comprehension loop
       - "Load { dest: 6, literal_idx: 1 }"  # Load subtrahend 1 into register 6
       - "Sub { dest: 9, left: 5, right: 6 }" # Subtract 1 from current value, store result in register 9
       - "ArrayPush { arr: 7, value: 9 }"    # Push transformed value to result array
@@ -77,6 +104,15 @@ cases:
     literals:
       - 1
       - 3
+    instruction_params:
+      loop_params:
+        - mode: "ArrayComprehension"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 7
+          body_start: 8
+          loop_end: 11
     instructions:
       - "ArrayNew { dest: 0 }"              # Create input array in register 0
       - "Load { dest: 1, literal_idx: 0 }"  # Load 1
@@ -85,7 +121,7 @@ cases:
       - "ArrayPush { arr: 0, value: 2 }"    # Push null to array
       - "Load { dest: 3, literal_idx: 1 }"  # Load 3
       - "ArrayPush { arr: 0, value: 3 }"    # Push 3 to array
-      - "LoopStart { mode: ArrayComprehension, collection: 0, key_reg: 4, value_reg: 5, result_reg: 7, body_start: 8, loop_end: 11 }"  # Start array comprehension loop
+      - "LoopStart { params_index: 0 }"     # Start array comprehension loop
       - "ArrayPush { arr: 7, value: 5 }"    # Push current value (including null) to result array
       - "LoopNext { body_start: 8, loop_end: 11 }"  # Continue to next iteration or exit
       - "Return { value: 7 }"               # Return result array

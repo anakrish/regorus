@@ -508,7 +508,7 @@ impl<'a> Compiler<'a> {
         }
 
         // Transfer spans to program (they already have correct source indices)
-        self.program.instruction_spans = self.spans.into_iter().map(|span| Some(span)).collect();
+        self.program.instruction_spans = self.spans.into_iter().map(Some).collect();
 
         std::println!(
             "Debug: Final program has {} instructions, {} rule infos",
@@ -1067,7 +1067,7 @@ impl<'a> Compiler<'a> {
                                     result_reg: dest_register,
                                     rule_index,
                                 },
-                                &value_expr.span(),
+                                value_expr.span(),
                             );
 
                             // Compile the assignment expression
@@ -1077,11 +1077,11 @@ impl<'a> Compiler<'a> {
                                     dest: dest_register,
                                     src: value_reg,
                                 },
-                                &value_expr.span(),
+                                value_expr.span(),
                             );
 
                             // Emit Rule Return
-                            self.emit_instruction(Instruction::RuleReturn {}, &value_expr.span());
+                            self.emit_instruction(Instruction::RuleReturn {}, value_expr.span());
                             self.pop_scope();
                         }
                     } else {
@@ -1121,7 +1121,7 @@ impl<'a> Compiler<'a> {
                                             dest: dest_register,
                                             src: value_reg,
                                         },
-                                        &value_expr.span(),
+                                        value_expr.span(),
                                     );
                                 }
                             }
@@ -1427,7 +1427,7 @@ impl<'a> Compiler<'a> {
         if loops.is_empty() {
             // No more loops, compile the current statement.
             if !stmts.is_empty() {
-                self.compile_single_statement(&stmts[0])?;
+                self.compile_single_statement(stmts[0])?;
                 // Remaining statements may have loops, so compile them recursively.
                 return self.hoist_loops_and_compile_statements(&stmts[1..]);
             } else {
@@ -1721,7 +1721,7 @@ impl<'a> Compiler<'a> {
             self.loop_expr_register_map
                 .insert(loop_expr.clone(), value_reg);
         }
-        std::print!("Debug: Index iteration loop for {key_var:?} over {loop_expr:?}\n");
+        std::println!("Debug: Index iteration loop for {key_var:?} over {loop_expr:?}");
         if let Some(key_var) = key_var {
             // Store loop variable in scope (extract variable name from key_var)
             if let crate::ast::Expr::Var { value, .. } = key_var.as_ref() {

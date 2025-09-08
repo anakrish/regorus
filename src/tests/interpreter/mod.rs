@@ -82,7 +82,7 @@ mod load_target_definitions {
         use crate::registry::targets;
 
         // Load target definitions
-        let _ = load()?;
+        load()?;
 
         // Check that the sample targets were loaded
         assert!(

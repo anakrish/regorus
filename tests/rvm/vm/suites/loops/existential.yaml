@@ -17,6 +17,15 @@ cases:
       - 2
       - 3
       - 2  # comparison value
+    instruction_params:
+      loop_params:
+        - mode: "Existential"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 6
+          body_start: 8
+          loop_end: 12
     instructions:
       - "ArrayNew { dest: 0 }"              # Create input array [1, 2, 3] in register 0
       - "Load { dest: 1, literal_idx: 0 }"  # Load 1 into register 1
@@ -25,7 +34,7 @@ cases:
       - "ArrayPush { arr: 0, value: 2 }"    # Push 2 to array
       - "Load { dest: 3, literal_idx: 2 }"  # Load 3 into register 3
       - "ArrayPush { arr: 0, value: 3 }"    # Push 3 to array
-      - "LoopStart { mode: Existential, collection: 0, key_reg: 4, value_reg: 5, result_reg: 6, body_start: 8, loop_end: 12 }"  # Start existential loop
+      - "LoopStart { params_index: 0 }"     # Start existential loop using parameter table index 0
       - "Load { dest: 7, literal_idx: 3 }"  # Load comparison value 2 into register 7
       - "Gt { dest: 8, left: 5, right: 7 }" # Check if current value > 2
       - "AssertCondition { condition: 8 }"  # Assert the condition result for existential logic
@@ -43,13 +52,22 @@ cases:
       - 1
       - 2
       - 5  # comparison value
+    instruction_params:
+      loop_params:
+        - mode: "Existential"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 6
+          body_start: 6
+          loop_end: 10
     instructions:
       - "ArrayNew { dest: 0 }"              # Create input array [1, 2] in register 0
       - "Load { dest: 1, literal_idx: 0 }"  # Load 1 into register 1
       - "ArrayPush { arr: 0, value: 1 }"    # Push 1 to array
       - "Load { dest: 2, literal_idx: 1 }"  # Load 2 into register 2
       - "ArrayPush { arr: 0, value: 2 }"    # Push 2 to array
-      - "LoopStart { mode: Existential, collection: 0, key_reg: 4, value_reg: 5, result_reg: 6, body_start: 6, loop_end: 10 }"  # Start existential loop
+      - "LoopStart { params_index: 0 }"     # Start existential loop using parameter table index 0
       - "Load { dest: 7, literal_idx: 2 }"  # Load comparison value 5 into register 7
       - "Gt { dest: 8, left: 5, right: 7 }" # Check if current value > 5
       - "AssertCondition { condition: 8 }"  # Assert the condition result for existential logic
@@ -65,9 +83,18 @@ cases:
       x > 0  # false (no elements to check)
     literals:
       - 0  # comparison value
+    instruction_params:
+      loop_params:
+        - mode: "Existential"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 6
+          body_start: 2
+          loop_end: 6
     instructions:
       - "ArrayNew { dest: 0 }"              # Create empty input array in register 0
-      - "LoopStart { mode: Existential, collection: 0, key_reg: 4, value_reg: 5, result_reg: 6, body_start: 2, loop_end: 6 }"  # Start existential loop
+      - "LoopStart { params_index: 0 }"     # Start existential loop using parameter table index 0
       - "Load { dest: 7, literal_idx: 0 }"  # Load comparison value 0 into register 7
       - "Gt { dest: 8, left: 5, right: 7 }" # Check if current value > 0
       - "AssertCondition { condition: 8 }"  # Assert the condition result for existential logic
@@ -87,6 +114,15 @@ cases:
       - 7
       - 4
       - 5  # comparison value
+    instruction_params:
+      loop_params:
+        - mode: "Existential"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 6
+          body_start: 8
+          loop_end: 12
     instructions:
       - "ArrayNew { dest: 0 }"              # Create array [3, 7, 4] in register 0
       - "Load { dest: 1, literal_idx: 0 }"  # Load 3
@@ -95,7 +131,7 @@ cases:
       - "ArrayPush { arr: 0, value: 2 }"    # Push 7 to array
       - "Load { dest: 3, literal_idx: 2 }"  # Load 4
       - "ArrayPush { arr: 0, value: 3 }"    # Push 4 to array
-      - "LoopStart { mode: Existential, collection: 0, key_reg: 4, value_reg: 5, result_reg: 6, body_start: 8, loop_end: 12 }"  # Start existential loop
+      - "LoopStart { params_index: 0 }"     # Start existential loop using parameter table index 0
       - "Load { dest: 7, literal_idx: 3 }" # Load comparison value 5
       - "Gt { dest: 8, left: 5, right: 7 }" # Check if current value > 5
       - "AssertCondition { condition: 8 }" # Assert the condition for existential logic
@@ -111,6 +147,15 @@ cases:
       - 2
       - 3
       - 5  # comparison value
+    instruction_params:
+      loop_params:
+        - mode: "Existential"
+          collection: 0
+          key_reg: 4
+          value_reg: 5
+          result_reg: 6
+          body_start: 8
+          loop_end: 12
     instructions:
       - "ArrayNew { dest: 0 }"              # Create array [1, 2, 3] in register 0
       - "Load { dest: 1, literal_idx: 0 }"  # Load 1 into register 1
@@ -119,7 +164,7 @@ cases:
       - "ArrayPush { arr: 0, value: 2 }"    # Push 2 to array
       - "Load { dest: 3, literal_idx: 2 }"  # Load 3 into register 3
       - "ArrayPush { arr: 0, value: 3 }"    # Push 3 to array
-      - "LoopStart { mode: Existential, collection: 0, key_reg: 4, value_reg: 5, result_reg: 6, body_start: 8, loop_end: 12 }"  # Start existential loop
+      - "LoopStart { params_index: 0 }"     # Start existential loop using parameter table index 0
       - "Load { dest: 7, literal_idx: 3 }"  # Load comparison value 5 into register 7
       - "Gt { dest: 8, left: 5, right: 7 }" # Check if current value > 5, store result in register 8
       - "AssertCondition { condition: 8 }"  # Assert the condition (fails for all elements)

@@ -2,7 +2,6 @@ use crate::rvm::instructions::{Instruction, LoopMode};
 use crate::rvm::program::Program;
 use crate::value::Value;
 use alloc::collections::BTreeMap;
-use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec;
@@ -86,9 +85,6 @@ pub struct CallRuleContext {
     pub current_body_index: usize,
 }
 
-/// Type alias for built-in function signature
-type BuiltinFunction = fn(&[Value]) -> Result<Value>;
-
 /// Parameters for loop execution
 struct LoopParams {
     collection: u16,
@@ -119,9 +115,6 @@ pub struct RegoVM {
     /// Global input object
     input: Value,
 
-    /// Built-in functions
-    builtins: BTreeMap<String, BuiltinFunction>,
-
     /// Loop execution stack
     loop_stack: Vec<LoopContext>,
 
@@ -148,14 +141,13 @@ impl Default for RegoVM {
 impl RegoVM {
     /// Create a new virtual machine
     pub fn new() -> Self {
-        let mut vm = RegoVM {
+        let vm = RegoVM {
             registers: Vec::new(), // Start with no registers - will be resized when program is loaded
             pc: 0,
             program: Arc::new(Program::default()),
             rule_cache: Vec::new(),
             data: Value::Null,
             input: Value::Null,
-            builtins: BTreeMap::new(),
             loop_stack: Vec::new(),
             call_rule_stack: Vec::new(),
             max_instructions: 5000, // Default maximum instruction limit
@@ -164,8 +156,6 @@ impl RegoVM {
             debugger: crate::rvm::debugger::InteractiveDebugger::new(),
         };
 
-        // Register built-in functions
-        vm.register_builtins();
         vm
     }
 
@@ -479,25 +469,59 @@ impl RegoVM {
                     self.registers[dest as usize] = Value::Bool(!a_bool);
                 }
 
-                Instruction::Concat { dest, left, right } => {
-                    let a = &self.registers[left as usize];
-                    let b = &self.registers[right as usize];
-                    self.registers[dest as usize] = self.concat_values(a, b)?;
+                Instruction::BuiltinCall { params_index } => {
+                    let params =
+                        &self.program.instruction_data.builtin_call_params[params_index as usize];
+                    let builtin_info =
+                        &self.program.builtin_info_table[params.builtin_index as usize];
+
+                    let mut args = Vec::new();
+                    for &arg_reg in params.arg_registers() {
+                        args.push(self.registers[arg_reg as usize].clone());
+                    }
+
+                    // Check argument count constraints
+                    if (args.len() as u16) != builtin_info.num_args {
+                        bail!(
+                            "Builtin function {} expects exactly {} arguments, got {}",
+                            builtin_info.name,
+                            builtin_info.num_args,
+                            args.len()
+                        );
+                    }
+
+                    // Use resolved builtin from program via vector indexing
+                    if let Some(builtin_fcn) = self.program.get_resolved_builtin(params.builtin_index) {
+                        // Create a dummy span for the VM context
+                        let dummy_source = crate::lexer::Source::from_contents(String::new(), String::new())?;
+                        let dummy_span = crate::lexer::Span {
+                            source: dummy_source,
+                            line: 0,
+                            col: 0,
+                            start: 0,
+                            end: 0,
+                        };
+                        let dummy_exprs: Vec<crate::ast::Ref<crate::ast::Expr>> = Vec::new();
+                        
+                        let result = (builtin_fcn.0)(&dummy_span, &dummy_exprs, &args, true)?;
+                        self.registers[params.dest as usize] = result;
+                    } else {
+                        bail!("Builtin function not resolved: {}", builtin_info.name);
+                    }
                 }
 
-                Instruction::Call { params_index } => {
-                    let params = &self.program.instruction_data.call_params[params_index as usize];
+                Instruction::FunctionCall { params_index } => {
+                    let params =
+                        &self.program.instruction_data.function_call_params[params_index as usize];
                     if let Value::String(func_name) = &self.registers[params.func as usize] {
                         let mut args = Vec::new();
-                        for i in 0..params.args_count {
-                            args.push(self.registers[(params.args_start + i) as usize].clone());
+                        for &arg_reg in params.arg_registers() {
+                            args.push(self.registers[arg_reg as usize].clone());
                         }
 
-                        if let Some(builtin) = self.builtins.get(func_name.as_ref()) {
-                            self.registers[params.dest as usize] = builtin(&args)?;
-                        } else {
-                            bail!("Unknown function: {}", func_name);
-                        }
+                        // This would eventually call user-defined function rules
+                        // For now, just return an error as this is not implemented yet
+                        bail!("Function rule calls not yet implemented: {}", func_name);
                     } else {
                         bail!("Function name must be a string");
                     }
@@ -754,12 +778,6 @@ impl RegoVM {
 
         // If we reach here, return register 0
         Ok(self.registers[0].clone())
-    }
-
-    /// Register built-in functions
-    fn register_builtins(&mut self) {
-        self.builtins.insert(String::from("count"), builtin_count);
-        self.builtins.insert(String::from("sum"), builtin_sum);
     }
 
     /// Execute CallRule instruction with caching and call stack support
@@ -1041,32 +1059,6 @@ impl RegoVM {
             Value::Object(obj) => !obj.is_empty(),
             Value::Set(set) => !set.is_empty(),
             _ => true,
-        }
-    }
-
-    fn concat_values(&self, a: &Value, b: &Value) -> Result<Value> {
-        match (a, b) {
-            (Value::String(x), Value::String(y)) => {
-                let mut result = String::new();
-                result.push_str(x.as_ref());
-                result.push_str(y.as_ref());
-                Ok(Value::String(result.into()))
-            }
-            (Value::String(x), b) => {
-                let mut result = String::new();
-                result.push_str(x.as_ref());
-                result.push_str(&format!("{:?}", b));
-                Ok(Value::String(result.into()))
-            }
-            (a, Value::String(y)) => {
-                let mut result = format!("{:?}", a);
-                result.push_str(y.as_ref());
-                Ok(Value::String(result.into()))
-            }
-            _ => {
-                let result = format!("{:?}{:?}", a, b);
-                Ok(Value::String(result.into()))
-            }
         }
     }
 
@@ -1460,46 +1452,5 @@ impl RegoVM {
             (LoopMode::ObjectComprehension, _) => LoopAction::Continue,
             _ => LoopAction::Continue,
         }
-    }
-}
-
-/// Built-in function: count
-fn builtin_count(args: &[Value]) -> Result<Value> {
-    if args.len() != 1 {
-        bail!("count expects 1 argument");
-    }
-
-    match &args[0] {
-        Value::Array(array_items) => Ok(Value::from(array_items.len() as f64)),
-        Value::Object(object_fields) => Ok(Value::from(object_fields.len() as f64)),
-        Value::Set(set_elements) => Ok(Value::from(set_elements.len() as f64)),
-        Value::String(string_content) => Ok(Value::from(string_content.len() as f64)),
-        _ => bail!("count expects array, object, set, or string"),
-    }
-}
-
-/// Built-in function: sum  
-fn builtin_sum(args: &[Value]) -> Result<Value> {
-    if args.len() != 1 {
-        bail!("sum expects 1 argument");
-    }
-
-    match &args[0] {
-        Value::Array(array_items) => {
-            let mut total = 0.0;
-            for item in array_items.iter() {
-                if let Value::Number(number_value) = item {
-                    if let Some(numeric_value) = number_value.as_f64() {
-                        total += numeric_value;
-                    } else {
-                        bail!("sum: non-numeric value in array");
-                    }
-                } else {
-                    bail!("sum: non-numeric value in array");
-                }
-            }
-            Ok(Value::from(total))
-        }
-        _ => bail!("sum expects array"),
     }
 }

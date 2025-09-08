@@ -744,10 +744,6 @@ impl RegoVM {
                     self.execute_loop_next(body_start, loop_end)?;
                 }
 
-                Instruction::LoopAccumulate { value, key } => {
-                    self.execute_loop_accumulate(value, key)?;
-                }
-
                 Instruction::Halt => {
                     return Ok(self.registers[0].clone());
                 }
@@ -1315,50 +1311,6 @@ impl RegoVM {
             );
             self.pc = _loop_end as usize; // Jump past LoopNext instruction
             Ok(())
-        }
-    }
-
-    /// Execute LoopAccumulate instruction (explicit accumulation control)
-    fn execute_loop_accumulate(&mut self, value: u16, key: Option<u16>) -> Result<()> {
-        if let Some(loop_ctx) = self.loop_stack.last() {
-            let value_to_accumulate = self.registers[value as usize].clone();
-            let result_reg = loop_ctx.result_reg;
-
-            let mut result_value =
-                std::mem::replace(&mut self.registers[result_reg as usize], Value::Null);
-
-            match &mut result_value {
-                Value::Array(_) => {
-                    if let Ok(arr_mut) = result_value.as_array_mut() {
-                        arr_mut.push(value_to_accumulate);
-                    }
-                }
-                Value::Set(_) => {
-                    if let Ok(set_mut) = result_value.as_set_mut() {
-                        set_mut.insert(value_to_accumulate);
-                    }
-                }
-                Value::Object(_) => {
-                    if let Some(key_reg) = key {
-                        let key_value = self.registers[key_reg as usize].clone();
-                        if let Ok(obj_mut) = result_value.as_object_mut() {
-                            obj_mut.insert(key_value, value_to_accumulate);
-                        }
-                    } else {
-                        self.registers[result_reg as usize] = result_value;
-                        bail!("Object comprehension requires key register");
-                    }
-                }
-                _ => {
-                    self.registers[result_reg as usize] = result_value;
-                    bail!("LoopAccumulate: invalid result type");
-                }
-            }
-
-            self.registers[result_reg as usize] = result_value;
-            Ok(())
-        } else {
-            bail!("LoopAccumulate without active loop");
         }
     }
 

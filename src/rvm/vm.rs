@@ -542,7 +542,17 @@ impl RegoVM {
                             start: 0,
                             end: 0,
                         };
-                        let dummy_exprs: Vec<crate::ast::Ref<crate::ast::Expr>> = Vec::new();
+
+                        // Create dummy expressions for each argument
+                        let mut dummy_exprs: Vec<crate::ast::Ref<crate::ast::Expr>> = Vec::new();
+                        for _ in 0..args.len() {
+                            let dummy_expr = crate::ast::Expr::Null {
+                                span: dummy_span.clone(),
+                                value: Value::Null,
+                                eidx: 0,
+                            };
+                            dummy_exprs.push(crate::ast::Ref::new(dummy_expr));
+                        }
 
                         let result = (builtin_fcn.0)(&dummy_span, &dummy_exprs, &args, true)?;
                         self.registers[params.dest as usize] = result;

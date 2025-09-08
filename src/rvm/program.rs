@@ -133,6 +133,9 @@ pub struct Program {
     /// Rule name to index mapping for lookup
     pub rule_name_to_index: BTreeMap<String, usize>,
 
+    /// Number of registers required by this program
+    pub num_registers: usize,
+
     /// Program metadata
     pub metadata: ProgramMetadata,
 }
@@ -267,6 +270,7 @@ impl Program {
             instruction_spans: Vec::new(),
             main_entry_point: 0,
             rule_name_to_index: BTreeMap::new(),
+            num_registers: 0,
             metadata: ProgramMetadata {
                 compiler_version: env!("CARGO_PKG_VERSION").to_string(),
                 compiled_at: "unknown".to_string(),

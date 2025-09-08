@@ -3,15 +3,21 @@ use alloc::string::String;
 use serde::{Deserialize, Serialize};
 
 /// Loop execution modes for different Rego iteration constructs
+#[repr(C)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LoopMode {
-    /// Existential quantification: some x in arr, x := arr[_], etc.
+    /// Any quantification: some x in arr, x := arr[_], etc.
     /// Succeeds if ANY iteration succeeds, exits early on first success
-    Existential,
+    Any,
 
-    /// Universal quantification: every x in arr  
+    /// Every quantification: every x in arr  
     /// Succeeds only if ALL iterations succeed, exits early on first failure
-    Universal,
+    Every,
+
+    /// ForEach processing: processes all elements without early exit
+    /// Used for set membership rules (contains), object rules, and complete rules
+    /// where all candidates must be evaluated. Determined by output constness.
+    ForEach,
 
     /// Array comprehension: [expr | ...]
     /// Collects successful iterations into an array
@@ -27,6 +33,7 @@ pub enum LoopMode {
 }
 
 /// RVM Instructions - simplified enum-based design
+#[repr(C)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Instruction {
     /// Load literal value from literal table into register

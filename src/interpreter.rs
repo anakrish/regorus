@@ -1697,14 +1697,16 @@ impl Interpreter {
             match expr.as_ref() {
                 Expr::Var { .. } => break,
                 Expr::RefDot { refr, .. } => expr = refr,
-                Expr::RefBrack { refr, index, .. } if self.is_simple_literal(index)? => expr = refr,
+                Expr::RefBrack { refr, index, .. } if Self::is_simple_literal(index)? => {
+                    expr = refr
+                }
                 _ => return Ok(false),
             }
         }
         Ok(true)
     }
 
-    fn is_simple_literal(&self, expr: &Ref<Expr>) -> Result<bool> {
+    pub(crate) fn is_simple_literal(expr: &Ref<Expr>) -> Result<bool> {
         Ok(matches!(
             expr.as_ref(),
             Expr::String { .. }
@@ -1717,16 +1719,15 @@ impl Interpreter {
 
     // A rule's output expression is constant if it does not contain local variables.
     // For now, we restrict output expressions to those that contain only simple literals.
-    fn is_constant_output(
-        &self,
+    pub(crate) fn is_constant_output(
         key_expr: &Option<Ref<Expr>>,
         output_expr: &Ref<Expr>,
     ) -> Result<bool> {
         let mut is_const = true;
         if let Some(key_expr) = key_expr {
-            is_const = self.is_simple_literal(key_expr)?;
+            is_const = Self::is_simple_literal(key_expr)?;
         }
-        Ok(is_const && self.is_simple_literal(output_expr)?)
+        Ok(is_const && Self::is_simple_literal(output_expr)?)
     }
 
     fn eval_output_expr_in_loop(&mut self, loops: &[HoistedLoop]) -> Result<bool> {
@@ -1756,7 +1757,7 @@ impl Interpreter {
                 }
                 let output = if let Some(oe) = &output_expr {
                     // Rule is constant only if its ref, key and output are constant.
-                    is_const_rule = is_const_rule && self.is_constant_output(&key_expr, oe)?;
+                    is_const_rule = is_const_rule && Self::is_constant_output(&key_expr, oe)?;
                     self.eval_expr(oe)?
                 } else if is_old_style_set && !comps.is_empty() {
                     // Rule's constness is determined only by its ref.

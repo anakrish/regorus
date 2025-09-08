@@ -35,7 +35,6 @@ pub fn parse_instruction(text: &str) -> Result<Instruction> {
             "And" => parse_and(params_text),
             "Or" => parse_or(params_text),
             "Not" => parse_not(params_text),
-            "Concat" => parse_concat(params_text),
             "Return" => parse_return(params_text),
             "ObjectNew" => parse_object_new(params_text),
             "ObjectSet" => parse_object_set(params_text),
@@ -399,10 +398,3 @@ fn parse_not(params_text: &str) -> Result<Instruction> {
     Ok(Instruction::Not { dest, operand })
 }
 
-fn parse_concat(params_text: &str) -> Result<Instruction> {
-    let params = parse_params(params_text)?;
-    let dest = get_param_u16(&params, "dest")?;
-    let left = get_param_u16(&params, "left")?;
-    let right = get_param_u16(&params, "right")?;
-    Ok(Instruction::Concat { dest, left, right })
-}

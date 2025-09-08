@@ -24,18 +24,54 @@ pub struct LoopStartParams {
     pub loop_end: u16,
 }
 
-/// Function call parameters stored in program's instruction data table
+/// Builtin function call parameters stored in program's instruction data table
 #[repr(C)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CallParams {
+pub struct BuiltinCallParams {
+    /// Destination register to store the result
+    pub dest: u16,
+    /// Index into program's builtin_info_table
+    pub builtin_index: u16,
+    /// Argument register numbers (u16::MAX indicates unused slots)
+    pub args: [u16; 8],
+}
+
+impl BuiltinCallParams {
+    /// Get the number of arguments (count of non-MAX values)
+    pub fn arg_count(&self) -> usize {
+        self.args.iter().take_while(|&&arg| arg != u16::MAX).count()
+    }
+
+    /// Get argument register numbers as a slice
+    pub fn arg_registers(&self) -> &[u16] {
+        let count = self.arg_count();
+        &self.args[..count]
+    }
+}
+
+/// Function rule call parameters stored in program's instruction data table
+#[repr(C)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionCallParams {
     /// Destination register to store the result
     pub dest: u16,
     /// Register containing the function to call
     pub func: u16,
-    /// Starting register for function arguments
-    pub args_start: u16,
-    /// Number of arguments
-    pub args_count: u16,
+    /// Argument register numbers (u16::MAX indicates unused slots)
+    pub args: [u16; 8],
+}
+
+impl FunctionCallParams {
+    /// Get the number of arguments (count of non-MAX values)
+    pub fn arg_count(&self) -> usize {
+        self.args.iter().take_while(|&&arg| arg != u16::MAX).count()
+    }
+
+    /// Get argument register numbers as a slice
+    pub fn arg_registers(&self) -> &[u16] {
+        let count = self.arg_count();
+        &self.args[..count]
+    }
 }
 
 /// Instruction data container for complex instruction parameters
@@ -43,8 +79,10 @@ pub struct CallParams {
 pub struct InstructionData {
     /// Loop parameter table for LoopStart instructions
     pub loop_params: Vec<LoopStartParams>,
-    /// Function call parameter table for Call instructions
-    pub call_params: Vec<CallParams>,
+    /// Builtin function call parameter table for BuiltinCall instructions
+    pub builtin_call_params: Vec<BuiltinCallParams>,
+    /// Function rule call parameter table for FunctionCall instructions
+    pub function_call_params: Vec<FunctionCallParams>,
 }
 
 impl InstructionData {
@@ -52,7 +90,8 @@ impl InstructionData {
     pub fn new() -> Self {
         Self {
             loop_params: Vec::new(),
-            call_params: Vec::new(),
+            builtin_call_params: Vec::new(),
+            function_call_params: Vec::new(),
         }
     }
 
@@ -63,10 +102,17 @@ impl InstructionData {
         index as u16
     }
 
-    /// Add call parameters and return the index
-    pub fn add_call_params(&mut self, params: CallParams) -> u16 {
-        let index = self.call_params.len();
-        self.call_params.push(params);
+    /// Add builtin call parameters and return the index
+    pub fn add_builtin_call_params(&mut self, params: BuiltinCallParams) -> u16 {
+        let index = self.builtin_call_params.len();
+        self.builtin_call_params.push(params);
+        index as u16
+    }
+
+    /// Add function call parameters and return the index
+    pub fn add_function_call_params(&mut self, params: FunctionCallParams) -> u16 {
+        let index = self.function_call_params.len();
+        self.function_call_params.push(params);
         index as u16
     }
 
@@ -75,9 +121,14 @@ impl InstructionData {
         self.loop_params.get(index as usize)
     }
 
-    /// Get call parameters by index
-    pub fn get_call_params(&self, index: u16) -> Option<&CallParams> {
-        self.call_params.get(index as usize)
+    /// Get builtin call parameters by index
+    pub fn get_builtin_call_params(&self, index: u16) -> Option<&BuiltinCallParams> {
+        self.builtin_call_params.get(index as usize)
+    }
+
+    /// Get function call parameters by index
+    pub fn get_function_call_params(&self, index: u16) -> Option<&FunctionCallParams> {
+        self.function_call_params.get(index as usize)
     }
 
     /// Get mutable reference to loop parameters by index
@@ -244,16 +295,15 @@ pub enum Instruction {
         operand: u16,
     },
 
-    /// String operations
-    Concat {
-        dest: u16,
-        left: u16,
-        right: u16,
+    /// Builtin function calls - optimized for builtin functions
+    BuiltinCall {
+        /// Index into program's instruction_data.builtin_call_params table
+        params_index: u16,
     },
 
-    /// Function calls - uses parameter table for complex arguments
-    Call {
-        /// Index into program's instruction_data.call_params table
+    /// Function rule calls - for user-defined function rules  
+    FunctionCall {
+        /// Index into program's instruction_data.function_call_params table
         params_index: u16,
     },
 
@@ -359,9 +409,14 @@ impl Instruction {
         Self::LoopStart { params_index }
     }
 
-    /// Create a new Call instruction with parameter table index
-    pub fn call(params_index: u16) -> Self {
-        Self::Call { params_index }
+    /// Create a new BuiltinCall instruction with parameter table index
+    pub fn builtin_call(params_index: u16) -> Self {
+        Self::BuiltinCall { params_index }
+    }
+
+    /// Create a new FunctionCall instruction with parameter table index
+    pub fn function_call(params_index: u16) -> Self {
+        Self::FunctionCall { params_index }
     }
 
     /// Get detailed display string with parameter resolution for debugging
@@ -383,14 +438,36 @@ impl Instruction {
                     format!("LOOP_START P({}) [INVALID INDEX]", params_index)
                 }
             }
-            Instruction::Call { params_index } => {
-                if let Some(params) = instruction_data.get_call_params(*params_index) {
+            Instruction::BuiltinCall { params_index } => {
+                if let Some(params) = instruction_data.get_builtin_call_params(*params_index) {
+                    let args_str = params
+                        .arg_registers()
+                        .iter()
+                        .map(|&r| format!("R({})", r))
+                        .collect::<Vec<_>>()
+                        .join(" ");
                     format!(
-                        "CALL R({}) R({}) R({}) {}",
-                        params.dest, params.func, params.args_start, params.args_count
+                        "BUILTIN_CALL R({}) B({}) [{}]",
+                        params.dest, params.builtin_index, args_str
                     )
                 } else {
-                    format!("CALL P({}) [INVALID INDEX]", params_index)
+                    format!("BUILTIN_CALL P({}) [INVALID INDEX]", params_index)
+                }
+            }
+            Instruction::FunctionCall { params_index } => {
+                if let Some(params) = instruction_data.get_function_call_params(*params_index) {
+                    let args_str = params
+                        .arg_registers()
+                        .iter()
+                        .map(|&r| format!("R({})", r))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    format!(
+                        "FUNCTION_CALL R({}) R({}) [{}]",
+                        params.dest, params.func, args_str
+                    )
+                } else {
+                    format!("FUNCTION_CALL P({}) [INVALID INDEX]", params_index)
                 }
             }
             _ => self.to_string(),
@@ -453,11 +530,11 @@ impl std::fmt::Display for Instruction {
             Instruction::Not { dest, operand } => {
                 format!("NOT R({}) R({})", dest, operand)
             }
-            Instruction::Concat { dest, left, right } => {
-                format!("CONCAT R({}) R({}) R({})", dest, left, right)
+            Instruction::BuiltinCall { params_index } => {
+                format!("BUILTIN_CALL P({})", params_index)
             }
-            Instruction::Call { params_index } => {
-                format!("CALL P({})", params_index)
+            Instruction::FunctionCall { params_index } => {
+                format!("FUNCTION_CALL P({})", params_index)
             }
             Instruction::Return { value } => format!("RETURN R({})", value),
             Instruction::ObjectNew { dest } => format!("OBJECT_NEW R({})", dest),

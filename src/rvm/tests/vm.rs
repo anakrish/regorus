@@ -106,14 +106,11 @@ mod tests {
             }
 
             // Convert call params
-            for call_param_spec in params_spec.call_params {
-                let call_params = crate::rvm::instructions::CallParams {
-                    dest: call_param_spec.dest,
-                    func: call_param_spec.func,
-                    args_start: call_param_spec.args_start,
-                    args_count: call_param_spec.args_count,
-                };
-                program.add_call_params(call_params);
+            // Legacy call_params support removed - use builtin_call_params or function_call_params instead
+            for _call_param_spec in params_spec.call_params {
+                // Legacy call parameters are no longer supported
+                // Convert to BuiltinCall or FunctionCall instructions instead
+                panic!("Legacy call_params are no longer supported. Use builtin_call_params or function_call_params instead.");
             }
         }
 

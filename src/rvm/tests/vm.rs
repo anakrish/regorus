@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::rvm::instruction_parser::{parse_instruction, parse_value};
+    use crate::rvm::instruction_parser::{parse_instruction, parse_loop_mode, parse_value};
     use crate::rvm::vm::RegoVM;
     use crate::tests::interpreter::process_value;
     use crate::value::Value;
@@ -28,8 +28,37 @@ mod tests {
         #[serde(default)]
         input: Option<crate::Value>,
         literals: Vec<crate::Value>,
+        #[serde(default)]
+        instruction_params: Option<InstructionParamsSpec>,
         instructions: Vec<String>,
         want_result: crate::Value,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, Default)]
+    struct InstructionParamsSpec {
+        #[serde(default)]
+        loop_params: Vec<LoopStartParamsSpec>,
+        #[serde(default)]
+        call_params: Vec<CallParamsSpec>,
+    }
+
+    #[derive(Debug, Deserialize, Serialize)]
+    struct LoopStartParamsSpec {
+        mode: String,
+        collection: u16,
+        key_reg: u16,
+        value_reg: u16,
+        result_reg: u16,
+        body_start: u16,
+        loop_end: u16,
+    }
+
+    #[derive(Debug, Deserialize, Serialize)]
+    struct CallParamsSpec {
+        dest: u16,
+        func: u16,
+        args_start: u16,
+        args_count: u16,
     }
 
     #[derive(Debug, Deserialize, Serialize)]
@@ -41,6 +70,7 @@ mod tests {
     fn execute_vm_instructions(
         instructions: Vec<crate::rvm::instructions::Instruction>,
         literals: Vec<Value>,
+        instruction_params: Option<InstructionParamsSpec>,
         data: Option<Value>,
         input: Option<Value>,
     ) -> Result<Value> {
@@ -58,6 +88,36 @@ mod tests {
         let mut program = crate::rvm::program::Program::new();
         program.instructions = instructions;
         program.literals = literals;
+
+        // Build instruction data from params specification
+        if let Some(params_spec) = instruction_params {
+            // Convert loop params
+            for loop_param_spec in params_spec.loop_params {
+                let mode = parse_loop_mode(&loop_param_spec.mode)?;
+                let loop_params = crate::rvm::instructions::LoopStartParams {
+                    mode,
+                    collection: loop_param_spec.collection,
+                    key_reg: loop_param_spec.key_reg,
+                    value_reg: loop_param_spec.value_reg,
+                    result_reg: loop_param_spec.result_reg,
+                    body_start: loop_param_spec.body_start,
+                    loop_end: loop_param_spec.loop_end,
+                };
+                program.add_loop_params(loop_params);
+            }
+
+            // Convert call params
+            for call_param_spec in params_spec.call_params {
+                let call_params = crate::rvm::instructions::CallParams {
+                    dest: call_param_spec.dest,
+                    func: call_param_spec.func,
+                    args_start: call_param_spec.args_start,
+                    args_count: call_param_spec.args_count,
+                };
+                program.add_call_params(call_params);
+            }
+        }
+
         program.main_entry_point = 0;
         let program = Arc::new(program);
 
@@ -90,8 +150,13 @@ mod tests {
             let expected_result = process_value(&test_case.want_result)?;
 
             // Execute the VM instructions
-            let actual_result =
-                execute_vm_instructions(instructions, literals, test_case.data, test_case.input)?;
+            let actual_result = execute_vm_instructions(
+                instructions,
+                literals,
+                test_case.instruction_params,
+                test_case.data,
+                test_case.input,
+            )?;
 
             // Compare results
             if actual_result != expected_result {
@@ -191,7 +256,7 @@ mod tests {
 
         // Create VM and execute
         std::println!("Starting execution...");
-        let result = execute_vm_instructions(instructions, literals, None, None)?;
+        let result = execute_vm_instructions(instructions, literals, None, None, None)?;
         std::println!("Result: {:?}", result);
 
         assert_eq!(result, Value::Bool(true));
@@ -235,7 +300,7 @@ mod tests {
 
         let literals = vec![Value::from(42.0)];
 
-        let result = execute_vm_instructions(instructions, literals, None, None)?;
+        let result = execute_vm_instructions(instructions, literals, None, None, None)?;
         assert_eq!(result, Value::from(42.0));
 
         Ok(())
@@ -263,7 +328,7 @@ mod tests {
 
         let literals = vec![Value::from(10.0), Value::from(5.0)];
 
-        let result = execute_vm_instructions(instructions, literals, None, None)?;
+        let result = execute_vm_instructions(instructions, literals, None, None, None)?;
         assert_eq!(result, Value::from(15.0));
 
         Ok(())

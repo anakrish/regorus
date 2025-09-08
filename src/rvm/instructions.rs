@@ -1,6 +1,96 @@
 use alloc::format;
 use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
+
+/// Loop parameters stored in program's instruction data table
+#[repr(C)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopStartParams {
+    /// Loop mode (Existential/Universal/Comprehension types)
+    pub mode: LoopMode,
+    /// Register containing the collection to iterate over
+    pub collection: u16,
+    /// Register to store current key (u16::MAX if not needed)
+    pub key_reg: u16,
+    /// Register to store current value
+    pub value_reg: u16,
+    /// Register to store final result
+    pub result_reg: u16,
+    /// Jump target for loop body start
+    pub body_start: u16,
+    /// Jump target for loop end
+    pub loop_end: u16,
+}
+
+/// Function call parameters stored in program's instruction data table
+#[repr(C)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallParams {
+    /// Destination register to store the result
+    pub dest: u16,
+    /// Register containing the function to call
+    pub func: u16,
+    /// Starting register for function arguments
+    pub args_start: u16,
+    /// Number of arguments
+    pub args_count: u16,
+}
+
+/// Instruction data container for complex instruction parameters
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstructionData {
+    /// Loop parameter table for LoopStart instructions
+    pub loop_params: Vec<LoopStartParams>,
+    /// Function call parameter table for Call instructions
+    pub call_params: Vec<CallParams>,
+}
+
+impl InstructionData {
+    /// Create a new empty instruction data container
+    pub fn new() -> Self {
+        Self {
+            loop_params: Vec::new(),
+            call_params: Vec::new(),
+        }
+    }
+
+    /// Add loop parameters and return the index
+    pub fn add_loop_params(&mut self, params: LoopStartParams) -> u16 {
+        let index = self.loop_params.len();
+        self.loop_params.push(params);
+        index as u16
+    }
+
+    /// Add call parameters and return the index
+    pub fn add_call_params(&mut self, params: CallParams) -> u16 {
+        let index = self.call_params.len();
+        self.call_params.push(params);
+        index as u16
+    }
+
+    /// Get loop parameters by index
+    pub fn get_loop_params(&self, index: u16) -> Option<&LoopStartParams> {
+        self.loop_params.get(index as usize)
+    }
+
+    /// Get call parameters by index
+    pub fn get_call_params(&self, index: u16) -> Option<&CallParams> {
+        self.call_params.get(index as usize)
+    }
+
+    /// Get mutable reference to loop parameters by index
+    pub fn get_loop_params_mut(&mut self, index: u16) -> Option<&mut LoopStartParams> {
+        self.loop_params.get_mut(index as usize)
+    }
+}
+
+impl Default for InstructionData {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Loop execution modes for different Rego iteration constructs
 #[repr(C)]
@@ -161,12 +251,10 @@ pub enum Instruction {
         right: u16,
     },
 
-    /// Function calls
+    /// Function calls - uses parameter table for complex arguments
     Call {
-        dest: u16,
-        func: u16,
-        args_start: u16,
-        args_count: u16,
+        /// Index into program's instruction_data.call_params table
+        params_index: u16,
     },
 
     /// Return result
@@ -227,22 +315,10 @@ pub enum Instruction {
         condition: u16,
     },
 
-    /// Start a loop over a collection with specified semantics
+    /// Start a loop over a collection with specified semantics - uses parameter table
     LoopStart {
-        /// Loop mode (Existential/Universal/Comprehension types)
-        mode: LoopMode,
-        /// Register containing the collection to iterate over
-        collection: u16,
-        /// Register to store current key (u16::MAX if not needed)
-        key_reg: u16,
-        /// Register to store current value
-        value_reg: u16,
-        /// Register to store final result
-        result_reg: u16,
-        /// Jump target for loop body start
-        body_start: u16,
-        /// Jump target for loop end
-        loop_end: u16,
+        /// Index into program's instruction_data.loop_params table
+        params_index: u16,
     },
 
     /// Continue to next iteration or exit loop
@@ -283,6 +359,51 @@ pub enum Instruction {
 
     /// Stop execution
     Halt,
+}
+
+impl Instruction {
+    /// Create a new LoopStart instruction with parameter table index
+    pub fn loop_start(params_index: u16) -> Self {
+        Self::LoopStart { params_index }
+    }
+
+    /// Create a new Call instruction with parameter table index
+    pub fn call(params_index: u16) -> Self {
+        Self::Call { params_index }
+    }
+
+    /// Get detailed display string with parameter resolution for debugging
+    pub fn display_with_params(&self, instruction_data: &InstructionData) -> String {
+        match self {
+            Instruction::LoopStart { params_index } => {
+                if let Some(params) = instruction_data.get_loop_params(*params_index) {
+                    format!(
+                        "LOOP_START {:?} R({}) R({}) R({}) R({}) {} {}",
+                        params.mode,
+                        params.collection,
+                        params.key_reg,
+                        params.value_reg,
+                        params.result_reg,
+                        params.body_start,
+                        params.loop_end
+                    )
+                } else {
+                    format!("LOOP_START P({}) [INVALID INDEX]", params_index)
+                }
+            }
+            Instruction::Call { params_index } => {
+                if let Some(params) = instruction_data.get_call_params(*params_index) {
+                    format!(
+                        "CALL R({}) R({}) R({}) {}",
+                        params.dest, params.func, params.args_start, params.args_count
+                    )
+                } else {
+                    format!("CALL P({}) [INVALID INDEX]", params_index)
+                }
+            }
+            _ => self.to_string(),
+        }
+    }
 }
 
 impl std::fmt::Display for Instruction {
@@ -343,15 +464,9 @@ impl std::fmt::Display for Instruction {
             Instruction::Concat { dest, left, right } => {
                 format!("CONCAT R({}) R({}) R({})", dest, left, right)
             }
-            Instruction::Call {
-                dest,
-                func,
-                args_start,
-                args_count,
-            } => format!(
-                "CALL R({}) R({}) R({}) {}",
-                dest, func, args_start, args_count
-            ),
+            Instruction::Call { params_index } => {
+                format!("CALL P({})", params_index)
+            }
             Instruction::Return { value } => format!("RETURN R({})", value),
             Instruction::ObjectNew { dest } => format!("OBJECT_NEW R({})", dest),
             Instruction::ObjectSet { obj, key, value } => {
@@ -374,18 +489,9 @@ impl std::fmt::Display for Instruction {
             Instruction::AssertCondition { condition } => {
                 format!("ASSERT_CONDITION R({})", condition)
             }
-            Instruction::LoopStart {
-                mode,
-                collection,
-                key_reg,
-                value_reg,
-                result_reg,
-                body_start,
-                loop_end,
-            } => format!(
-                "LOOP_START {:?} R({}) R({}) R({}) R({}) {} {}",
-                mode, collection, key_reg, value_reg, result_reg, body_start, loop_end
-            ),
+            Instruction::LoopStart { params_index } => {
+                format!("LOOP_START P({})", params_index)
+            }
             Instruction::LoopNext {
                 body_start,
                 loop_end,

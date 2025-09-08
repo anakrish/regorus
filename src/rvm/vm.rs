@@ -485,20 +485,16 @@ impl RegoVM {
                     self.registers[dest as usize] = self.concat_values(a, b)?;
                 }
 
-                Instruction::Call {
-                    dest,
-                    func,
-                    args_start,
-                    args_count,
-                } => {
-                    if let Value::String(func_name) = &self.registers[func as usize] {
+                Instruction::Call { params_index } => {
+                    let params = &self.program.instruction_data.call_params[params_index as usize];
+                    if let Value::String(func_name) = &self.registers[params.func as usize] {
                         let mut args = Vec::new();
-                        for i in 0..args_count {
-                            args.push(self.registers[(args_start + i) as usize].clone());
+                        for i in 0..params.args_count {
+                            args.push(self.registers[(params.args_start + i) as usize].clone());
                         }
 
                         if let Some(builtin) = self.builtins.get(func_name.as_ref()) {
-                            self.registers[dest as usize] = builtin(&args)?;
+                            self.registers[params.dest as usize] = builtin(&args)?;
                         } else {
                             bail!("Unknown function: {}", func_name);
                         }
@@ -706,9 +702,11 @@ impl RegoVM {
                                     }
                                 }
                             } else {
-                                // Outside of loop context, failed assertion means rule is undefined
-                                std::println!("Debug: AssertCondition failed outside loop - returning Undefined");
-                                return Ok(Value::Undefined);
+                                // Outside of loop context, failed assertion means this body/definition fails
+                                std::println!(
+                                    "Debug: AssertCondition failed outside loop - body failed"
+                                );
+                                return Err(anyhow::anyhow!("Assertion failed"));
                             }
                         }
                         Value::Null => {
@@ -724,22 +722,17 @@ impl RegoVM {
                     }
                 }
 
-                Instruction::LoopStart {
-                    mode,
-                    collection,
-                    key_reg,
-                    value_reg,
-                    result_reg,
-                    body_start,
-                    loop_end,
-                } => {
+                Instruction::LoopStart { params_index } => {
+                    let loop_params =
+                        &self.program.instruction_data.loop_params[params_index as usize];
+                    let mode = loop_params.mode.clone();
                     let params = LoopParams {
-                        collection,
-                        key_reg,
-                        value_reg,
-                        result_reg,
-                        body_start,
-                        loop_end,
+                        collection: loop_params.collection,
+                        key_reg: loop_params.key_reg,
+                        value_reg: loop_params.value_reg,
+                        result_reg: loop_params.result_reg,
+                        body_start: loop_params.body_start,
+                        loop_end: loop_params.loop_end,
                     };
                     self.execute_loop_start(&mode, params)?;
                 }
@@ -881,6 +874,31 @@ impl RegoVM {
             rule_index,
             self.pc
         );
+
+        // For partial set/object rules, if all definitions failed and we still have Undefined,
+        // set the appropriate empty collection as the default
+        if self.registers[dest as usize] == Value::Undefined {
+            match call_context.rule_type {
+                crate::rvm::program::RuleType::PartialSet => {
+                    std::println!(
+                        "Debug: All definitions failed for PartialSet rule - using empty set"
+                    );
+                    self.registers[dest as usize] = Value::new_set();
+                }
+                crate::rvm::program::RuleType::PartialObject => {
+                    std::println!(
+                        "Debug: All definitions failed for PartialObject rule - using empty object"
+                    );
+                    self.registers[dest as usize] = Value::new_object();
+                }
+                crate::rvm::program::RuleType::Complete => {
+                    // For complete rules, Undefined is the correct result when all definitions fail
+                    std::println!(
+                        "Debug: All definitions failed for Complete rule - keeping Undefined"
+                    );
+                }
+            }
+        }
 
         // Cache the final result
         let result = self.registers[dest as usize].clone();

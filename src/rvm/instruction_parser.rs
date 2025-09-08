@@ -252,7 +252,7 @@ fn get_param_optional_u16(params: &[(String, String)], name: &str) -> Result<Opt
     Ok(None)
 }
 
-fn parse_loop_mode(text: &str) -> Result<LoopMode> {
+pub fn parse_loop_mode(text: &str) -> Result<LoopMode> {
     match text {
         "Any" => Ok(LoopMode::Any),
         "Every" => Ok(LoopMode::Every),
@@ -442,30 +442,10 @@ fn parse_assert_condition(params_text: &str) -> Result<Instruction> {
 fn parse_loop_start(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
 
-    // Get mode parameter and parse it
-    let mode_str = params
-        .iter()
-        .find(|(k, _)| k == "mode")
-        .map(|(_, v)| v.as_str())
-        .ok_or_else(|| anyhow!("Missing mode parameter"))?;
-    let mode = parse_loop_mode(mode_str)?;
+    // Get params_index parameter - this should be specified in the test
+    let params_index = get_param_u16(&params, "params_index")?;
 
-    let collection = get_param_u16(&params, "collection")?;
-    let key_reg = get_param_u16(&params, "key_reg")?;
-    let value_reg = get_param_u16(&params, "value_reg")?;
-    let result_reg = get_param_u16(&params, "result_reg")?;
-    let body_start = get_param_u16(&params, "body_start")?;
-    let loop_end = get_param_u16(&params, "loop_end")?;
-
-    Ok(Instruction::LoopStart {
-        mode,
-        collection,
-        key_reg,
-        value_reg,
-        result_reg,
-        body_start,
-        loop_end,
-    })
+    Ok(Instruction::LoopStart { params_index })
 }
 
 fn parse_loop_next(params_text: &str) -> Result<Instruction> {

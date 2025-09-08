@@ -96,12 +96,12 @@ cases:
       deny: false
 
   - note: conditional_set_contains
-    data:
-      input:
-        user:
-          active: true
-          level: 3
-          department: "engineering"
+    data: {}
+    input:
+      user:
+        active: true
+        level: 3
+        department: "engineering"
     modules:
       - |
         package test
@@ -128,11 +128,11 @@ cases:
       set!: ["read", "write"]
 
   - note: empty_set_contains
-    data:
-      input:
-        user:
-          role: "user"
-          verified: false
+    data: {}
+    input:
+      user:
+        role: "user"
+        verified: false
     modules:
       - |
         package test

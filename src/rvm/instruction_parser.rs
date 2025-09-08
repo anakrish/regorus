@@ -397,4 +397,3 @@ fn parse_not(params_text: &str) -> Result<Instruction> {
     let operand = get_param_u16(&params, "operand")?;
     Ok(Instruction::Not { dest, operand })
 }
-

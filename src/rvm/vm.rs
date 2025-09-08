@@ -141,7 +141,7 @@ impl Default for RegoVM {
 impl RegoVM {
     /// Create a new virtual machine
     pub fn new() -> Self {
-        let vm = RegoVM {
+        RegoVM {
             registers: Vec::new(), // Start with no registers - will be resized when program is loaded
             pc: 0,
             program: Arc::new(Program::default()),
@@ -154,9 +154,7 @@ impl RegoVM {
             executed_instructions: 0,
             #[cfg(feature = "rvm-debug")]
             debugger: crate::rvm::debugger::InteractiveDebugger::new(),
-        };
-
-        vm
+        }
     }
 
     /// Load a complete program for execution
@@ -356,13 +354,25 @@ impl RegoVM {
                 Instruction::Add { dest, left, right } => {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
-                    self.registers[dest as usize] = self.add_values(a, b)?;
+
+                    // Handle undefined values like the interpreter
+                    if a == &Value::Undefined || b == &Value::Undefined {
+                        self.registers[dest as usize] = Value::Undefined;
+                    } else {
+                        self.registers[dest as usize] = self.add_values(a, b)?;
+                    }
                 }
 
                 Instruction::Sub { dest, left, right } => {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
-                    self.registers[dest as usize] = self.sub_values(a, b)?;
+
+                    // Handle undefined values like the interpreter
+                    if a == &Value::Undefined || b == &Value::Undefined {
+                        self.registers[dest as usize] = Value::Undefined;
+                    } else {
+                        self.registers[dest as usize] = self.sub_values(a, b)?;
+                    }
                 }
 
                 Instruction::Mul { dest, left, right } => {
@@ -370,42 +380,72 @@ impl RegoVM {
                     let b = &self.registers[right as usize];
                     std::println!("Debug: Mul instruction - left_reg={} contains {:?}, right_reg={} contains {:?}", 
                                  left, a, right, b);
-                    self.registers[dest as usize] = self.mul_values(a, b)?;
+
+                    // Handle undefined values like the interpreter
+                    if a == &Value::Undefined || b == &Value::Undefined {
+                        self.registers[dest as usize] = Value::Undefined;
+                    } else {
+                        self.registers[dest as usize] = self.mul_values(a, b)?;
+                    }
                 }
 
                 Instruction::Div { dest, left, right } => {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
-                    self.registers[dest as usize] = self.div_values(a, b)?;
+
+                    // Handle undefined values like the interpreter
+                    if a == &Value::Undefined || b == &Value::Undefined {
+                        self.registers[dest as usize] = Value::Undefined;
+                    } else {
+                        self.registers[dest as usize] = self.div_values(a, b)?;
+                    }
                 }
 
                 Instruction::Mod { dest, left, right } => {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
-                    self.registers[dest as usize] = self.mod_values(a, b)?;
+
+                    // Handle undefined values like the interpreter
+                    if a == &Value::Undefined || b == &Value::Undefined {
+                        self.registers[dest as usize] = Value::Undefined;
+                    } else {
+                        self.registers[dest as usize] = self.mod_values(a, b)?;
+                    }
                 }
 
                 Instruction::Eq { dest, left, right } => {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
-                    self.registers[dest as usize] = Value::Bool(a == b);
+
+                    // Handle undefined values like the interpreter
+                    if a == &Value::Undefined || b == &Value::Undefined {
+                        self.registers[dest as usize] = Value::Undefined;
+                    } else {
+                        self.registers[dest as usize] = Value::Bool(a == b);
+                    }
                 }
 
                 Instruction::Ne { dest, left, right } => {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
-                    self.registers[dest as usize] = Value::Bool(a != b);
+
+                    // Handle undefined values like the interpreter
+                    if a == &Value::Undefined || b == &Value::Undefined {
+                        self.registers[dest as usize] = Value::Undefined;
+                    } else {
+                        self.registers[dest as usize] = Value::Bool(a != b);
+                    }
                 }
 
                 Instruction::Lt { dest, left, right } => {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
 
-                    // If either operand is undefined, result is undefined
+                    // Handle undefined values like the interpreter
                     if a == &Value::Undefined || b == &Value::Undefined {
                         self.registers[dest as usize] = Value::Undefined;
                     } else {
-                        self.registers[dest as usize] = Value::Bool(self.compare_values(a, b)? < 0);
+                        self.registers[dest as usize] = Value::Bool(a < b);
                     }
                 }
 
@@ -413,12 +453,11 @@ impl RegoVM {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
 
-                    // If either operand is undefined, result is undefined
+                    // Handle undefined values like the interpreter
                     if a == &Value::Undefined || b == &Value::Undefined {
                         self.registers[dest as usize] = Value::Undefined;
                     } else {
-                        self.registers[dest as usize] =
-                            Value::Bool(self.compare_values(a, b)? <= 0);
+                        self.registers[dest as usize] = Value::Bool(a <= b);
                     }
                 }
 
@@ -426,11 +465,11 @@ impl RegoVM {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
 
-                    // If either operand is undefined, result is undefined
+                    // Handle undefined values like the interpreter
                     if a == &Value::Undefined || b == &Value::Undefined {
                         self.registers[dest as usize] = Value::Undefined;
                     } else {
-                        self.registers[dest as usize] = Value::Bool(self.compare_values(a, b)? > 0);
+                        self.registers[dest as usize] = Value::Bool(a > b);
                     }
                 }
 
@@ -438,12 +477,11 @@ impl RegoVM {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
 
-                    // If either operand is undefined, result is undefined
+                    // Handle undefined values like the interpreter
                     if a == &Value::Undefined || b == &Value::Undefined {
                         self.registers[dest as usize] = Value::Undefined;
                     } else {
-                        self.registers[dest as usize] =
-                            Value::Bool(self.compare_values(a, b)? >= 0);
+                        self.registers[dest as usize] = Value::Bool(a >= b);
                     }
                 }
 
@@ -491,9 +529,12 @@ impl RegoVM {
                     }
 
                     // Use resolved builtin from program via vector indexing
-                    if let Some(builtin_fcn) = self.program.get_resolved_builtin(params.builtin_index) {
+                    if let Some(builtin_fcn) =
+                        self.program.get_resolved_builtin(params.builtin_index)
+                    {
                         // Create a dummy span for the VM context
-                        let dummy_source = crate::lexer::Source::from_contents(String::new(), String::new())?;
+                        let dummy_source =
+                            crate::lexer::Source::from_contents(String::new(), String::new())?;
                         let dummy_span = crate::lexer::Span {
                             source: dummy_source,
                             line: 0,
@@ -502,7 +543,7 @@ impl RegoVM {
                             end: 0,
                         };
                         let dummy_exprs: Vec<crate::ast::Ref<crate::ast::Expr>> = Vec::new();
-                        
+
                         let result = (builtin_fcn.0)(&dummy_span, &dummy_exprs, &args, true)?;
                         self.registers[params.dest as usize] = result;
                     } else {
@@ -968,76 +1009,64 @@ impl RegoVM {
         Ok(())
     }
 
-    /// Add two values
+    /// Add two values using interpreter's arithmetic logic
     fn add_values(&self, a: &Value, b: &Value) -> Result<Value> {
         match (a, b) {
-            (Value::Number(x), Value::Number(y)) => {
-                if let (Some(x_f64), Some(y_f64)) = (x.as_f64(), y.as_f64()) {
-                    Ok(Value::from(x_f64 + y_f64))
-                } else {
-                    bail!("Cannot add these numbers");
-                }
-            }
+            (Value::Number(x), Value::Number(y)) => Ok(Value::from(x.add(y)?)),
             _ => bail!("Cannot add {:?} and {:?}", a, b),
         }
     }
 
-    /// Subtract two values
+    /// Subtract two values using interpreter's arithmetic logic
     fn sub_values(&self, a: &Value, b: &Value) -> Result<Value> {
         match (a, b) {
-            (Value::Number(x), Value::Number(y)) => {
-                if let (Some(x_f64), Some(y_f64)) = (x.as_f64(), y.as_f64()) {
-                    Ok(Value::from(x_f64 - y_f64))
-                } else {
-                    bail!("Cannot subtract these numbers");
-                }
-            }
+            (Value::Number(x), Value::Number(y)) => Ok(Value::from(x.sub(y)?)),
             _ => bail!("Cannot subtract {:?} and {:?}", a, b),
         }
     }
 
-    /// Multiply two values
+    /// Multiply two values using interpreter's arithmetic logic
     fn mul_values(&self, a: &Value, b: &Value) -> Result<Value> {
         match (a, b) {
-            (Value::Number(x), Value::Number(y)) => {
-                if let (Some(x_f64), Some(y_f64)) = (x.as_f64(), y.as_f64()) {
-                    Ok(Value::from(x_f64 * y_f64))
-                } else {
-                    bail!("Cannot multiply these numbers");
-                }
-            }
+            (Value::Number(x), Value::Number(y)) => Ok(Value::from(x.mul(y)?)),
             _ => bail!("Cannot multiply {:?} and {:?}", a, b),
         }
     }
 
-    /// Divide two values
+    /// Divide two values using interpreter's arithmetic logic
     fn div_values(&self, a: &Value, b: &Value) -> Result<Value> {
+        use crate::number::Number;
+
         match (a, b) {
             (Value::Number(x), Value::Number(y)) => {
-                if let (Some(x_f64), Some(y_f64)) = (x.as_f64(), y.as_f64()) {
-                    if y_f64 == 0.0 {
-                        bail!("Division by zero");
-                    }
-                    Ok(Value::from(x_f64 / y_f64))
-                } else {
-                    bail!("Cannot divide these numbers");
+                // Handle division by zero like the interpreter (return Undefined in non-strict mode)
+                if *y == Number::from(0u64) {
+                    return Ok(Value::Undefined);
                 }
+
+                Ok(Value::from(x.clone().divide(y)?))
             }
             _ => bail!("Cannot divide {:?} and {:?}", a, b),
         }
     }
 
+    /// Modulo two values using interpreter's arithmetic logic  
     fn mod_values(&self, a: &Value, b: &Value) -> Result<Value> {
+        use crate::number::Number;
+
         match (a, b) {
             (Value::Number(x), Value::Number(y)) => {
-                if let (Some(x_f64), Some(y_f64)) = (x.as_f64(), y.as_f64()) {
-                    if y_f64 == 0.0 {
-                        bail!("Modulo by zero");
-                    }
-                    Ok(Value::from(x_f64 % y_f64))
-                } else {
-                    bail!("Cannot modulo these numbers");
+                // Handle modulo by zero like the interpreter (return Undefined in non-strict mode)
+                if *y == Number::from(0u64) {
+                    return Ok(Value::Undefined);
                 }
+
+                // Check for integer requirement like the interpreter
+                if !x.is_integer() || !y.is_integer() {
+                    bail!("modulo on floating-point number");
+                }
+
+                Ok(Value::from(x.clone().modulo(y)?))
             }
             _ => bail!("Cannot modulo {:?} and {:?}", a, b),
         }
@@ -1059,23 +1088,6 @@ impl RegoVM {
             Value::Object(obj) => !obj.is_empty(),
             Value::Set(set) => !set.is_empty(),
             _ => true,
-        }
-    }
-
-    /// Compare two values (-1, 0, 1)
-    fn compare_values(&self, a: &Value, b: &Value) -> Result<i32> {
-        // Handle undefined values specially - they should be handled at higher level
-        if a == &Value::Undefined || b == &Value::Undefined {
-            bail!("undefined comparison should be handled at higher level");
-        }
-
-        // Use Value's derived PartialOrd implementation which follows the correct ordering:
-        // 1. null, 2. bool, 3. number, 4. string, 5. Array, 6. Set, 7. Object
-        match a.partial_cmp(b) {
-            Some(std::cmp::Ordering::Less) => Ok(-1),
-            Some(std::cmp::Ordering::Equal) => Ok(0),
-            Some(std::cmp::Ordering::Greater) => Ok(1),
-            None => bail!("Cannot compare {:?} and {:?}", a, b),
         }
     }
 

@@ -1,7 +1,7 @@
+use crate::builtins::BuiltinFcn;
 use crate::rvm::instructions::InstructionData;
 use crate::rvm::Instruction;
 use crate::value::Value;
-use crate::builtins::BuiltinFcn;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -420,12 +420,21 @@ impl Program {
 
     /// Initialize resolved builtins from interpreter's builtin map
     /// This should be called after deserialization to populate the skipped field
-    pub fn initialize_resolved_builtins(&mut self, builtin_map: &std::collections::BTreeMap<&'static str, BuiltinFcn>) {
+    pub fn initialize_resolved_builtins(
+        &mut self,
+        builtin_map: &std::collections::BTreeMap<&'static str, BuiltinFcn>,
+    ) {
         self.resolved_builtins.clear();
-        self.resolved_builtins.reserve(self.builtin_info_table.len());
+        self.resolved_builtins
+            .reserve(self.builtin_info_table.len());
 
         // Helper function for missing builtins
-        fn missing_builtin_error(_span: &crate::lexer::Span, _exprs: &[crate::ast::Ref<crate::ast::Expr>], _args: &[Value], _strict: bool) -> anyhow::Result<Value> {
+        fn missing_builtin_error(
+            _span: &crate::lexer::Span,
+            _exprs: &[crate::ast::Ref<crate::ast::Expr>],
+            _args: &[Value],
+            _strict: bool,
+        ) -> anyhow::Result<Value> {
             Err(anyhow::anyhow!("Builtin function not found"))
         }
 

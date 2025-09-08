@@ -50,6 +50,10 @@ mod tests {
         loop_params: Vec<LoopStartParamsSpec>,
         #[serde(default)]
         call_params: Vec<CallParamsSpec>,
+        #[serde(default)]
+        builtin_call_params: Vec<BuiltinCallParamsSpec>,
+        #[serde(default)]
+        builtin_infos: Vec<BuiltinInfoSpec>,
     }
 
     #[derive(Debug, Deserialize, Serialize)]
@@ -72,6 +76,19 @@ mod tests {
     }
 
     #[derive(Debug, Deserialize, Serialize)]
+    struct BuiltinCallParamsSpec {
+        dest: u16,
+        builtin_index: u16,
+        args: Vec<u16>,
+    }
+
+    #[derive(Debug, Deserialize, Serialize)]
+    struct BuiltinInfoSpec {
+        name: String,
+        num_args: u16,
+    }
+
+    #[derive(Debug, Deserialize, Serialize)]
     struct VmTestSuite {
         cases: Vec<VmTestCase>,
     }
@@ -88,16 +105,24 @@ mod tests {
 
         // Set global data and input if provided
         if let Some(data_value) = data {
-            vm.set_data(data_value);
+            let processed_data = process_value(&data_value)?;
+            vm.set_data(processed_data);
         }
         if let Some(input_value) = input {
-            vm.set_input(input_value);
+            let processed_input = process_value(&input_value)?;
+            vm.set_input(processed_input);
         }
 
         // Create a Program from instructions and literals
         let mut program = crate::rvm::program::Program::new();
         program.instructions = instructions;
-        program.literals = literals;
+
+        // Process literals through the value converter to handle special syntax like set!
+        let mut processed_literals = Vec::new();
+        for literal in literals {
+            processed_literals.push(process_value(&literal)?);
+        }
+        program.literals = processed_literals;
 
         // Build instruction data from params specification
         if let Some(params_spec) = instruction_params {
@@ -123,6 +148,35 @@ mod tests {
                 // Convert to BuiltinCall or FunctionCall instructions instead
                 panic!("Legacy call_params are no longer supported. Use builtin_call_params or function_call_params instead.");
             }
+
+            // Convert builtin info specs to program builtin info table
+            for builtin_info_spec in params_spec.builtin_infos {
+                let builtin_info = crate::rvm::program::BuiltinInfo {
+                    name: builtin_info_spec.name,
+                    num_args: builtin_info_spec.num_args,
+                };
+                program.add_builtin_info(builtin_info);
+            }
+
+            // Convert builtin call params
+            for builtin_call_spec in params_spec.builtin_call_params {
+                use crate::rvm::instructions::BuiltinCallParams;
+
+                // Convert Vec<u16> to fixed array, padding with u16::MAX
+                let mut args_array = [u16::MAX; 8];
+                for (i, &arg) in builtin_call_spec.args.iter().enumerate() {
+                    if i < 8 {
+                        args_array[i] = arg;
+                    }
+                }
+
+                let builtin_call_params = BuiltinCallParams {
+                    dest: builtin_call_spec.dest,
+                    builtin_index: builtin_call_spec.builtin_index,
+                    args: args_array,
+                };
+                program.add_builtin_call_params(builtin_call_params);
+            }
         }
 
         program.main_entry_point = 0;
@@ -130,6 +184,17 @@ mod tests {
         // Set a reasonable default for register count in VM tests
         // Most tests use registers 0-10, so we'll allocate 256 registers to be safe
         program.num_registers = 256;
+
+        // Initialize resolved builtins if we have builtin info
+        if !program.builtin_info_table.is_empty() {
+            // Convert HashMap to BTreeMap for compatibility
+            let builtin_map: std::collections::BTreeMap<&'static str, crate::builtins::BuiltinFcn> =
+                crate::builtins::BUILTINS
+                    .iter()
+                    .map(|(&k, &v)| (k, v))
+                    .collect();
+            program.initialize_resolved_builtins(&builtin_map);
+        }
 
         let program = Arc::new(program);
 

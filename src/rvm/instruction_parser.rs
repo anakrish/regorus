@@ -45,6 +45,7 @@ pub fn parse_instruction(text: &str) -> Result<Instruction> {
             "SetAdd" => parse_set_add(params_text),
             "Contains" => parse_contains(params_text),
             "AssertCondition" => parse_assert_condition(params_text),
+            "BuiltinCall" => parse_builtin_call(params_text),
             "LoopStart" => parse_loop_start(params_text),
             "LoopNext" => parse_loop_next(params_text),
             "Halt" => Ok(Instruction::Halt),
@@ -396,4 +397,10 @@ fn parse_not(params_text: &str) -> Result<Instruction> {
     let dest = get_param_u16(&params, "dest")?;
     let operand = get_param_u16(&params, "operand")?;
     Ok(Instruction::Not { dest, operand })
+}
+
+fn parse_builtin_call(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let params_index = get_param_u16(&params, "params_index")?;
+    Ok(Instruction::BuiltinCall { params_index })
 }

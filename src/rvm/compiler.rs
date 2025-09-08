@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-pub type Register = u16;
+pub type Register = u8;
 use anyhow::{bail, Result};
 
 #[derive(Debug, Clone, Default)]
@@ -89,8 +89,25 @@ impl<'a> Compiler<'a> {
     }
 
     pub fn alloc_register(&mut self) -> Register {
+        // Assert that we don't exceed 256 registers (u8::MAX + 1)
+        assert!(
+            self.register_counter < 255,
+            "Register overflow: attempted to allocate register {}, but maximum is 255. \
+             Consider using register windowing or spill handling.",
+            self.register_counter
+        );
+
         let reg = self.register_counter;
         self.register_counter += 1;
+
+        // Debug logging for register allocation tracking
+        if self.register_counter > 200 {
+            std::println!(
+                "Warning: High register usage - allocated register {}, approaching 256 limit",
+                reg
+            );
+        }
+
         reg
     }
 
@@ -1552,6 +1569,13 @@ impl<'a> Compiler<'a> {
         let value_var_name = value.text().to_string();
         let key_var_name = key.as_ref().map(|k| k.text().to_string());
 
+        // Check if key is actually needed (not None and not underscore)
+        let actual_key_reg = if key_var_name.is_none() || key_var_name.as_ref() == Some(&"_".to_string()) {
+            value_reg // Set key_reg = value_reg to indicate key not needed
+        } else {
+            key_reg
+        };
+
         std::println!(
             "Debug: Every quantifier - value var: '{}', key var: {:?}",
             value_var_name,
@@ -1562,7 +1586,7 @@ impl<'a> Compiler<'a> {
         let loop_params_index = self.program.add_loop_params(LoopStartParams {
             mode: LoopMode::Every,
             collection: collection_reg,
-            key_reg,
+            key_reg: actual_key_reg,
             value_reg,
             result_reg,
             body_start: 0, // Will be updated

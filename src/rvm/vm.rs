@@ -15,9 +15,9 @@ extern crate alloc;
 pub struct LoopContext {
     pub mode: LoopMode,
     pub iteration_state: IterationState,
-    pub key_reg: u16,
-    pub value_reg: u16,
-    pub result_reg: u16,
+    pub key_reg: u8,
+    pub value_reg: u8,
+    pub result_reg: u8,
     pub body_start: u16,
     pub loop_end: u16,
     pub loop_next_pc: u16, // PC of the LoopNext instruction to avoid searching
@@ -77,8 +77,8 @@ enum LoopAction {
 #[derive(Debug, Clone)]
 pub struct CallRuleContext {
     pub return_pc: usize,
-    pub dest_reg: u16,
-    pub result_reg: u16,
+    pub dest_reg: u8,
+    pub result_reg: u8,
     pub rule_index: u16,
     pub rule_type: crate::rvm::program::RuleType,
     pub current_definition_index: usize,
@@ -87,10 +87,10 @@ pub struct CallRuleContext {
 
 /// Parameters for loop execution
 struct LoopParams {
-    collection: u16,
-    key_reg: u16,
-    value_reg: u16,
-    result_reg: u16,
+    collection: u8,
+    key_reg: u8,
+    value_reg: u8,
+    result_reg: u8,
     body_start: u16,
     loop_end: u16,
 }
@@ -832,7 +832,7 @@ impl RegoVM {
     }
 
     /// Execute CallRule instruction with caching and call stack support
-    fn execute_call_rule(&mut self, dest: u16, rule_index: u16) -> Result<()> {
+    fn execute_call_rule(&mut self, dest: u8, rule_index: u16) -> Result<()> {
         std::println!(
             "Debug: CallRule execution - dest={}, rule_index={}",
             dest,
@@ -979,7 +979,7 @@ impl RegoVM {
     }
 
     /// Execute RuleInit instruction
-    fn execute_rule_init(&mut self, result_reg: u16, _rule_index: u16) -> Result<()> {
+    fn execute_rule_init(&mut self, result_reg: u8, _rule_index: u16) -> Result<()> {
         let current_ctx = self
             .call_rule_stack
             .last_mut()
@@ -1245,7 +1245,7 @@ impl RegoVM {
             } = &mut loop_ctx.iteration_state
             {
                 // Get the key from the key register to store as current_key
-                if loop_ctx.key_reg != u16::MAX {
+                if loop_ctx.key_reg != loop_ctx.value_reg {
                     *current_key = Some(self.registers[loop_ctx.key_reg as usize].clone());
                 }
             } else if let IterationState::Set {
@@ -1332,7 +1332,7 @@ impl RegoVM {
     fn handle_empty_collection(
         &mut self,
         mode: &LoopMode,
-        result_reg: u16,
+        result_reg: u8,
         loop_end: u16,
     ) -> Result<()> {
         let result = match mode {
@@ -1354,13 +1354,13 @@ impl RegoVM {
     fn setup_next_iteration(
         &mut self,
         state: &IterationState,
-        key_reg: u16,
-        value_reg: u16,
+        key_reg: u8,
+        value_reg: u8,
     ) -> Result<bool> {
         match state {
             IterationState::Array { items, index } => {
                 if *index < items.len() {
-                    if key_reg != u16::MAX {
+                    if key_reg != value_reg {
                         let key_value = Value::from(*index as f64);
                         self.registers[key_reg as usize] = key_value;
                     }
@@ -1379,7 +1379,7 @@ impl RegoVM {
                 if *first_iteration {
                     // First iteration: get the first key-value pair
                     if let Some((key, value)) = obj.iter().next() {
-                        if key_reg != u16::MAX {
+                        if key_reg != value_reg {
                             self.registers[key_reg as usize] = key.clone();
                         }
                         self.registers[value_reg as usize] = value.clone();
@@ -1396,7 +1396,7 @@ impl RegoVM {
                             std::ops::Bound::Unbounded,
                         ));
                         if let Some((key, value)) = range_iter.next() {
-                            if key_reg != u16::MAX {
+                            if key_reg != value_reg {
                                 self.registers[key_reg as usize] = key.clone();
                             }
                             self.registers[value_reg as usize] = value.clone();
@@ -1417,7 +1417,7 @@ impl RegoVM {
                 if *first_iteration {
                     // First iteration: get the first item
                     if let Some(item) = items.iter().next() {
-                        if key_reg != u16::MAX {
+                        if key_reg != value_reg {
                             // For sets, key and value are the same
                             self.registers[key_reg as usize] = item.clone();
                         }
@@ -1435,7 +1435,7 @@ impl RegoVM {
                             std::ops::Bound::Unbounded,
                         ));
                         if let Some(item) = range_iter.next() {
-                            if key_reg != u16::MAX {
+                            if key_reg != value_reg {
                                 // For sets, key and value are the same
                                 self.registers[key_reg as usize] = item.clone();
                             }

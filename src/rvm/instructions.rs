@@ -11,13 +11,13 @@ pub struct LoopStartParams {
     /// Loop mode (Existential/Universal/Comprehension types)
     pub mode: LoopMode,
     /// Register containing the collection to iterate over
-    pub collection: u16,
-    /// Register to store current key (u16::MAX if not needed)
-    pub key_reg: u16,
+    pub collection: u8,
+    /// Register to store current key (same as value_reg if key not needed)
+    pub key_reg: u8,
     /// Register to store current value
-    pub value_reg: u16,
+    pub value_reg: u8,
     /// Register to store final result
-    pub result_reg: u16,
+    pub result_reg: u8,
     /// Jump target for loop body start
     pub body_start: u16,
     /// Jump target for loop end
@@ -29,23 +29,24 @@ pub struct LoopStartParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuiltinCallParams {
     /// Destination register to store the result
-    pub dest: u16,
+    pub dest: u8,
     /// Index into program's builtin_info_table
     pub builtin_index: u16,
-    /// Argument register numbers (u16::MAX indicates unused slots)
-    pub args: [u16; 8],
+    /// Number of arguments actually used
+    pub num_args: u8,
+    /// Argument register numbers (unused slots contain undefined values)
+    pub args: [u8; 8],
 }
 
 impl BuiltinCallParams {
-    /// Get the number of arguments (count of non-MAX values)
+    /// Get the number of arguments actually used
     pub fn arg_count(&self) -> usize {
-        self.args.iter().take_while(|&&arg| arg != u16::MAX).count()
+        self.num_args as usize
     }
 
     /// Get argument register numbers as a slice
-    pub fn arg_registers(&self) -> &[u16] {
-        let count = self.arg_count();
-        &self.args[..count]
+    pub fn arg_registers(&self) -> &[u8] {
+        &self.args[..self.num_args as usize]
     }
 }
 
@@ -54,23 +55,24 @@ impl BuiltinCallParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionCallParams {
     /// Destination register to store the result
-    pub dest: u16,
+    pub dest: u8,
     /// Register containing the function to call
-    pub func: u16,
-    /// Argument register numbers (u16::MAX indicates unused slots)
-    pub args: [u16; 8],
+    pub func: u8,
+    /// Number of arguments actually used
+    pub num_args: u8,
+    /// Argument register numbers (unused slots contain undefined values)
+    pub args: [u8; 8],
 }
 
 impl FunctionCallParams {
-    /// Get the number of arguments (count of non-MAX values)
+    /// Get the number of arguments actually used
     pub fn arg_count(&self) -> usize {
-        self.args.iter().take_while(|&&arg| arg != u16::MAX).count()
+        self.num_args as usize
     }
 
     /// Get argument register numbers as a slice
-    pub fn arg_registers(&self) -> &[u16] {
-        let count = self.arg_count();
-        &self.args[..count]
+    pub fn arg_registers(&self) -> &[u8] {
+        &self.args[..self.num_args as usize]
     }
 }
 
@@ -179,120 +181,120 @@ pub enum LoopMode {
 pub enum Instruction {
     /// Load literal value from literal table into register
     Load {
-        dest: u16,
+        dest: u8,
         literal_idx: u16,
     },
 
     /// Load true value into register
     LoadTrue {
-        dest: u16,
+        dest: u8,
     },
 
     /// Load false value into register
     LoadFalse {
-        dest: u16,
+        dest: u8,
     },
 
     /// Load null value into register
     LoadNull {
-        dest: u16,
+        dest: u8,
     },
 
     /// Load boolean value into register
     LoadBool {
-        dest: u16,
+        dest: u8,
         value: bool,
     },
 
     /// Load global data object into register
     LoadData {
-        dest: u16,
+        dest: u8,
     },
 
     /// Load global input object into register
     LoadInput {
-        dest: u16,
+        dest: u8,
     },
 
     /// Move value from one register to another
     Move {
-        dest: u16,
-        src: u16,
+        dest: u8,
+        src: u8,
     },
 
     /// Arithmetic operations
     Add {
-        dest: u16,
-        left: u16,
-        right: u16,
+        dest: u8,
+        left: u8,
+        right: u8,
     },
     Sub {
-        dest: u16,
-        left: u16,
-        right: u16,
+        dest: u8,
+        left: u8,
+        right: u8,
     },
     Mul {
-        dest: u16,
-        left: u16,
-        right: u16,
+        dest: u8,
+        left: u8,
+        right: u8,
     },
     Div {
-        dest: u16,
-        left: u16,
-        right: u16,
+        dest: u8,
+        left: u8,
+        right: u8,
     },
     Mod {
-        dest: u16,
-        left: u16,
-        right: u16,
+        dest: u8,
+        left: u8,
+        right: u8,
     },
 
     /// Comparison operations
     Eq {
-        dest: u16,
-        left: u16,
-        right: u16,
+        dest: u8,
+        left: u8,
+        right: u8,
     },
     Ne {
-        dest: u16,
-        left: u16,
-        right: u16,
+        dest: u8,
+        left: u8,
+        right: u8,
     },
     Lt {
-        dest: u16,
-        left: u16,
-        right: u16,
+        dest: u8,
+        left: u8,
+        right: u8,
     },
     Le {
-        dest: u16,
-        left: u16,
-        right: u16,
+        dest: u8,
+        left: u8,
+        right: u8,
     },
     Gt {
-        dest: u16,
-        left: u16,
-        right: u16,
+        dest: u8,
+        left: u8,
+        right: u8,
     },
     Ge {
-        dest: u16,
-        left: u16,
-        right: u16,
+        dest: u8,
+        left: u8,
+        right: u8,
     },
 
     /// Logical operations
     And {
-        dest: u16,
-        left: u16,
-        right: u16,
+        dest: u8,
+        left: u8,
+        right: u8,
     },
     Or {
-        dest: u16,
-        left: u16,
-        right: u16,
+        dest: u8,
+        left: u8,
+        right: u8,
     },
     Not {
-        dest: u16,
-        operand: u16,
+        dest: u8,
+        operand: u8,
     },
 
     /// Builtin function calls - optimized for builtin functions
@@ -309,60 +311,60 @@ pub enum Instruction {
 
     /// Return result
     Return {
-        value: u16,
+        value: u8,
     },
 
     /// Create empty object
     ObjectNew {
-        dest: u16,
+        dest: u8,
     },
 
     /// Set object field
     ObjectSet {
-        obj: u16,
-        key: u16,
-        value: u16,
+        obj: u8,
+        key: u8,
+        value: u8,
     },
 
     /// Index into container (object, array, set)
     Index {
-        dest: u16,
-        container: u16,
-        key: u16,
+        dest: u8,
+        container: u8,
+        key: u8,
     },
 
     /// Create empty array
     ArrayNew {
-        dest: u16,
+        dest: u8,
     },
 
     /// Push element to array
     ArrayPush {
-        arr: u16,
-        value: u16,
+        arr: u8,
+        value: u8,
     },
 
     /// Create empty set
     SetNew {
-        dest: u16,
+        dest: u8,
     },
 
     /// Add element to set
     SetAdd {
-        set: u16,
-        value: u16,
+        set: u8,
+        value: u8,
     },
 
     /// Check if collection contains value (for membership testing)
     Contains {
-        dest: u16,
-        collection: u16,
-        value: u16,
+        dest: u8,
+        collection: u8,
+        value: u8,
     },
 
     /// Assert condition - if register contains false or undefined, return undefined immediately
     AssertCondition {
-        condition: u16,
+        condition: u8,
     },
 
     /// Start a loop over a collection with specified semantics - uses parameter table
@@ -382,7 +384,7 @@ pub enum Instruction {
     /// Call rule with caching - checks cache first, executes rule if needed, supports call stack
     CallRule {
         /// Destination register to store the result of the rule call
-        dest: u16,
+        dest: u8,
         /// Rule index to execute
         rule_index: u16,
     },
@@ -390,7 +392,7 @@ pub enum Instruction {
     /// Initialize a rule
     RuleInit {
         /// The register where rule's result is accumulated.
-        result_reg: u16,
+        result_reg: u8,
 
         /// The rule number of the rule
         rule_index: u16,

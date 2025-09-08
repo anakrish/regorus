@@ -48,7 +48,6 @@ pub fn parse_instruction(text: &str) -> Result<Instruction> {
             "AssertCondition" => parse_assert_condition(params_text),
             "LoopStart" => parse_loop_start(params_text),
             "LoopNext" => parse_loop_next(params_text),
-            "LoopAccumulate" => parse_loop_accumulate(params_text),
             "Halt" => Ok(Instruction::Halt),
             _ => bail!("Unknown instruction: {}", name),
         }
@@ -124,22 +123,6 @@ fn get_param_bool(params: &[(String, String)], name: &str) -> Result<bool> {
         }
     }
     bail!("Missing parameter: {}", name);
-}
-
-fn get_param_optional_u16(params: &[(String, String)], name: &str) -> Result<Option<u16>> {
-    for (key, value) in params {
-        if key == name {
-            if value == "None" {
-                return Ok(None);
-            } else {
-                let val = value
-                    .parse::<u16>()
-                    .map_err(|_| anyhow!("Invalid u16 value for {}: {}", name, value))?;
-                return Ok(Some(val));
-            }
-        }
-    }
-    Ok(None)
 }
 
 pub fn parse_loop_mode(text: &str) -> Result<LoopMode> {
@@ -346,13 +329,6 @@ fn parse_loop_next(params_text: &str) -> Result<Instruction> {
         body_start,
         loop_end,
     })
-}
-
-fn parse_loop_accumulate(params_text: &str) -> Result<Instruction> {
-    let params = parse_params(params_text)?;
-    let value = get_param_u16(&params, "value")?;
-    let key = get_param_optional_u16(&params, "key")?;
-    Ok(Instruction::LoopAccumulate { value, key })
 }
 
 fn parse_load_true(params_text: &str) -> Result<Instruction> {

@@ -329,14 +329,6 @@ pub enum Instruction {
         loop_end: u16,
     },
 
-    /// Accumulate result for comprehension modes (optional explicit control)
-    LoopAccumulate {
-        /// Register containing value to accumulate
-        value: u16,
-        /// Register containing key (for object comprehensions only)
-        key: Option<u16>,
-    },
-
     /// Call rule with caching - checks cache first, executes rule if needed, supports call stack
     CallRule {
         /// Destination register to store the result of the rule call
@@ -497,13 +489,6 @@ impl std::fmt::Display for Instruction {
                 loop_end,
             } => {
                 format!("LOOP_NEXT {} {}", body_start, loop_end)
-            }
-            Instruction::LoopAccumulate { value, key } => {
-                if let Some(key_reg) = key {
-                    format!("LOOP_ACCUMULATE R({}) R({})", value, key_reg)
-                } else {
-                    format!("LOOP_ACCUMULATE R({})", value)
-                }
             }
             Instruction::CallRule { dest, rule_index } => {
                 format!("CALL_RULE R({}) {}", dest, rule_index)

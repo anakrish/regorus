@@ -1,4 +1,4 @@
-use super::instructions::LoopMode;
+use super::instructions::{LoopMode, LoopStartParams};
 use super::program::Program;
 use super::Instruction;
 use crate::ast::{Expr, ExprRef, Rule, RuleHead};
@@ -34,6 +34,7 @@ pub enum ComprehensionType {
 pub enum ContextType {
     Comprehension(ComprehensionType),
     Rule(RuleType),
+    Every,
 }
 
 /// Compilation context for handling different types of rule bodies and comprehensions
@@ -48,8 +49,7 @@ pub struct CompilationContext {
 }
 
 pub struct Compiler<'a> {
-    instructions: Vec<Instruction>,
-    literals: Vec<Value>,
+    program: Program, // Program being built with instructions and parameter data
     spans: Vec<SpanInfo>,
     register_counter: Register,
     scopes: Vec<Scope>,         // Stack of variable scopes (like the interpreter)
@@ -71,8 +71,7 @@ pub struct Compiler<'a> {
 impl<'a> Compiler<'a> {
     pub fn with_policy(policy: &'a CompiledPolicy, package: String) -> Self {
         Self {
-            instructions: Vec::new(),
-            literals: Vec::new(),
+            program: Program::new(),
             spans: Vec::new(),
             register_counter: 1,
             scopes: vec![Scope::default()],
@@ -99,14 +98,14 @@ impl<'a> Compiler<'a> {
     pub fn add_literal(&mut self, value: Value) -> u16 {
         // Check if literal already exists to avoid duplication
         // TODO: Optimize lookup
-        for (idx, existing) in self.literals.iter().enumerate() {
+        for (idx, existing) in self.program.literals.iter().enumerate() {
             if existing == &value {
                 return idx as u16;
             }
         }
 
-        let idx = self.literals.len() as u16;
-        self.literals.push(value);
+        let idx = self.program.literals.len() as u16;
+        self.program.literals.push(value);
         idx
     }
 
@@ -202,6 +201,10 @@ impl<'a> Compiler<'a> {
                         span,
                     );
                 }
+                ContextType::Every => {
+                    // Every quantifiers don't emit any yield instructions
+                    // They are assertion-only contexts
+                }
             }
             Ok(())
         } else {
@@ -249,6 +252,18 @@ impl<'a> Compiler<'a> {
 
     pub fn bind_unbound_variable(&mut self, var_name: &str) {
         self.current_scope_mut().unbound_vars.remove(var_name);
+    }
+
+    /// Check if a variable can be resolved either locally or as a rule
+    fn can_resolve_variable(&self, var_name: &str) -> bool {
+        // Check local variables first
+        if self.lookup_variable(var_name).is_some() {
+            return true;
+        }
+
+        // Check if there's a rule for this variable
+        let rule_path = format!("{}.{}", &self.current_package, var_name);
+        self.policy.inner.rules.contains_key(&rule_path)
     }
 
     /// Store a variable mapping (backward compatibility)
@@ -408,7 +423,7 @@ impl<'a> Compiler<'a> {
 
     /// Emit an instruction with span tracking
     pub fn emit_instruction(&mut self, instruction: Instruction, span: &Span) {
-        self.instructions.push(instruction);
+        self.program.instructions.push(instruction);
 
         // Get the source path and find its index (0-based, matching program source table)
         let source_path = span.source.get_path().to_string();
@@ -432,25 +447,24 @@ impl<'a> Compiler<'a> {
 
     pub fn emit_return(&mut self, result_reg: Register) {
         // Add return instruction
-        self.instructions
+        self.program
+            .instructions
             .push(Instruction::Return { value: result_reg });
         self.spans.push(SpanInfo::new(0, 0, 0, 0)); // Default span for return instruction
     }
 
     pub fn emit_call_rule(&mut self, dest: Register, rule_index: u16) {
         // Add call rule instruction
-        self.instructions
+        self.program
+            .instructions
             .push(Instruction::CallRule { dest, rule_index });
         self.spans.push(SpanInfo::new(0, 0, 0, 0)); // Default span for call rule instruction
     }
 
-    pub fn finish(self) -> crate::rvm::program::Program {
-        // Convert to Program
-        let mut program = Program::new();
-        program.instructions = self.instructions;
-        program.literals = self.literals;
-        program.main_entry_point = 0;
-        program.num_registers = self.register_counter as usize;
+    pub fn finish(mut self) -> crate::rvm::program::Program {
+        // Update the program with final values
+        self.program.main_entry_point = 0;
+        self.program.num_registers = self.register_counter as usize;
 
         // Set the rule definitions from the compiler
         let mut rule_infos_map = BTreeMap::new();
@@ -465,11 +479,11 @@ impl<'a> Compiler<'a> {
             rule_infos_map.insert(rule_index as usize, rule_info);
         }
 
-        program.rule_infos = rule_infos_map.into_values().collect();
+        self.program.rule_infos = rule_infos_map.into_values().collect();
 
         // Debug: Print rule definitions
         std::println!("Debug: Rule definitions in program:");
-        for (rule_idx, rule_info) in program.rule_infos.iter().enumerate() {
+        for (rule_idx, rule_info) in self.program.rule_infos.iter().enumerate() {
             std::println!(
                 "  Rule {}: {} definitions",
                 rule_idx,
@@ -485,35 +499,28 @@ impl<'a> Compiler<'a> {
             }
         }
 
-        // Add worklist rules to the mapping (they use 1-based indices)
-        for (rule_path, &rule_index) in &self.rule_index_map {
-            program
-                .rule_name_to_index
-                .insert(rule_path.clone(), rule_index as usize);
-        }
-
         // Extract source contents from the policy modules and add them to the program
         for module in self.policy.get_modules().iter() {
             let source = &module.package.refr.span().source;
             let source_path = source.get_path().to_string();
             let source_content = source.get_contents().to_string();
-            program.add_source(source_path, source_content);
+            self.program.add_source(source_path, source_content);
         }
 
         // Transfer spans to program (they already have correct source indices)
-        program.instruction_spans = self.spans.into_iter().map(|span| Some(span)).collect();
+        self.program.instruction_spans = self.spans.into_iter().map(|span| Some(span)).collect();
 
         std::println!(
             "Debug: Final program has {} instructions, {} rule infos",
-            program.instructions.len(),
-            program.rule_infos.len()
+            self.program.instructions.len(),
+            self.program.rule_infos.len()
         );
         std::println!(
             "Debug: Program requires {} registers",
-            program.num_registers
+            self.program.num_registers
         );
 
-        program
+        self.program
     }
 
     /// Compile a Rego expression to RVM instructions
@@ -1045,34 +1052,84 @@ impl<'a> Compiler<'a> {
                     self.push_context(context);
                     let mut body_entry_points = Vec::new();
 
-                    // Compile each body within this definition
-                    for (body_idx, body) in bodies.iter().enumerate() {
-                        self.push_scope();
-                        let body_entry_point = self.instructions.len();
-                        body_entry_points.push(body_entry_point);
+                    // Handle rules with no bodies but assignment expressions (like my_set := {1, 2, 3})
+                    if bodies.is_empty() {
+                        let value_expr_opt = self.context_stack.last().unwrap().value_expr.clone();
+                        if let Some(value_expr) = value_expr_opt {
+                            // Create a single body entry point for the assignment
+                            let body_entry_point = self.program.instructions.len();
+                            body_entry_points.push(body_entry_point);
 
-                        std::println!(
-                            "Debug: Compiling body {} at entry point {}",
-                            body_idx,
-                            body_entry_point
-                        );
+                            self.push_scope();
 
-                        self.emit_instruction(
-                            Instruction::RuleInit {
-                                result_reg: dest_register,
-                                rule_index,
-                            },
-                            &body.span,
-                        );
+                            self.emit_instruction(
+                                Instruction::RuleInit {
+                                    result_reg: dest_register,
+                                    rule_index,
+                                },
+                                &value_expr.span(),
+                            );
 
-                        // 1. Compile the query (with proper loop hoisting)
-                        if !body.query.stmts.is_empty() {
-                            self.compile_query(&body.query)?;
+                            // Compile the assignment expression
+                            let value_reg = self.compile_rego_expr(&value_expr)?;
+                            self.emit_instruction(
+                                Instruction::Move {
+                                    dest: dest_register,
+                                    src: value_reg,
+                                },
+                                &value_expr.span(),
+                            );
+
+                            // Emit Rule Return
+                            self.emit_instruction(Instruction::RuleReturn {}, &value_expr.span());
+                            self.pop_scope();
                         }
+                    } else {
+                        // Compile each body within this definition
+                        for (body_idx, body) in bodies.iter().enumerate() {
+                            self.push_scope();
+                            let body_entry_point = self.program.instructions.len();
+                            body_entry_points.push(body_entry_point);
 
-                        // 2. Emit Rule Return
-                        self.emit_instruction(Instruction::RuleReturn {}, &body.span);
-                        self.pop_scope();
+                            std::println!(
+                                "Debug: Compiling body {} at entry point {}",
+                                body_idx,
+                                body_entry_point
+                            );
+
+                            self.emit_instruction(
+                                Instruction::RuleInit {
+                                    result_reg: dest_register,
+                                    rule_index,
+                                },
+                                &body.span,
+                            );
+
+                            // 1. Compile the query (with proper loop hoisting)
+                            if !body.query.stmts.is_empty() {
+                                self.compile_query(&body.query)?;
+                            } else {
+                                // Check if there's an assignment expression in the rule head (for rules like my_set := {1, 2, 3})
+                                let value_expr_opt =
+                                    self.context_stack.last().unwrap().value_expr.clone();
+                                if let Some(value_expr) = value_expr_opt {
+                                    // For rules with empty bodies but assignment expressions
+                                    // compile the assignment expression and store it in the result register
+                                    let value_reg = self.compile_rego_expr(&value_expr)?;
+                                    self.emit_instruction(
+                                        Instruction::Move {
+                                            dest: dest_register,
+                                            src: value_reg,
+                                        },
+                                        &value_expr.span(),
+                                    );
+                                }
+                            }
+
+                            // 2. Emit Rule Return
+                            self.emit_instruction(Instruction::RuleReturn {}, &body.span);
+                            self.pop_scope();
+                        }
                     }
 
                     // Store the body entry points for this definition
@@ -1098,23 +1155,33 @@ impl<'a> Compiler<'a> {
 
     /// Compile a query (statements with proper loop hoisting, similar to interpreter's eval_stmts)
     fn compile_query(&mut self, query: &crate::ast::Query) -> Result<()> {
-        let schedule = {
-            self.policy
-                .inner
-                .schedule
-                .as_ref()
-                .and_then(|s| s.queries.get(self.current_module_index, query.qidx))
+        // Push a new scope for this query
+        self.push_scope();
+
+        let result = {
+            let schedule = {
+                self.policy
+                    .inner
+                    .schedule
+                    .as_ref()
+                    .and_then(|s| s.queries.get(self.current_module_index, query.qidx))
+            };
+
+            let ordered_stmts: Vec<&crate::ast::LiteralStmt> = match schedule {
+                Some(schedule) => schedule
+                    .order
+                    .iter()
+                    .map(|i| &query.stmts[*i as usize])
+                    .collect(),
+                None => query.stmts.iter().collect(),
+            };
+            self.hoist_loops_and_compile_statements(&ordered_stmts)
         };
 
-        let ordered_stmts: Vec<&crate::ast::LiteralStmt> = match schedule {
-            Some(schedule) => schedule
-                .order
-                .iter()
-                .map(|i| &query.stmts[*i as usize])
-                .collect(),
-            None => query.stmts.iter().collect(),
-        };
-        self.hoist_loops_and_compile_statements(&ordered_stmts)
+        // Pop the scope after compilation
+        self.pop_scope();
+
+        result
     }
 
     /// Hoist loops from statements and compile them with proper sequencing (similar to interpreter's eval_stmts)
@@ -1128,7 +1195,12 @@ impl<'a> Compiler<'a> {
         );
 
         for (idx, stmt) in stmts.iter().enumerate() {
-            std::println!("Debug: Processing statement {} of {}", idx + 1, stmts.len());
+            std::println!(
+                "Debug: Processing statement {} of {}: {}",
+                idx + 1,
+                stmts.len(),
+                stmt.span.text()
+            );
 
             // Hoist loops from this statement (like interpreter)
             let loop_exprs = self.hoist_loops_from_literal(&stmt.literal)?;
@@ -1145,9 +1217,11 @@ impl<'a> Compiler<'a> {
             }
 
             // No loops, compile statement normally
+            std::println!("Debug: Compiling statement {} normally (no loops)", idx + 1);
             self.compile_single_statement(stmt)?;
         }
 
+        std::println!("Debug: Finished compiling all statements, calling emit_context_yield");
         self.hoist_loops_and_emit_context_yield()
     }
 
@@ -1189,10 +1263,12 @@ impl<'a> Compiler<'a> {
                 key: _key,
                 value: _value,
                 domain: _domain,
+                query: _query,
                 ..
             } => {
+                // Every quantifiers are not hoisted as loops
+                // They are compiled directly in compile_single_statement
                 self.hoist_loops_from_expr(_domain, &mut loops)?;
-                std::println!("Debug: Found Every literal - creating universal loop: TODO");
             }
             _ => {
                 // Other literal types don't have loops to hoist
@@ -1265,24 +1341,25 @@ impl<'a> Compiler<'a> {
                 self.hoist_loops_from_expr(refr, loops)?;
                 self.hoist_loops_from_expr(index, loops)?;
 
-                // Check if this is an array[_] pattern
+                // Check if this is an array[_] pattern or unbound variable pattern
                 if let Var {
                     value: Value::String(var_name),
                     ..
                 } = index.as_ref()
                 {
-                    if var_name.as_ref() == "_" || self.is_unbound_var(var_name.as_ref()) {
+                    if var_name.as_ref() == "_"
+                        || self.is_unbound_var(var_name.as_ref())
+                        || !self.can_resolve_variable(var_name.as_ref())
+                    {
                         if var_name.as_ref() == "_" {
-                            std::println!(
-                                "Debug: Found index[_] pattern - creating iteration loop"
-                            );
+                            // Anonymous variable
+                        } else if self.is_unbound_var(var_name.as_ref()) {
+                            // Already marked as unbound variable
                         } else {
-                            std::println!(
-                                "Debug: Found index variable '{}' - creating iteration loop",
-                                var_name
-                            );
+                            // Add as unbound variable for proper tracking
+                            self.add_unbound_variable(var_name.as_ref());
                         }
-                        // This is array[_] - create a loop to iterate over the array
+                        // This is array[_] or object[unbound_var] - create a loop to iterate over the collection
                         loops.push(HoistedLoop {
                             loop_expr: Some(expr.clone()),
                             key: Some(index.clone()),
@@ -1391,6 +1468,25 @@ impl<'a> Compiler<'a> {
     }
 
     fn hoist_loops_and_emit_context_yield(&mut self) -> Result<(), anyhow::Error> {
+        // Check if we're in an Every quantifier context - if so, don't emit context yield
+        // Every quantifiers are assertions, not value-producing expressions
+        if let Some(context) = self.context_stack.last() {
+            // Check if this is an Every context that doesn't need context yield
+            match &context.context_type {
+                ContextType::Every => {
+                    // Every quantifiers don't emit context yield
+                    std::println!("Debug: Skipping context yield for Every quantifier context");
+                    return Ok(());
+                }
+                ContextType::Rule(_) => {
+                    // This is a rule context, proceed with normal context yield logic
+                }
+                ContextType::Comprehension(_) => {
+                    // This is a comprehension context, proceed with normal context yield logic
+                }
+            }
+        }
+
         if let Some(context) = self.context_stack.last_mut() {
             if context.key_value_loops_hoisted {
                 // Loops already hoisted, emit context yield
@@ -1428,9 +1524,130 @@ impl<'a> Compiler<'a> {
                 }
             }
         } else {
-            // No context, emit context yield
-            self.emit_context_yield()
+            // No context, just return without error
+            Ok(())
         }
+    }
+
+    /// Compile an Every quantifier
+    fn compile_every_quantifier(
+        &mut self,
+        key: &Option<crate::lexer::Span>,
+        value: &crate::lexer::Span,
+        domain: &ExprRef,
+        query: &crate::ast::Query,
+        span: &crate::lexer::Span,
+    ) -> Result<()> {
+        std::println!("Debug: Compiling Every quantifier with domain and query");
+
+        // Compile the domain expression
+        let collection_reg = self.compile_rego_expr(domain)?;
+
+        // Allocate registers for loop variables
+        let key_reg = self.alloc_register();
+        let value_reg = self.alloc_register();
+        let result_reg = self.alloc_register();
+
+        // Extract variable names from the spans
+        let value_var_name = value.text().to_string();
+        let key_var_name = key.as_ref().map(|k| k.text().to_string());
+
+        std::println!(
+            "Debug: Every quantifier - value var: '{}', key var: {:?}",
+            value_var_name,
+            key_var_name
+        );
+
+        // Generate loop start instruction for Every mode
+        let loop_params_index = self.program.add_loop_params(LoopStartParams {
+            mode: LoopMode::Every,
+            collection: collection_reg,
+            key_reg,
+            value_reg,
+            result_reg,
+            body_start: 0, // Will be updated
+            loop_end: 0,   // Will be updated
+        });
+
+        self.emit_instruction(
+            Instruction::LoopStart {
+                params_index: loop_params_index,
+            },
+            span,
+        );
+
+        let body_start = self.program.instructions.len() as u16;
+
+        // Push new scope for loop variables (Every needs explicit scope management)
+        self.push_scope();
+
+        // Push Every context - this will prevent context yield emission
+        let every_context = CompilationContext {
+            context_type: ContextType::Every,
+            dest_register: result_reg, // Not used for Every but required
+            key_expr: None,
+            value_expr: None,
+            span: span.clone(),
+            key_value_loops_hoisted: false,
+        };
+        self.push_context(every_context);
+
+        // Add loop variables to scope using their actual names
+        self.add_variable(&value_var_name, value_reg);
+        if let Some(ref key_name) = key_var_name {
+            self.add_variable(key_name, key_reg);
+        }
+
+        std::println!(
+            "Debug: Added Every loop variables to scope - value: '{}' -> reg {}, key: {:?}",
+            value_var_name,
+            value_reg,
+            key_var_name.as_ref().map(|k| (k, key_reg))
+        );
+
+        // Compile the query body using standard query compilation
+        // Note: compile_query will push/pop its own additional scope
+        self.compile_query(query)?;
+
+        // Pop Every context and scope
+        self.pop_context();
+        self.pop_scope();
+
+        // Add LoopNext instruction
+        self.emit_instruction(
+            Instruction::LoopNext {
+                body_start,
+                loop_end: 0, // Will be updated
+            },
+            span,
+        );
+
+        let loop_end = self.program.instructions.len() as u16;
+
+        // Update the loop parameters with actual body_start and loop_end
+        self.program
+            .update_loop_params(loop_params_index, |params| {
+                params.body_start = body_start;
+                params.loop_end = loop_end;
+            });
+
+        // Update the LoopNext instruction
+        let loop_next_idx = self.program.instructions.len() - 1;
+        if let Instruction::LoopNext {
+            loop_end: ref mut end,
+            ..
+        } = &mut self.program.instructions[loop_next_idx]
+        {
+            *end = loop_end;
+        }
+
+        std::println!(
+            "Debug: Every quantifier compiled - body_start={}, loop_end={}",
+            body_start,
+            loop_end
+        );
+
+        Ok(())
     }
 
     /// Compile a single statement without loops
@@ -1445,9 +1662,21 @@ impl<'a> Compiler<'a> {
                 // Should have been handled by loop hoisting
                 return Err(anyhow::anyhow!("SomeIn should have been hoisted as a loop"));
             }
-            crate::ast::Literal::Every { .. } => {
-                // Should have been handled by loop hoisting
-                return Err(anyhow::anyhow!("Every should have been hoisted as a loop"));
+            crate::ast::Literal::Every {
+                key,
+                value,
+                domain,
+                query,
+                ..
+            } => {
+                std::println!("Debug: Compiling Every quantifier");
+                self.compile_every_quantifier(key, value, domain, query, &stmt.span)?;
+
+                // Every quantifier acts as an assertion - if it succeeds,
+                // we continue with the next statement
+                std::println!(
+                    "Debug: Every quantifier completed - continuing with next statements"
+                );
             }
             crate::ast::Literal::SomeVars { span, vars } => {
                 std::println!(
@@ -1515,21 +1744,23 @@ impl<'a> Compiler<'a> {
         }
 
         // Generate loop start instruction
-        let loop_start_idx = self.instructions.len();
+        let loop_params_index = self.program.add_loop_params(LoopStartParams {
+            mode: LoopMode::ForEach,
+            collection: collection_reg,
+            key_reg,
+            value_reg,
+            result_reg,
+            body_start: 0, // Will be updated
+            loop_end: 0,   // Will be updated
+        });
         self.emit_instruction(
             Instruction::LoopStart {
-                mode: LoopMode::ForEach,
-                collection: collection_reg,
-                key_reg,
-                value_reg,
-                result_reg,
-                body_start: 0, // Will be updated
-                loop_end: 0,   // Will be updated
+                params_index: loop_params_index,
             },
             collection.span(),
         );
 
-        let body_start = self.instructions.len() as u16;
+        let body_start = self.program.instructions.len() as u16;
 
         // Include the first statement as part of the loop body, then compile remaining statements.
         let body_stmts = &remaining_stmts[0..];
@@ -1546,25 +1777,21 @@ impl<'a> Compiler<'a> {
             collection.span(),
         );
 
-        let loop_end = self.instructions.len() as u16;
+        let loop_end = self.program.instructions.len() as u16;
 
-        // Update the LoopStart instruction
-        if let Instruction::LoopStart {
-            body_start: ref mut start,
-            loop_end: ref mut end,
-            ..
-        } = &mut self.instructions[loop_start_idx]
-        {
-            *start = body_start;
-            *end = loop_end;
-        }
+        // Update the loop parameters with actual body_start and loop_end
+        self.program
+            .update_loop_params(loop_params_index, |params| {
+                params.body_start = body_start;
+                params.loop_end = loop_end;
+            });
 
         // Update the LoopNext instruction
-        let loop_next_idx = self.instructions.len() - 1;
+        let loop_next_idx = self.program.instructions.len() - 1;
         if let Instruction::LoopNext {
             loop_end: ref mut end,
             ..
-        } = &mut self.instructions[loop_next_idx]
+        } = &mut self.program.instructions[loop_next_idx]
         {
             *end = loop_end;
         }
@@ -1629,28 +1856,31 @@ impl<'a> Compiler<'a> {
         let result_reg = self.alloc_register();
 
         // Initialize result register as empty set
-        self.instructions
+        self.program
+            .instructions
             .push(Instruction::SetNew { dest: result_reg });
 
         // Start the existential loop - we'll calculate the correct loop_end after compiling the body
-        let loop_start_idx = self.instructions.len();
 
-        // Add placeholder LoopStart instruction (we'll update loop_end later)
+        // Add LoopStart instruction with parameters
+        let loop_params_index = self.program.add_loop_params(LoopStartParams {
+            mode: LoopMode::SetComprehension, // Use SetComprehension for set rules with some...in
+            collection: collection_reg,
+            key_reg,
+            value_reg,
+            result_reg,
+            body_start: 0, // Will be calculated after adding LoopStart
+            loop_end: 0,   // Placeholder
+        });
         self.emit_instruction(
             Instruction::LoopStart {
-                mode: LoopMode::SetComprehension, // Use SetComprehension for set rules with some...in
-                collection: collection_reg,
-                key_reg,
-                value_reg,
-                result_reg,
-                body_start: 0, // Will be calculated after adding LoopStart
-                loop_end: 0,   // Placeholder
+                params_index: loop_params_index,
             },
             collection.span(),
         );
 
         // Calculate body_start after adding LoopStart instruction
-        let body_start = self.instructions.len() as u16;
+        let body_start = self.program.instructions.len() as u16;
 
         // Store loop variables in scope for body compilation
         if let Some(key_expr) = key {
@@ -1719,25 +1949,21 @@ impl<'a> Compiler<'a> {
         );
 
         // Calculate the correct loop_end (points to instruction after LoopNext)
-        let loop_end = self.instructions.len() as u16;
+        let loop_end = self.program.instructions.len() as u16;
 
-        // Update the LoopStart instruction with the correct body_start and loop_end
-        if let Instruction::LoopStart {
-            body_start: ref mut start,
-            loop_end: ref mut end,
-            ..
-        } = &mut self.instructions[loop_start_idx]
-        {
-            *start = body_start;
-            *end = loop_end;
-        }
+        // Update the loop parameters with actual body_start and loop_end
+        self.program
+            .update_loop_params(loop_params_index, |params| {
+                params.body_start = body_start;
+                params.loop_end = loop_end;
+            });
 
         // Update the LoopNext instruction with the correct loop_end
-        let loop_next_idx = self.instructions.len() - 1;
+        let loop_next_idx = self.program.instructions.len() - 1;
         if let Instruction::LoopNext {
             loop_end: ref mut end,
             ..
-        } = &mut self.instructions[loop_next_idx]
+        } = &mut self.program.instructions[loop_next_idx]
         {
             *end = loop_end;
         }
@@ -1751,15 +1977,15 @@ impl<'a> Compiler<'a> {
         // Debug: Print all instructions generated for this loop
         std::println!(
             "Debug: Generated {} instructions for SomeIn loop:",
-            self.instructions.len()
+            self.program.instructions.len()
         );
-        for (i, instr) in self.instructions.iter().enumerate() {
+        for (i, instr) in self.program.instructions.iter().enumerate() {
             std::println!("  {}: {:?}", i, instr);
         }
 
         // Debug: Print literals table
         std::println!("Debug: Literals table:");
-        for (i, literal) in self.literals.iter().enumerate() {
+        for (i, literal) in self.program.literals.iter().enumerate() {
             std::println!("  literal_idx {}: {:?}", i, literal);
         }
 
@@ -1773,81 +1999,28 @@ impl<'a> Compiler<'a> {
         query: &crate::ast::Query,
         span: &Span,
     ) -> Result<Register> {
-        // For array comprehension, we need to parse the query to extract loop patterns
-        // For now, create a simple hardcoded collection for testing
-        let collection_reg = self.alloc_register();
-        let literal_idx = self.add_literal(Value::Array(Arc::new(vec![
-            Value::Number(1i64.into()),
-            Value::Number(2i64.into()),
-            Value::Number(3i64.into()),
-        ])));
-        self.emit_instruction(
-            Instruction::Load {
-                dest: collection_reg,
-                literal_idx,
-            },
-            span,
-        );
+        std::println!("Debug: Compiling array comprehension");
 
-        // Allocate registers for loop variables
-        let key_reg = self.alloc_register(); // For array index
-        let value_reg = self.alloc_register(); // For array value
+        // Allocate result register and initialize as empty array
         let result_reg = self.alloc_register();
+        self.emit_instruction(Instruction::ArrayNew { dest: result_reg }, span);
 
-        // Start the array comprehension loop
-        let body_start = (self.instructions.len() + 1) as u16;
-        let loop_start_idx = self.instructions.len();
+        // Push comprehension context with the term as output expression
+        let comprehension_context = CompilationContext {
+            context_type: ContextType::Comprehension(ComprehensionType::Array),
+            dest_register: result_reg,
+            key_expr: None,
+            value_expr: Some(term.clone()),
+            span: span.clone(),
+            key_value_loops_hoisted: false,
+        };
+        self.push_context(comprehension_context);
 
-        // Add LoopStart with placeholder loop_end
-        self.emit_instruction(
-            Instruction::LoopStart {
-                mode: LoopMode::ArrayComprehension,
-                collection: collection_reg,
-                key_reg,
-                value_reg,
-                result_reg,
-                body_start,
-                loop_end: 0, // Will be updated below
-            },
-            span,
-        );
+        // Compile the query - this will push/pop its own scope
+        self.compile_query(query)?;
 
-        // Store the loop variable in scope
-        self.store_variable("x".to_string(), value_reg);
-
-        // Compile the query conditions first
-        if !query.stmts.is_empty() {
-            self.compile_query(query)?;
-        }
-
-        // Compile the term expression
-        let term_reg = self.compile_rego_expr(term)?;
-
-        // Accumulate the term
-        self.emit_instruction(
-            Instruction::LoopAccumulate {
-                value: term_reg,
-                key: None,
-            },
-            span,
-        );
-
-        // Add loop control instructions
-        let actual_loop_end = (self.instructions.len() + 1) as u16;
-        self.emit_instruction(
-            Instruction::LoopNext {
-                body_start,
-                loop_end: actual_loop_end,
-            },
-            span,
-        );
-
-        // Update the LoopStart instruction with the correct loop_end
-        if let Some(Instruction::LoopStart { loop_end, .. }) =
-            self.instructions.get_mut(loop_start_idx)
-        {
-            *loop_end = actual_loop_end;
-        }
+        // Pop context
+        self.pop_context();
 
         Ok(result_reg)
     }
@@ -1859,73 +2032,28 @@ impl<'a> Compiler<'a> {
         query: &crate::ast::Query,
         span: &Span,
     ) -> Result<Register> {
-        // Similar to array comprehension but with SetComprehension mode
-        let collection_reg = self.alloc_register();
-        let literal_idx = self.add_literal(Value::Array(Arc::new(vec![
-            Value::Number(1i64.into()),
-            Value::Number(2i64.into()),
-            Value::Number(3i64.into()),
-        ])));
-        self.emit_instruction(
-            Instruction::Load {
-                dest: collection_reg,
-                literal_idx,
-            },
-            span,
-        );
+        std::println!("Debug: Compiling set comprehension");
 
-        let key_reg = self.alloc_register();
-        let value_reg = self.alloc_register();
+        // Allocate result register and initialize as empty set
         let result_reg = self.alloc_register();
+        self.emit_instruction(Instruction::SetNew { dest: result_reg }, span);
 
-        let body_start = (self.instructions.len() + 1) as u16;
-        let loop_start_idx = self.instructions.len();
+        // Push comprehension context with the term as output expression
+        let comprehension_context = CompilationContext {
+            context_type: ContextType::Comprehension(ComprehensionType::Set),
+            dest_register: result_reg,
+            key_expr: None,
+            value_expr: Some(term.clone()),
+            span: span.clone(),
+            key_value_loops_hoisted: false,
+        };
+        self.push_context(comprehension_context);
 
-        self.emit_instruction(
-            Instruction::LoopStart {
-                mode: LoopMode::SetComprehension,
-                collection: collection_reg,
-                key_reg,
-                value_reg,
-                result_reg,
-                body_start,
-                loop_end: 0, // Will be updated below
-            },
-            span,
-        );
+        // Compile the query - this will push/pop its own scope
+        self.compile_query(query)?;
 
-        self.store_variable("x".to_string(), value_reg);
-
-        // Compile the query conditions first
-        if !query.stmts.is_empty() {
-            self.compile_query(query)?;
-        }
-
-        let term_reg = self.compile_rego_expr(term)?;
-
-        self.emit_instruction(
-            Instruction::LoopAccumulate {
-                value: term_reg,
-                key: None,
-            },
-            span,
-        );
-
-        let actual_loop_end = (self.instructions.len() + 1) as u16;
-        self.emit_instruction(
-            Instruction::LoopNext {
-                body_start,
-                loop_end: actual_loop_end,
-            },
-            span,
-        );
-
-        // Update the LoopStart instruction with the correct loop_end
-        if let Some(Instruction::LoopStart { loop_end, .. }) =
-            self.instructions.get_mut(loop_start_idx)
-        {
-            *loop_end = actual_loop_end;
-        }
+        // Pop context
+        self.pop_context();
 
         Ok(result_reg)
     }
@@ -1938,78 +2066,28 @@ impl<'a> Compiler<'a> {
         query: &crate::ast::Query,
         span: &Span,
     ) -> Result<Register> {
-        // For object comprehension, use a hardcoded object to iterate over
-        let collection_reg = self.alloc_register();
-        let literal_idx = self.add_literal(Value::Object(Arc::new(BTreeMap::from([
-            (Value::String("a".into()), Value::Number(1i64.into())),
-            (Value::String("b".into()), Value::Number(2i64.into())),
-            (Value::String("c".into()), Value::Number(3i64.into())),
-        ]))));
-        self.emit_instruction(
-            Instruction::Load {
-                dest: collection_reg,
-                literal_idx,
-            },
-            span,
-        );
+        std::println!("Debug: Compiling object comprehension");
 
-        let key_reg = self.alloc_register(); // For object key
-        let value_reg = self.alloc_register(); // For object value
+        // Allocate result register and initialize as empty object
         let result_reg = self.alloc_register();
+        self.emit_instruction(Instruction::ObjectNew { dest: result_reg }, span);
 
-        let body_start = (self.instructions.len() + 1) as u16;
-        let loop_start_idx = self.instructions.len();
+        // Push comprehension context with both key and value expressions
+        let comprehension_context = CompilationContext {
+            context_type: ContextType::Comprehension(ComprehensionType::Object),
+            dest_register: result_reg,
+            key_expr: Some(key.clone()),
+            value_expr: Some(value.clone()),
+            span: span.clone(),
+            key_value_loops_hoisted: false,
+        };
+        self.push_context(comprehension_context);
 
-        self.emit_instruction(
-            Instruction::LoopStart {
-                mode: LoopMode::ObjectComprehension,
-                collection: collection_reg,
-                key_reg,
-                value_reg,
-                result_reg,
-                body_start,
-                loop_end: 0, // Will be updated below
-            },
-            span,
-        );
+        // Compile the query - this will push/pop its own scope
+        self.compile_query(query)?;
 
-        // Store loop variables in scope (hardcoded for now)
-        self.store_variable("k".to_string(), key_reg); // key variable
-        self.store_variable("v".to_string(), value_reg); // value variable
-
-        // Compile the query conditions first
-        if !query.stmts.is_empty() {
-            self.compile_query(query)?;
-        }
-
-        // Compile the key and value expressions
-        let key_result_reg = self.compile_rego_expr(key)?;
-        let value_result_reg = self.compile_rego_expr(value)?;
-
-        // Accumulate the key-value pair
-        self.emit_instruction(
-            Instruction::LoopAccumulate {
-                value: value_result_reg,
-                key: Some(key_result_reg),
-            },
-            span,
-        );
-
-        let actual_loop_end = (self.instructions.len() + 1) as u16;
-        self.emit_instruction(
-            Instruction::LoopNext {
-                body_start,
-                loop_end: actual_loop_end,
-            },
-            span,
-        );
-
-        // Update the LoopStart instruction with the correct loop_end
-        if let Some(Instruction::LoopStart { loop_end, .. }) =
-            self.instructions.get_mut(loop_start_idx)
-        {
-            *loop_end = actual_loop_end;
-        }
+        // Pop context
+        self.pop_context();
 
         Ok(result_reg)
     }

@@ -1,6 +1,5 @@
-use crate::rvm::instructions::Instruction;
+use crate::rvm::instructions::{Instruction, InstructionData};
 use crate::value::Value;
-use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -118,6 +117,9 @@ pub struct Program {
     /// Literal value table
     pub literals: Vec<Value>,
 
+    /// Complex instruction parameter data (for LoopStart, Call, etc.)
+    pub instruction_data: InstructionData,
+
     /// Source files table with content
     pub sources: Vec<SourceFile>,
 
@@ -129,9 +131,6 @@ pub struct Program {
 
     /// Main program entry point
     pub main_entry_point: usize,
-
-    /// Rule name to index mapping for lookup
-    pub rule_name_to_index: BTreeMap<String, usize>,
 
     /// Number of registers required by this program
     pub num_registers: usize,
@@ -265,11 +264,11 @@ impl Program {
         Self {
             instructions: Vec::new(),
             literals: Vec::new(),
+            instruction_data: InstructionData::new(),
             sources: Vec::new(),
             rule_infos: Vec::new(),
             instruction_spans: Vec::new(),
             main_entry_point: 0,
-            rule_name_to_index: BTreeMap::new(),
             num_registers: 0,
             metadata: ProgramMetadata {
                 compiler_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -283,10 +282,41 @@ impl Program {
     /// Add a source file and return its index
     pub fn add_source(&mut self, name: String, content: String) -> usize {
         let source_file = SourceFile::new(name.clone(), content);
+        let index = self.sources.len();
+        self.sources.push(source_file);
+        index
+    }
 
+    /// Add loop parameters and return the index
+    pub fn add_loop_params(&mut self, params: crate::rvm::instructions::LoopStartParams) -> u16 {
+        self.instruction_data.add_loop_params(params)
+    }
+
+    /// Add call parameters and return the index
+    pub fn add_call_params(&mut self, params: crate::rvm::instructions::CallParams) -> u16 {
+        self.instruction_data.add_call_params(params)
+    }
+
+    /// Update loop parameters by index
+    pub fn update_loop_params<F>(&mut self, params_index: u16, updater: F)
+    where
+        F: FnOnce(&mut crate::rvm::instructions::LoopStartParams),
+    {
+        if let Some(params) = self.instruction_data.get_loop_params_mut(params_index) {
+            updater(params);
+        }
+    }
+
+    /// Get detailed instruction display with parameter resolution
+    pub fn display_instruction_with_params(&self, instruction: &Instruction) -> String {
+        instruction.display_with_params(&self.instruction_data)
+    }
+
+    /// Add a source file and return its index (checks for duplicates)
+    fn add_source_internal(&mut self, source_file: SourceFile) -> usize {
         // Check if source already exists to avoid duplicates (by name)
         for (i, existing) in self.sources.iter().enumerate() {
-            if existing.name == name {
+            if existing.name == source_file.name {
                 return i;
             }
         }
@@ -325,20 +355,9 @@ impl Program {
         self.sources.get(index).map(|s| s.name.as_str())
     }
 
-    /// Get rule index by name
-    pub fn get_rule_index(&self, rule_name: &str) -> Option<usize> {
-        self.rule_name_to_index.get(rule_name).copied()
-    }
-
     /// Get rule info by index
     pub fn get_rule_info(&self, rule_index: usize) -> Option<&RuleInfo> {
         self.rule_infos.get(rule_index)
-    }
-
-    /// Get rule info by name
-    pub fn get_rule_info_by_name(&self, rule_name: &str) -> Option<&RuleInfo> {
-        self.get_rule_index(rule_name)
-            .and_then(|idx| self.get_rule_info(idx))
     }
 
     /// Get span information for instruction

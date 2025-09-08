@@ -146,14 +146,20 @@ fn parse_load(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let dest = get_param_u16(&params, "dest")?;
     let literal_idx = get_param_u16(&params, "literal_idx")?;
-    Ok(Instruction::Load { dest, literal_idx })
+    Ok(Instruction::Load {
+        dest: dest.try_into().unwrap(),
+        literal_idx,
+    })
 }
 
 fn parse_move(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let dest = get_param_u16(&params, "dest")?;
     let src = get_param_u16(&params, "src")?;
-    Ok(Instruction::Move { dest, src })
+    Ok(Instruction::Move {
+        dest: dest.try_into().unwrap(),
+        src: src.try_into().unwrap(),
+    })
 }
 
 fn parse_add(params_text: &str) -> Result<Instruction> {
@@ -161,7 +167,11 @@ fn parse_add(params_text: &str) -> Result<Instruction> {
     let dest = get_param_u16(&params, "dest")?;
     let left = get_param_u16(&params, "left")?;
     let right = get_param_u16(&params, "right")?;
-    Ok(Instruction::Add { dest, left, right })
+    Ok(Instruction::Add {
+        dest: dest.try_into().unwrap(),
+        left: left.try_into().unwrap(),
+        right: right.try_into().unwrap(),
+    })
 }
 
 fn parse_sub(params_text: &str) -> Result<Instruction> {
@@ -169,7 +179,11 @@ fn parse_sub(params_text: &str) -> Result<Instruction> {
     let dest = get_param_u16(&params, "dest")?;
     let left = get_param_u16(&params, "left")?;
     let right = get_param_u16(&params, "right")?;
-    Ok(Instruction::Sub { dest, left, right })
+    Ok(Instruction::Sub {
+        dest: dest.try_into().unwrap(),
+        left: left.try_into().unwrap(),
+        right: right.try_into().unwrap(),
+    })
 }
 
 fn parse_mul(params_text: &str) -> Result<Instruction> {
@@ -177,7 +191,11 @@ fn parse_mul(params_text: &str) -> Result<Instruction> {
     let dest = get_param_u16(&params, "dest")?;
     let left = get_param_u16(&params, "left")?;
     let right = get_param_u16(&params, "right")?;
-    Ok(Instruction::Mul { dest, left, right })
+    Ok(Instruction::Mul {
+        dest: dest.try_into().unwrap(),
+        left: left.try_into().unwrap(),
+        right: right.try_into().unwrap(),
+    })
 }
 
 fn parse_div(params_text: &str) -> Result<Instruction> {
@@ -185,7 +203,11 @@ fn parse_div(params_text: &str) -> Result<Instruction> {
     let dest = get_param_u16(&params, "dest")?;
     let left = get_param_u16(&params, "left")?;
     let right = get_param_u16(&params, "right")?;
-    Ok(Instruction::Div { dest, left, right })
+    Ok(Instruction::Div {
+        dest: dest.try_into().unwrap(),
+        left: left.try_into().unwrap(),
+        right: right.try_into().unwrap(),
+    })
 }
 
 fn parse_eq(params_text: &str) -> Result<Instruction> {
@@ -193,7 +215,11 @@ fn parse_eq(params_text: &str) -> Result<Instruction> {
     let dest = get_param_u16(&params, "dest")?;
     let left = get_param_u16(&params, "left")?;
     let right = get_param_u16(&params, "right")?;
-    Ok(Instruction::Eq { dest, left, right })
+    Ok(Instruction::Eq {
+        dest: dest.try_into().unwrap(),
+        left: left.try_into().unwrap(),
+        right: right.try_into().unwrap(),
+    })
 }
 
 fn parse_ne_instruction(content: &str) -> Result<Instruction> {
@@ -201,7 +227,11 @@ fn parse_ne_instruction(content: &str) -> Result<Instruction> {
     let dest = get_param_u16(&params, "dest")?;
     let left = get_param_u16(&params, "left")?;
     let right = get_param_u16(&params, "right")?;
-    Ok(Instruction::Ne { dest, left, right })
+    Ok(Instruction::Ne {
+        dest: dest.try_into().unwrap(),
+        left: left.try_into().unwrap(),
+        right: right.try_into().unwrap(),
+    })
 }
 
 fn parse_lt(params_text: &str) -> Result<Instruction> {
@@ -209,7 +239,11 @@ fn parse_lt(params_text: &str) -> Result<Instruction> {
     let dest = get_param_u16(&params, "dest")?;
     let left = get_param_u16(&params, "left")?;
     let right = get_param_u16(&params, "right")?;
-    Ok(Instruction::Lt { dest, left, right })
+    Ok(Instruction::Lt {
+        dest: dest.try_into().unwrap(),
+        left: left.try_into().unwrap(),
+        right: right.try_into().unwrap(),
+    })
 }
 
 fn parse_le_instruction(content: &str) -> Result<Instruction> {
@@ -217,7 +251,11 @@ fn parse_le_instruction(content: &str) -> Result<Instruction> {
     let dest = get_param_u16(&params, "dest")?;
     let left = get_param_u16(&params, "left")?;
     let right = get_param_u16(&params, "right")?;
-    Ok(Instruction::Le { dest, left, right })
+    Ok(Instruction::Le {
+        dest: dest.try_into().unwrap(),
+        left: left.try_into().unwrap(),
+        right: right.try_into().unwrap(),
+    })
 }
 
 fn parse_gt(params_text: &str) -> Result<Instruction> {
@@ -225,7 +263,11 @@ fn parse_gt(params_text: &str) -> Result<Instruction> {
     let dest = get_param_u16(&params, "dest")?;
     let left = get_param_u16(&params, "left")?;
     let right = get_param_u16(&params, "right")?;
-    Ok(Instruction::Gt { dest, left, right })
+    Ok(Instruction::Gt {
+        dest: dest.try_into().unwrap(),
+        left: left.try_into().unwrap(),
+        right: right.try_into().unwrap(),
+    })
 }
 
 fn parse_ge_instruction(content: &str) -> Result<Instruction> {
@@ -233,19 +275,27 @@ fn parse_ge_instruction(content: &str) -> Result<Instruction> {
     let dest = get_param_u16(&params, "dest")?;
     let left = get_param_u16(&params, "left")?;
     let right = get_param_u16(&params, "right")?;
-    Ok(Instruction::Ge { dest, left, right })
+    Ok(Instruction::Ge {
+        dest: dest.try_into().unwrap(),
+        left: left.try_into().unwrap(),
+        right: right.try_into().unwrap(),
+    })
 }
 
 fn parse_return(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let value = get_param_u16(&params, "value")?;
-    Ok(Instruction::Return { value })
+    Ok(Instruction::Return {
+        value: value.try_into().unwrap(),
+    })
 }
 
 fn parse_object_new(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let dest = get_param_u16(&params, "dest")?;
-    Ok(Instruction::ObjectNew { dest })
+    Ok(Instruction::ObjectNew {
+        dest: dest.try_into().unwrap(),
+    })
 }
 
 fn parse_object_set(params_text: &str) -> Result<Instruction> {
@@ -253,7 +303,11 @@ fn parse_object_set(params_text: &str) -> Result<Instruction> {
     let obj = get_param_u16(&params, "obj")?;
     let key = get_param_u16(&params, "key")?;
     let value = get_param_u16(&params, "value")?;
-    Ok(Instruction::ObjectSet { obj, key, value })
+    Ok(Instruction::ObjectSet {
+        obj: obj.try_into().unwrap(),
+        key: key.try_into().unwrap(),
+        value: value.try_into().unwrap(),
+    })
 }
 
 fn parse_index(params_text: &str) -> Result<Instruction> {
@@ -262,36 +316,46 @@ fn parse_index(params_text: &str) -> Result<Instruction> {
     let container = get_param_u16(&params, "container")?;
     let key = get_param_u16(&params, "key")?;
     Ok(Instruction::Index {
-        dest,
-        container,
-        key,
+        dest: dest.try_into().unwrap(),
+        container: container.try_into().unwrap(),
+        key: key.try_into().unwrap(),
     })
 }
 
 fn parse_array_new(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let dest = get_param_u16(&params, "dest")?;
-    Ok(Instruction::ArrayNew { dest })
+    Ok(Instruction::ArrayNew {
+        dest: dest.try_into().unwrap(),
+    })
 }
 
 fn parse_array_push(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let arr = get_param_u16(&params, "arr")?;
     let value = get_param_u16(&params, "value")?;
-    Ok(Instruction::ArrayPush { arr, value })
+    Ok(Instruction::ArrayPush {
+        arr: arr.try_into().unwrap(),
+        value: value.try_into().unwrap(),
+    })
 }
 
 fn parse_set_new(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let dest = get_param_u16(&params, "dest")?;
-    Ok(Instruction::SetNew { dest })
+    Ok(Instruction::SetNew {
+        dest: dest.try_into().unwrap(),
+    })
 }
 
 fn parse_set_add(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let set = get_param_u16(&params, "set")?;
     let value = get_param_u16(&params, "value")?;
-    Ok(Instruction::SetAdd { set, value })
+    Ok(Instruction::SetAdd {
+        set: set.try_into().unwrap(),
+        value: value.try_into().unwrap(),
+    })
 }
 
 fn parse_contains(params_text: &str) -> Result<Instruction> {
@@ -300,16 +364,18 @@ fn parse_contains(params_text: &str) -> Result<Instruction> {
     let collection = get_param_u16(&params, "collection")?;
     let value = get_param_u16(&params, "value")?;
     Ok(Instruction::Contains {
-        dest,
-        collection,
-        value,
+        dest: dest.try_into().unwrap(),
+        collection: collection.try_into().unwrap(),
+        value: value.try_into().unwrap(),
     })
 }
 
 fn parse_assert_condition(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let condition = get_param_u16(&params, "condition")?;
-    Ok(Instruction::AssertCondition { condition })
+    Ok(Instruction::AssertCondition {
+        condition: condition.try_into().unwrap(),
+    })
 }
 
 fn parse_loop_start(params_text: &str) -> Result<Instruction> {
@@ -334,38 +400,51 @@ fn parse_loop_next(params_text: &str) -> Result<Instruction> {
 fn parse_load_true(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let dest = get_param_u16(&params, "dest")?;
-    Ok(Instruction::LoadTrue { dest })
+    Ok(Instruction::LoadTrue {
+        dest: dest.try_into().unwrap(),
+    })
 }
 
 fn parse_load_false(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let dest = get_param_u16(&params, "dest")?;
-    Ok(Instruction::LoadFalse { dest })
+    Ok(Instruction::LoadFalse {
+        dest: dest.try_into().unwrap(),
+    })
 }
 
 fn parse_load_null(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let dest = get_param_u16(&params, "dest")?;
-    Ok(Instruction::LoadNull { dest })
+    Ok(Instruction::LoadNull {
+        dest: dest.try_into().unwrap(),
+    })
 }
 
 fn parse_load_bool(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let dest = get_param_u16(&params, "dest")?;
     let value = get_param_bool(&params, "value")?;
-    Ok(Instruction::LoadBool { dest, value })
+    Ok(Instruction::LoadBool {
+        dest: dest.try_into().unwrap(),
+        value,
+    })
 }
 
 fn parse_load_data(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let dest = get_param_u16(&params, "dest")?;
-    Ok(Instruction::LoadData { dest })
+    Ok(Instruction::LoadData {
+        dest: dest.try_into().unwrap(),
+    })
 }
 
 fn parse_load_input(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let dest = get_param_u16(&params, "dest")?;
-    Ok(Instruction::LoadInput { dest })
+    Ok(Instruction::LoadInput {
+        dest: dest.try_into().unwrap(),
+    })
 }
 
 fn parse_mod(params_text: &str) -> Result<Instruction> {
@@ -373,7 +452,11 @@ fn parse_mod(params_text: &str) -> Result<Instruction> {
     let dest = get_param_u16(&params, "dest")?;
     let left = get_param_u16(&params, "left")?;
     let right = get_param_u16(&params, "right")?;
-    Ok(Instruction::Mod { dest, left, right })
+    Ok(Instruction::Mod {
+        dest: dest.try_into().unwrap(),
+        left: left.try_into().unwrap(),
+        right: right.try_into().unwrap(),
+    })
 }
 
 fn parse_and(params_text: &str) -> Result<Instruction> {
@@ -381,7 +464,11 @@ fn parse_and(params_text: &str) -> Result<Instruction> {
     let dest = get_param_u16(&params, "dest")?;
     let left = get_param_u16(&params, "left")?;
     let right = get_param_u16(&params, "right")?;
-    Ok(Instruction::And { dest, left, right })
+    Ok(Instruction::And {
+        dest: dest.try_into().unwrap(),
+        left: left.try_into().unwrap(),
+        right: right.try_into().unwrap(),
+    })
 }
 
 fn parse_or(params_text: &str) -> Result<Instruction> {
@@ -389,14 +476,21 @@ fn parse_or(params_text: &str) -> Result<Instruction> {
     let dest = get_param_u16(&params, "dest")?;
     let left = get_param_u16(&params, "left")?;
     let right = get_param_u16(&params, "right")?;
-    Ok(Instruction::Or { dest, left, right })
+    Ok(Instruction::Or {
+        dest: dest.try_into().unwrap(),
+        left: left.try_into().unwrap(),
+        right: right.try_into().unwrap(),
+    })
 }
 
 fn parse_not(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let dest = get_param_u16(&params, "dest")?;
     let operand = get_param_u16(&params, "operand")?;
-    Ok(Instruction::Not { dest, operand })
+    Ok(Instruction::Not {
+        dest: dest.try_into().unwrap(),
+        operand: operand.try_into().unwrap(),
+    })
 }
 
 fn parse_builtin_call(params_text: &str) -> Result<Instruction> {

@@ -131,10 +131,10 @@ mod tests {
                 let mode = parse_loop_mode(&loop_param_spec.mode)?;
                 let loop_params = crate::rvm::instructions::LoopStartParams {
                     mode,
-                    collection: loop_param_spec.collection,
-                    key_reg: loop_param_spec.key_reg,
-                    value_reg: loop_param_spec.value_reg,
-                    result_reg: loop_param_spec.result_reg,
+                    collection: loop_param_spec.collection.try_into().unwrap(),
+                    key_reg: loop_param_spec.key_reg.try_into().unwrap(),
+                    value_reg: loop_param_spec.value_reg.try_into().unwrap(),
+                    result_reg: loop_param_spec.result_reg.try_into().unwrap(),
                     body_start: loop_param_spec.body_start,
                     loop_end: loop_param_spec.loop_end,
                 };
@@ -162,17 +162,18 @@ mod tests {
             for builtin_call_spec in params_spec.builtin_call_params {
                 use crate::rvm::instructions::BuiltinCallParams;
 
-                // Convert Vec<u16> to fixed array, padding with u16::MAX
-                let mut args_array = [u16::MAX; 8];
+                // Convert Vec<u16> to fixed array, padding with u8::MAX
+                let mut args_array = [u8::MAX; 8];
                 for (i, &arg) in builtin_call_spec.args.iter().enumerate() {
                     if i < 8 {
-                        args_array[i] = arg;
+                        args_array[i] = arg.try_into().unwrap();
                     }
                 }
 
                 let builtin_call_params = BuiltinCallParams {
-                    dest: builtin_call_spec.dest,
+                    dest: builtin_call_spec.dest.try_into().unwrap(),
                     builtin_index: builtin_call_spec.builtin_index,
+                    num_args: builtin_call_spec.args.len() as u8,
                     args: args_array,
                 };
                 program.add_builtin_call_params(builtin_call_params);

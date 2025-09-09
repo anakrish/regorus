@@ -82,6 +82,17 @@ pub struct RuleInfo {
     pub rule_type: RuleType,
     /// Definitions
     pub definitions: crate::Rc<Vec<Vec<usize>>>,
+    /// Function-specific information (only present for function rules)
+    pub function_info: Option<FunctionInfo>,
+}
+
+/// Information about function rules
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionInfo {
+    /// Parameter names in order
+    pub param_names: Vec<String>,
+    /// Number of parameters
+    pub num_params: usize,
 }
 
 impl RuleInfo {
@@ -90,6 +101,26 @@ impl RuleInfo {
             name,
             rule_type,
             definitions,
+            function_info: None,
+        }
+    }
+
+    /// Create a new function rule with parameter information
+    pub fn new_function(
+        name: String,
+        rule_type: RuleType,
+        definitions: crate::Rc<Vec<Vec<usize>>>,
+        param_names: Vec<String>,
+    ) -> Self {
+        let num_params = param_names.len();
+        Self {
+            name,
+            rule_type,
+            definitions,
+            function_info: Some(FunctionInfo {
+                param_names,
+                num_params,
+            }),
         }
     }
 }

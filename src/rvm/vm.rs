@@ -354,12 +354,25 @@ impl RegoVM {
                 Instruction::Add { dest, left, right } => {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
+                    std::println!(
+                        "Debug: Add instruction - left[{}]={:?}, right[{}]={:?}",
+                        left,
+                        a,
+                        right,
+                        b
+                    );
 
                     // Handle undefined values like the interpreter
                     if a == &Value::Undefined || b == &Value::Undefined {
                         self.registers[dest as usize] = Value::Undefined;
+                        std::println!("Debug: Add result - Undefined due to undefined operand");
                     } else {
                         self.registers[dest as usize] = self.add_values(a, b)?;
+                        std::println!(
+                            "Debug: Add result - dest[{}]={:?}",
+                            dest,
+                            self.registers[dest as usize]
+                        );
                     }
                 }
 
@@ -508,74 +521,11 @@ impl RegoVM {
                 }
 
                 Instruction::BuiltinCall { params_index } => {
-                    let params =
-                        &self.program.instruction_data.builtin_call_params[params_index as usize];
-                    let builtin_info =
-                        &self.program.builtin_info_table[params.builtin_index as usize];
-
-                    let mut args = Vec::new();
-                    for &arg_reg in params.arg_registers() {
-                        args.push(self.registers[arg_reg as usize].clone());
-                    }
-
-                    // Check argument count constraints
-                    if (args.len() as u16) != builtin_info.num_args {
-                        bail!(
-                            "Builtin function {} expects exactly {} arguments, got {}",
-                            builtin_info.name,
-                            builtin_info.num_args,
-                            args.len()
-                        );
-                    }
-
-                    // Use resolved builtin from program via vector indexing
-                    if let Some(builtin_fcn) =
-                        self.program.get_resolved_builtin(params.builtin_index)
-                    {
-                        // Create a dummy span for the VM context
-                        let dummy_source =
-                            crate::lexer::Source::from_contents(String::new(), String::new())?;
-                        let dummy_span = crate::lexer::Span {
-                            source: dummy_source,
-                            line: 0,
-                            col: 0,
-                            start: 0,
-                            end: 0,
-                        };
-
-                        // Create dummy expressions for each argument
-                        let mut dummy_exprs: Vec<crate::ast::Ref<crate::ast::Expr>> = Vec::new();
-                        for _ in 0..args.len() {
-                            let dummy_expr = crate::ast::Expr::Null {
-                                span: dummy_span.clone(),
-                                value: Value::Null,
-                                eidx: 0,
-                            };
-                            dummy_exprs.push(crate::ast::Ref::new(dummy_expr));
-                        }
-
-                        let result = (builtin_fcn.0)(&dummy_span, &dummy_exprs, &args, true)?;
-                        self.registers[params.dest as usize] = result;
-                    } else {
-                        bail!("Builtin function not resolved: {}", builtin_info.name);
-                    }
+                    self.execute_builtin_call(params_index)?;
                 }
 
                 Instruction::FunctionCall { params_index } => {
-                    let params =
-                        &self.program.instruction_data.function_call_params[params_index as usize];
-                    if let Value::String(func_name) = &self.registers[params.func as usize] {
-                        let mut args = Vec::new();
-                        for &arg_reg in params.arg_registers() {
-                            args.push(self.registers[arg_reg as usize].clone());
-                        }
-
-                        // This would eventually call user-defined function rules
-                        // For now, just return an error as this is not implemented yet
-                        bail!("Function rule calls not yet implemented: {}", func_name);
-                    } else {
-                        bail!("Function name must be a string");
-                    }
+                    self.execute_function_call(params_index)?;
                 }
 
                 Instruction::Return { value } => {
@@ -978,6 +928,261 @@ impl RegoVM {
         Ok(())
     }
 
+    /// Execute a function rule call with arguments
+    /// Execute a builtin function call
+    fn execute_builtin_call(&mut self, params_index: u16) -> Result<()> {
+        let params = &self.program.instruction_data.builtin_call_params[params_index as usize];
+        let builtin_info = &self.program.builtin_info_table[params.builtin_index as usize];
+
+        let mut args = Vec::new();
+        for &arg_reg in params.arg_registers() {
+            args.push(self.registers[arg_reg as usize].clone());
+        }
+
+        // Check argument count constraints
+        if (args.len() as u16) != builtin_info.num_args {
+            bail!(
+                "Builtin function {} expects exactly {} arguments, got {}",
+                builtin_info.name,
+                builtin_info.num_args,
+                args.len()
+            );
+        }
+
+        // Use resolved builtin from program via vector indexing
+        if let Some(builtin_fcn) = self.program.get_resolved_builtin(params.builtin_index) {
+            // Create a dummy span for the VM context
+            let dummy_source = crate::lexer::Source::from_contents(String::new(), String::new())?;
+            let dummy_span = crate::lexer::Span {
+                source: dummy_source,
+                line: 0,
+                col: 0,
+                start: 0,
+                end: 0,
+            };
+
+            // Create dummy expressions for each argument
+            let mut dummy_exprs: Vec<crate::ast::Ref<crate::ast::Expr>> = Vec::new();
+            for _ in 0..args.len() {
+                let dummy_expr = crate::ast::Expr::Null {
+                    span: dummy_span.clone(),
+                    value: Value::Null,
+                    eidx: 0,
+                };
+                dummy_exprs.push(crate::ast::Ref::new(dummy_expr));
+            }
+
+            let result = (builtin_fcn.0)(&dummy_span, &dummy_exprs, &args, true)?;
+            self.registers[params.dest as usize] = result;
+        } else {
+            bail!("Builtin function not resolved: {}", builtin_info.name);
+        }
+
+        Ok(())
+    }
+
+    /// Execute a function call to a user-defined function rule
+    fn execute_function_call(&mut self, params_index: u16) -> Result<()> {
+        // Get parameters and extract needed values
+        let (rule_index, dest_reg, arg_regs) = {
+            let params = &self.program.instruction_data.function_call_params[params_index as usize];
+            (
+                params.func_rule_index,
+                params.dest,
+                params.arg_registers().to_vec(),
+            )
+        };
+
+        // Collect arguments from registers
+        let mut args = Vec::new();
+        for &arg_reg in &arg_regs {
+            args.push(self.registers[arg_reg as usize].clone());
+        }
+
+        // Execute the function rule with arguments
+        let result = self.execute_rule_with_args(rule_index, Some(args))?;
+        self.registers[dest_reg as usize] = result;
+
+        Ok(())
+    }
+
+    /// Shared rule execution logic for both function calls and regular rule calls
+    fn execute_rule_with_args(
+        &mut self,
+        rule_index: u16,
+        args: Option<Vec<Value>>,
+    ) -> Result<Value> {
+        std::println!(
+            "Debug: Rule execution - rule_index={}, args={:?}",
+            rule_index,
+            args
+        );
+
+        let rule_idx = rule_index as usize;
+
+        // Check bounds
+        if rule_idx >= self.rule_cache.len() {
+            bail!("Rule index {} out of bounds", rule_index);
+        }
+
+        let rule_info = self
+            .program
+            .rule_infos
+            .get(rule_idx)
+            .ok_or_else(|| anyhow::anyhow!("Rule index {} has no info", rule_index))?
+            .clone();
+
+        let rule_definitions = rule_info.definitions.clone();
+
+        if rule_definitions.is_empty() {
+            // No definitions - return undefined
+            std::println!(
+                "Debug: Rule {} has no definitions - returning Undefined",
+                rule_index
+            );
+            return Ok(Value::Undefined);
+        }
+
+        // Save current execution state
+        let saved_pc = self.pc;
+        let saved_registers = if args.is_some() {
+            Some(self.registers.clone())
+        } else {
+            None
+        };
+
+        // Create call context for function calls
+        let is_function_call = args.is_some();
+        let dest_reg = if is_function_call {
+            // For function calls, we'll use register 0 as the destination for the result
+            0
+        } else {
+            0 // Not used for non-function calls
+        };
+
+        if is_function_call {
+            // Create call context so RuleReturn has something to work with
+            self.call_rule_stack.push(CallRuleContext {
+                return_pc: saved_pc,
+                dest_reg,
+                result_reg: dest_reg, // Will be updated by RuleInit
+                rule_index,
+                rule_type: rule_info.rule_type.clone(),
+                current_definition_index: 0,
+                current_body_index: 0,
+            });
+        }
+
+        // Set up function arguments if this is a function call
+        if let Some(function_args) = args {
+            // Set up function arguments in the beginning of register space
+            // Argument registers start from register 1 (register 0 is typically for return values)
+            for (i, arg) in function_args.iter().enumerate() {
+                if i + 1 < self.registers.len() {
+                    self.registers[i + 1] = arg.clone();
+                } else {
+                    bail!("Too many arguments for function call - register space exceeded");
+                }
+            }
+
+            // Initialize return register (register 0) to undefined
+            self.registers[0] = Value::Undefined;
+        }
+
+        std::println!(
+            "Debug: Rule execution - rule {} with {} definitions",
+            rule_index,
+            rule_definitions.len()
+        );
+
+        let mut rule_result = Value::Undefined;
+        let mut first_successful_result: Option<Value> = None;
+
+        // Execute rule definitions
+        for (def_idx, definition_bodies) in rule_definitions.iter().enumerate() {
+            for (body_entry_point_idx, body_entry_point) in definition_bodies.iter().enumerate() {
+                std::println!(
+                    "Debug: Executing rule definition {} at body {}, entry point {}",
+                    def_idx,
+                    body_entry_point_idx,
+                    body_entry_point
+                );
+
+                // Execute the rule body
+                match self.jump_to(*body_entry_point) {
+                    Ok(_) => {
+                        // Body completed successfully
+                        // For function calls, get the result from the destination register
+                        let result = if is_function_call {
+                            self.registers[dest_reg as usize].clone()
+                        } else {
+                            Value::Undefined // Not used for regular rule calls
+                        };
+
+                        std::println!(
+                            "Debug: Rule body {} completed with result: {:?}",
+                            body_entry_point_idx,
+                            result
+                        );
+
+                        // For both function calls and complete rules, all definitions must produce the same value
+                        if let Some(ref expected) = first_successful_result {
+                            if *expected != result {
+                                std::println!(
+                                    "Debug: Rule consistency check failed - expected {:?}, got {:?}",
+                                    expected, result
+                                );
+                                // Definitions produced different values - rule fails
+                                rule_result = Value::Undefined;
+                                break;
+                            } else {
+                                std::println!("Debug: Rule consistency check passed - result matches expected");
+                            }
+                        } else {
+                            // First successful result
+                            first_successful_result = Some(result.clone());
+                            rule_result = result;
+                            std::println!(
+                                "Debug: Rule - first successful result: {:?}",
+                                rule_result
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        std::println!("Debug: Rule body {} failed: {:?}", body_entry_point_idx, e);
+                        // Body failed - try next definition
+                        continue;
+                    }
+                }
+            }
+
+            // Break conditions - stop if we had inconsistent results
+            if matches!(rule_result, Value::Undefined) && first_successful_result.is_some() {
+                // Stop if we had inconsistent results
+                std::println!("Debug: Rule failed due to inconsistent results");
+                break;
+            }
+        }
+
+        // Clean up call context for function calls
+        if is_function_call {
+            self.call_rule_stack.pop();
+        }
+
+        // Restore execution state if this was a function call
+        if let Some(original_registers) = saved_registers {
+            self.pc = saved_pc;
+            self.registers = original_registers;
+        }
+
+        std::println!(
+            "Debug: FunctionCall completed - returning result: {:?}",
+            rule_result
+        );
+
+        Ok(rule_result)
+    }
+
     /// Execute RuleInit instruction
     fn execute_rule_init(&mut self, result_reg: u8, _rule_index: u16) -> Result<()> {
         let current_ctx = self
@@ -1013,9 +1218,29 @@ impl RegoVM {
             .call_rule_stack
             .last_mut()
             .expect("Call stack underflow");
+
         let result_reg = current_ctx.result_reg;
         let dest_reg = current_ctx.dest_reg;
+
+        // Copy result to destination register (same logic for both function calls and regular calls)
+        std::println!(
+            "Debug: RuleReturn - copying from result_reg {} to dest_reg {}",
+            result_reg,
+            dest_reg
+        );
+        std::println!(
+            "Debug: RuleReturn - result_reg {} contains: {:?}",
+            result_reg,
+            self.registers[result_reg as usize]
+        );
+
         self.registers[dest_reg as usize] = self.registers[result_reg as usize].clone();
+
+        std::println!(
+            "Debug: RuleReturn - dest_reg {} now contains: {:?}",
+            dest_reg,
+            self.registers[dest_reg as usize]
+        );
         Ok(())
     }
 

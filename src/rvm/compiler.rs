@@ -2,9 +2,11 @@ use super::instructions::{LoopMode, LoopStartParams};
 use super::program::Program;
 use super::Instruction;
 use crate::ast::{Expr, ExprRef, Rule, RuleHead};
+use crate::builtins;
 use crate::lexer::Span;
 use crate::rvm::program::RuleType;
 use crate::rvm::program::SpanInfo;
+use crate::utils::get_path_string;
 use crate::{CompiledPolicy, Value};
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
@@ -61,11 +63,14 @@ pub struct Compiler<'a> {
     rule_worklist: Vec<String>,           // Rules that need to be compiled
     rule_definitions: Vec<Vec<Vec<usize>>>, // rule_index -> Vec<definition> where definition is Vec<body_entry_point>
     rule_types: Vec<RuleType>,              // rule_index -> true if set rule, false if regular rule
+    rule_function_params: Vec<Option<Vec<String>>>, // rule_index -> Some(param_names) for function rules, None for others
     // Context stack for output expression handling
     context_stack: Vec<CompilationContext>, // Stack of compilation contexts
     loop_expr_register_map: BTreeMap<ExprRef, Register>, // Map from loop expressions to their allocated registers
     // Source tracking for span information (0-based indices)
     source_to_index: HashMap<String, usize>, // Maps source file paths to source indices (0-based)
+    // Builtin management
+    builtin_index_map: HashMap<String, u16>, // Maps builtin names to their assigned indices
 }
 
 impl<'a> Compiler<'a> {
@@ -82,10 +87,62 @@ impl<'a> Compiler<'a> {
             rule_worklist: Vec::new(),
             rule_definitions: Vec::new(),
             rule_types: Vec::new(),
+            rule_function_params: Vec::new(),
             context_stack: vec![], // Default context
             loop_expr_register_map: BTreeMap::new(),
             source_to_index: HashMap::new(),
+            builtin_index_map: HashMap::new(),
         }
+    }
+
+    /// Check if a function path is a builtin function (similar to interpreter's is_builtin)
+    fn is_builtin(&self, path: &str) -> bool {
+        path == "print" || builtins::BUILTINS.contains_key(path)
+    }
+
+    /// Check if a function path is a user-defined function rule
+    fn is_user_defined_function(&self, rule_path: &str) -> bool {
+        self.policy.inner.rules.contains_key(rule_path)
+    }
+
+    /// Get builtin index for a builtin function
+    fn get_builtin_index(&mut self, builtin_name: &str) -> Result<u16> {
+        if !self.is_builtin(builtin_name) {
+            bail!("Not a builtin function: {}", builtin_name);
+        }
+
+        // Check if we already have an index for this builtin
+        if let Some(&index) = self.builtin_index_map.get(builtin_name) {
+            return Ok(index);
+        }
+
+        // Get the builtin function info to determine number of arguments
+        let num_args = if builtin_name == "print" {
+            2 // Special case for print
+        } else if let Some(builtin_fcn) = builtins::BUILTINS.get(builtin_name) {
+            builtin_fcn.1 as u16 // Second element is the number of arguments
+        } else {
+            bail!("Unknown builtin function: {}", builtin_name);
+        };
+
+        // Create builtin info and add it to the program
+        let builtin_info = crate::rvm::program::BuiltinInfo {
+            name: builtin_name.to_string(),
+            num_args,
+        };
+        let index = self.program.add_builtin_info(builtin_info);
+
+        // Store in our mapping
+        self.builtin_index_map
+            .insert(builtin_name.to_string(), index);
+
+        std::println!(
+            "Debug: Assigned builtin index {} to '{}' (num_args={})",
+            index,
+            builtin_name,
+            num_args
+        );
+        Ok(index)
     }
 
     pub fn alloc_register(&mut self) -> Register {
@@ -419,6 +476,11 @@ impl<'a> Compiler<'a> {
             }
             self.rule_types[index as usize] = rule_type;
 
+            // Ensure rule_function_params has enough capacity
+            while self.rule_function_params.len() <= index as usize {
+                self.rule_function_params.push(None); // Default to None (not a function)
+            }
+
             std::println!("Debug: Assigned rule index {} to '{}'", index, rule_path);
             Ok(index)
         }
@@ -488,11 +550,27 @@ impl<'a> Compiler<'a> {
         for (rule_path, &rule_index) in &self.rule_index_map {
             let definitions = self.rule_definitions[rule_index as usize].clone();
             let rule_type = self.rule_types[rule_index as usize].clone();
-            let rule_info = crate::rvm::program::RuleInfo::new(
-                rule_path.clone(),
-                rule_type,
-                crate::Rc::new(definitions),
-            );
+            let function_params = &self.rule_function_params[rule_index as usize];
+
+            let rule_info = match function_params {
+                Some(param_names) => {
+                    // This is a function rule
+                    crate::rvm::program::RuleInfo::new_function(
+                        rule_path.clone(),
+                        rule_type,
+                        crate::Rc::new(definitions),
+                        param_names.clone(),
+                    )
+                }
+                None => {
+                    // This is a regular rule
+                    crate::rvm::program::RuleInfo::new(
+                        rule_path.clone(),
+                        rule_type,
+                        crate::Rc::new(definitions),
+                    )
+                }
+            };
             rule_infos_map.insert(rule_index as usize, rule_info);
         }
 
@@ -501,10 +579,18 @@ impl<'a> Compiler<'a> {
         // Debug: Print rule definitions
         std::println!("Debug: Rule definitions in program:");
         for (rule_idx, rule_info) in self.program.rule_infos.iter().enumerate() {
+            let function_info = match &rule_info.function_info {
+                Some(func_info) => format!(
+                    " (function with {} params: {:?})",
+                    func_info.num_params, func_info.param_names
+                ),
+                None => String::new(),
+            };
             std::println!(
-                "  Rule {}: {} definitions",
+                "  Rule {}: {} definitions{}",
                 rule_idx,
-                rule_info.definitions.len()
+                rule_info.definitions.len(),
+                function_info
             );
             for (def_idx, bodies) in rule_info.definitions.iter().enumerate() {
                 std::println!(
@@ -536,6 +622,21 @@ impl<'a> Compiler<'a> {
             "Debug: Program requires {} registers",
             self.program.num_registers
         );
+
+        // Initialize resolved builtins if we have builtin info
+        if !self.program.builtin_info_table.is_empty() {
+            // Convert HashMap to BTreeMap for compatibility
+            let builtin_map: std::collections::BTreeMap<&'static str, crate::builtins::BuiltinFcn> =
+                crate::builtins::BUILTINS
+                    .iter()
+                    .map(|(&k, &v)| (k, v))
+                    .collect();
+            self.program.initialize_resolved_builtins(&builtin_map);
+            std::println!(
+                "Debug: Initialized {} resolved builtins",
+                self.program.resolved_builtins.len()
+            );
+        }
 
         self.program
     }
@@ -931,6 +1032,10 @@ impl<'a> Compiler<'a> {
                 std::println!("Debug: Compiling object comprehension");
                 self.compile_object_comprehension(key, value, query, span)?
             }
+            Expr::Call { fcn, params, .. } => {
+                // Compile function call
+                self.compile_function_call(fcn, params, span.clone())?
+            }
             _ => {
                 // For other expression types, return null for now
                 let dest = self.alloc_register();
@@ -1030,6 +1135,8 @@ impl<'a> Compiler<'a> {
                         bodies.len()
                     );
 
+                    let mut is_function_rule = false;
+
                     let (key_expr, value_expr) = match head {
                         RuleHead::Compr { refr, assign, .. } => {
                             let output_expr = assign.as_ref().map(|assign| assign.value.clone());
@@ -1049,7 +1156,41 @@ impl<'a> Compiler<'a> {
                             // For set rules, no separate key_expr, output_expr is the key
                             (None, key.clone())
                         }
-                        _ => unimplemented!("rule head type"),
+                        RuleHead::Func { assign, args, .. } => {
+                            // Allocate registers for function parameters and add them to scope
+                            // Function parameters start from register 1 (register 0 is for return value)
+                            self.push_scope();
+                            let mut param_names = Vec::new();
+                            for (i, arg) in args.iter().enumerate() {
+                                if let Expr::Var {
+                                    value: Value::String(param_name),
+                                    ..
+                                } = arg.as_ref()
+                                {
+                                    param_names.push(param_name.to_string());
+                                    let param_reg = (i + 1) as u8; // Parameters start at register 1
+                                    self.scopes
+                                        .last_mut()
+                                        .unwrap()
+                                        .bound_vars
+                                        .insert(param_name.to_string(), param_reg);
+                                    std::println!(
+                                        "Debug: Function parameter '{}' assigned to register {}",
+                                        param_name,
+                                        param_reg
+                                    );
+                                }
+                            }
+                            // Store function parameters for this rule
+                            self.rule_function_params[rule_index as usize] = Some(param_names);
+                            is_function_rule = true;
+
+                            // For function rules, the output expression comes from the assignment
+                            match assign {
+                                Some(assignment) => (None, Some(assignment.value.clone())),
+                                None => (None, None),
+                            }
+                        }
                     };
 
                     let span = match (&key_expr, &value_expr) {
@@ -1147,6 +1288,10 @@ impl<'a> Compiler<'a> {
                             self.emit_instruction(Instruction::RuleReturn {}, &body.span);
                             self.pop_scope();
                         }
+                    }
+
+                    if is_function_rule {
+                        self.pop_scope(); // Pop function parameter scope
                     }
 
                     // Store the body entry points for this definition
@@ -1570,11 +1715,12 @@ impl<'a> Compiler<'a> {
         let key_var_name = key.as_ref().map(|k| k.text().to_string());
 
         // Check if key is actually needed (not None and not underscore)
-        let actual_key_reg = if key_var_name.is_none() || key_var_name.as_ref() == Some(&"_".to_string()) {
-            value_reg // Set key_reg = value_reg to indicate key not needed
-        } else {
-            key_reg
-        };
+        let actual_key_reg =
+            if key_var_name.is_none() || key_var_name.as_ref() == Some(&"_".to_string()) {
+                value_reg // Set key_reg = value_reg to indicate key not needed
+            } else {
+                key_reg
+            };
 
         std::println!(
             "Debug: Every quantifier - value var: '{}', key var: {:?}",
@@ -2114,5 +2260,125 @@ impl<'a> Compiler<'a> {
         self.pop_context();
 
         Ok(result_reg)
+    }
+
+    /// Compile a function call expression
+    fn compile_function_call(
+        &mut self,
+        fcn: &ExprRef,
+        params: &[ExprRef],
+        span: Span,
+    ) -> Result<Register> {
+        std::println!(
+            "Debug: Compiling function call with {} parameters",
+            params.len()
+        );
+
+        // Get the function path
+        let fcn_path = get_path_string(fcn, None)
+            .map_err(|_| anyhow::anyhow!("Invalid function expression"))?;
+
+        std::println!("Debug: Function call path: '{}'", fcn_path);
+
+        // Try to find user-defined function first with the original path
+        let original_fcn_path = fcn_path.clone();
+        let full_fcn_path = if self.policy.inner.rules.contains_key(&fcn_path) {
+            fcn_path
+        } else {
+            // If not found, try with current package prefix
+            let with_package = get_path_string(fcn, Some(&self.current_package))
+                .map_err(|_| anyhow::anyhow!("Invalid function expression with package"))?;
+            std::println!("Debug: Function call path with package: '{}'", with_package);
+            with_package
+        };
+
+        std::println!("Debug: Final function call path: '{}'", full_fcn_path);
+
+        // Compile all parameter expressions first
+        let mut arg_regs = Vec::new();
+        for param in params {
+            let param_reg = self.compile_rego_expr_with_span(param, param.span(), false)?;
+            arg_regs.push(param_reg);
+        }
+
+        // Allocate destination register for the result
+        let dest = self.alloc_register();
+
+        // First check if this is a user-defined function rule
+        if self.is_user_defined_function(&full_fcn_path) {
+            std::println!(
+                "Debug: Function '{}' is a user-defined function",
+                full_fcn_path
+            );
+
+            // Get the function rule index for user-defined functions
+            let rule_index = self.get_or_assign_rule_index(&full_fcn_path)?;
+            std::println!(
+                "Debug: Function '{}' resolved to rule index {}",
+                full_fcn_path,
+                rule_index
+            );
+
+            // Create function call parameters with fixed-size array
+            let mut args_array = [0u8; 8];
+            let num_args = arg_regs.len().min(8) as u8; // Limit to 8 arguments
+            for (i, &reg) in arg_regs.iter().take(8).enumerate() {
+                args_array[i] = reg;
+            }
+
+            let params_index =
+                self.program
+                    .add_function_call_params(super::instructions::FunctionCallParams {
+                        func_rule_index: rule_index,
+                        dest,
+                        num_args,
+                        args: args_array,
+                    });
+
+            // Emit the FunctionCall instruction
+            self.emit_instruction(Instruction::FunctionCall { params_index }, &span);
+
+            std::println!(
+                "Debug: Function call compiled - dest={}, params_index={}, rule_index={}",
+                dest,
+                params_index,
+                rule_index
+            );
+        } else if self.is_builtin(&original_fcn_path) {
+            std::println!("Debug: Function '{}' is a builtin", original_fcn_path);
+
+            // Get builtin index
+            let builtin_index = self.get_builtin_index(&original_fcn_path)?;
+
+            // Create builtin call parameters with fixed-size array
+            let mut args_array = [0u8; 8];
+            let num_args = arg_regs.len().min(8) as u8; // Limit to 8 arguments
+            for (i, &reg) in arg_regs.iter().take(8).enumerate() {
+                args_array[i] = reg;
+            }
+
+            let params_index =
+                self.program
+                    .add_builtin_call_params(super::instructions::BuiltinCallParams {
+                        dest,
+                        builtin_index,
+                        num_args,
+                        args: args_array,
+                    });
+
+            // Emit the BuiltinCall instruction
+            self.emit_instruction(Instruction::BuiltinCall { params_index }, &span);
+
+            std::println!(
+                "Debug: Builtin call compiled - dest={}, params_index={}, builtin_index={}",
+                dest,
+                params_index,
+                builtin_index
+            );
+        } else {
+            bail!("Unknown function: '{}'", original_fcn_path);
+        }
+
+        Ok(dest)
     }
 }

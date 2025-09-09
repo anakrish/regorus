@@ -1,6 +1,22 @@
 #[cfg(test)]
 mod tests {
     use crate::rvm::instruction_parser::{parse_instruction, parse_loop_mode};
+    #[derive(Debug, Deserialize, Serialize, Default)]
+    struct RuleInfoSpec {
+        rule_type: String,
+        definitions: Vec<Vec<u16>>,
+        #[serde(default)]
+        default_rule_index: Option<u16>,
+        #[serde(default)]
+        default_literal_index: Option<u16>,
+    }
+
+    #[derive(Debug, Deserialize, Serialize)]
+    struct DefaultRuleSpec {
+        rule_name: String,
+        default_value: crate::Value,
+    }
+
     use crate::rvm::vm::RegoVM;
     use crate::tests::interpreter::process_value;
     use crate::value::Value;
@@ -29,6 +45,8 @@ mod tests {
         literals: Vec<crate::Value>,
         #[serde(default)]
         rule_infos: Vec<RuleInfoSpec>,
+        #[serde(default)]
+        default_rules: Vec<DefaultRuleSpec>,
         #[serde(default)]
         instruction_params: Option<InstructionParamsSpec>,
         instructions: Vec<String>,
@@ -100,12 +118,6 @@ mod tests {
     }
 
     #[derive(Debug, Deserialize, Serialize)]
-    struct RuleInfoSpec {
-        rule_type: String,
-        definitions: Vec<Vec<u16>>,
-    }
-
-    #[derive(Debug, Deserialize, Serialize)]
     struct VmTestSuite {
         cases: Vec<VmTestCase>,
     }
@@ -170,6 +182,7 @@ mod tests {
                 rule_type,
                 definitions: crate::Rc::new(definitions),
                 function_info: None,
+                default_literal_index: rule_info_spec.default_literal_index,
             };
 
             program.rule_infos.push(rule_info);

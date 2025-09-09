@@ -366,6 +366,7 @@ mod tests {
             "tests/rvm/compiler/cases/sets.yaml",
             "tests/rvm/compiler/cases/set_rules.yaml",
             "tests/rvm/compiler/cases/examples.yaml",
+            "tests/rvm/compiler/cases/default_rules.yaml",
         ];
 
         for file in test_files {

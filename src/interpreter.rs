@@ -3266,6 +3266,51 @@ impl Interpreter {
         Ok(())
     }
 
+    /// Evaluate a default rule and return the computed value
+    /// This is a public function for use by the compiler
+    pub fn eval_default_rule_for_compiler(&mut self, rule_path: &str) -> Result<Value> {
+        // Set input and data to undefined as requested by the user
+        self.input = Value::Undefined;
+        self.data = Value::Undefined;
+        
+        // Get default rules for this rule path
+        let default_rules = self.compiled_policy.default_rules.get(rule_path).cloned();
+        
+        if let Some(rules) = default_rules {
+            for (rule, _) in rules {
+                // Find the module containing this rule
+                for module in self.compiled_policy.modules.iter() {
+                    if module.policy.contains(&rule) {
+                        // Set the current module for evaluation
+                        let prev_module = self.set_current_module(Some(module.clone()))?;
+                        
+                        // Evaluate the default rule
+                        let result = self.eval_default_rule(&rule);
+                        
+                        // Restore the previous module
+                        self.set_current_module(prev_module)?;
+                        
+                        // If evaluation succeeded, extract the computed value
+                        if result.is_ok() {
+                            // Parse the rule path to navigate the data structure
+                            let components: Vec<&str> = rule_path.split('.').skip(1).collect(); // Skip "data" prefix
+                            let value = Self::get_value_chained(self.data.clone(), &components);
+                            
+                            // Return the found value if it's not undefined
+                            if value != Value::Undefined {
+                                return Ok(value);
+                            }
+                        }
+                        
+                        return result.map(|_| Value::Undefined);
+                    }
+                }
+            }
+        }
+        
+        bail!("Could not find default rule for path: {}", rule_path);
+    }
+
     fn update_data(
         &mut self,
         span: &Span,

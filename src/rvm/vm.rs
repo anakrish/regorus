@@ -125,7 +125,7 @@ pub struct RegoVM {
     /// Call rule execution stack for managing nested rule calls
     call_rule_stack: Vec<CallRuleContext>,
 
-    /// Maximum number of instructions to execute (default: 5000)
+    /// Maximum number of instructions to execute (default: 25000)
     max_instructions: usize,
 
     /// Current count of executed instructions
@@ -162,7 +162,7 @@ impl RegoVM {
             input: Value::Null,
             loop_stack: Vec::new(),
             call_rule_stack: Vec::new(),
-            max_instructions: 5000, // Default maximum instruction limit
+            max_instructions: 25000, // Default maximum instruction limit
             executed_instructions: 0,
             #[cfg(feature = "rvm-debug")]
             debugger: crate::rvm::debugger::InteractiveDebugger::new(),
@@ -955,8 +955,8 @@ impl RegoVM {
                         continue;
                     }
                 }
-                std::println!(
-                    "Debug: Body {} completed successfully for definition {} of {} definitions",
+                debug!(
+                    "Body {} completed successfully for definition {} of {} definitions",
                     body_entry_point_idx,
                     def_idx,
                     rule_definitions.len()
@@ -967,10 +967,9 @@ impl RegoVM {
         // Return from the call
         let call_context = self.call_rule_stack.pop().expect("Call stack underflow");
         self.pc = call_context.return_pc;
-        std::println!(
-            "Debug: CallRule returning from rule {} to PC {}",
-            rule_index,
-            self.pc
+        debug!(
+            "CallRule returning from rule {} to PC {}",
+            rule_index, self.pc
         );
 
         // For partial set/object rules, if all definitions failed and we still have Undefined,
@@ -978,41 +977,43 @@ impl RegoVM {
         if self.registers[dest as usize] == Value::Undefined {
             match call_context.rule_type {
                 crate::rvm::program::RuleType::PartialSet => {
-                    std::println!(
-                        "Debug: All definitions failed for PartialSet rule - using empty set"
-                    );
+                    debug!("All definitions failed for PartialSet rule - using empty set");
                     self.registers[dest as usize] = Value::new_set();
                 }
                 crate::rvm::program::RuleType::PartialObject => {
-                    std::println!(
-                        "Debug: All definitions failed for PartialObject rule - using empty object"
-                    );
+                    debug!("All definitions failed for PartialObject rule - using empty object");
                     self.registers[dest as usize] = Value::new_object();
                 }
                 crate::rvm::program::RuleType::Complete => {
                     // For complete rules, check if there's a default literal value
-                    if let Some(rule_info) = self.program.rule_infos.get(call_context.rule_index as usize) {
+                    if let Some(rule_info) = self
+                        .program
+                        .rule_infos
+                        .get(call_context.rule_index as usize)
+                    {
                         if let Some(default_literal_index) = rule_info.default_literal_index {
-                            if let Some(default_value) = self.program.literals.get(default_literal_index as usize) {
-                                std::println!(
-                                    "Debug: All definitions failed for Complete rule - using default literal value: {:?}",
+                            if let Some(default_value) =
+                                self.program.literals.get(default_literal_index as usize)
+                            {
+                                debug!(
+                                    "All definitions failed for Complete rule - using default literal value: {:?}",
                                     default_value
                                 );
                                 self.registers[dest as usize] = default_value.clone();
                             } else {
-                                std::println!(
-                                    "Debug: All definitions failed for Complete rule - default literal index {} not found, keeping Undefined",
+                                debug!(
+                                    "All definitions failed for Complete rule - default literal index {} not found, keeping Undefined",
                                     default_literal_index
                                 );
                             }
                         } else {
-                            std::println!(
-                                "Debug: All definitions failed for Complete rule - no default literal, keeping Undefined"
+                            debug!(
+                                "All definitions failed for Complete rule - no default literal, keeping Undefined"
                             );
                         }
                     } else {
-                        std::println!(
-                            "Debug: All definitions failed for Complete rule - rule info not found, keeping Undefined"
+                        debug!(
+                            "All definitions failed for Complete rule - rule info not found, keeping Undefined"
                         );
                     }
                 }
@@ -1021,13 +1022,12 @@ impl RegoVM {
 
         // Cache the final result
         let result = self.registers[dest as usize].clone();
-        std::println!("Debug: Set rule final result: {:?}", result);
+        debug!("Set rule final result: {:?}", result);
         self.rule_cache[rule_idx] = (true, result.clone());
 
-        std::println!(
-            "Debug: CallRule completed - dest register {} set to {:?}",
-            dest,
-            self.registers[dest as usize]
+        debug!(
+            "CallRule completed - dest register {} set to {:?}",
+            dest, self.registers[dest as usize]
         );
         Ok(())
     }
@@ -1290,10 +1290,7 @@ impl RegoVM {
                         };
 
                         #[cfg(feature = "rvm-tracing")]
-                        debug!(
-                            "Rule body completed with result: {:?}",
-                            result
-                        );
+                        debug!("Rule body completed with result: {:?}", result);
 
                         // For both function calls and complete rules, all definitions must produce the same value
                         if let Some(ref expected) = first_successful_result {
@@ -1335,23 +1332,31 @@ impl RegoVM {
         }
 
         // For complete rules, if all definitions failed, try using the pre-computed default value
-        if matches!(rule_info.rule_type, crate::rvm::program::RuleType::Complete) 
+        if matches!(rule_info.rule_type, crate::rvm::program::RuleType::Complete)
             && matches!(rule_result, Value::Undefined)
-            && !is_function_call {
-            
+            && !is_function_call
+        {
             // Check if there's a pre-computed default value in the literal table
             if let Some(default_literal_index) = rule_info.default_literal_index {
                 debug!("All regular definitions failed for complete rule '{}', using pre-computed default value from literal index {}", rule_info.name, default_literal_index);
-                
+
                 // Get the default value from the literal table
-                if let Some(default_value) = self.program.literals.get(default_literal_index as usize) {
+                if let Some(default_value) =
+                    self.program.literals.get(default_literal_index as usize)
+                {
                     rule_result = default_value.clone();
                     debug!("Using default value: {:?}", rule_result);
                 } else {
-                    debug!("Default literal index {} is out of bounds in literal table", default_literal_index);
+                    debug!(
+                        "Default literal index {} is out of bounds in literal table",
+                        default_literal_index
+                    );
                 }
             } else {
-                debug!("No pre-computed default value available for complete rule '{}'", rule_info.name);
+                debug!(
+                    "No pre-computed default value available for complete rule '{}'",
+                    rule_info.name
+                );
             }
         }
 
@@ -1392,8 +1397,8 @@ impl RegoVM {
                 if current_ctx.current_definition_index == 0 {
                     self.registers[result_reg as usize] = Value::new_set();
                 }
-                std::println!(
-                    "Debug: RuleInit for PartialSet - set value: {:?}",
+                debug!(
+                    "RuleInit for PartialSet - set value: {:?}",
                     self.registers[result_reg as usize]
                 );
             }

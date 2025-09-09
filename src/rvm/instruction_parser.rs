@@ -533,8 +533,8 @@ fn parse_call_rule(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let dest = get_param_u16(&params, "dest")?;
     let rule_index = get_param_u16(&params, "rule_index")?;
-    Ok(Instruction::CallRule { 
-        dest: dest.try_into().unwrap(), 
-        rule_index 
+    Ok(Instruction::CallRule {
+        dest: dest.try_into().unwrap(),
+        rule_index,
     })
 }

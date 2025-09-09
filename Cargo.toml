@@ -186,6 +186,11 @@ harness = false
 name = "aci_benchmark"
 harness = false
 
+
+[[bench]]
+name = "server_engine_vs_vm_benchmark"
+harness = false
+
 [[example]]
 name="regorus"
 harness=false

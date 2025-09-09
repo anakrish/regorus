@@ -138,8 +138,8 @@ impl<'a> Compiler<'a> {
         self.builtin_index_map
             .insert(builtin_name.to_string(), index);
 
-        std::println!(
-            "Debug: Assigned builtin index {} to '{}' (num_args={})",
+        debug!(
+            "Assigned builtin index {} to '{}' (num_args={})",
             index,
             builtin_name,
             num_args
@@ -161,8 +161,8 @@ impl<'a> Compiler<'a> {
 
         // Debug logging for register allocation tracking
         if self.register_counter > 200 {
-            std::println!(
-                "Warning: High register usage - allocated register {}, approaching 256 limit",
+            debug!(
+                "High register usage - allocated register {}, approaching 256 limit",
                 reg
             );
         }
@@ -542,7 +542,7 @@ impl<'a> Compiler<'a> {
 
         // Set the rule definitions from the compiler
         let mut rule_infos_map = BTreeMap::new();
-        
+
         // First, collect all rule info without default evaluation
         for (rule_path, &rule_index) in &self.rule_index_map {
             let definitions = self.rule_definitions[rule_index as usize].clone();
@@ -573,7 +573,9 @@ impl<'a> Compiler<'a> {
         }
 
         // Now evaluate default rules for Complete rules and update their literal indices
-        let rule_paths_to_evaluate: Vec<(String, usize)> = self.rule_index_map.iter()
+        let rule_paths_to_evaluate: Vec<(String, usize)> = self
+            .rule_index_map
+            .iter()
             .filter_map(|(rule_path, &rule_index)| {
                 let rule_type = &self.rule_types[rule_index as usize];
                 if *rule_type == crate::rvm::program::RuleType::Complete {
@@ -650,8 +652,8 @@ impl<'a> Compiler<'a> {
                     .map(|(&k, &v)| (k, v))
                     .collect();
             self.program.initialize_resolved_builtins(&builtin_map);
-            std::println!(
-                "Debug: Initialized {} resolved builtins",
+            debug!(
+                "Initialized {} resolved builtins",
                 self.program.resolved_builtins.len()
             );
         }
@@ -673,8 +675,8 @@ impl<'a> Compiler<'a> {
     ) -> Result<Register> {
         // TODO: If expr is a loop expr or a loop var, look up.
         if let Some(reg) = self.loop_expr_register_map.get(expr).cloned() {
-            std::println!(
-                "Debug: Found loop expression in map, using register {}",
+            debug!(
+                "Found loop expression in map, using register {}",
                 reg
             );
             let result_reg = reg;
@@ -930,8 +932,8 @@ impl<'a> Compiler<'a> {
                     );
 
                     // Store the variable binding to the NEW register
-                    std::println!(
-                        "Debug: Assignment '{}' := value from register {} to new register {}",
+                    debug!(
+                        "Assignment '{}' := value from register {} to new register {}",
                         var_name,
                         rhs_reg,
                         lhs_reg
@@ -948,8 +950,8 @@ impl<'a> Compiler<'a> {
             Expr::Var { value, .. } => {
                 // Check if this is a variable reference that we should resolve
                 if let Value::String(var_name) = value {
-                    std::println!(
-                        "Debug: Resolving variable '{}' - looking up in scopes",
+                    debug!(
+                        "Resolving variable '{}' - looking up in scopes",
                         var_name
                     );
                     return self.resolve_variable(var_name.as_ref(), span);
@@ -1167,8 +1169,8 @@ impl<'a> Compiler<'a> {
             let rule_type = self.rule_types[rule_index as usize].clone();
             let dest_register = self.alloc_register();
 
-            std::println!(
-                "Debug: Rule '{}' has {} definitions",
+            debug!(
+                "Rule '{}' has {} definitions",
                 rule_path,
                 rule_definitions.len()
             );
@@ -1181,8 +1183,8 @@ impl<'a> Compiler<'a> {
             // Compile each definition (Rule::Spec)
             for (def_idx, rule_ref) in rule_definitions.iter().enumerate() {
                 if let Rule::Spec { head, bodies, span } = rule_ref.as_ref() {
-                    std::println!(
-                        "Debug: Compiling definition {} with {} bodies",
+                    debug!(
+                        "Compiling definition {} with {} bodies",
                         def_idx,
                         bodies.len()
                     );
@@ -1226,8 +1228,8 @@ impl<'a> Compiler<'a> {
                                         .unwrap()
                                         .bound_vars
                                         .insert(param_name.to_string(), param_reg);
-                                    std::println!(
-                                        "Debug: Function parameter '{}' assigned to register {}",
+                                    debug!(
+                                        "Function parameter '{}' assigned to register {}",
                                         param_name,
                                         param_reg
                                     );
@@ -1301,8 +1303,8 @@ impl<'a> Compiler<'a> {
                             let body_entry_point = self.program.instructions.len();
                             body_entry_points.push(body_entry_point);
 
-                            std::println!(
-                                "Debug: Compiling body {} at entry point {}",
+                            debug!(
+                                "Compiling body {} at entry point {}",
                                 body_idx,
                                 body_entry_point
                             );
@@ -1349,16 +1351,16 @@ impl<'a> Compiler<'a> {
                     // Store the body entry points for this definition
                     self.rule_definitions[rule_index as usize].push(body_entry_points);
 
-                    std::println!(
-                        "Debug: Definition {} compiled with {} bodies",
+                    debug!(
+                        "Definition {} compiled with {} bodies",
                         def_idx,
                         bodies.len()
                     );
                 }
             }
 
-            std::println!(
-                "Debug: Rule '{}' compiled with {} definitions",
+            debug!(
+                "Rule '{}' compiled with {} definitions",
                 rule_path,
                 rule_definitions.len()
             );
@@ -1403,14 +1405,14 @@ impl<'a> Compiler<'a> {
         &mut self,
         stmts: &[&crate::ast::LiteralStmt],
     ) -> Result<()> {
-        std::println!(
-            "Debug: Compiling {} statements with loop hoisting",
+        debug!(
+            "Compiling {} statements with loop hoisting",
             stmts.len()
         );
 
         for (idx, stmt) in stmts.iter().enumerate() {
-            std::println!(
-                "Debug: Processing statement {} of {}: {}",
+            debug!(
+                "Processing statement {} of {}: {}",
                 idx + 1,
                 stmts.len(),
                 stmt.span.text()
@@ -1420,8 +1422,8 @@ impl<'a> Compiler<'a> {
             let loop_exprs = self.hoist_loops_from_literal(&stmt.literal)?;
 
             if !loop_exprs.is_empty() {
-                std::println!(
-                    "Debug: Found {} loop expressions in statement {} {}",
+                debug!(
+                    "Found {} loop expressions in statement {} {}",
                     loop_exprs.len(),
                     idx,
                     stmt.span.text()
@@ -1431,11 +1433,11 @@ impl<'a> Compiler<'a> {
             }
 
             // No loops, compile statement normally
-            std::println!("Debug: Compiling statement {} normally (no loops)", idx + 1);
+            debug!("Compiling statement {} normally (no loops)", idx + 1);
             self.compile_single_statement(stmt)?;
         }
 
-        std::println!("Debug: Finished compiling all statements, calling emit_context_yield");
+        debug!("Finished compiling all statements, calling emit_context_yield");
         self.hoist_loops_and_emit_context_yield()
     }
 
@@ -1455,7 +1457,7 @@ impl<'a> Compiler<'a> {
                 collection,
                 ..
             } => {
-                std::println!("Debug: Found SomeIn literal - creating loop");
+                debug!("Found SomeIn literal - creating loop");
                 if let Some(key) = key {
                     self.hoist_loops_from_expr(key, &mut loops)?;
                 }
@@ -1652,7 +1654,7 @@ impl<'a> Compiler<'a> {
         let current_loop = &loops[0];
         let remaining_loops = &loops[1..];
 
-        std::println!("Debug: Compiling loop of type {:?}", current_loop.loop_type);
+        debug!("Compiling loop of type {:?}", current_loop.loop_type);
 
         match current_loop.loop_type {
             LoopType::SomeIn => {
@@ -1689,7 +1691,7 @@ impl<'a> Compiler<'a> {
             match &context.context_type {
                 ContextType::Every => {
                     // Every quantifiers don't emit context yield
-                    std::println!("Debug: Skipping context yield for Every quantifier context");
+                    debug!("Skipping context yield for Every quantifier context");
                     return Ok(());
                 }
                 ContextType::Rule(_) => {
@@ -1752,7 +1754,7 @@ impl<'a> Compiler<'a> {
         query: &crate::ast::Query,
         span: &crate::lexer::Span,
     ) -> Result<()> {
-        std::println!("Debug: Compiling Every quantifier with domain and query");
+        debug!("Compiling Every quantifier with domain and query");
 
         // Compile the domain expression
         let collection_reg = self.compile_rego_expr(domain)?;
@@ -1774,8 +1776,8 @@ impl<'a> Compiler<'a> {
                 key_reg
             };
 
-        std::println!(
-            "Debug: Every quantifier - value var: '{}', key var: {:?}",
+        debug!(
+            "Every quantifier - value var: '{}', key var: {:?}",
             value_var_name,
             key_var_name
         );
@@ -1820,8 +1822,8 @@ impl<'a> Compiler<'a> {
             self.add_variable(key_name, key_reg);
         }
 
-        std::println!(
-            "Debug: Added Every loop variables to scope - value: '{}' -> reg {}, key: {:?}",
+        debug!(
+            "Added Every loop variables to scope - value: '{}' -> reg {}, key: {:?}",
             value_var_name,
             value_reg,
             key_var_name.as_ref().map(|k| (k, key_reg))
@@ -1863,8 +1865,8 @@ impl<'a> Compiler<'a> {
             *end = loop_end;
         }
 
-        std::println!(
-            "Debug: Every quantifier compiled - body_start={}, loop_end={}",
+        debug!(
+            "Every quantifier compiled - body_start={}, loop_end={}",
             body_start,
             loop_end
         );
@@ -1874,7 +1876,7 @@ impl<'a> Compiler<'a> {
 
     /// Compile a single statement without loops
     fn compile_single_statement(&mut self, stmt: &crate::ast::LiteralStmt) -> Result<()> {
-        std::println!("Debug: Compiling single statement: {}", stmt.span.text());
+        debug!("Compiling single statement: {}", stmt.span.text());
         match &stmt.literal {
             crate::ast::Literal::Expr { expr, .. } => {
                 // Compile the condition and assert it must be true
@@ -1891,18 +1893,18 @@ impl<'a> Compiler<'a> {
                 query,
                 ..
             } => {
-                std::println!("Debug: Compiling Every quantifier");
+                debug!("Compiling Every quantifier");
                 self.compile_every_quantifier(key, value, domain, query, &stmt.span)?;
 
                 // Every quantifier acts as an assertion - if it succeeds,
                 // we continue with the next statement
-                std::println!(
-                    "Debug: Every quantifier completed - continuing with next statements"
+                debug!(
+                    "Every quantifier completed - continuing with next statements"
                 );
             }
             crate::ast::Literal::SomeVars { span, vars } => {
-                std::println!(
-                    "Debug: Compiling SomeVars statement with {:?} variables at span {:?}",
+                debug!(
+                    "Compiling SomeVars statement with {:?} variables at span {:?}",
                     vars.iter().map(|v| v.text()),
                     span
                 );
@@ -1912,7 +1914,7 @@ impl<'a> Compiler<'a> {
                 }
             }
             _ => {
-                std::println!("Debug: Skipping complex literal: {:?}", stmt.literal);
+                debug!("Skipping complex literal: {:?}", stmt.literal);
                 // For other literal types, skip for now
             }
         }
@@ -1929,7 +1931,7 @@ impl<'a> Compiler<'a> {
         remaining_stmts: &[&crate::ast::LiteralStmt],
         remaining_loops: &[HoistedLoop],
     ) -> Result<()> {
-        std::println!("Debug: Compiling index iteration loop");
+        debug!("Compiling index iteration loop");
 
         // Compile the collection expression
         let collection_reg = self.compile_rego_expr(collection)?;
@@ -1943,7 +1945,7 @@ impl<'a> Compiler<'a> {
             self.loop_expr_register_map
                 .insert(loop_expr.clone(), value_reg);
         }
-        std::println!("Debug: Index iteration loop for {key_var:?} over {loop_expr:?}");
+        debug!("Index iteration loop for {key_var:?} over {loop_expr:?}");
         if let Some(key_var) = key_var {
             // Store loop variable in scope (extract variable name from key_var)
             if let crate::ast::Expr::Var { value, .. } = key_var.as_ref() {
@@ -2018,8 +2020,8 @@ impl<'a> Compiler<'a> {
             *end = loop_end;
         }
 
-        std::println!(
-            "Debug: Array iteration loop compiled - body_start={}, loop_end={}",
+        debug!(
+            "Array iteration loop compiled - body_start={}, loop_end={}",
             body_start,
             loop_end
         );
@@ -2110,8 +2112,8 @@ impl<'a> Compiler<'a> {
                 value: var_name, ..
             } = key_expr.as_ref()
             {
-                std::println!(
-                    "Debug: Storing loop key variable '{}' at register {}",
+                debug!(
+                    "Storing loop key variable '{}' at register {}",
                     var_name,
                     key_reg
                 );
@@ -2123,7 +2125,7 @@ impl<'a> Compiler<'a> {
             value: var_name, ..
         } = value.as_ref()
         {
-            std::println!("Debug: Variable name value: {:?}", var_name);
+            debug!("Variable name value: {:?}", var_name);
 
             // Extract the string value from the Value
             let clean_var_name = match var_name {
@@ -2131,8 +2133,8 @@ impl<'a> Compiler<'a> {
                 _ => var_name.to_string(),
             };
 
-            std::println!(
-                "Debug: Storing loop value variable '{}' at register {} (from '{:?}')",
+            debug!(
+                "Storing loop value variable '{}' at register {} (from '{:?}')",
                 clean_var_name,
                 value_reg,
                 var_name
@@ -2140,19 +2142,19 @@ impl<'a> Compiler<'a> {
             self.store_variable(clean_var_name.clone(), value_reg);
 
             // Debug: Check if variable is actually stored
-            std::println!(
-                "Debug: Checking if variable '{}' is now in scope...",
+            debug!(
+                "Checking if variable '{}' is now in scope...",
                 clean_var_name
             );
             if let Some(reg) = self.lookup_variable(&clean_var_name) {
-                std::println!(
-                    "Debug: Yes, variable '{}' found at register {}",
+                debug!(
+                    "Yes, variable '{}' found at register {}",
                     clean_var_name,
                     reg
                 );
             } else {
-                std::println!(
-                    "Debug: ERROR - variable '{}' not found after storing!",
+                debug!(
+                    "ERROR - variable '{}' not found after storing!",
                     clean_var_name
                 );
             }
@@ -2190,25 +2192,25 @@ impl<'a> Compiler<'a> {
             *end = loop_end;
         }
 
-        std::println!(
-            "Debug: SomeIn loop compiled - body_start={}, loop_end={}",
+        debug!(
+            "SomeIn loop compiled - body_start={}, loop_end={}",
             body_start,
             loop_end
         );
 
         // Debug: Print all instructions generated for this loop
-        std::println!(
-            "Debug: Generated {} instructions for SomeIn loop:",
+        debug!(
+            "Generated {} instructions for SomeIn loop:",
             self.program.instructions.len()
         );
         for (i, instr) in self.program.instructions.iter().enumerate() {
-            std::println!("  {}: {:?}", i, instr);
+            debug!("  {}: {:?}", i, instr);
         }
 
         // Debug: Print literals table
-        std::println!("Debug: Literals table:");
+        debug!("Literals table:");
         for (i, literal) in self.program.literals.iter().enumerate() {
-            std::println!("  literal_idx {}: {:?}", i, literal);
+            debug!("  literal_idx {}: {:?}", i, literal);
         }
 
         Ok(result_reg)
@@ -2221,7 +2223,7 @@ impl<'a> Compiler<'a> {
         query: &crate::ast::Query,
         span: &Span,
     ) -> Result<Register> {
-        std::println!("Debug: Compiling array comprehension");
+        debug!("Compiling array comprehension");
 
         // Allocate result register and initialize as empty array
         let result_reg = self.alloc_register();
@@ -2254,7 +2256,7 @@ impl<'a> Compiler<'a> {
         query: &crate::ast::Query,
         span: &Span,
     ) -> Result<Register> {
-        std::println!("Debug: Compiling set comprehension");
+        debug!("Compiling set comprehension");
 
         // Allocate result register and initialize as empty set
         let result_reg = self.alloc_register();
@@ -2288,7 +2290,7 @@ impl<'a> Compiler<'a> {
         query: &crate::ast::Query,
         span: &Span,
     ) -> Result<Register> {
-        std::println!("Debug: Compiling object comprehension");
+        debug!("Compiling object comprehension");
 
         // Allocate result register and initialize as empty object
         let result_reg = self.alloc_register();
@@ -2435,26 +2437,32 @@ impl<'a> Compiler<'a> {
             debug!("No default rules found for '{}'", rule_path);
             return None;
         }
-        
+
         // Create an interpreter to evaluate the default rule
         let mut interpreter = Interpreter::new_from_compiled_policy(self.policy.inner.clone());
-        
+
         // Use the compiler-specific function to evaluate the default rule and get its value
         match interpreter.eval_default_rule_for_compiler(rule_path) {
             Ok(computed_value) => {
                 if computed_value != Value::Undefined {
-                    debug!("Evaluated default rule for '{}': {:?}", rule_path, computed_value);
-                    
+                    debug!(
+                        "Evaluated default rule for '{}': {:?}",
+                        rule_path, computed_value
+                    );
+
                     // Add the computed value to the literal table
                     let literal_index = self.add_literal(computed_value);
                     return Some(literal_index as u16);
                 }
             }
             Err(_e) => {
-                debug!("Failed to evaluate default rule for '{}': {}", rule_path, _e);
+                debug!(
+                    "Failed to evaluate default rule for '{}': {}",
+                    rule_path, _e
+                );
             }
         }
-        
+
         None
     }
 }

@@ -84,6 +84,8 @@ pub struct RuleInfo {
     pub definitions: crate::Rc<Vec<Vec<usize>>>,
     /// Function-specific information (only present for function rules)
     pub function_info: Option<FunctionInfo>,
+    /// Index into the program's literal table for default value (only for Complete rules)
+    pub default_literal_index: Option<u16>,
 }
 
 /// Information about function rules
@@ -102,6 +104,7 @@ impl RuleInfo {
             rule_type,
             definitions,
             function_info: None,
+            default_literal_index: None,
         }
     }
 
@@ -121,7 +124,13 @@ impl RuleInfo {
                 param_names,
                 num_params,
             }),
+            default_literal_index: None,
         }
+    }
+
+    /// Set the default literal index for this rule
+    pub fn set_default_literal_index(&mut self, default_literal_index: u16) {
+        self.default_literal_index = Some(default_literal_index);
     }
 }
 

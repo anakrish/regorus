@@ -3,6 +3,7 @@ use super::program::Program;
 use super::Instruction;
 use crate::ast::{Expr, ExprRef, Rule, RuleHead};
 use crate::builtins;
+use crate::interpreter::Interpreter;
 use crate::lexer::Span;
 use crate::rvm::program::RuleType;
 use crate::rvm::program::SpanInfo;
@@ -541,6 +542,8 @@ impl<'a> Compiler<'a> {
 
         // Set the rule definitions from the compiler
         let mut rule_infos_map = BTreeMap::new();
+        
+        // First, collect all rule info without default evaluation
         for (rule_path, &rule_index) in &self.rule_index_map {
             let definitions = self.rule_definitions[rule_index as usize].clone();
             let rule_type = self.rule_types[rule_index as usize].clone();
@@ -565,7 +568,28 @@ impl<'a> Compiler<'a> {
                     )
                 }
             };
+
             rule_infos_map.insert(rule_index as usize, rule_info);
+        }
+
+        // Now evaluate default rules for Complete rules and update their literal indices
+        let rule_paths_to_evaluate: Vec<(String, usize)> = self.rule_index_map.iter()
+            .filter_map(|(rule_path, &rule_index)| {
+                let rule_type = &self.rule_types[rule_index as usize];
+                if *rule_type == crate::rvm::program::RuleType::Complete {
+                    Some((rule_path.clone(), rule_index as usize))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (rule_path, rule_index) in rule_paths_to_evaluate {
+            if let Some(default_literal_index) = self.evaluate_default_rule(&rule_path) {
+                if let Some(rule_info) = rule_infos_map.get_mut(&rule_index) {
+                    rule_info.set_default_literal_index(default_literal_index);
+                }
+            }
         }
 
         self.program.rule_infos = rule_infos_map.into_values().collect();
@@ -2402,5 +2426,35 @@ impl<'a> Compiler<'a> {
             dest
         );
         Ok(dest)
+    }
+
+    /// Evaluate simple literal default rules and store results in literal table
+    fn evaluate_default_rule(&mut self, rule_path: &str) -> Option<u16> {
+        // Check if there are default rules for this path in the compiled policy
+        if !self.policy.inner.default_rules.contains_key(rule_path) {
+            debug!("No default rules found for '{}'", rule_path);
+            return None;
+        }
+        
+        // Create an interpreter to evaluate the default rule
+        let mut interpreter = Interpreter::new_from_compiled_policy(self.policy.inner.clone());
+        
+        // Use the compiler-specific function to evaluate the default rule and get its value
+        match interpreter.eval_default_rule_for_compiler(rule_path) {
+            Ok(computed_value) => {
+                if computed_value != Value::Undefined {
+                    debug!("Evaluated default rule for '{}': {:?}", rule_path, computed_value);
+                    
+                    // Add the computed value to the literal table
+                    let literal_index = self.add_literal(computed_value);
+                    return Some(literal_index as u16);
+                }
+            }
+            Err(_e) => {
+                debug!("Failed to evaluate default rule for '{}': {}", rule_path, _e);
+            }
+        }
+        
+        None
     }
 }

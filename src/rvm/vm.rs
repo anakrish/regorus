@@ -107,6 +107,9 @@ pub struct RegoVM {
     /// The compiled program containing instructions, literals, and metadata
     program: Arc<Program>,
 
+    /// Reference to the compiled policy for default rule access
+    compiled_policy: Option<crate::CompiledPolicy>,
+
     /// Rule execution cache: rule_index -> (computed: bool, result: Value)
     rule_cache: Vec<(bool, Value)>,
 
@@ -153,6 +156,7 @@ impl RegoVM {
             registers: Vec::new(), // Start with no registers - will be resized when program is loaded
             pc: 0,
             program: Arc::new(Program::default()),
+            compiled_policy: None,
             rule_cache: Vec::new(),
             data: Value::Null,
             input: Value::Null,
@@ -165,6 +169,13 @@ impl RegoVM {
             #[cfg(feature = "rvm-tracing")]
             span_stack: Vec::new(),
         }
+    }
+
+    /// Create a new virtual machine with compiled policy for default rule support
+    pub fn new_with_policy(compiled_policy: crate::CompiledPolicy) -> Self {
+        let mut vm = Self::new();
+        vm.compiled_policy = Some(compiled_policy);
+        vm
     }
 
     /// Load a complete program for execution
@@ -219,6 +230,11 @@ impl RegoVM {
                 }
             }
         }
+    }
+
+    /// Set the compiled policy for default rule evaluation
+    pub fn set_compiled_policy(&mut self, compiled_policy: crate::CompiledPolicy) {
+        self.compiled_policy = Some(compiled_policy);
     }
 
     /// Set the maximum number of instructions that can be executed
@@ -974,10 +990,31 @@ impl RegoVM {
                     self.registers[dest as usize] = Value::new_object();
                 }
                 crate::rvm::program::RuleType::Complete => {
-                    // For complete rules, Undefined is the correct result when all definitions fail
-                    std::println!(
-                        "Debug: All definitions failed for Complete rule - keeping Undefined"
-                    );
+                    // For complete rules, check if there's a default literal value
+                    if let Some(rule_info) = self.program.rule_infos.get(call_context.rule_index as usize) {
+                        if let Some(default_literal_index) = rule_info.default_literal_index {
+                            if let Some(default_value) = self.program.literals.get(default_literal_index as usize) {
+                                std::println!(
+                                    "Debug: All definitions failed for Complete rule - using default literal value: {:?}",
+                                    default_value
+                                );
+                                self.registers[dest as usize] = default_value.clone();
+                            } else {
+                                std::println!(
+                                    "Debug: All definitions failed for Complete rule - default literal index {} not found, keeping Undefined",
+                                    default_literal_index
+                                );
+                            }
+                        } else {
+                            std::println!(
+                                "Debug: All definitions failed for Complete rule - no default literal, keeping Undefined"
+                            );
+                        }
+                    } else {
+                        std::println!(
+                            "Debug: All definitions failed for Complete rule - rule info not found, keeping Undefined"
+                        );
+                    }
                 }
             }
         }
@@ -1294,6 +1331,27 @@ impl RegoVM {
                 // Stop if we had inconsistent results
                 debug!("Rule failed due to inconsistent results");
                 break;
+            }
+        }
+
+        // For complete rules, if all definitions failed, try using the pre-computed default value
+        if matches!(rule_info.rule_type, crate::rvm::program::RuleType::Complete) 
+            && matches!(rule_result, Value::Undefined)
+            && !is_function_call {
+            
+            // Check if there's a pre-computed default value in the literal table
+            if let Some(default_literal_index) = rule_info.default_literal_index {
+                debug!("All regular definitions failed for complete rule '{}', using pre-computed default value from literal index {}", rule_info.name, default_literal_index);
+                
+                // Get the default value from the literal table
+                if let Some(default_value) = self.program.literals.get(default_literal_index as usize) {
+                    rule_result = default_value.clone();
+                    debug!("Using default value: {:?}", rule_result);
+                } else {
+                    debug!("Default literal index {} is out of bounds in literal table", default_literal_index);
+                }
+            } else {
+                debug!("No pre-computed default value available for complete rule '{}'", rule_info.name);
             }
         }
 

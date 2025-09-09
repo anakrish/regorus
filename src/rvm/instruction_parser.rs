@@ -49,13 +49,19 @@ pub fn parse_instruction(text: &str) -> Result<Instruction> {
             "AssertCondition" => parse_assert_condition(params_text),
             "BuiltinCall" => parse_builtin_call(params_text),
             "FunctionCall" => parse_function_call(params_text),
+            "CallRule" => parse_call_rule(params_text),
             "LoopStart" => parse_loop_start(params_text),
             "LoopNext" => parse_loop_next(params_text),
-            "Halt" => Ok(Instruction::Halt),
             _ => bail!("Unknown instruction: {}", name),
         }
     } else {
-        bail!("Invalid instruction format: {}", text);
+        // Handle instructions without parameters (no braces)
+        let name = text.trim();
+        match name {
+            "Halt" => Ok(Instruction::Halt),
+            "RuleReturn" => Ok(Instruction::RuleReturn {}),
+            _ => bail!("Unknown instruction: {}", name),
+        }
     }
 }
 
@@ -521,4 +527,14 @@ fn parse_function_call(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let params_index = get_param_u16(&params, "params_index")?;
     Ok(Instruction::FunctionCall { params_index })
+}
+
+fn parse_call_rule(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let dest = get_param_u16(&params, "dest")?;
+    let rule_index = get_param_u16(&params, "rule_index")?;
+    Ok(Instruction::CallRule { 
+        dest: dest.try_into().unwrap(), 
+        rule_index 
+    })
 }

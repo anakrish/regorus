@@ -3,12 +3,8 @@
 /// Initialize tracing subscriber for RVM debugging with tree-like hierarchical display
 #[cfg(feature = "rvm-tracing")]
 pub fn init_rvm_tracing() {
-    use tracing_subscriber::{
-        layer::SubscriberExt,
-        util::SubscriberInitExt,
-        EnvFilter,
-    };
     use std::string::ToString;
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
     struct TreeLayer;
 
@@ -24,7 +20,7 @@ pub fn init_rvm_tracing() {
             // Calculate nesting level from span context
             let scope = ctx.event_scope(event);
             let mut level = 0;
-            
+
             if let Some(scope) = scope {
                 level = scope.count().saturating_sub(1);
             }
@@ -58,7 +54,13 @@ pub fn init_rvm_tracing() {
             let reset_color = "\x1b[0m";
 
             // Print the tree-formatted message
-            std::print!("{}{}{:5}{} ", tree_prefix, level_color, event.metadata().level(), reset_color);
+            std::print!(
+                "{}{}{:5}{} ",
+                tree_prefix,
+                level_color,
+                event.metadata().level(),
+                reset_color
+            );
 
             // Create a visitor to extract the message
             struct MessageVisitor {
@@ -66,18 +68,23 @@ pub fn init_rvm_tracing() {
             }
 
             impl tracing::field::Visit for MessageVisitor {
-                fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                fn record_debug(
+                    &mut self,
+                    field: &tracing::field::Field,
+                    value: &dyn std::fmt::Debug,
+                ) {
                     if field.name() == "message" {
                         self.message = std::format!("{:?}", value);
                         // Remove surrounding quotes if it's a string
                         if self.message.starts_with('"') && self.message.ends_with('"') {
-                            self.message = self.message[1..self.message.len()-1].to_string();
+                            self.message = self.message[1..self.message.len() - 1].to_string();
                         }
                     } else {
                         if !self.message.is_empty() {
                             self.message.push_str(", ");
                         }
-                        self.message.push_str(&std::format!("{}={:?}", field.name(), value));
+                        self.message
+                            .push_str(&std::format!("{}={:?}", field.name(), value));
                     }
                 }
 
@@ -88,7 +95,8 @@ pub fn init_rvm_tracing() {
                         if !self.message.is_empty() {
                             self.message.push_str(", ");
                         }
-                        self.message.push_str(&std::format!("{}={}", field.name(), value));
+                        self.message
+                            .push_str(&std::format!("{}={}", field.name(), value));
                     }
                 }
             }
@@ -103,16 +111,15 @@ pub fn init_rvm_tracing() {
 
         fn on_enter(&self, id: &tracing::span::Id, ctx: tracing_subscriber::layer::Context<'_, S>) {
             if let Some(span) = ctx.span(id) {
-                if let Some(name) = span.name().strip_prefix("loop_") {
+                if let Some(_name) = span.name().strip_prefix("loop_") {
                     // Don't show enter/exit for loop spans to reduce noise
-                    return;
                 }
             }
         }
     }
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "info,regorus::rvm=debug".into());
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,regorus::rvm=debug".into());
 
     let _ = tracing_subscriber::registry()
         .with(TreeLayer)
@@ -127,7 +134,7 @@ pub fn init_rvm_tracing() {
 
 // When tracing feature is enabled, export tracing crate directly
 #[cfg(feature = "rvm-tracing")]
-pub use tracing::{debug, info, trace, span, Level};
+pub use tracing::{debug, info, span, trace, Level};
 
 // When tracing feature is disabled, define macros directly
 #[cfg(not(feature = "rvm-tracing"))]
@@ -153,7 +160,7 @@ macro_rules! span {
 }
 
 #[cfg(not(feature = "rvm-tracing"))]
-pub(crate) use {debug, info, trace, span};
+pub(crate) use {debug, info, span, trace};
 
 // No-op span type when tracing is disabled
 #[cfg(not(feature = "rvm-tracing"))]

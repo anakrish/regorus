@@ -36,6 +36,8 @@ pub fn parse_instruction(text: &str) -> Result<Instruction> {
             "Or" => parse_or(params_text),
             "Not" => parse_not(params_text),
             "Return" => parse_return(params_text),
+            "RuleInit" => parse_rule_init(params_text),
+            "RuleReturn" => parse_rule_return(params_text),
             "ObjectNew" => parse_object_new(params_text),
             "ObjectSet" => parse_object_set(params_text),
             "Index" => parse_index(params_text),
@@ -46,6 +48,7 @@ pub fn parse_instruction(text: &str) -> Result<Instruction> {
             "Contains" => parse_contains(params_text),
             "AssertCondition" => parse_assert_condition(params_text),
             "BuiltinCall" => parse_builtin_call(params_text),
+            "FunctionCall" => parse_function_call(params_text),
             "LoopStart" => parse_loop_start(params_text),
             "LoopNext" => parse_loop_next(params_text),
             "Halt" => Ok(Instruction::Halt),
@@ -290,6 +293,21 @@ fn parse_return(params_text: &str) -> Result<Instruction> {
     })
 }
 
+fn parse_rule_init(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let result_reg = get_param_u16(&params, "result_reg")?;
+    let rule_index = get_param_u16(&params, "rule_index")?;
+    Ok(Instruction::RuleInit {
+        result_reg: result_reg.try_into().unwrap(),
+        rule_index,
+    })
+}
+
+fn parse_rule_return(params_text: &str) -> Result<Instruction> {
+    let _params = parse_params(params_text)?;
+    Ok(Instruction::RuleReturn {})
+}
+
 fn parse_object_new(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let dest = get_param_u16(&params, "dest")?;
@@ -497,4 +515,10 @@ fn parse_builtin_call(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let params_index = get_param_u16(&params, "params_index")?;
     Ok(Instruction::BuiltinCall { params_index })
+}
+
+fn parse_function_call(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let params_index = get_param_u16(&params, "params_index")?;
+    Ok(Instruction::FunctionCall { params_index })
 }

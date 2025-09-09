@@ -56,8 +56,8 @@ impl BuiltinCallParams {
 pub struct FunctionCallParams {
     /// Destination register to store the result
     pub dest: u8,
-    /// Register containing the function to call
-    pub func: u8,
+    /// Rule index of the function to call
+    pub func_rule_index: u16,
     /// Number of arguments actually used
     pub num_args: u8,
     /// Argument register numbers (unused slots contain undefined values)
@@ -465,8 +465,8 @@ impl Instruction {
                         .collect::<Vec<_>>()
                         .join(" ");
                     format!(
-                        "FUNCTION_CALL R({}) R({}) [{}]",
-                        params.dest, params.func, args_str
+                        "FUNCTION_CALL R({}) RULE({}) [{}]",
+                        params.dest, params.func_rule_index, args_str
                     )
                 } else {
                     format!("FUNCTION_CALL P({}) [INVALID INDEX]", params_index)

@@ -28,6 +28,8 @@ mod tests {
         input: Option<crate::Value>,
         literals: Vec<crate::Value>,
         #[serde(default)]
+        rule_infos: Vec<RuleInfoSpec>,
+        #[serde(default)]
         instruction_params: Option<InstructionParamsSpec>,
         instructions: Vec<String>,
         #[serde(default, deserialize_with = "deserialize_optional_value")]
@@ -52,6 +54,8 @@ mod tests {
         call_params: Vec<CallParamsSpec>,
         #[serde(default)]
         builtin_call_params: Vec<BuiltinCallParamsSpec>,
+        #[serde(default)]
+        function_call_params: Vec<FunctionCallParamsSpec>,
         #[serde(default)]
         builtin_infos: Vec<BuiltinInfoSpec>,
     }
@@ -83,9 +87,22 @@ mod tests {
     }
 
     #[derive(Debug, Deserialize, Serialize)]
+    struct FunctionCallParamsSpec {
+        func: u16,
+        dest: u16,
+        args: Vec<u16>,
+    }
+
+    #[derive(Debug, Deserialize, Serialize)]
     struct BuiltinInfoSpec {
         name: String,
         num_args: u16,
+    }
+
+    #[derive(Debug, Deserialize, Serialize)]
+    struct RuleInfoSpec {
+        rule_type: String,
+        definitions: Vec<Vec<u16>>,
     }
 
     #[derive(Debug, Deserialize, Serialize)]
@@ -97,6 +114,7 @@ mod tests {
     fn execute_vm_instructions(
         instructions: Vec<crate::rvm::instructions::Instruction>,
         literals: Vec<Value>,
+        rule_infos: Vec<RuleInfoSpec>,
         instruction_params: Option<InstructionParamsSpec>,
         data: Option<Value>,
         input: Option<Value>,
@@ -124,6 +142,39 @@ mod tests {
         }
         program.literals = processed_literals;
 
+        // Convert rule infos
+        for rule_info_spec in rule_infos.iter() {
+            use crate::rvm::program::{RuleInfo, RuleType};
+
+            let rule_type = match rule_info_spec.rule_type.as_str() {
+                "Complete" => RuleType::Complete,
+                "PartialSet" => RuleType::PartialSet,
+                "PartialObject" => RuleType::PartialObject,
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "Unknown rule type: {}",
+                        rule_info_spec.rule_type
+                    ))
+                }
+            };
+
+            // Convert Vec<Vec<u16>> to Vec<Vec<usize>>
+            let definitions: Vec<Vec<usize>> = rule_info_spec
+                .definitions
+                .iter()
+                .map(|def| def.iter().map(|&x| x as usize).collect())
+                .collect();
+
+            let rule_info = RuleInfo {
+                name: String::from("test_rule"),
+                rule_type,
+                definitions: crate::Rc::new(definitions),
+                function_info: None,
+            };
+
+            program.rule_infos.push(rule_info);
+        }
+
         // Build instruction data from params specification
         if let Some(params_spec) = instruction_params {
             // Convert loop params
@@ -143,7 +194,7 @@ mod tests {
 
             // Convert call params
             // Legacy call_params support removed - use builtin_call_params or function_call_params instead
-            for _call_param_spec in params_spec.call_params {
+            if !params_spec.call_params.is_empty() {
                 // Legacy call parameters are no longer supported
                 // Convert to BuiltinCall or FunctionCall instructions instead
                 panic!("Legacy call_params are no longer supported. Use builtin_call_params or function_call_params instead.");
@@ -162,8 +213,8 @@ mod tests {
             for builtin_call_spec in params_spec.builtin_call_params {
                 use crate::rvm::instructions::BuiltinCallParams;
 
-                // Convert Vec<u16> to fixed array, padding with u8::MAX
-                let mut args_array = [u8::MAX; 8];
+                // Convert Vec<u16> to fixed array (unused slots are irrelevant due to num_args)
+                let mut args_array = [0u8; 8];
                 for (i, &arg) in builtin_call_spec.args.iter().enumerate() {
                     if i < 8 {
                         args_array[i] = arg.try_into().unwrap();
@@ -177,6 +228,27 @@ mod tests {
                     args: args_array,
                 };
                 program.add_builtin_call_params(builtin_call_params);
+            }
+
+            // Convert function call params
+            for function_call_spec in params_spec.function_call_params {
+                use crate::rvm::instructions::FunctionCallParams;
+
+                // Convert Vec<u16> to fixed array (unused slots are irrelevant due to num_args)
+                let mut args_array = [0u8; 8];
+                for (i, &arg) in function_call_spec.args.iter().enumerate() {
+                    if i < 8 {
+                        args_array[i] = arg.try_into().unwrap();
+                    }
+                }
+
+                let function_call_params = FunctionCallParams {
+                    func_rule_index: function_call_spec.func,
+                    dest: function_call_spec.dest.try_into().unwrap(),
+                    num_args: function_call_spec.args.len() as u8,
+                    args: args_array,
+                };
+                program.add_function_call_params(function_call_params);
             }
         }
 
@@ -228,6 +300,7 @@ mod tests {
             let execution_result = execute_vm_instructions(
                 instructions,
                 literals,
+                test_case.rule_infos,
                 test_case.instruction_params,
                 test_case.data,
                 test_case.input,

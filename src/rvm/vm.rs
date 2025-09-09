@@ -1,6 +1,6 @@
 use crate::rvm::instructions::{Instruction, LoopMode};
 use crate::rvm::program::Program;
-use crate::rvm::tracing_utils::{debug, info, trace, span};
+use crate::rvm::tracing_utils::{debug, info, span, trace};
 use crate::value::Value;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -148,7 +148,7 @@ impl RegoVM {
     pub fn new() -> Self {
         // Initialize tracing if enabled
         crate::rvm::tracing_utils::init_rvm_tracing();
-        
+
         RegoVM {
             registers: Vec::new(), // Start with no registers - will be resized when program is loaded
             pc: 0,
@@ -192,25 +192,31 @@ impl RegoVM {
             program.rule_infos.len(),
             required_registers
         );
-        for (i, literal) in program.literals.iter().enumerate() {
-            debug!("  VM literal_idx {}: {:?}", i, literal);
+        #[cfg(feature = "rvm-tracing")]
+        {
+            for (i, literal) in program.literals.iter().enumerate() {
+                debug!("  VM literal_idx {}: {:?}", i, literal);
+            }
         }
 
         // Debug: Print rule definitions
-        debug!("VM rule infos:");
-        for (rule_idx, rule_info) in program.rule_infos.iter().enumerate() {
-            debug!(
-                "  VM Rule {}: {} definitions",
-                rule_idx,
-                rule_info.definitions.len()
-            );
-            for (def_idx, bodies) in rule_info.definitions.iter().enumerate() {
+        #[cfg(feature = "rvm-tracing")]
+        {
+            debug!("VM rule infos:");
+            for (rule_idx, rule_info) in program.rule_infos.iter().enumerate() {
                 debug!(
-                    "    VM Definition {}: {} bodies at entry points {:?}",
-                    def_idx,
-                    bodies.len(),
-                    bodies
+                    "  VM Rule {}: {} definitions",
+                    rule_idx,
+                    rule_info.definitions.len()
                 );
+                for (def_idx, bodies) in rule_info.definitions.iter().enumerate() {
+                    debug!(
+                        "    VM Definition {}: {} bodies at entry points {:?}",
+                        def_idx,
+                        bodies.len(),
+                        bodies
+                    );
+                }
             }
         }
     }
@@ -232,15 +238,16 @@ impl RegoVM {
 
     pub fn execute(&mut self) -> Result<Value> {
         let _span = span!(tracing::Level::INFO, "vm_execute");
-        info!("Starting VM execution with {} instructions", self.program.instructions.len());
-        
+        info!(
+            "Starting VM execution with {} instructions",
+            self.program.instructions.len()
+        );
+
         // Reset execution state for each execution
         self.executed_instructions = 0;
         self.pc = 0;
 
-        let result = self.jump_to(0);
-        info!("VM execution completed, executed {} instructions", self.executed_instructions);
-        result
+        self.jump_to(0)
     }
 
     // Public getters for visualization
@@ -292,9 +299,9 @@ impl RegoVM {
             let span = span!(tracing::Level::INFO, "vm_execution");
             self.push_span(span);
         }
-        
+
         info!(target_pc = target, "starting VM execution");
-        
+
         let program = self.program.clone();
         self.pc = target;
         while self.pc < program.instructions.len() {
@@ -356,15 +363,12 @@ impl RegoVM {
                     if let Some(value) = program.literals.get(literal_idx as usize) {
                         debug!(
                             "Load instruction - dest={}, literal_idx={}, value={:?}",
-                            dest,
-                            literal_idx,
-                            value
+                            dest, literal_idx, value
                         );
                         self.registers[dest as usize] = value.clone();
                         debug!(
                             "After Load - register[{}] = {:?}",
-                            dest,
-                            self.registers[dest as usize]
+                            dest, self.registers[dest as usize]
                         );
                     } else {
                         bail!("Literal index {} out of bounds", literal_idx);
@@ -401,14 +405,12 @@ impl RegoVM {
                     debug!("Move instruction - dest={}, src={}", dest, src);
                     debug!(
                         "Before Move - src register {} contains: {:?}",
-                        src,
-                        self.registers[src as usize]
+                        src, self.registers[src as usize]
                     );
                     self.registers[dest as usize] = self.registers[src as usize].clone();
                     debug!(
                         "After Move - dest register {} contains: {:?}",
-                        dest,
-                        self.registers[dest as usize]
+                        dest, self.registers[dest as usize]
                     );
                 }
 
@@ -417,10 +419,7 @@ impl RegoVM {
                     let b = &self.registers[right as usize];
                     debug!(
                         "Add instruction - left[{}]={:?}, right[{}]={:?}",
-                        left,
-                        a,
-                        right,
-                        b
+                        left, a, right, b
                     );
 
                     // Handle undefined values like the interpreter
@@ -431,8 +430,7 @@ impl RegoVM {
                         self.registers[dest as usize] = self.add_values(a, b)?;
                         debug!(
                             "Add result - dest[{}]={:?}",
-                            dest,
-                            self.registers[dest as usize]
+                            dest, self.registers[dest as usize]
                         );
                     }
                 }
@@ -452,8 +450,10 @@ impl RegoVM {
                 Instruction::Mul { dest, left, right } => {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
-                    debug!("Mul instruction - left_reg={} contains {:?}, right_reg={} contains {:?}", 
-                                 left, a, right, b);
+                    debug!(
+                        "Mul instruction - left_reg={} contains {:?}, right_reg={} contains {:?}",
+                        left, a, right, b
+                    );
 
                     // Handle undefined values like the interpreter
                     if a == &Value::Undefined || b == &Value::Undefined {
@@ -728,23 +728,25 @@ impl RegoVM {
                     let value = &self.registers[condition as usize];
                     debug!(
                         "AssertCondition - condition_reg={} contains {:?}",
-                        condition,
-                        value
+                        condition, value
                     );
 
                     // Check if condition is false or undefined
                     match value {
                         Value::Bool(false) | Value::Undefined => {
-                            let condition_type = match value {
-                                Value::Bool(false) => "false",
-                                Value::Undefined => "undefined",
-                                _ => unreachable!(),
-                            };
-                            debug!(
-                                "AssertCondition failed ({}) - in loop: {}",
-                                condition_type,
-                                !self.loop_stack.is_empty()
-                            );
+                            #[cfg(feature = "rvm-tracing")]
+                            {
+                                let condition_type = match value {
+                                    Value::Bool(false) => "false",
+                                    Value::Undefined => "undefined",
+                                    _ => unreachable!(),
+                                };
+                                debug!(
+                                    "AssertCondition failed ({}) - in loop: {}",
+                                    condition_type,
+                                    !self.loop_stack.is_empty()
+                                );
+                            }
                             if !self.loop_stack.is_empty() {
                                 // In a loop - behavior depends on loop mode
                                 // Get the loop context values we need before mutable borrow
@@ -795,9 +797,7 @@ impl RegoVM {
                                 }
                             } else {
                                 // Outside of loop context, failed assertion means this body/definition fails
-                                debug!(
-                                    "AssertCondition failed outside loop - body failed"
-                                );
+                                debug!("AssertCondition failed outside loop - body failed");
                                 return Err(anyhow::anyhow!("Assertion failed"));
                             }
                         }
@@ -845,7 +845,7 @@ impl RegoVM {
         // If we reach here, return register 0
         #[cfg(feature = "rvm-tracing")]
         self.clear_spans();
-        
+
         Ok(self.registers[0].clone())
     }
 
@@ -853,8 +853,7 @@ impl RegoVM {
     fn execute_call_rule(&mut self, dest: u8, rule_index: u16) -> Result<()> {
         debug!(
             "CallRule execution - dest={}, rule_index={}",
-            dest,
-            rule_index
+            dest, rule_index
         );
         let rule_idx = rule_index as usize;
 
@@ -869,8 +868,7 @@ impl RegoVM {
             // Cache hit - return cached result
             debug!(
                 "Cache hit for rule {} - result: {:?}",
-                rule_index,
-                cached_result
+                rule_index, cached_result
             );
             self.registers[dest as usize] = cached_result.clone();
             return Ok(());
@@ -924,9 +922,7 @@ impl RegoVM {
                 }
                 debug!(
                     "Executing rule definition {} at body {}, entry point {}",
-                    def_idx,
-                    body_entry_point_idx,
-                    body_entry_point
+                    def_idx, body_entry_point_idx, body_entry_point
                 );
 
                 // Execute the body
@@ -935,8 +931,11 @@ impl RegoVM {
                         debug!("Body {} completed", body_entry_point_idx);
                     }
                     Err(e) => {
+                        #[cfg(feature = "rvm-tracing")]
                         debug!("Body {} failed: {:?}", body_entry_point_idx, e);
-                        // Body failed - skip this definition
+                        #[cfg(not(feature = "rvm-tracing"))]
+                        let _ = e; // Suppress unused warning
+                                   // Body failed - skip this definition
                         continue;
                     }
                 }
@@ -1002,24 +1001,36 @@ impl RegoVM {
         let _span = span!(tracing::Level::DEBUG, "execute_builtin_call");
         let _enter = _span.enter();
         debug!("Executing builtin call with params_index: {}", params_index);
-        
+
         let params = &self.program.instruction_data.builtin_call_params[params_index as usize];
         let builtin_info = &self.program.builtin_info_table[params.builtin_index as usize];
-        
-        debug!("Builtin: {} (index: {}), dest_reg: {}", 
-               builtin_info.name, params.builtin_index, params.dest);
+
+        debug!(
+            "Builtin: {} (index: {}), dest_reg: {}",
+            builtin_info.name, params.builtin_index, params.dest
+        );
 
         let mut args = Vec::new();
+        #[cfg(feature = "rvm-tracing")]
         for (i, &arg_reg) in params.arg_registers().iter().enumerate() {
             let arg_value = self.registers[arg_reg as usize].clone();
             debug!("Builtin arg {}: register {} = {:?}", i, arg_reg, arg_value);
             args.push(arg_value);
         }
+        #[cfg(not(feature = "rvm-tracing"))]
+        for &arg_reg in params.arg_registers().iter() {
+            let arg_value = self.registers[arg_reg as usize].clone();
+            args.push(arg_value);
+        }
 
         // Check argument count constraints
         if (args.len() as u16) != builtin_info.num_args {
-            debug!("Argument count mismatch for builtin {}: expected {}, got {}", 
-                   builtin_info.name, builtin_info.num_args, args.len());
+            debug!(
+                "Argument count mismatch for builtin {}: expected {}, got {}",
+                builtin_info.name,
+                builtin_info.num_args,
+                args.len()
+            );
             bail!(
                 "Builtin function {} expects exactly {} arguments, got {}",
                 builtin_info.name,
@@ -1070,9 +1081,12 @@ impl RegoVM {
             let span = span!(tracing::Level::DEBUG, "execute_function_call");
             self.push_span(span);
         }
-        
-        debug!("Executing function call with params_index: {}", params_index);
-        
+
+        debug!(
+            "Executing function call with params_index: {}",
+            params_index
+        );
+
         // Get parameters and extract needed values
         let (rule_index, dest_reg, arg_regs) = {
             let params = &self.program.instruction_data.function_call_params[params_index as usize];
@@ -1082,20 +1096,33 @@ impl RegoVM {
                 params.arg_registers().to_vec(),
             )
         };
-        
-        debug!("Function call: rule_index={}, dest_reg={}, arg_count={}", 
-               rule_index, dest_reg, arg_regs.len());
+
+        debug!(
+            "Function call: rule_index={}, dest_reg={}, arg_count={}",
+            rule_index,
+            dest_reg,
+            arg_regs.len()
+        );
 
         // Collect arguments from registers
         let mut args = Vec::new();
+        #[cfg(feature = "rvm-tracing")]
         for (i, &arg_reg) in arg_regs.iter().enumerate() {
             let arg_value = self.registers[arg_reg as usize].clone();
             debug!("Argument {}: register {} = {:?}", i, arg_reg, arg_value);
             args.push(arg_value);
         }
+        #[cfg(not(feature = "rvm-tracing"))]
+        for &arg_reg in arg_regs.iter() {
+            let arg_value = self.registers[arg_reg as usize].clone();
+            args.push(arg_value);
+        }
 
         // Execute the function rule with arguments
-        debug!("Calling execute_rule_with_args for rule_index: {}", rule_index);
+        debug!(
+            "Calling execute_rule_with_args for rule_index: {}",
+            rule_index
+        );
         let result = self.execute_rule_with_args(rule_index, Some(args))?;
         debug!("Function call result: {:?}", result);
         self.registers[dest_reg as usize] = result.clone();
@@ -1118,7 +1145,7 @@ impl RegoVM {
             let span = span!(tracing::Level::DEBUG, "execute_rule");
             self.push_span(span);
         }
-        
+
         debug!(
             rule_index = rule_index,
             args = ?args,
@@ -1206,13 +1233,12 @@ impl RegoVM {
         let mut first_successful_result: Option<Value> = None;
 
         // Execute rule definitions
-        for (def_idx, definition_bodies) in rule_definitions.iter().enumerate() {
-            for (body_entry_point_idx, body_entry_point) in definition_bodies.iter().enumerate() {
+        for definition_bodies in rule_definitions.iter() {
+            for body_entry_point in definition_bodies.iter() {
+                #[cfg(feature = "rvm-tracing")]
                 debug!(
-                    "Executing rule definition {} at body {}, entry point {}",
-                    def_idx,
-                    body_entry_point_idx,
-                    body_entry_point
+                    "Executing rule definition at body {}, entry point {}",
+                    body_entry_point, body_entry_point
                 );
 
                 // Execute the rule body
@@ -1226,9 +1252,9 @@ impl RegoVM {
                             Value::Undefined // Not used for regular rule calls
                         };
 
+                        #[cfg(feature = "rvm-tracing")]
                         debug!(
-                            "Rule body {} completed with result: {:?}",
-                            body_entry_point_idx,
+                            "Rule body completed with result: {:?}",
                             result
                         );
 
@@ -1249,15 +1275,15 @@ impl RegoVM {
                             // First successful result
                             first_successful_result = Some(result.clone());
                             rule_result = result;
-                            debug!(
-                                "Rule - first successful result: {:?}",
-                                rule_result
-                            );
+                            debug!("Rule - first successful result: {:?}", rule_result);
                         }
                     }
                     Err(e) => {
-                        debug!("Rule body {} failed: {:?}", body_entry_point_idx, e);
-                        // Body failed - try next definition
+                        #[cfg(feature = "rvm-tracing")]
+                        debug!("Rule body failed: {:?}", e);
+                        #[cfg(not(feature = "rvm-tracing"))]
+                        let _ = e; // Suppress unused warning
+                                   // Body failed - try next definition
                         continue;
                     }
                 }
@@ -1335,21 +1361,18 @@ impl RegoVM {
         // Copy result to destination register (same logic for both function calls and regular calls)
         debug!(
             "RuleReturn - copying from result_reg {} to dest_reg {}",
-            result_reg,
-            dest_reg
+            result_reg, dest_reg
         );
         debug!(
             "RuleReturn - result_reg {} contains: {:?}",
-            result_reg,
-            self.registers[result_reg as usize]
+            result_reg, self.registers[result_reg as usize]
         );
 
         self.registers[dest_reg as usize] = self.registers[result_reg as usize].clone();
 
         debug!(
             "RuleReturn - dest_reg {} now contains: {:?}",
-            dest_reg,
-            self.registers[dest_reg as usize]
+            dest_reg, self.registers[dest_reg as usize]
         );
         Ok(())
     }
@@ -1443,10 +1466,12 @@ impl RegoVM {
             let span = span!(tracing::Level::DEBUG, "execute_loop_start", mode = ?mode);
             self.push_span(span);
         }
-        
-        debug!("Starting loop: mode={:?}, collection_reg={}, key_reg={}, value_reg={}, result_reg={}", 
-               mode, params.collection, params.key_reg, params.value_reg, params.result_reg);
-        
+
+        debug!(
+            "Starting loop: mode={:?}, collection_reg={}, key_reg={}, value_reg={}, result_reg={}",
+            mode, params.collection, params.key_reg, params.value_reg, params.result_reg
+        );
+
         // Initialize result container based on mode
         let initial_result = match mode {
             LoopMode::Any | LoopMode::Every | LoopMode::ForEach => Value::Bool(false),
@@ -1455,7 +1480,10 @@ impl RegoVM {
             LoopMode::ObjectComprehension => Value::Object(Arc::new(BTreeMap::new())),
         };
         self.registers[params.result_reg as usize] = initial_result.clone();
-        debug!("Initialized result register {} with: {:?}", params.result_reg, initial_result);
+        debug!(
+            "Initialized result register {} with: {:?}",
+            params.result_reg, initial_result
+        );
 
         let collection_value = self.registers[params.collection as usize].clone();
         debug!("Loop collection: {:?}", collection_value);
@@ -1528,21 +1556,21 @@ impl RegoVM {
         };
 
         self.loop_stack.push(loop_context);
-        
+
         // Add span for the first iteration
         #[cfg(feature = "rvm-tracing")]
         {
             let iteration_span = span!(
-                tracing::Level::DEBUG, 
-                "loop_iteration", 
+                tracing::Level::DEBUG,
+                "loop_iteration",
                 iteration = 1,
                 mode = ?mode
             );
             self.push_span(iteration_span);
         }
-        
+
         self.pc = params.body_start as usize - 1; // -1 because PC will be incremented after instruction
-        
+
         Ok(())
     }
 
@@ -1553,7 +1581,6 @@ impl RegoVM {
             let body_start = loop_ctx.body_start;
             let loop_end = loop_ctx.loop_end;
 
-
             #[cfg(feature = "rvm-tracing")]
             {
                 // Pop the iteration span first
@@ -1562,26 +1589,21 @@ impl RegoVM {
                 let span = span!(tracing::Level::DEBUG, "execute_loop_next");
                 self.push_span(span);
             }
-        
+
             debug!(
                 "LoopNext - body_start={}, loop_end={} (from context)",
-                body_start,
-                loop_end
+                body_start, loop_end
             );
 
             loop_ctx.total_iterations += 1;
             debug!(
                 "LoopNext - iteration {}, mode={:?}",
-                loop_ctx.total_iterations,
-                loop_ctx.mode
+                loop_ctx.total_iterations, loop_ctx.mode
             );
 
             // Check iteration result
             let iteration_succeeded = self.check_iteration_success(&loop_ctx)?;
-            debug!(
-                "LoopNext - iteration_succeeded={}",
-                iteration_succeeded
-            );
+            debug!("LoopNext - iteration_succeeded={}", iteration_succeeded);
 
             if iteration_succeeded {
                 loop_ctx.success_count += 1;
@@ -1598,10 +1620,10 @@ impl RegoVM {
                     self.registers[loop_ctx.result_reg as usize] = Value::Bool(true);
                     // Set PC to loop_end - 1 because main loop will increment it
                     self.pc = loop_end as usize - 1;
-                    
+
                     #[cfg(feature = "rvm-tracing")]
                     self.pop_span();
-                    
+
                     return Ok(());
                 }
                 LoopAction::ExitWithFailure => {
@@ -1609,15 +1631,13 @@ impl RegoVM {
                     self.registers[loop_ctx.result_reg as usize] = Value::Bool(false);
                     // Set PC to loop_end - 1 because main loop will increment it
                     self.pc = loop_end as usize - 1;
-                    
+
                     #[cfg(feature = "rvm-tracing")]
                     self.pop_span();
-                    
+
                     return Ok(());
                 }
-                LoopAction::Continue => {
-                    
-                }
+                LoopAction::Continue => {}
             }
 
             // Advance to next iteration
@@ -1651,7 +1671,7 @@ impl RegoVM {
 
             if has_next {
                 loop_ctx.current_iteration_failed = false; // Reset for next iteration
-                
+
                 self.loop_stack.push(loop_ctx);
                 self.pc = body_start as usize - 1; // Jump to body_start, which will be incremented to body_start
                 debug!(
@@ -1664,10 +1684,10 @@ impl RegoVM {
                 let final_result = match loop_ctx.mode {
                     LoopMode::Any => {
                         let result = Value::Bool(loop_ctx.success_count > 0);
+                        #[cfg(feature = "rvm-tracing")]
                         debug!(
                             "LoopNext - Any final result: {:?} (success_count={})",
-                            result,
-                            loop_ctx.success_count
+                            result, loop_ctx.success_count
                         );
                         result
                     }
@@ -1676,10 +1696,10 @@ impl RegoVM {
                     }
                     LoopMode::ForEach => {
                         let result = Value::Bool(loop_ctx.success_count > 0);
+                        #[cfg(feature = "rvm-tracing")]
                         debug!(
                             "LoopNext - ForEach final result: {:?} (success_count={})",
-                            result,
-                            loop_ctx.success_count
+                            result, loop_ctx.success_count
                         );
                         result
                     }
@@ -1694,12 +1714,11 @@ impl RegoVM {
                 self.registers[loop_ctx.result_reg as usize] = final_result;
                 debug!(
                     "LoopNext - final result stored in register {}: {:?}",
-                    loop_ctx.result_reg,
-                    self.registers[loop_ctx.result_reg as usize]
+                    loop_ctx.result_reg, self.registers[loop_ctx.result_reg as usize]
                 );
-                
+
                 self.pc = loop_end as usize - 1; // -1 because PC will be incremented
-                
+
                 #[cfg(feature = "rvm-tracing")]
                 self.pop_span();
             }
@@ -1708,9 +1727,7 @@ impl RegoVM {
         } else {
             // No active loop context - this happens when the collection was empty
             // and handle_empty_collection was called. Just continue past loop_end.
-            debug!(
-                "LoopNext - no active loop (empty collection), jumping past loop_end"
-            );
+            debug!("LoopNext - no active loop (empty collection), jumping past loop_end");
             self.pc = _loop_end as usize; // Jump past LoopNext instruction
             Ok(())
         }
@@ -1735,10 +1752,10 @@ impl RegoVM {
         self.registers[result_reg as usize] = result;
         // Set PC to loop_end - 1 because the main loop will increment it by 1
         self.pc = (loop_end as usize).saturating_sub(1);
-        
+
         #[cfg(feature = "rvm-tracing")]
         self.pop_span();
-        
+
         Ok(())
     }
 
@@ -1754,16 +1771,24 @@ impl RegoVM {
                 if *index < items.len() {
                     if key_reg != value_reg {
                         let key_value = Value::from(*index as f64);
-                        debug!("Setting array iteration: key[{}] = {}, value[{}] = {:?}", 
-                               key_reg, index, value_reg, items[*index]);
+                        debug!(
+                            "Setting array iteration: key[{}] = {}, value[{}] = {:?}",
+                            key_reg, index, value_reg, items[*index]
+                        );
                         self.registers[key_reg as usize] = key_value;
                     }
                     let item_value = items[*index].clone();
                     self.registers[value_reg as usize] = item_value.clone();
-                    debug!("Array iteration setup complete: index={}, value={:?}", index, item_value);
+                    debug!(
+                        "Array iteration setup complete: index={}, value={:?}",
+                        index, item_value
+                    );
                     Ok(true)
                 } else {
-                    debug!("Array iteration complete: reached end of {} items", items.len());
+                    debug!(
+                        "Array iteration complete: reached end of {} items",
+                        items.len()
+                    );
                     Ok(false)
                 }
             }

@@ -6,7 +6,7 @@ use crate::builtins;
 use crate::lexer::Span;
 use crate::rvm::program::RuleType;
 use crate::rvm::program::SpanInfo;
-use crate::rvm::tracing_utils::{debug, info, trace, span};
+use crate::rvm::tracing_utils::{debug, info, span};
 use crate::utils::get_path_string;
 use crate::{CompiledPolicy, Value};
 use alloc::collections::{BTreeMap, BTreeSet};
@@ -377,8 +377,7 @@ impl<'a> Compiler<'a> {
         if let Some(var_reg) = self.lookup_variable(var_name) {
             debug!(
                 "Variable '{}' found in local scope at register {}",
-                var_name,
-                var_reg
+                var_name, var_reg
             );
             return Ok(var_reg);
         }
@@ -425,9 +424,7 @@ impl<'a> Compiler<'a> {
                     };
                     debug!(
                         "Rule '{}' head type: {:?}, is_set: {:?}",
-                        rule_path,
-                        head,
-                        result
+                        rule_path, head, result
                     );
                     result
                 } else {
@@ -488,11 +485,7 @@ impl<'a> Compiler<'a> {
     }
 
     fn store_variable(&mut self, var_name: String, register: Register) {
-        debug!(
-            "Storing variable '{}' in register {}",
-            var_name,
-            register
-        );
+        debug!("Storing variable '{}' in register {}", var_name, register);
         self.add_variable(&var_name, register);
     }
 
@@ -578,28 +571,31 @@ impl<'a> Compiler<'a> {
         self.program.rule_infos = rule_infos_map.into_values().collect();
 
         // Debug: Print rule definitions
-        debug!("Rule definitions in program:");
-        for (rule_idx, rule_info) in self.program.rule_infos.iter().enumerate() {
-            let function_info = match &rule_info.function_info {
-                Some(func_info) => format!(
-                    " (function with {} params: {:?})",
-                    func_info.num_params, func_info.param_names
-                ),
-                None => String::new(),
-            };
-            debug!(
-                "  Rule {}: {} definitions{}",
-                rule_idx,
-                rule_info.definitions.len(),
-                function_info
-            );
-            for (def_idx, bodies) in rule_info.definitions.iter().enumerate() {
+        #[cfg(feature = "rvm-tracing")]
+        {
+            debug!("Rule definitions in program:");
+            for (rule_idx, rule_info) in self.program.rule_infos.iter().enumerate() {
+                let function_info = match &rule_info.function_info {
+                    Some(func_info) => format!(
+                        " (function with {} params: {:?})",
+                        func_info.num_params, func_info.param_names
+                    ),
+                    None => String::new(),
+                };
                 debug!(
-                    "    Definition {}: {} bodies at entry points {:?}",
-                    def_idx,
-                    bodies.len(),
-                    bodies
+                    "  Rule {}: {} definitions{}",
+                    rule_idx,
+                    rule_info.definitions.len(),
+                    function_info
                 );
+                for (def_idx, bodies) in rule_info.definitions.iter().enumerate() {
+                    debug!(
+                        "    Definition {}: {} bodies at entry points {:?}",
+                        def_idx,
+                        bodies.len(),
+                        bodies
+                    );
+                }
             }
         }
 
@@ -619,10 +615,7 @@ impl<'a> Compiler<'a> {
             self.program.instructions.len(),
             self.program.rule_infos.len()
         );
-        debug!(
-            "Program requires {} registers",
-            self.program.num_registers
-        );
+        debug!("Program requires {} registers", self.program.num_registers);
 
         // Initialize resolved builtins if we have builtin info
         if !self.program.builtin_info_table.is_empty() {
@@ -1061,10 +1054,14 @@ impl<'a> Compiler<'a> {
 
     /// Compile from a CompiledPolicy to RVM Program
     pub fn compile_from_policy(policy: &CompiledPolicy, rule_name: &str) -> Result<Arc<Program>> {
-        let _span = span!(tracing::Level::INFO, "compile_from_policy", rule_name = rule_name);
+        let _span = span!(
+            tracing::Level::INFO,
+            "compile_from_policy",
+            rule_name = rule_name
+        );
         let _enter = _span.enter();
         info!("Starting compilation for rule: {}", rule_name);
-        
+
         // Extract package name from rule_name
         let package = if let Some(last_dot) = rule_name.rfind('.') {
             rule_name[..last_dot].to_string()
@@ -1076,11 +1073,14 @@ impl<'a> Compiler<'a> {
         let mut compiler = Compiler::with_policy(policy, package);
         let rules = policy.get_rules();
 
-        debug!("Available rules in policy:");
-        for (key, rule_list) in rules.iter() {
-            debug!("  Rule key: '{}' ({} variants)", key, rule_list.len());
+        #[cfg(feature = "rvm-tracing")]
+        {
+            debug!("Available rules in policy:");
+            for (key, rule_list) in rules.iter() {
+                debug!("  Rule key: '{}' ({} variants)", key, rule_list.len());
+            }
+            debug!("Looking for rule: '{}'", rule_name);
         }
-        debug!("Looking for rule: '{}'", rule_name);
 
         // Emit CallRule instruction for the main entry point
         let result_reg = compiler.alloc_register();
@@ -1091,11 +1091,17 @@ impl<'a> Compiler<'a> {
         // Add Return instruction for main execution
         compiler.emit_return(result_reg);
 
-        info!("Starting worklist compilation for {} rule groups", rules.len());
+        info!(
+            "Starting worklist compilation for {} rule groups",
+            rules.len()
+        );
         compiler.compile_worklist_rules(rules)?;
 
         let program = Arc::new(compiler.finish());
-        info!("Compilation completed successfully, program has {} instructions", program.instructions.len());
+        info!(
+            "Compilation completed successfully, program has {} instructions",
+            program.instructions.len()
+        );
         Ok(program)
     }
 
@@ -1104,8 +1110,11 @@ impl<'a> Compiler<'a> {
         rules: &HashMap<String, Vec<crate::ast::NodeRef<Rule>>>,
     ) -> Result<()> {
         let _span = span!(tracing::Level::DEBUG, "compile_worklist_rules");
-        debug!("Starting worklist compilation with {} rules in worklist", self.rule_worklist.len());
-        
+        debug!(
+            "Starting worklist compilation with {} rules in worklist",
+            self.rule_worklist.len()
+        );
+
         // Now compile all rules in the worklist (set rules referenced via CallRule)
         while !self.rule_worklist.is_empty() {
             let rule_to_compile = self.rule_worklist.remove(0);
@@ -1122,7 +1131,11 @@ impl<'a> Compiler<'a> {
         rule_path: &str,
         rules: &HashMap<String, Vec<crate::ast::NodeRef<Rule>>>,
     ) -> Result<()> {
-        let _span = span!(tracing::Level::DEBUG, "compile_worklist_rule", rule_path = rule_path);
+        let _span = span!(
+            tracing::Level::DEBUG,
+            "compile_worklist_rule",
+            rule_path = rule_path
+        );
         debug!("Starting compilation of worklist rule: '{}'", rule_path);
 
         if let Some(rule_definitions) = rules.get(rule_path) {
@@ -2290,7 +2303,11 @@ impl<'a> Compiler<'a> {
 
         let _span = span!(tracing::Level::DEBUG, "compile_function_call");
         let _enter = _span.enter();
-        debug!("Compiling function call: '{}' with {} parameters", fcn_path, params.len());
+        debug!(
+            "Compiling function call: '{}' with {} parameters",
+            fcn_path,
+            params.len()
+        );
 
         // Try to find user-defined function first with the original path
         let original_fcn_path = fcn_path.clone();
@@ -2307,9 +2324,8 @@ impl<'a> Compiler<'a> {
 
         // Compile all parameter expressions first
         let mut arg_regs = Vec::new();
-        for (i, param) in params.iter().enumerate() {
+        for param in params.iter() {
             let param_reg = self.compile_rego_expr_with_span(param, param.span(), false)?;
-            debug!("Compiled parameter {}: register {}", i, param_reg);
             arg_regs.push(param_reg);
         }
 
@@ -2371,16 +2387,20 @@ impl<'a> Compiler<'a> {
 
             debug!(
                 "Builtin call compiled - dest={}, params_index={}, builtin_index={}",
-                dest,
-                params_index,
-                builtin_index
+                dest, params_index, builtin_index
             );
         } else {
-            debug!("Function '{}' not found as user-defined or builtin", original_fcn_path);
+            debug!(
+                "Function '{}' not found as user-defined or builtin",
+                original_fcn_path
+            );
             bail!("Unknown function: '{}'", original_fcn_path);
         }
 
-        debug!("Function call compilation completed, result in register {}", dest);
+        debug!(
+            "Function call compilation completed, result in register {}",
+            dest
+        );
         Ok(dest)
     }
 }

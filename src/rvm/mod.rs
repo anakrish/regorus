@@ -6,6 +6,7 @@ pub mod compiler;
 pub mod debugger;
 pub mod instructions;
 pub mod program;
+pub mod tracing_utils;
 pub mod vm;
 
 #[cfg(test)]

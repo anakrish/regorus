@@ -45,6 +45,7 @@ uuid = ["dep:uuid"]
 urlquery = ["dep:url"]
 yaml = ["serde_yaml"]
 rvm-debug = []
+rvm-tracing = ["tracing", "tracing-subscriber"]
 full-opa = [
     "base64",
     "base64url",
@@ -120,6 +121,8 @@ rand = { version = "0.9.0", default-features = false, features = ["thread_rng"],
 msvc_spectre_libs = { version = "0.1", features = ["error"], optional = true }
 dashmap = { version = "6.1", default-features = false, optional = true }
 mimalloc = { path = "mimalloc", optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 
 [dev-dependencies]
 anyhow = "1.0.45"
@@ -127,6 +130,7 @@ cfg-if = "1.0.0"
 clap = { version = "4.5.49", features = ["derive"] }
 prettydiff = { version = "0.8.0", default-features = false }
 serde_yaml = "0.9.16"
+tracing-test = "0.2"
 test-generator = "0.3.1"
 walkdir = "2.3.2"
 criterion = { version = "0.7" }

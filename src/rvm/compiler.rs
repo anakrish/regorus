@@ -6,6 +6,7 @@ use crate::builtins;
 use crate::lexer::Span;
 use crate::rvm::program::RuleType;
 use crate::rvm::program::SpanInfo;
+use crate::rvm::tracing_utils::{debug, info, trace, span};
 use crate::utils::get_path_string;
 use crate::{CompiledPolicy, Value};
 use alloc::collections::{BTreeMap, BTreeSet};
@@ -343,15 +344,15 @@ impl<'a> Compiler<'a> {
     /// Store a variable mapping (backward compatibility)
     /// Look up a variable, first in local scope, then as a rule reference
     fn resolve_variable(&mut self, var_name: &str, span: &Span) -> Result<Register> {
-        std::println!("Debug: resolve_variable called for '{}'", var_name);
+        debug!("resolve_variable called for '{}'", var_name);
 
         // Handle special built-in variables first
         match var_name {
             "input" => {
                 let dest = self.alloc_register();
                 self.emit_instruction(Instruction::LoadInput { dest }, span);
-                std::println!(
-                    "Debug: Variable 'input' resolved to LoadInput instruction, register {}",
+                debug!(
+                    "Variable 'input' resolved to LoadInput instruction, register {}",
                     dest
                 );
                 return Ok(dest);
@@ -361,8 +362,8 @@ impl<'a> Compiler<'a> {
                 // TODO: data overrides rule in same path
                 let dest = self.alloc_register();
                 self.emit_instruction(Instruction::LoadData { dest }, span);
-                std::println!(
-                    "Debug: Variable 'data' resolved to LoadData instruction, register {}",
+                debug!(
+                    "Variable 'data' resolved to LoadData instruction, register {}",
                     dest
                 );
                 return Ok(dest);
@@ -374,16 +375,16 @@ impl<'a> Compiler<'a> {
 
         // First check local variables
         if let Some(var_reg) = self.lookup_variable(var_name) {
-            std::println!(
-                "Debug: Variable '{}' found in local scope at register {}",
+            debug!(
+                "Variable '{}' found in local scope at register {}",
                 var_name,
                 var_reg
             );
             return Ok(var_reg);
         }
 
-        std::println!(
-            "Debug: Variable '{}' not found in local scope, checking rules",
+        debug!(
+            "Variable '{}' not found in local scope, checking rules",
             var_name
         );
 
@@ -422,15 +423,15 @@ impl<'a> Compiler<'a> {
                         },
                         _ => RuleType::Complete,
                     };
-                    std::println!(
-                        "Debug: Rule '{}' head type: {:?}, is_set: {:?}",
+                    debug!(
+                        "Rule '{}' head type: {:?}, is_set: {:?}",
                         rule_path,
                         head,
                         result
                     );
                     result
                 } else {
-                    std::println!("Debug: Rule '{}' is not a Spec rule", rule_path);
+                    debug!("Rule '{}' is not a Spec rule", rule_path);
                     RuleType::Complete
                 }
             })
@@ -481,14 +482,14 @@ impl<'a> Compiler<'a> {
                 self.rule_function_params.push(None); // Default to None (not a function)
             }
 
-            std::println!("Debug: Assigned rule index {} to '{}'", index, rule_path);
+            debug!("Assigned rule index {} to '{}'", index, rule_path);
             Ok(index)
         }
     }
 
     fn store_variable(&mut self, var_name: String, register: Register) {
-        std::println!(
-            "Debug: Storing variable '{}' in register {}",
+        debug!(
+            "Storing variable '{}' in register {}",
             var_name,
             register
         );
@@ -577,7 +578,7 @@ impl<'a> Compiler<'a> {
         self.program.rule_infos = rule_infos_map.into_values().collect();
 
         // Debug: Print rule definitions
-        std::println!("Debug: Rule definitions in program:");
+        debug!("Rule definitions in program:");
         for (rule_idx, rule_info) in self.program.rule_infos.iter().enumerate() {
             let function_info = match &rule_info.function_info {
                 Some(func_info) => format!(
@@ -586,14 +587,14 @@ impl<'a> Compiler<'a> {
                 ),
                 None => String::new(),
             };
-            std::println!(
+            debug!(
                 "  Rule {}: {} definitions{}",
                 rule_idx,
                 rule_info.definitions.len(),
                 function_info
             );
             for (def_idx, bodies) in rule_info.definitions.iter().enumerate() {
-                std::println!(
+                debug!(
                     "    Definition {}: {} bodies at entry points {:?}",
                     def_idx,
                     bodies.len(),
@@ -613,13 +614,13 @@ impl<'a> Compiler<'a> {
         // Transfer spans to program (they already have correct source indices)
         self.program.instruction_spans = self.spans.into_iter().map(Some).collect();
 
-        std::println!(
-            "Debug: Final program has {} instructions, {} rule infos",
+        debug!(
+            "Final program has {} instructions, {} rule infos",
             self.program.instructions.len(),
             self.program.rule_infos.len()
         );
-        std::println!(
-            "Debug: Program requires {} registers",
+        debug!(
+            "Program requires {} registers",
             self.program.num_registers
         );
 
@@ -1019,17 +1020,17 @@ impl<'a> Compiler<'a> {
                 dest
             }
             Expr::ArrayCompr { term, query, .. } => {
-                std::println!("Debug: Compiling array comprehension");
+                debug!("Compiling array comprehension");
                 self.compile_array_comprehension(term, query, span)?
             }
             Expr::SetCompr { term, query, .. } => {
-                std::println!("Debug: Compiling set comprehension");
+                debug!("Compiling set comprehension");
                 self.compile_set_comprehension(term, query, span)?
             }
             Expr::ObjectCompr {
                 key, value, query, ..
             } => {
-                std::println!("Debug: Compiling object comprehension");
+                debug!("Compiling object comprehension");
                 self.compile_object_comprehension(key, value, query, span)?
             }
             Expr::Call { fcn, params, .. } => {
@@ -1060,45 +1061,58 @@ impl<'a> Compiler<'a> {
 
     /// Compile from a CompiledPolicy to RVM Program
     pub fn compile_from_policy(policy: &CompiledPolicy, rule_name: &str) -> Result<Arc<Program>> {
+        let _span = span!(tracing::Level::INFO, "compile_from_policy", rule_name = rule_name);
+        let _enter = _span.enter();
+        info!("Starting compilation for rule: {}", rule_name);
+        
         // Extract package name from rule_name
         let package = if let Some(last_dot) = rule_name.rfind('.') {
             rule_name[..last_dot].to_string()
         } else {
             "data".to_string()
         };
+        debug!("Extracted package: {}", package);
 
         let mut compiler = Compiler::with_policy(policy, package);
         let rules = policy.get_rules();
 
-        std::println!("Debug: Available rules in policy:");
+        debug!("Available rules in policy:");
         for (key, rule_list) in rules.iter() {
-            std::println!("  Rule key: '{}' ({} variants)", key, rule_list.len());
+            debug!("  Rule key: '{}' ({} variants)", key, rule_list.len());
         }
-        std::println!("Debug: Looking for rule: '{}'", rule_name);
+        debug!("Looking for rule: '{}'", rule_name);
 
         // Emit CallRule instruction for the main entry point
         let result_reg = compiler.alloc_register();
         let rule_idx = compiler.get_or_assign_rule_index(rule_name)?;
+        debug!("Assigned rule index {} for rule '{}'", rule_idx, rule_name);
         compiler.emit_call_rule(result_reg, rule_idx);
 
         // Add Return instruction for main execution
         compiler.emit_return(result_reg);
 
+        info!("Starting worklist compilation for {} rule groups", rules.len());
         compiler.compile_worklist_rules(rules)?;
 
-        Ok(Arc::new(compiler.finish()))
+        let program = Arc::new(compiler.finish());
+        info!("Compilation completed successfully, program has {} instructions", program.instructions.len());
+        Ok(program)
     }
 
     fn compile_worklist_rules(
         &mut self,
         rules: &HashMap<String, Vec<crate::ast::NodeRef<Rule>>>,
     ) -> Result<()> {
+        let _span = span!(tracing::Level::DEBUG, "compile_worklist_rules");
+        debug!("Starting worklist compilation with {} rules in worklist", self.rule_worklist.len());
+        
         // Now compile all rules in the worklist (set rules referenced via CallRule)
         while !self.rule_worklist.is_empty() {
             let rule_to_compile = self.rule_worklist.remove(0);
-            std::println!("Debug: Compiling worklist rule: '{}'", rule_to_compile);
+            debug!("Compiling worklist rule: '{}'", rule_to_compile);
             self.compile_worklist_rule(&rule_to_compile, rules)?;
         }
+        debug!("Worklist compilation completed");
         Ok(())
     }
 
@@ -1108,7 +1122,8 @@ impl<'a> Compiler<'a> {
         rule_path: &str,
         rules: &HashMap<String, Vec<crate::ast::NodeRef<Rule>>>,
     ) -> Result<()> {
-        std::println!("Debug: Compiling worklist rule: '{}'", rule_path);
+        let _span = span!(tracing::Level::DEBUG, "compile_worklist_rule", rule_path = rule_path);
+        debug!("Starting compilation of worklist rule: '{}'", rule_path);
 
         if let Some(rule_definitions) = rules.get(rule_path) {
             let rule_index = self.rule_index_map.get(rule_path).copied().unwrap_or(1);
@@ -2269,55 +2284,45 @@ impl<'a> Compiler<'a> {
         params: &[ExprRef],
         span: Span,
     ) -> Result<Register> {
-        std::println!(
-            "Debug: Compiling function call with {} parameters",
-            params.len()
-        );
-
         // Get the function path
         let fcn_path = get_path_string(fcn, None)
             .map_err(|_| anyhow::anyhow!("Invalid function expression"))?;
 
-        std::println!("Debug: Function call path: '{}'", fcn_path);
+        let _span = span!(tracing::Level::DEBUG, "compile_function_call");
+        let _enter = _span.enter();
+        debug!("Compiling function call: '{}' with {} parameters", fcn_path, params.len());
 
         // Try to find user-defined function first with the original path
         let original_fcn_path = fcn_path.clone();
         let full_fcn_path = if self.policy.inner.rules.contains_key(&fcn_path) {
+            debug!("Found user-defined function: '{}'", fcn_path);
             fcn_path
         } else {
             // If not found, try with current package prefix
             let with_package = get_path_string(fcn, Some(&self.current_package))
                 .map_err(|_| anyhow::anyhow!("Invalid function expression with package"))?;
-            std::println!("Debug: Function call path with package: '{}'", with_package);
+            debug!("Trying with package prefix: '{}'", with_package);
             with_package
         };
 
-        std::println!("Debug: Final function call path: '{}'", full_fcn_path);
-
         // Compile all parameter expressions first
         let mut arg_regs = Vec::new();
-        for param in params {
+        for (i, param) in params.iter().enumerate() {
             let param_reg = self.compile_rego_expr_with_span(param, param.span(), false)?;
+            debug!("Compiled parameter {}: register {}", i, param_reg);
             arg_regs.push(param_reg);
         }
 
         // Allocate destination register for the result
         let dest = self.alloc_register();
+        debug!("Allocated destination register: {}", dest);
 
         // First check if this is a user-defined function rule
         if self.is_user_defined_function(&full_fcn_path) {
-            std::println!(
-                "Debug: Function '{}' is a user-defined function",
-                full_fcn_path
-            );
-
+            debug!("Compiling as user-defined function: '{}'", full_fcn_path);
             // Get the function rule index for user-defined functions
             let rule_index = self.get_or_assign_rule_index(&full_fcn_path)?;
-            std::println!(
-                "Debug: Function '{}' resolved to rule index {}",
-                full_fcn_path,
-                rule_index
-            );
+            debug!("Function rule index: {}", rule_index);
 
             // Create function call parameters with fixed-size array
             let mut args_array = [0u8; 8];
@@ -2337,18 +2342,13 @@ impl<'a> Compiler<'a> {
 
             // Emit the FunctionCall instruction
             self.emit_instruction(Instruction::FunctionCall { params_index }, &span);
-
-            std::println!(
-                "Debug: Function call compiled - dest={}, params_index={}, rule_index={}",
-                dest,
-                params_index,
-                rule_index
-            );
+            debug!("Emitted FunctionCall instruction for user-defined function");
         } else if self.is_builtin(&original_fcn_path) {
-            std::println!("Debug: Function '{}' is a builtin", original_fcn_path);
+            debug!("Compiling as builtin function: '{}'", original_fcn_path);
 
             // Get builtin index
             let builtin_index = self.get_builtin_index(&original_fcn_path)?;
+            debug!("Builtin index: {}", builtin_index);
 
             // Create builtin call parameters with fixed-size array
             let mut args_array = [0u8; 8];
@@ -2369,16 +2369,18 @@ impl<'a> Compiler<'a> {
             // Emit the BuiltinCall instruction
             self.emit_instruction(Instruction::BuiltinCall { params_index }, &span);
 
-            std::println!(
-                "Debug: Builtin call compiled - dest={}, params_index={}, builtin_index={}",
+            debug!(
+                "Builtin call compiled - dest={}, params_index={}, builtin_index={}",
                 dest,
                 params_index,
                 builtin_index
             );
         } else {
+            debug!("Function '{}' not found as user-defined or builtin", original_fcn_path);
             bail!("Unknown function: '{}'", original_fcn_path);
         }
 
+        debug!("Function call compilation completed, result in register {}", dest);
         Ok(dest)
     }
 }

@@ -213,16 +213,16 @@ impl InteractiveDebugger {
         let rego_lines = self.get_rego_display_lines(pc, program, content_height);
         let instruction_lines = self.get_instruction_display_lines(pc, program, content_height);
 
-        // Header row for the two panels
+        // Header row for the two panels - Instructions first, then Source
         println!(
             "│ {:<width$} │ {:<width$} │",
-            "📜 Rego Source",
-            "📋 Instructions",
+            "� Instructions",
+            "� Rego Source",
             width = half_width - 2
         );
         println!("├{}┼{}┤", "─".repeat(half_width), "─".repeat(half_width));
 
-        // Content rows
+        // Content rows - Instructions first, then Source
         for i in 0..content_height {
             let rego_line = if i < rego_lines.len() {
                 &rego_lines[i]
@@ -237,8 +237,8 @@ impl InteractiveDebugger {
 
             println!(
                 "│ {:<width$} │ {:<width$} │",
-                self.truncate_or_pad(rego_line, half_width - 2),
                 self.truncate_or_pad(inst_line, half_width - 2),
+                self.truncate_or_pad(rego_line, half_width - 2),
                 width = half_width - 2
             );
         }
@@ -310,8 +310,30 @@ impl InteractiveDebugger {
                 };
 
                 if is_current {
-                    // Use highlighted formatting for current line (avoid bold that might bleed)
-                    lines.push(format!("*** {:3}: {}", line_num, line_content));
+                    // Highlight the current line and expression with color
+                    if let Some(span) = current_span {
+                        let col = if span.column > 0 { span.column - 1 } else { 0 };
+                        if col < line_content.len() {
+                            let end_col = (col + span.length).min(line_content.len());
+                            
+                            // Split the line into: before expression | expression | after expression
+                            let before = &line_content[..col];
+                            let expression = &line_content[col..end_col];
+                            let after = &line_content[end_col..];
+                            
+                            // Use ANSI colors: \x1b[93m for bright yellow background, \x1b[0m to reset
+                            let highlighted_line = format!(
+                                "*** {:3}: {}\x1b[43m\x1b[30m{}\x1b[0m{}", 
+                                line_num, before, expression, after
+                            );
+                            lines.push(highlighted_line);
+                        } else {
+                            // Fallback if column is out of bounds
+                            lines.push(format!("*** {:3}: {}", line_num, line_content));
+                        }
+                    } else {
+                        lines.push(format!("*** {:3}: {}", line_num, line_content));
+                    }
 
                     // Add cursor line if we have span info
                     if let Some(span) = current_span {
@@ -360,15 +382,41 @@ impl InteractiveDebugger {
     ) -> Vec<String> {
         let mut lines = Vec::new();
 
+        // First pass: identify all loop ranges for indentation
+        let mut loop_ranges = Vec::new();
+        for (i, instruction) in program.instructions.iter().enumerate() {
+            if let Instruction::LoopStart { params_index } = instruction {
+                if let Some(loop_params) = program.instruction_data.loop_params.get(*params_index as usize) {
+                    loop_ranges.push((i, loop_params.loop_end as usize));
+                }
+            }
+        }
+
         // Show instructions around current PC
         let start_pc = pc.saturating_sub(max_lines / 2);
         let end_pc = std::cmp::min(program.instructions.len(), start_pc + max_lines);
 
         for i in start_pc..end_pc {
             if i < program.instructions.len() {
+                // Calculate loop depth for this instruction
+                let loop_depth = loop_ranges.iter()
+                    .filter(|(start, end)| i > *start && i < *end)
+                    .count();
+                
+                // Create indentation based on loop depth
+                let indent = "  ".repeat(loop_depth);
+                
+                // Mark loop instructions with special symbol
+                let loop_marker = match &program.instructions[i] {
+                    Instruction::LoopStart { .. } => "█",
+                    Instruction::LoopNext { .. } => "█", 
+                    _ => " ",
+                };
+                
                 let marker = if i == pc { "***" } else { "   " };
                 let inst = &program.instructions[i];
-                lines.push(format!("{} {:3}: {:?}", marker, i, inst));
+                
+                lines.push(format!("{} {:3}:{} {}{:?}", marker, i, loop_marker, indent, inst));
             }
         }
 

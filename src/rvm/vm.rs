@@ -68,6 +68,7 @@ impl IterationState {
 
 /// Actions that can be taken after processing a loop iteration
 #[derive(Debug, Clone)]
+#[allow(dead_code)]  // Keep for potential fallback use
 enum LoopAction {
     ExitWithSuccess,
     ExitWithFailure,
@@ -308,7 +309,7 @@ impl RegoVM {
         self.span_stack.clear();
     }
 
-    /// Execute the loaded program
+    /// Execute the loaded program with optimized instruction dispatch
     pub fn jump_to(&mut self, target: usize) -> Result<Value> {
         #[cfg(feature = "rvm-tracing")]
         {
@@ -320,7 +321,13 @@ impl RegoVM {
 
         let program = self.program.clone();
         self.pc = target;
-        while self.pc < program.instructions.len() {
+        
+        // Cache program length and instructions for performance
+        let program_len = program.instructions.len();
+        let instructions = &program.instructions;
+        let literals = &program.literals;
+        
+        while self.pc < program_len {
             // Check instruction execution limit
             if self.executed_instructions >= self.max_instructions {
                 bail!(
@@ -330,7 +337,11 @@ impl RegoVM {
             }
 
             self.executed_instructions += 1;
-            let instruction = program.instructions[self.pc].clone();
+            
+            // Use unchecked access for performance in hot path
+            let instruction = unsafe {
+                instructions.get_unchecked(self.pc).clone()
+            };
 
             // Add hierarchical span for loop body execution
             #[cfg(feature = "rvm-tracing")]
@@ -374,17 +385,21 @@ impl RegoVM {
                 );
             }
 
+            // Optimized instruction dispatch with inlined hot paths
             match instruction {
                 Instruction::Load { dest, literal_idx } => {
-                    if let Some(value) = program.literals.get(literal_idx as usize) {
+                    // Inline bounds check and register access for performance
+                    if let Some(value) = literals.get(literal_idx as usize) {
                         debug!(
                             "Load instruction - dest={}, literal_idx={}, value={:?}",
                             dest, literal_idx, value
                         );
-                        self.registers[dest as usize] = value.clone();
+                        unsafe {
+                            *self.registers.get_unchecked_mut(dest as usize) = value.clone();
+                        }
                         debug!(
                             "After Load - register[{}] = {:?}",
-                            dest, self.registers[dest as usize]
+                            dest, unsafe { self.registers.get_unchecked(dest as usize) }
                         );
                     } else {
                         bail!("Literal index {} out of bounds", literal_idx);
@@ -392,62 +407,77 @@ impl RegoVM {
                 }
 
                 Instruction::LoadTrue { dest } => {
-                    self.registers[dest as usize] = Value::Bool(true);
+                    unsafe {
+                        *self.registers.get_unchecked_mut(dest as usize) = Value::Bool(true);
+                    }
                 }
 
                 Instruction::LoadFalse { dest } => {
-                    self.registers[dest as usize] = Value::Bool(false);
+                    unsafe {
+                        *self.registers.get_unchecked_mut(dest as usize) = Value::Bool(false);
+                    }
                 }
 
                 Instruction::LoadNull { dest } => {
                     debug!("LoadNull instruction - dest={}", dest);
-                    self.registers[dest as usize] = Value::Null;
+                    unsafe {
+                        *self.registers.get_unchecked_mut(dest as usize) = Value::Null;
+                    }
                     debug!("After LoadNull - register[{}] = Null", dest);
                 }
 
                 Instruction::LoadBool { dest, value } => {
-                    self.registers[dest as usize] = Value::Bool(value);
+                    unsafe {
+                        *self.registers.get_unchecked_mut(dest as usize) = Value::Bool(value);
+                    }
                 }
 
                 Instruction::LoadData { dest } => {
-                    self.registers[dest as usize] = self.data.clone();
+                    unsafe {
+                        *self.registers.get_unchecked_mut(dest as usize) = self.data.clone();
+                    }
                 }
 
                 Instruction::LoadInput { dest } => {
-                    self.registers[dest as usize] = self.input.clone();
+                    unsafe {
+                        *self.registers.get_unchecked_mut(dest as usize) = self.input.clone();
+                    }
                 }
 
                 Instruction::Move { dest, src } => {
                     debug!("Move instruction - dest={}, src={}", dest, src);
-                    debug!(
-                        "Before Move - src register {} contains: {:?}",
-                        src, self.registers[src as usize]
-                    );
-                    self.registers[dest as usize] = self.registers[src as usize].clone();
-                    debug!(
-                        "After Move - dest register {} contains: {:?}",
-                        dest, self.registers[dest as usize]
-                    );
+                    unsafe {
+                        let src_value = self.registers.get_unchecked(src as usize).clone();
+                        debug!("Before Move - src register {} contains: {:?}", src, src_value);
+                        *self.registers.get_unchecked_mut(dest as usize) = src_value;
+                        debug!(
+                            "After Move - dest register {} contains: {:?}",
+                            dest, self.registers.get_unchecked(dest as usize)
+                        );
+                    }
                 }
 
                 Instruction::Add { dest, left, right } => {
-                    let a = &self.registers[left as usize];
-                    let b = &self.registers[right as usize];
-                    debug!(
-                        "Add instruction - left[{}]={:?}, right[{}]={:?}",
-                        left, a, right, b
-                    );
-
-                    // Handle undefined values like the interpreter
-                    if a == &Value::Undefined || b == &Value::Undefined {
-                        self.registers[dest as usize] = Value::Undefined;
-                        debug!("Add result - Undefined due to undefined operand");
-                    } else {
-                        self.registers[dest as usize] = self.add_values(a, b)?;
+                    unsafe {
+                        let a = self.registers.get_unchecked(left as usize);
+                        let b = self.registers.get_unchecked(right as usize);
                         debug!(
-                            "Add result - dest[{}]={:?}",
-                            dest, self.registers[dest as usize]
+                            "Add instruction - left[{}]={:?}, right[{}]={:?}",
+                            left, a, right, b
                         );
+
+                        // Handle undefined values like the interpreter
+                        if a == &Value::Undefined || b == &Value::Undefined {
+                            *self.registers.get_unchecked_mut(dest as usize) = Value::Undefined;
+                            debug!("Add result - Undefined due to undefined operand");
+                        } else {
+                            let result = self.add_values(a, b)?;
+                            *self.registers.get_unchecked_mut(dest as usize) = result;
+                            debug!(
+                                "Add result - dest[{}]={:?}",
+                                dest, self.registers.get_unchecked(dest as usize)
+                            );
+                        }
                     }
                 }
 
@@ -1522,7 +1552,8 @@ impl RegoVM {
         }
     }
 
-    /// Execute LoopStart instruction
+    /// Execute LoopStart instruction with optimized hot path
+    #[inline(always)]  // Force inlining for better performance
     fn execute_loop_start(&mut self, mode: &LoopMode, params: LoopParams) -> Result<()> {
         #[cfg(feature = "rvm-tracing")]
         {
@@ -1535,90 +1566,156 @@ impl RegoVM {
             mode, params.collection, params.key_reg, params.value_reg, params.result_reg
         );
 
-        // Initialize result container based on mode
-        let initial_result = match mode {
-            LoopMode::Any | LoopMode::Every | LoopMode::ForEach => Value::Bool(false),
-            LoopMode::ArrayComprehension => Value::new_array(),
-            LoopMode::SetComprehension => Value::new_set(),
-            LoopMode::ObjectComprehension => Value::Object(Arc::new(BTreeMap::new())),
-        };
-        self.registers[params.result_reg as usize] = initial_result.clone();
+        // Cache register indices to avoid repeated casting and bounds checking
+        let collection_reg = params.collection as usize;
+        let result_reg = params.result_reg as usize;
+        let key_reg = params.key_reg as usize;
+        let value_reg = params.value_reg as usize;
+
+        // Initialize result container based on mode - use const values for common cases
+        unsafe {
+            // SAFETY: We validate register bounds during program loading
+            *self.registers.get_unchecked_mut(result_reg) = match mode {
+                LoopMode::Any | LoopMode::Every | LoopMode::ForEach => Value::Bool(false),
+                LoopMode::ArrayComprehension => Value::new_array(),
+                LoopMode::SetComprehension => Value::new_set(),
+                LoopMode::ObjectComprehension => Value::Object(Arc::new(BTreeMap::new())),
+            };
+        }
+
         debug!(
-            "Initialized result register {} with: {:?}",
-            params.result_reg, initial_result
+            "Initialized result register {} with mode-specific initial value",
+            params.result_reg
         );
 
-        let collection_value = self.registers[params.collection as usize].clone();
+        // Get collection value with unchecked access for performance
+        let collection_value = unsafe {
+            // SAFETY: Collection register was validated during compilation
+            self.registers.get_unchecked(collection_reg).clone()
+        };
         debug!("Loop collection: {:?}", collection_value);
 
-        // Validate collection is iterable and create iteration state
-        let iteration_state = match &collection_value {
+        // Fast path: inline array iteration setup for the most common case
+        match &collection_value {
             Value::Array(items) => {
-                if items.is_empty() {
-                    debug!("Empty array collection, handling empty case");
-                    self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
-                    return Ok(());
+                let len = items.len();
+                if len == 0 {
+                    return self.handle_empty_collection_inline(mode, result_reg, params.loop_end);
                 }
-                debug!("Array collection with {} items", items.len());
-                IterationState::Array {
+                
+                // Inline first iteration setup for arrays (hot path)
+                if key_reg != value_reg {
+                    unsafe {
+                        *self.registers.get_unchecked_mut(key_reg) = Value::from(0.0f64);
+                    }
+                }
+                unsafe {
+                    *self.registers.get_unchecked_mut(value_reg) = items.get_unchecked(0).clone();
+                }
+
+                // Create optimized array iteration state
+                let iteration_state = IterationState::Array {
                     items: items.clone(),
                     index: 0,
-                }
+                };
+
+                // Inline loop context creation
+                self.loop_stack.push(LoopContext {
+                    mode: mode.clone(),
+                    iteration_state,
+                    key_reg: params.key_reg,
+                    value_reg: params.value_reg,
+                    result_reg: params.result_reg,
+                    body_start: params.body_start,
+                    loop_end: params.loop_end,
+                    loop_next_pc: params.loop_end - 1,
+                    success_count: 0,
+                    total_iterations: 0,
+                    current_iteration_failed: false,
+                });
+
+                debug!("Array iteration setup complete: index=0, value={:?}", unsafe { 
+                    self.registers.get_unchecked(value_reg)
+                });
             }
             Value::Object(obj) => {
                 if obj.is_empty() {
-                    self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
-                    return Ok(());
+                    return self.handle_empty_collection_inline(mode, result_reg, params.loop_end);
                 }
-                IterationState::Object {
+                
+                // Setup first iteration for objects
+                if let Some((key, value)) = obj.iter().next() {
+                    if key_reg != value_reg {
+                        unsafe {
+                            *self.registers.get_unchecked_mut(key_reg) = key.clone();
+                        }
+                    }
+                    unsafe {
+                        *self.registers.get_unchecked_mut(value_reg) = value.clone();
+                    }
+                }
+
+                let iteration_state = IterationState::Object {
                     obj: obj.clone(),
                     current_key: None,
                     first_iteration: true,
-                }
+                };
+
+                self.loop_stack.push(LoopContext {
+                    mode: mode.clone(),
+                    iteration_state,
+                    key_reg: params.key_reg,
+                    value_reg: params.value_reg,
+                    result_reg: params.result_reg,
+                    body_start: params.body_start,
+                    loop_end: params.loop_end,
+                    loop_next_pc: params.loop_end - 1,
+                    success_count: 0,
+                    total_iterations: 0,
+                    current_iteration_failed: false,
+                });
             }
             Value::Set(set) => {
                 if set.is_empty() {
-                    self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
-                    return Ok(());
+                    return self.handle_empty_collection_inline(mode, result_reg, params.loop_end);
                 }
-                IterationState::Set {
+                
+                // Setup first iteration for sets
+                if let Some(item) = set.iter().next() {
+                    if key_reg != value_reg {
+                        unsafe {
+                            *self.registers.get_unchecked_mut(key_reg) = item.clone();
+                        }
+                    }
+                    unsafe {
+                        *self.registers.get_unchecked_mut(value_reg) = item.clone();
+                    }
+                }
+
+                let iteration_state = IterationState::Set {
                     items: set.clone(),
                     current_item: None,
                     first_iteration: true,
-                }
+                };
+
+                self.loop_stack.push(LoopContext {
+                    mode: mode.clone(),
+                    iteration_state,
+                    key_reg: params.key_reg,
+                    value_reg: params.value_reg,
+                    result_reg: params.result_reg,
+                    body_start: params.body_start,
+                    loop_end: params.loop_end,
+                    loop_next_pc: params.loop_end - 1,
+                    success_count: 0,
+                    total_iterations: 0,
+                    current_iteration_failed: false,
+                });
             }
             _ => {
                 bail!("Cannot iterate over {:?}", collection_value);
             }
-        };
-
-        // Set up first iteration
-        let has_next =
-            self.setup_next_iteration(&iteration_state, params.key_reg, params.value_reg)?;
-        if !has_next {
-            self.pc = params.loop_end as usize;
-            return Ok(());
         }
-
-        // Create loop context
-        // The LoopNext instruction is positioned immediately before loop_end
-        let loop_next_pc = params.loop_end - 1;
-
-        let loop_context = LoopContext {
-            mode: mode.clone(),
-            iteration_state,
-            key_reg: params.key_reg,
-            value_reg: params.value_reg,
-            result_reg: params.result_reg,
-            body_start: params.body_start,
-            loop_end: params.loop_end,
-            loop_next_pc,
-            success_count: 0,
-            total_iterations: 0,
-            current_iteration_failed: false,
-        };
-
-        self.loop_stack.push(loop_context);
 
         // Add span for the first iteration
         #[cfg(feature = "rvm-tracing")]
@@ -1637,7 +1734,8 @@ impl RegoVM {
         Ok(())
     }
 
-    /// Execute LoopNext instruction
+    /// Execute LoopNext instruction with optimized hot path
+    #[inline(always)]  // Force inlining for better performance
     fn execute_loop_next(&mut self, _body_start: u16, _loop_end: u16) -> Result<()> {
         // Ignore the parameters and use the loop context instead
         if let Some(mut loop_ctx) = self.loop_stack.pop() {
@@ -1664,8 +1762,8 @@ impl RegoVM {
                 loop_ctx.total_iterations, loop_ctx.mode
             );
 
-            // Check iteration result
-            let iteration_succeeded = self.check_iteration_success(&loop_ctx)?;
+            // Inline iteration success check for performance
+            let iteration_succeeded = !loop_ctx.current_iteration_failed;
             debug!("LoopNext - iteration_succeeded={}", iteration_succeeded);
 
             if iteration_succeeded {
@@ -1673,63 +1771,62 @@ impl RegoVM {
                 debug!("LoopNext - success_count={}", loop_ctx.success_count);
             }
 
-            // Handle mode-specific logic
-            let action = self.determine_loop_action(&loop_ctx.mode, iteration_succeeded);
-            debug!("LoopNext - action={:?}", action);
-
-            match action {
-                LoopAction::ExitWithSuccess => {
+            // Inline mode-specific logic for hot paths
+            match (&loop_ctx.mode, iteration_succeeded) {
+                (LoopMode::Any, true) => {
+                    // Early exit for existential quantification
                     debug!("Loop exiting with success, setting result to true");
-                    self.registers[loop_ctx.result_reg as usize] = Value::Bool(true);
-                    // Set PC to loop_end - 1 because main loop will increment it
+                    unsafe {
+                        *self.registers.get_unchecked_mut(loop_ctx.result_reg as usize) = Value::Bool(true);
+                    }
                     self.pc = loop_end as usize - 1;
-
                     #[cfg(feature = "rvm-tracing")]
                     self.pop_span();
-
                     return Ok(());
                 }
-                LoopAction::ExitWithFailure => {
+                (LoopMode::Every, false) => {
+                    // Early exit for universal quantification
                     debug!("Loop exiting with failure, setting result to false");
-                    self.registers[loop_ctx.result_reg as usize] = Value::Bool(false);
-                    // Set PC to loop_end - 1 because main loop will increment it
+                    unsafe {
+                        *self.registers.get_unchecked_mut(loop_ctx.result_reg as usize) = Value::Bool(false);
+                    }
                     self.pc = loop_end as usize - 1;
-
                     #[cfg(feature = "rvm-tracing")]
                     self.pop_span();
-
                     return Ok(());
                 }
-                LoopAction::Continue => {}
+                _ => {} // Continue with iteration
             }
 
-            // Advance to next iteration
-            // Store current key/item before advancing for Object and Set iteration
-            if let IterationState::Object {
-                ref mut current_key,
-                ..
-            } = &mut loop_ctx.iteration_state
-            {
-                // Get the key from the key register to store as current_key
-                if loop_ctx.key_reg != loop_ctx.value_reg {
-                    *current_key = Some(self.registers[loop_ctx.key_reg as usize].clone());
+            // Fast path: optimize array iteration (most common case)
+            let has_next = match &mut loop_ctx.iteration_state {
+                IterationState::Array { items, ref mut index } => {
+                    *index += 1;
+                    if *index < items.len() {
+                        // Inline next iteration setup for arrays
+                        let key_reg = loop_ctx.key_reg as usize;
+                        let value_reg = loop_ctx.value_reg as usize;
+                        
+                        if key_reg != value_reg {
+                            unsafe {
+                                *self.registers.get_unchecked_mut(key_reg) = Value::from(*index as f64);
+                            }
+                        }
+                        unsafe {
+                            *self.registers.get_unchecked_mut(value_reg) = items.get_unchecked(*index).clone();
+                        }
+                        true
+                    } else {
+                        false
+                    }
                 }
-            } else if let IterationState::Set {
-                ref mut current_item,
-                ..
-            } = &mut loop_ctx.iteration_state
-            {
-                // Get the item from the value register to store as current_item
-                *current_item = Some(self.registers[loop_ctx.value_reg as usize].clone());
-            }
+                _ => {
+                    // Fallback to slower path for objects and sets
+                    self.advance_iteration_state(&mut loop_ctx)?;
+                    self.setup_next_iteration_optimized(&loop_ctx.iteration_state, loop_ctx.key_reg, loop_ctx.value_reg)?
+                }
+            };
 
-            loop_ctx.iteration_state.advance();
-            debug!("LoopNext - advanced to next iteration");
-            let has_next = self.setup_next_iteration(
-                &loop_ctx.iteration_state,
-                loop_ctx.key_reg,
-                loop_ctx.value_reg,
-            )?;
             debug!("LoopNext - has_next={}", has_next);
 
             if has_next {
@@ -1743,41 +1840,27 @@ impl RegoVM {
                 );
             } else {
                 debug!("LoopNext - loop finished, calculating final result");
-                // Loop finished - determine final result
+                // Inline final result calculation
                 let final_result = match loop_ctx.mode {
-                    LoopMode::Any => {
-                        let result = Value::Bool(loop_ctx.success_count > 0);
-                        #[cfg(feature = "rvm-tracing")]
-                        debug!(
-                            "LoopNext - Any final result: {:?} (success_count={})",
-                            result, loop_ctx.success_count
-                        );
-                        result
-                    }
-                    LoopMode::Every => {
-                        Value::Bool(loop_ctx.success_count == loop_ctx.total_iterations)
-                    }
-                    LoopMode::ForEach => {
-                        let result = Value::Bool(loop_ctx.success_count > 0);
-                        #[cfg(feature = "rvm-tracing")]
-                        debug!(
-                            "LoopNext - ForEach final result: {:?} (success_count={})",
-                            result, loop_ctx.success_count
-                        );
-                        result
-                    }
+                    LoopMode::Any => Value::Bool(loop_ctx.success_count > 0),
+                    LoopMode::Every => Value::Bool(loop_ctx.success_count == loop_ctx.total_iterations),
+                    LoopMode::ForEach => Value::Bool(loop_ctx.success_count > 0),
                     LoopMode::ArrayComprehension
                     | LoopMode::SetComprehension
                     | LoopMode::ObjectComprehension => {
                         // Result is already accumulated in result_reg
-                        self.registers[loop_ctx.result_reg as usize].clone()
+                        unsafe {
+                            self.registers.get_unchecked(loop_ctx.result_reg as usize).clone()
+                        }
                     }
                 };
 
-                self.registers[loop_ctx.result_reg as usize] = final_result;
+                unsafe {
+                    *self.registers.get_unchecked_mut(loop_ctx.result_reg as usize) = final_result;
+                }
                 debug!(
                     "LoopNext - final result stored in register {}: {:?}",
-                    loop_ctx.result_reg, self.registers[loop_ctx.result_reg as usize]
+                    loop_ctx.result_reg, unsafe { self.registers.get_unchecked(loop_ctx.result_reg as usize) }
                 );
 
                 self.pc = loop_end as usize - 1; // -1 because PC will be incremented
@@ -1796,7 +1879,37 @@ impl RegoVM {
         }
     }
 
+    /// Handle empty collection based on loop mode with inlined operations
+    #[inline(always)]
+    fn handle_empty_collection_inline(
+        &mut self,
+        mode: &LoopMode,
+        result_reg: usize,  // Already converted to usize
+        loop_end: u16,
+    ) -> Result<()> {
+        // Use unsafe for performance in hot path
+        unsafe {
+            *self.registers.get_unchecked_mut(result_reg) = match mode {
+                LoopMode::Any => Value::Bool(false),
+                LoopMode::Every => Value::Bool(true), // Every element of empty set satisfies condition
+                LoopMode::ForEach => Value::Bool(false),
+                LoopMode::ArrayComprehension => Value::new_array(),
+                LoopMode::SetComprehension => Value::new_set(),
+                LoopMode::ObjectComprehension => Value::Object(Arc::new(BTreeMap::new())),
+            };
+        }
+
+        // Set PC to loop_end - 1 because the main loop will increment it by 1
+        self.pc = (loop_end as usize).saturating_sub(1);
+
+        #[cfg(feature = "rvm-tracing")]
+        self.pop_span();
+
+        Ok(())
+    }
+
     /// Handle empty collection based on loop mode
+    #[allow(dead_code)]  // Keep for potential fallback use
     fn handle_empty_collection(
         &mut self,
         mode: &LoopMode,
@@ -1823,6 +1936,7 @@ impl RegoVM {
     }
 
     /// Set up the next iteration values
+    #[allow(dead_code)]  // Keep for potential fallback use
     fn setup_next_iteration(
         &mut self,
         state: &IterationState,
@@ -1937,6 +2051,7 @@ impl RegoVM {
     }
 
     /// Check if current iteration succeeded
+    #[allow(dead_code)]  // Keep for potential fallback use
     fn check_iteration_success(&self, loop_ctx: &LoopContext) -> Result<bool> {
         // Check if the current iteration had any condition failures
         debug!(
@@ -1947,6 +2062,7 @@ impl RegoVM {
     }
 
     /// Determine what action to take based on loop mode and iteration result
+    #[allow(dead_code)]  // Keep for potential fallback use
     fn determine_loop_action(&self, mode: &LoopMode, success: bool) -> LoopAction {
         match (mode, success) {
             (LoopMode::Any, true) => LoopAction::ExitWithSuccess,
@@ -1957,6 +2073,139 @@ impl RegoVM {
             (LoopMode::SetComprehension, _) => LoopAction::Continue,
             (LoopMode::ObjectComprehension, _) => LoopAction::Continue,
             _ => LoopAction::Continue,
+        }
+    }
+
+    /// Advance iteration state for objects and sets (optimized)
+    #[inline(always)]
+    fn advance_iteration_state(&mut self, loop_ctx: &mut LoopContext) -> Result<()> {
+        match &mut loop_ctx.iteration_state {
+            IterationState::Object { ref mut current_key, .. } => {
+                // Get the key from the key register to store as current_key
+                if loop_ctx.key_reg != loop_ctx.value_reg {
+                    *current_key = Some(unsafe {
+                        self.registers.get_unchecked(loop_ctx.key_reg as usize).clone()
+                    });
+                }
+            }
+            IterationState::Set { ref mut current_item, .. } => {
+                // Get the item from the value register to store as current_item
+                *current_item = Some(unsafe {
+                    self.registers.get_unchecked(loop_ctx.value_reg as usize).clone()
+                });
+            }
+            _ => {} // Arrays are handled in the fast path
+        }
+        
+        loop_ctx.iteration_state.advance();
+        Ok(())
+    }
+
+    /// Optimized next iteration setup with unsafe register access
+    #[inline(always)]
+    fn setup_next_iteration_optimized(
+        &mut self,
+        state: &IterationState,
+        key_reg: u8,
+        value_reg: u8,
+    ) -> Result<bool> {
+        let key_reg_idx = key_reg as usize;
+        let value_reg_idx = value_reg as usize;
+        
+        match state {
+            IterationState::Array { items, index } => {
+                if *index < items.len() {
+                    if key_reg != value_reg {
+                        unsafe {
+                            *self.registers.get_unchecked_mut(key_reg_idx) = Value::from(*index as f64);
+                        }
+                    }
+                    unsafe {
+                        *self.registers.get_unchecked_mut(value_reg_idx) = items.get_unchecked(*index).clone();
+                    }
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
+            IterationState::Object { obj, current_key, first_iteration } => {
+                if *first_iteration {
+                    if let Some((key, value)) = obj.iter().next() {
+                        if key_reg != value_reg {
+                            unsafe {
+                                *self.registers.get_unchecked_mut(key_reg_idx) = key.clone();
+                            }
+                        }
+                        unsafe {
+                            *self.registers.get_unchecked_mut(value_reg_idx) = value.clone();
+                        }
+                        Ok(true)
+                    } else {
+                        Ok(false)
+                    }
+                } else {
+                    if let Some(ref current) = current_key {
+                        let mut range_iter = obj.range((
+                            std::ops::Bound::Excluded(current),
+                            std::ops::Bound::Unbounded,
+                        ));
+                        if let Some((key, value)) = range_iter.next() {
+                            if key_reg != value_reg {
+                                unsafe {
+                                    *self.registers.get_unchecked_mut(key_reg_idx) = key.clone();
+                                }
+                            }
+                            unsafe {
+                                *self.registers.get_unchecked_mut(value_reg_idx) = value.clone();
+                            }
+                            Ok(true)
+                        } else {
+                            Ok(false)
+                        }
+                    } else {
+                        Ok(false)
+                    }
+                }
+            }
+            IterationState::Set { items, current_item, first_iteration } => {
+                if *first_iteration {
+                    if let Some(item) = items.iter().next() {
+                        if key_reg != value_reg {
+                            unsafe {
+                                *self.registers.get_unchecked_mut(key_reg_idx) = item.clone();
+                            }
+                        }
+                        unsafe {
+                            *self.registers.get_unchecked_mut(value_reg_idx) = item.clone();
+                        }
+                        Ok(true)
+                    } else {
+                        Ok(false)
+                    }
+                } else {
+                    if let Some(ref current) = current_item {
+                        let mut range_iter = items.range((
+                            std::ops::Bound::Excluded(current),
+                            std::ops::Bound::Unbounded,
+                        ));
+                        if let Some(item) = range_iter.next() {
+                            if key_reg != value_reg {
+                                unsafe {
+                                    *self.registers.get_unchecked_mut(key_reg_idx) = item.clone();
+                                }
+                            }
+                            unsafe {
+                                *self.registers.get_unchecked_mut(value_reg_idx) = item.clone();
+                            }
+                            Ok(true)
+                        } else {
+                            Ok(false)
+                        }
+                    } else {
+                        Ok(false)
+                    }
+                }
+            }
         }
     }
 }

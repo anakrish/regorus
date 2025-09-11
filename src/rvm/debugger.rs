@@ -1,3 +1,4 @@
+use super::assembly_listing::{generate_assembly_listing, generate_tabular_assembly_listing, AssemblyListingConfig};
 use super::instructions::Instruction;
 use super::program::Program;
 use super::vm::{CallRuleContext, LoopContext};
@@ -259,25 +260,59 @@ impl InteractiveDebugger {
 
         let current_span = program.get_instruction_span(pc);
 
+        // Validate span to check if it's reasonable for highlighting
+        let is_valid_span = |span: &super::program::SpanInfo| {
+            // Check basic validity
+            span.source_index < program.sources.len() &&
+            span.line > 0 &&
+            span.column > 0 &&
+            span.length > 0 &&
+            // Ensure span is not excessively long (likely a temporary/invalid span)
+            span.length < 200 && // Reasonable max expression length
+            {
+                // Check that the span doesn't extend beyond reasonable bounds
+                let source_content = &program.sources[span.source_index].content;
+                let source_lines: Vec<&str> = source_content.lines().collect();
+                if span.line <= source_lines.len() {
+                    let line_content = source_lines[span.line - 1];
+                    span.column <= line_content.len() + 1 &&
+                    span.length <= line_content.len() &&
+                    (span.column - 1 + span.length) <= line_content.len() &&
+                    // Critical fix: Highlight should not extend beyond a single line
+                    // Check that the span doesn't contain newlines or extend to next line
+                    {
+                        let start_pos = span.column.saturating_sub(1);
+                        let end_pos = start_pos + span.length;
+                        // Ensure we don't go beyond the current line
+                        end_pos <= line_content.len() &&
+                        // Also check that the span content doesn't contain newlines
+                        !line_content[start_pos..end_pos.min(line_content.len())].contains('\n')
+                    }
+                } else {
+                    false
+                }
+            }
+        };
+
         // Find the correct source file and line info, with fallback to last valid info
-        let (source_lines, current_line) = if let Some(span) = current_span {
-            if span.source_index < program.sources.len() {
-                // Update last valid source info
+        let (source_lines, current_line, validated_span) = if let Some(span) = current_span {
+            if is_valid_span(&span) && span.source_index < program.sources.len() {
+                // Update last valid source info only for valid spans
                 self.last_valid_source_index = span.source_index;
                 self.last_valid_line = span.line;
 
                 let source_content = &program.sources[span.source_index].content;
                 let source_lines: Vec<&str> = source_content.lines().collect();
-                (source_lines, span.line)
+                (source_lines, span.line, Some(span))
             } else {
-                // Use last valid source info if available, otherwise fallback to first source
+                // Invalid span - don't update highlight position, use last valid source info
                 if self.last_valid_source_index < program.sources.len() {
                     let source_content = &program.sources[self.last_valid_source_index].content;
                     let source_lines: Vec<&str> = source_content.lines().collect();
-                    (source_lines, self.last_valid_line)
+                    (source_lines, self.last_valid_line, None)
                 } else {
                     let source_lines: Vec<&str> = program.sources[0].content.lines().collect();
-                    (source_lines, 1)
+                    (source_lines, 1, None)
                 }
             }
         } else {
@@ -285,10 +320,10 @@ impl InteractiveDebugger {
             if self.last_valid_source_index < program.sources.len() {
                 let source_content = &program.sources[self.last_valid_source_index].content;
                 let source_lines: Vec<&str> = source_content.lines().collect();
-                (source_lines, self.last_valid_line)
+                (source_lines, self.last_valid_line, None)
             } else {
                 let source_lines: Vec<&str> = program.sources[0].content.lines().collect();
-                (source_lines, 1)
+                (source_lines, 1, None)
             }
         };
 
@@ -303,7 +338,7 @@ impl InteractiveDebugger {
         for line_num in start_line..=end_line {
             if line_num <= source_lines.len() {
                 let line_content = source_lines[line_num - 1];
-                let is_current = if let Some(span) = current_span {
+                let is_current = if let Some(span) = validated_span {
                     span.line == line_num
                 } else {
                     false
@@ -311,22 +346,29 @@ impl InteractiveDebugger {
 
                 if is_current {
                     // Highlight the current line and expression with color
-                    if let Some(span) = current_span {
+                    if let Some(span) = validated_span {
                         let col = if span.column > 0 { span.column - 1 } else { 0 };
                         if col < line_content.len() {
                             let end_col = (col + span.length).min(line_content.len());
                             
-                            // Split the line into: before expression | expression | after expression
-                            let before = &line_content[..col];
-                            let expression = &line_content[col..end_col];
-                            let after = &line_content[end_col..];
-                            
-                            // Use ANSI colors: \x1b[93m for bright yellow background, \x1b[0m to reset
-                            let highlighted_line = format!(
-                                "*** {:3}: {}\x1b[43m\x1b[30m{}\x1b[0m{}", 
-                                line_num, before, expression, after
-                            );
-                            lines.push(highlighted_line);
+                            // Only highlight if the span length is reasonable and not too large
+                            // Be more restrictive: max 25 chars and max 1/4 of line length
+                            if span.length > 0 && span.length <= 25 && span.length <= line_content.len() / 4 {
+                                // Split the line into: before expression | expression | after expression
+                                let before = &line_content[..col];
+                                let expression = &line_content[col..end_col];
+                                let after = &line_content[end_col..];
+                                
+                                // Use ANSI colors: \x1b[43m\x1b[30m for yellow background with black text
+                                let highlighted_line = format!(
+                                    "*** {:3}: {}\x1b[43m\x1b[30m{}\x1b[0m{}", 
+                                    line_num, before, expression, after
+                                );
+                                lines.push(highlighted_line);
+                            } else {
+                                // Fallback if span is too large - just mark the line
+                                lines.push(format!("*** {:3}: {}", line_num, line_content));
+                            }
                         } else {
                             // Fallback if column is out of bounds
                             lines.push(format!("*** {:3}: {}", line_num, line_content));
@@ -335,34 +377,27 @@ impl InteractiveDebugger {
                         lines.push(format!("*** {:3}: {}", line_num, line_content));
                     }
 
-                    // Add cursor line if we have span info
-                    if let Some(span) = current_span {
-                        let col = if span.column > 0 { span.column - 1 } else { 0 };
-                        if col < line_content.len() {
+                    // Add cursor line if we have span info and it's reasonable
+                    if let Some(span) = validated_span {
+                        if span.column > 0 && span.column <= line_content.len() + 1 && span.length > 0 && span.length <= 25 && span.length <= line_content.len() / 4 {
                             let prefix_len = 8; // Length of "*** 123: "
-                            let cursor_line = format!(
+                            let col_offset = span.column.saturating_sub(1);
+                            let cursor_length = std::cmp::min(
+                                std::cmp::max(1, span.length),
+                                line_content.len().saturating_sub(col_offset),
+                            );
+
+                            let cursor_indicator = format!(
                                 "{}{}{}",
-                                " ".repeat(prefix_len + col),
-                                "^".repeat(std::cmp::min(
-                                    std::cmp::max(1, span.length),
-                                    line_content.len() - col
-                                )),
+                                " ".repeat(prefix_len + col_offset),
+                                "^".repeat(cursor_length),
                                 if span.length > 1 {
                                     format!(" ({})", span.length)
                                 } else {
                                     String::new()
                                 }
                             );
-                            lines.push(cursor_line);
-                        } else if span.column > 0 {
-                            // Even if column is beyond line length, show cursor at end
-                            let prefix_len = 8; // Length of "*** 123: "
-                            let cursor_line = format!(
-                                "{}^ (col:{})",
-                                " ".repeat(prefix_len + line_content.len()),
-                                span.column
-                            );
-                            lines.push(cursor_line);
+                            lines.push(cursor_indicator);
                         }
                     }
                 } else {
@@ -382,41 +417,70 @@ impl InteractiveDebugger {
     ) -> Vec<String> {
         let mut lines = Vec::new();
 
-        // First pass: identify all loop ranges for indentation
-        let mut loop_ranges = Vec::new();
-        for (i, instruction) in program.instructions.iter().enumerate() {
-            if let Instruction::LoopStart { params_index } = instruction {
-                if let Some(loop_params) = program.instruction_data.loop_params.get(*params_index as usize) {
-                    loop_ranges.push((i, loop_params.loop_end as usize));
-                }
+        // Use enhanced assembly listing for better formatting
+        let config = AssemblyListingConfig {
+            show_addresses: true,
+            show_bytes: false,
+            indent_size: 2,  // Smaller indent for side panel
+            instruction_width: 30,
+            show_literal_values: false,  // Too verbose for side panel
+            comment_column: 40,
+        };
+
+        let listing = generate_assembly_listing(program, &config);
+        let assembly_lines: Vec<&str> = listing.lines().collect();
+
+        // Find the line containing current PC
+        let mut current_line_idx = None;
+        for (idx, line) in assembly_lines.iter().enumerate() {
+            if line.contains(&format!("{:03}:", pc)) {
+                current_line_idx = Some(idx);
+                break;
             }
         }
 
-        // Show instructions around current PC
-        let start_pc = pc.saturating_sub(max_lines / 2);
-        let end_pc = std::cmp::min(program.instructions.len(), start_pc + max_lines);
+        // Show context around current PC
+        let context_size = max_lines / 2;
+        let start_idx = if let Some(curr_idx) = current_line_idx {
+            curr_idx.saturating_sub(context_size)
+        } else {
+            0
+        };
+        let end_idx = (start_idx + max_lines).min(assembly_lines.len());
 
-        for i in start_pc..end_pc {
-            if i < program.instructions.len() {
-                // Calculate loop depth for this instruction
-                let loop_depth = loop_ranges.iter()
-                    .filter(|(start, end)| i > *start && i < *end)
-                    .count();
-                
-                // Create indentation based on loop depth
-                let indent = "  ".repeat(loop_depth);
-                
-                // Mark loop instructions with special symbol
-                let loop_marker = match &program.instructions[i] {
-                    Instruction::LoopStart { .. } => "█",
-                    Instruction::LoopNext { .. } => "█", 
-                    _ => " ",
-                };
-                
-                let marker = if i == pc { "***" } else { "   " };
-                let inst = &program.instructions[i];
-                
-                lines.push(format!("{} {:3}:{} {}{:?}", marker, i, loop_marker, indent, inst));
+        for (idx, line) in assembly_lines[start_idx..end_idx].iter().enumerate() {
+            let actual_idx = start_idx + idx;
+            let is_current = current_line_idx == Some(actual_idx);
+            
+            // Skip comment lines (starting with ;) to save space
+            if line.trim_start().starts_with(';') {
+                continue;
+            }
+            
+            let display_line = if is_current {
+                format!(">>> {}", line.trim())
+            } else {
+                format!("    {}", line.trim())
+            };
+            
+            lines.push(display_line);
+            
+            if lines.len() >= max_lines {
+                break;
+            }
+        }
+
+        // If we still have space and didn't find the current PC, fall back to old method
+        if lines.is_empty() {
+            let start_pc = pc.saturating_sub(max_lines / 2);
+            let end_pc = (start_pc + max_lines).min(program.instructions.len());
+
+            for i in start_pc..end_pc {
+                if i < program.instructions.len() {
+                    let marker = if i == pc { ">>>" } else { "   " };
+                    let inst = &program.instructions[i];
+                    lines.push(format!("{} {:3}: {:?}", marker, i, inst));
+                }
             }
         }
 
@@ -548,7 +612,7 @@ impl InteractiveDebugger {
         println!("├{}┤", "─".repeat(width - 2));
         println!(
             "│ {:<width$} │",
-            "💻 Commands: (c)ontinue (s)tep (r)egisters (cs)call-stack (ls)loop-stack (ctx)context (h)elp (q)uit",
+            "💻 Commands: (c)ontinue (s)tep (l)ist (asm)embly (r)egisters (cs)call-stack (ls)loop-stack (h)elp (q)uit",
             width = width - 4
         );
         println!("└{}┘", "─".repeat(width - 2));
@@ -591,23 +655,16 @@ impl InteractiveDebugger {
                         break;
                     }
                     "l" | "list" => {
-                        // Clear screen and show full instruction listing
-                        print!("\x1B[2J\x1B[H");
-                        println!("┌{}┐", "─".repeat(80));
-                        println!("│ {:<78} │", "📋 Full Instruction Listing");
-                        println!("├{}┤", "─".repeat(80));
-
-                        for (i, inst) in ctx.program.instructions.iter().enumerate() {
-                            let marker = if i == ctx.pc { ">>>" } else { "   " };
-                            let line = format!("{} {:3}: {:?}", marker, i, inst);
-                            println!("│ {:<78} │", self.truncate_or_pad(&line, 78));
-                        }
-
-                        println!("└{}┘", "─".repeat(80));
-                        println!("Press Enter to return to debugger...");
-                        let mut _dummy = String::new();
-                        std::io::stdin().read_line(&mut _dummy).ok();
-                        return; // This will redraw the main screen
+                        self.show_enhanced_assembly_listing(ctx);
+                        return;
+                    }
+                    "lt" | "list-tabular" => {
+                        self.show_tabular_assembly_listing(ctx);
+                        return;
+                    }
+                    "asm" | "assembly" => {
+                        self.show_full_assembly_listing(ctx);
+                        return;
                     }
                     "r" | "registers" => {
                         self.show_detailed_registers(ctx);
@@ -1114,19 +1171,26 @@ impl InteractiveDebugger {
                 // Show cursor position if this is the current line
                 if is_current {
                     if let Some(span) = current_span {
-                        if span.column > 0 && span.column <= line_content.len() + 1 {
+                        if span.column > 0 && span.column <= line_content.len() + 1 && span.length > 0 {
                             let prefix_len = 8; // ">>> 123: ".len()
                             let col_offset = span.column.saturating_sub(1);
-                            let cursor_length = std::cmp::min(
-                                std::cmp::max(1, span.length),
-                                line_content.len().saturating_sub(col_offset),
-                            );
+                            
+                            // Sanity check: don't highlight if span is too large (likely corrupted data)
+                            let max_reasonable_length = line_content.len().saturating_sub(col_offset);
+                            let safe_cursor_length = if span.length > max_reasonable_length || span.length > line_content.len() / 2 {
+                                // If span is unreasonably large, just show a single character cursor
+                                1
+                            } else {
+                                std::cmp::min(span.length, max_reasonable_length)
+                            };
 
                             let cursor_indicator = format!(
                                 "{}{}{}",
                                 " ".repeat(prefix_len + col_offset),
-                                "^".repeat(cursor_length),
-                                if span.length > 1 {
+                                "^".repeat(safe_cursor_length),
+                                if span.length > safe_cursor_length {
+                                    format!(" (span_len:{} capped)", span.length)
+                                } else if span.length > 1 {
                                     format!(" (len:{})", span.length)
                                 } else {
                                     String::new()
@@ -1136,8 +1200,8 @@ impl InteractiveDebugger {
                         } else {
                             // Show cursor info even if position is out of bounds
                             let cursor_indicator = format!(
-                                "{}^ (col:{}, len:{})",
-                                " ".repeat(8 + line_content.len()),
+                                "{}^ (col:{}, len:{}) [out_of_bounds]",
+                                " ".repeat(8 + line_content.len().min(40)), // Don't go too far right
                                 span.column,
                                 span.length
                             );
@@ -1194,7 +1258,15 @@ impl InteractiveDebugger {
         println!("│ {:<78} │", "🔍 Inspection Commands:");
         println!(
             "│ {:<78} │",
-            "  l, list     - Show all instructions with current PC"
+            "  l, list     - Show enhanced assembly listing (context)"
+        );
+        println!(
+            "│ {:<78} │",
+            "  lt, list-tabular - Show tabular assembly format"
+        );
+        println!(
+            "│ {:<78} │",
+            "  asm, assembly    - Show full enhanced assembly listing"
         );
         println!(
             "│ {:<78} │",
@@ -1236,6 +1308,135 @@ impl InteractiveDebugger {
             "  RVM_BREAKPOINT=pc1,pc2  - Set initial breakpoints"
         );
         println!("└{}┘", "─".repeat(80));
+        println!("Press Enter to return to debugger...");
+        let mut _dummy = String::new();
+        std::io::stdin().read_line(&mut _dummy).ok();
+    }
+
+    /// Show enhanced assembly listing with new format
+    fn show_enhanced_assembly_listing(&self, ctx: &DebugContext) {
+        print!("\x1B[2J\x1B[H");
+        println!("┌{}┐", "─".repeat(140));
+        println!("│ {:<138} │", "📋 Enhanced Assembly Listing with Current PC Highlighted");
+        println!("├{}┤", "─".repeat(140));
+
+        let config = AssemblyListingConfig {
+            show_addresses: true,
+            show_bytes: false,
+            indent_size: 4,
+            instruction_width: 40,
+            show_literal_values: true,
+            comment_column: 60,
+        };
+
+        let listing = generate_assembly_listing(ctx.program, &config);
+        let lines: Vec<&str> = listing.lines().collect();
+
+        // Find current instruction line in the listing
+        let mut current_line_idx = None;
+        for (idx, line) in lines.iter().enumerate() {
+            if line.contains(&format!("{:03}:", ctx.pc)) {
+                current_line_idx = Some(idx);
+                break;
+            }
+        }
+
+        // Show context around current instruction
+        let context_size = 15;
+        let start_idx = if let Some(curr_idx) = current_line_idx {
+            curr_idx.saturating_sub(context_size)
+        } else {
+            0
+        };
+        let end_idx = (start_idx + context_size * 2).min(lines.len());
+
+        for (idx, line) in lines[start_idx..end_idx].iter().enumerate() {
+            let actual_idx = start_idx + idx;
+            let is_current = current_line_idx == Some(actual_idx);
+            
+            let display_line = if is_current {
+                format!(">>> {}", line)
+            } else {
+                format!("    {}", line)
+            };
+            
+            println!("│ {:<138} │", self.truncate_or_pad(&display_line, 138));
+        }
+
+        println!("└{}┘", "─".repeat(140));
+        println!("Commands: (f)ull listing, (t)abular format, (Enter) return to debugger");
+        
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).ok();
+        match input.trim() {
+            "f" | "full" => self.show_full_assembly_listing(ctx),
+            "t" | "tabular" => self.show_tabular_assembly_listing(ctx),
+            _ => {} // Return to main debugger
+        }
+    }
+
+    /// Show full assembly listing with enhanced format
+    fn show_full_assembly_listing(&self, ctx: &DebugContext) {
+        print!("\x1B[2J\x1B[H");
+        println!("┌{}┐", "─".repeat(160));
+        println!("│ {:<158} │", "📋 Full Enhanced Assembly Listing - All Instructions with Builtins & Rules");
+        println!("├{}┤", "─".repeat(160));
+
+        let config = AssemblyListingConfig {
+            show_addresses: true,
+            show_bytes: false,
+            indent_size: 4,
+            instruction_width: 50,
+            show_literal_values: true,
+            comment_column: 70,
+        };
+
+        let listing = generate_assembly_listing(ctx.program, &config);
+        let lines: Vec<&str> = listing.lines().collect();
+
+        for line in &lines {
+            // Highlight current PC line
+            let is_current_pc = line.contains(&format!("{:03}:", ctx.pc));
+            let display_line = if is_current_pc {
+                format!(">>> {}", line)
+            } else {
+                format!("    {}", line)
+            };
+            
+            println!("│ {:<158} │", self.truncate_or_pad(&display_line, 158));
+        }
+
+        println!("└{}┘", "─".repeat(160));
+        println!("Press Enter to return to debugger...");
+        let mut _dummy = String::new();
+        std::io::stdin().read_line(&mut _dummy).ok();
+    }
+
+    /// Show tabular assembly listing
+    fn show_tabular_assembly_listing(&self, ctx: &DebugContext) {
+        print!("\x1B[2J\x1B[H");
+        println!("┌{}┐", "─".repeat(120));
+        println!("│ {:<118} │", "📋 Tabular Assembly Listing - Compact Format");
+        println!("├{}┤", "─".repeat(120));
+
+        let config = AssemblyListingConfig::default();
+        let listing = generate_tabular_assembly_listing(ctx.program, &config);
+        let lines: Vec<&str> = listing.lines().collect();
+
+        for line in &lines {
+            // Highlight current PC line if it contains the PC
+            let contains_current_pc = line.contains(&format!("{:>4}", ctx.pc)) || 
+                                     line.contains(&format!("{:03}", ctx.pc));
+            let display_line = if contains_current_pc && !line.starts_with(';') {
+                format!(">>> {}", line)
+            } else {
+                format!("    {}", line)
+            };
+            
+            println!("│ {:<118} │", self.truncate_or_pad(&display_line, 118));
+        }
+
+        println!("└{}┘", "─".repeat(120));
         println!("Press Enter to return to debugger...");
         let mut _dummy = String::new();
         std::io::stdin().read_line(&mut _dummy).ok();

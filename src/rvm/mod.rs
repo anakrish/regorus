@@ -2,6 +2,7 @@
 // A register-based virtual machine for executing Rego policies
 
 pub mod analysis;
+pub mod assembly_listing;
 pub mod compiler;
 pub mod debugger;
 pub mod instructions;
@@ -15,6 +16,7 @@ mod instruction_parser;
 #[cfg(test)]
 mod tests;
 
+pub use assembly_listing::{generate_assembly_listing, generate_tabular_assembly_listing, AssemblyListingConfig};
 pub use compiler::Compiler;
 pub use debugger::InteractiveDebugger;
 pub use instructions::Instruction;

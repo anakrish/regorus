@@ -12,11 +12,17 @@ cases:
       # Create object mapping each value to its double
       {x: x * 2 | x := [1, 2, 3][_]}  # {1: 2, 2: 4, 3: 6}
     literals:
+      - {}
       - 1
       - 2
       - 3
       - 2  # multiplier
     instruction_params:
+      object_create_params:
+        - dest: 9
+          template_literal_idx: 0
+          literal_key_fields: []
+          fields: []
       loop_params:
         - mode: "ObjectComprehension"
           collection: 0
@@ -27,15 +33,15 @@ cases:
           loop_end: 13
     instructions:
       - "ArrayNew { dest: 0 }"              # Create input array [1, 2, 3] in register 0
-      - "Load { dest: 1, literal_idx: 0 }"  # Load 1 into register 1
+      - "Load { dest: 1, literal_idx: 1 }"  # Load 1 into register 1
       - "ArrayPush { arr: 0, value: 1 }"    # Push 1 to array
-      - "Load { dest: 2, literal_idx: 1 }"  # Load 2 into register 2
+      - "Load { dest: 2, literal_idx: 2 }"  # Load 2 into register 2
       - "ArrayPush { arr: 0, value: 2 }"    # Push 2 to array
-      - "Load { dest: 3, literal_idx: 2 }"  # Load 3 into register 3
+      - "Load { dest: 3, literal_idx: 3 }"  # Load 3 into register 3
       - "ArrayPush { arr: 0, value: 3 }"    # Push 3 to array
-      - "ObjectNew { dest: 9 }"             # Initialize result object in register 9
+      - "ObjectCreate { params_index: 0 }"             
       - "LoopStart { params_index: 0 }"     # Start object comprehension loop
-      - "Load { dest: 10, literal_idx: 3 }" # Load multiplier 2 into register 10
+      - "Load { dest: 10, literal_idx: 4 }" # Load multiplier 2 into register 10
       - "Mul { dest: 11, left: 5, right: 10 }" # Multiply current value by 2 for object value
       - "ObjectSet { obj: 9, key: 5, value: 11 }" # Set key-value pair in result object (using current value as key)
       - "LoopNext { body_start: 9, loop_end: 13 }"  # Continue to next iteration or exit
@@ -48,8 +54,14 @@ cases:
       # Create object from empty array
       {x: x + 5 | x := [][_]}  # {} (empty object)
     literals:
+      - {}
       - 5  # addend
     instruction_params:
+      object_create_params:
+        - dest: 9
+          template_literal_idx: 0
+          literal_key_fields: []
+          fields: []
       loop_params:
         - mode: "ObjectComprehension"
           collection: 0
@@ -60,9 +72,9 @@ cases:
           loop_end: 7
     instructions:
       - "ArrayNew { dest: 0 }"              # Create empty input array in register 0
-      - "ObjectNew { dest: 9 }"             # Initialize result object in register 9
+      - "ObjectCreate { params_index: 0 }"             
       - "LoopStart { params_index: 0 }"     # Start object comprehension loop
-      - "Load { dest: 10, literal_idx: 0 }" # Load addend 5 into register 10
+      - "Load { dest: 10, literal_idx: 1 }" # Load addend 5 into register 10
       - "Add { dest: 11, left: 5, right: 10 }" # Add 5 to current value for object value
       - "ObjectSet { obj: 9, key: 5, value: 11 }" # Set key-value pair in result object
       - "LoopNext { body_start: 3, loop_end: 7 }"  # Continue to next iteration or exit
@@ -75,9 +87,15 @@ cases:
       # Create object with single key-value pair
       {x: x - 1 | x := [5][_]}  # {5: 4}
     literals:
+      - {}
       - 5
       - 1  # subtrahend
     instruction_params:
+      object_create_params:
+        - dest: 9
+          template_literal_idx: 0
+          literal_key_fields: []
+          fields: []
       loop_params:
         - mode: "ObjectComprehension"
           collection: 0
@@ -88,11 +106,11 @@ cases:
           loop_end: 9
     instructions:
       - "ArrayNew { dest: 0 }"              # Create input array [5] in register 0
-      - "Load { dest: 1, literal_idx: 0 }"  # Load 5 into register 1
+      - "Load { dest: 1, literal_idx: 1 }"  # Load 5 into register 1
       - "ArrayPush { arr: 0, value: 1 }"    # Push 5 to array
-      - "ObjectNew { dest: 9 }"             # Initialize result object in register 9
+      - "ObjectCreate { params_index: 0 }"             
       - "LoopStart { params_index: 0 }"     # Start object comprehension loop
-      - "Load { dest: 10, literal_idx: 1 }" # Load subtrahend 1 into register 10
+      - "Load { dest: 10, literal_idx: 2 }" # Load subtrahend 1 into register 10
       - "Sub { dest: 11, left: 5, right: 10 }" # Subtract 1 from current value for object value
       - "ObjectSet { obj: 9, key: 5, value: 11 }" # Set key-value pair in result object
       - "LoopNext { body_start: 5, loop_end: 9 }"  # Continue to next iteration or exit
@@ -105,9 +123,15 @@ cases:
       # Create object with null keys/values
       {x: x | x := [1, null, 2][_]}  # {1: 1, null: null, 2: 2}
     literals:
+      - {}
       - 1
       - 2
     instruction_params:
+      object_create_params:
+        - dest: 9
+          template_literal_idx: 0
+          literal_key_fields: []
+          fields: []
       loop_params:
         - mode: "ObjectComprehension"
           collection: 0
@@ -118,13 +142,13 @@ cases:
           loop_end: 11
     instructions:
       - "ArrayNew { dest: 0 }"              # Create input array in register 0
-      - "Load { dest: 1, literal_idx: 0 }"  # Load 1
+      - "Load { dest: 1, literal_idx: 1 }"  # Load 1
       - "ArrayPush { arr: 0, value: 1 }"    # Push 1 to array
       - "LoadNull { dest: 2 }"              # Load null value
       - "ArrayPush { arr: 0, value: 2 }"    # Push null to array
-      - "Load { dest: 3, literal_idx: 1 }"  # Load 2
+      - "Load { dest: 3, literal_idx: 2 }"  # Load 2
       - "ArrayPush { arr: 0, value: 3 }"    # Push 2 to array
-      - "ObjectNew { dest: 9 }"             # Initialize result object in register 9
+      - "ObjectCreate { params_index: 0 }"             
       - "LoopStart { params_index: 0 }"     # Start object comprehension loop
       - "ObjectSet { obj: 9, key: 5, value: 5 }" # Set key-value pair where key equals value
       - "LoopNext { body_start: 9, loop_end: 11 }"  # Continue to next iteration or exit

@@ -16,7 +16,9 @@ mod instruction_parser;
 #[cfg(test)]
 mod tests;
 
-pub use assembly_listing::{generate_assembly_listing, generate_tabular_assembly_listing, AssemblyListingConfig};
+pub use assembly_listing::{
+    generate_assembly_listing, generate_tabular_assembly_listing, AssemblyListingConfig,
+};
 pub use compiler::Compiler;
 pub use debugger::InteractiveDebugger;
 pub use instructions::Instruction;

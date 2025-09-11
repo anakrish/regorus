@@ -1,4 +1,4 @@
-use super::instructions::{LoopMode, LoopStartParams};
+use super::instructions::{LoopMode, LoopStartParams, ObjectCreateParams};
 use super::program::Program;
 use super::Instruction;
 use crate::ast::{Expr, ExprRef, Rule, RuleHead};
@@ -74,8 +74,8 @@ pub struct Compiler<'a> {
     // Builtin management
     builtin_index_map: HashMap<String, u16>, // Maps builtin names to their assigned indices
     // Input/Data loading optimization - track registers per rule definition
-    current_input_register: Option<Register>,   // Register holding input in current rule definition
-    current_data_register: Option<Register>,    // Register holding data in current rule definition
+    current_input_register: Option<Register>, // Register holding input in current rule definition
+    current_data_register: Option<Register>,  // Register holding data in current rule definition
 }
 
 impl<'a> Compiler<'a> {
@@ -145,9 +145,7 @@ impl<'a> Compiler<'a> {
 
         debug!(
             "Assigned builtin index {} to '{}' (num_args={})",
-            index,
-            builtin_name,
-            num_args
+            index, builtin_name, num_args
         );
         Ok(index)
     }
@@ -709,10 +707,7 @@ impl<'a> Compiler<'a> {
     ) -> Result<Register> {
         // TODO: If expr is a loop expr or a loop var, look up.
         if let Some(reg) = self.loop_expr_register_map.get(expr).cloned() {
-            debug!(
-                "Found loop expression in map, using register {}",
-                reg
-            );
+            debug!("Found loop expression in map, using register {}", reg);
             let result_reg = reg;
             // If this expression should be asserted as a condition, emit AssertCondition
             if assert_condition {
@@ -796,28 +791,83 @@ impl<'a> Compiler<'a> {
                 dest
             }
             Expr::Object { fields, .. } => {
-                // Create empty object first
                 let dest = self.alloc_register();
-                self.emit_instruction(Instruction::ObjectNew { dest }, span);
 
-                // Add each field to the object
-                for (_, key_expr, value_expr) in fields {
-                    // Compile key and value
-                    let key_reg =
-                        self.compile_rego_expr_with_span(key_expr, key_expr.span(), false)?;
+                // First pass: compile all values and store in array
+                let mut value_regs = Vec::new();
+                for (_, _key_expr, value_expr) in fields {
                     let value_reg =
                         self.compile_rego_expr_with_span(value_expr, value_expr.span(), false)?;
-
-                    // Set the field in the object
-                    self.emit_instruction(
-                        Instruction::ObjectSet {
-                            obj: dest,
-                            key: key_reg,
-                            value: value_reg,
-                        },
-                        span,
-                    );
+                    value_regs.push(value_reg);
                 }
+
+                // Second pass: determine keys and categorize them
+                let mut literal_key_fields = Vec::new();
+                let mut non_literal_key_fields = Vec::new();
+                let mut literal_keys = Vec::new();
+
+                for (field_idx, (_, key_expr, _value_expr)) in fields.iter().enumerate() {
+                    let value_reg = value_regs[field_idx];
+
+                    // Check if key expression is a literal (String, Number, Bool, Null, etc.)
+                    let key_literal = match key_expr.as_ref() {
+                        Expr::String { value, .. }
+                        | Expr::RawString { value, .. }
+                        | Expr::Number { value, .. }
+                        | Expr::Bool { value, .. }
+                        | Expr::Null { value, .. } => Some(value.clone()),
+                        _ => None,
+                    };
+
+                    if let Some(key_value) = key_literal {
+                        // Key is a literal - add to literal table and use literal key field
+                        let literal_idx = self.add_literal(key_value.clone());
+                        literal_key_fields.push((literal_idx, value_reg));
+                        literal_keys.push(key_value);
+                    } else {
+                        // Key is not a literal - compile it and use non-literal key field
+                        let key_reg =
+                            self.compile_rego_expr_with_span(key_expr, key_expr.span(), false)?;
+                        non_literal_key_fields.push((key_reg, value_reg));
+                    }
+                }
+
+                // Always create template object - even if empty for consistency
+                let template_literal_idx = {
+                    // Collect all literal keys for template
+                    let mut template_keys = literal_keys.clone();
+                    template_keys.sort();
+
+                    // Create template object with all literal keys set to undefined
+                    use std::collections::BTreeMap;
+                    let mut template_obj = BTreeMap::new();
+                    for key in &template_keys {
+                        template_obj.insert(key.clone(), Value::Undefined);
+                    }
+
+                    let template_value = Value::Object(std::sync::Arc::new(template_obj));
+                    self.add_literal(template_value)
+                };
+
+                // Sort literal key fields by literal key value for better performance
+                literal_key_fields.sort_by(|a, b| {
+                    let key_a = &self.program.literals[a.0 as usize];
+                    let key_b = &self.program.literals[b.0 as usize];
+                    key_a.cmp(key_b)
+                });
+
+                // Create ObjectCreate instruction
+                let params = ObjectCreateParams {
+                    dest,
+                    template_literal_idx,
+                    literal_key_fields,
+                    fields: non_literal_key_fields,
+                };
+                let params_index = self
+                    .program
+                    .instruction_data
+                    .add_object_create_params(params);
+                self.emit_instruction(Instruction::ObjectCreate { params_index }, span);
 
                 dest
             }
@@ -968,9 +1018,7 @@ impl<'a> Compiler<'a> {
                     // Store the variable binding to the NEW register
                     debug!(
                         "Assignment '{}' := value from register {} to new register {}",
-                        var_name,
-                        rhs_reg,
-                        lhs_reg
+                        var_name, rhs_reg, lhs_reg
                     );
                     self.add_variable(var_name.as_ref(), lhs_reg);
 
@@ -984,10 +1032,7 @@ impl<'a> Compiler<'a> {
             Expr::Var { value, .. } => {
                 // Check if this is a variable reference that we should resolve
                 if let Value::String(var_name) = value {
-                    debug!(
-                        "Resolving variable '{}' - looking up in scopes",
-                        var_name
-                    );
+                    debug!("Resolving variable '{}' - looking up in scopes", var_name);
                     return self.resolve_variable(var_name.as_ref(), span);
                 }
 
@@ -1256,8 +1301,7 @@ impl<'a> Compiler<'a> {
                                         .insert(param_name.to_string(), param_reg);
                                     debug!(
                                         "Function parameter '{}' assigned to register {}",
-                                        param_name,
-                                        param_reg
+                                        param_name, param_reg
                                     );
                                 }
                             }
@@ -1330,14 +1374,13 @@ impl<'a> Compiler<'a> {
                             self.push_scope();
                             // Reset input/data registers for each rule body
                             self.reset_rule_definition_registers();
-                            
+
                             let body_entry_point = self.program.instructions.len();
                             body_entry_points.push(body_entry_point);
 
                             debug!(
                                 "Compiling body {} at entry point {}",
-                                body_idx,
-                                body_entry_point
+                                body_idx, body_entry_point
                             );
 
                             self.emit_instruction(
@@ -1436,10 +1479,7 @@ impl<'a> Compiler<'a> {
         &mut self,
         stmts: &[&crate::ast::LiteralStmt],
     ) -> Result<()> {
-        debug!(
-            "Compiling {} statements with loop hoisting",
-            stmts.len()
-        );
+        debug!("Compiling {} statements with loop hoisting", stmts.len());
 
         for (idx, stmt) in stmts.iter().enumerate() {
             debug!(
@@ -1809,8 +1849,7 @@ impl<'a> Compiler<'a> {
 
         debug!(
             "Every quantifier - value var: '{}', key var: {:?}",
-            value_var_name,
-            key_var_name
+            value_var_name, key_var_name
         );
 
         // Generate loop start instruction for Every mode
@@ -1898,8 +1937,7 @@ impl<'a> Compiler<'a> {
 
         debug!(
             "Every quantifier compiled - body_start={}, loop_end={}",
-            body_start,
-            loop_end
+            body_start, loop_end
         );
 
         Ok(())
@@ -1929,9 +1967,7 @@ impl<'a> Compiler<'a> {
 
                 // Every quantifier acts as an assertion - if it succeeds,
                 // we continue with the next statement
-                debug!(
-                    "Every quantifier completed - continuing with next statements"
-                );
+                debug!("Every quantifier completed - continuing with next statements");
             }
             crate::ast::Literal::SomeVars { span, vars } => {
                 debug!(
@@ -2053,8 +2089,7 @@ impl<'a> Compiler<'a> {
 
         debug!(
             "Array iteration loop compiled - body_start={}, loop_end={}",
-            body_start,
-            loop_end
+            body_start, loop_end
         );
 
         Ok(())
@@ -2145,8 +2180,7 @@ impl<'a> Compiler<'a> {
             {
                 debug!(
                     "Storing loop key variable '{}' at register {}",
-                    var_name,
-                    key_reg
+                    var_name, key_reg
                 );
                 self.store_variable(var_name.to_string(), key_reg);
             }
@@ -2166,9 +2200,7 @@ impl<'a> Compiler<'a> {
 
             debug!(
                 "Storing loop value variable '{}' at register {} (from '{:?}')",
-                clean_var_name,
-                value_reg,
-                var_name
+                clean_var_name, value_reg, var_name
             );
             self.store_variable(clean_var_name.clone(), value_reg);
 
@@ -2180,8 +2212,7 @@ impl<'a> Compiler<'a> {
             if let Some(reg) = self.lookup_variable(&clean_var_name) {
                 debug!(
                     "Yes, variable '{}' found at register {}",
-                    clean_var_name,
-                    reg
+                    clean_var_name, reg
                 );
             } else {
                 debug!(
@@ -2225,8 +2256,7 @@ impl<'a> Compiler<'a> {
 
         debug!(
             "SomeIn loop compiled - body_start={}, loop_end={}",
-            body_start,
-            loop_end
+            body_start, loop_end
         );
 
         // Debug: Print all instructions generated for this loop
@@ -2325,7 +2355,22 @@ impl<'a> Compiler<'a> {
 
         // Allocate result register and initialize as empty object
         let result_reg = self.alloc_register();
-        self.emit_instruction(Instruction::ObjectNew { dest: result_reg }, span);
+
+        // Create empty template object
+        let template_literal_idx = self.add_literal(Value::Object(Arc::new(BTreeMap::new())));
+
+        // Create ObjectCreate parameters for empty object
+        let params = ObjectCreateParams {
+            dest: result_reg,
+            template_literal_idx,
+            literal_key_fields: Vec::new(),
+            fields: Vec::new(),
+        };
+        let params_index = self
+            .program
+            .instruction_data
+            .add_object_create_params(params);
+        self.emit_instruction(Instruction::ObjectCreate { params_index }, span);
 
         // Push comprehension context with both key and value expressions
         let comprehension_context = CompilationContext {

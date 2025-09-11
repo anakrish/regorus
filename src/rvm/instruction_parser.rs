@@ -38,8 +38,8 @@ pub fn parse_instruction(text: &str) -> Result<Instruction> {
             "Return" => parse_return(params_text),
             "RuleInit" => parse_rule_init(params_text),
             "RuleReturn" => parse_rule_return(params_text),
-            "ObjectNew" => parse_object_new(params_text),
             "ObjectSet" => parse_object_set(params_text),
+            "ObjectCreate" => parse_object_create(params_text),
             "Index" => parse_index(params_text),
             "ArrayNew" => parse_array_new(params_text),
             "ArrayPush" => parse_array_push(params_text),
@@ -314,14 +314,6 @@ fn parse_rule_return(params_text: &str) -> Result<Instruction> {
     Ok(Instruction::RuleReturn {})
 }
 
-fn parse_object_new(params_text: &str) -> Result<Instruction> {
-    let params = parse_params(params_text)?;
-    let dest = get_param_u16(&params, "dest")?;
-    Ok(Instruction::ObjectNew {
-        dest: dest.try_into().unwrap(),
-    })
-}
-
 fn parse_object_set(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let obj = get_param_u16(&params, "obj")?;
@@ -332,6 +324,12 @@ fn parse_object_set(params_text: &str) -> Result<Instruction> {
         key: key.try_into().unwrap(),
         value: value.try_into().unwrap(),
     })
+}
+
+fn parse_object_create(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let params_index = get_param_u16(&params, "params_index")?;
+    Ok(Instruction::ObjectCreate { params_index })
 }
 
 fn parse_index(params_text: &str) -> Result<Instruction> {

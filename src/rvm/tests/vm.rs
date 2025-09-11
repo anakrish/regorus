@@ -76,6 +76,8 @@ mod tests {
         function_call_params: Vec<FunctionCallParamsSpec>,
         #[serde(default)]
         builtin_infos: Vec<BuiltinInfoSpec>,
+        #[serde(default)]
+        object_create_params: Vec<ObjectCreateParamsSpec>,
     }
 
     #[derive(Debug, Deserialize, Serialize)]
@@ -115,6 +117,14 @@ mod tests {
     struct BuiltinInfoSpec {
         name: String,
         num_args: u16,
+    }
+
+    #[derive(Debug, Deserialize, Serialize)]
+    struct ObjectCreateParamsSpec {
+        dest: u16,
+        template_literal_idx: u16,
+        literal_key_fields: Vec<(u16, u16)>,
+        fields: Vec<(u16, u16)>,
     }
 
     #[derive(Debug, Deserialize, Serialize)]
@@ -262,6 +272,19 @@ mod tests {
                     args: args_array,
                 };
                 program.add_function_call_params(function_call_params);
+            }
+
+            // Convert object create params
+            for object_create_spec in params_spec.object_create_params {
+                use crate::rvm::instructions::ObjectCreateParams;
+
+                let object_create_params = ObjectCreateParams {
+                    dest: object_create_spec.dest.try_into().unwrap(),
+                    template_literal_idx: object_create_spec.template_literal_idx,
+                    literal_key_fields: object_create_spec.literal_key_fields.into_iter().map(|(k, v)| (k, v.try_into().unwrap())).collect(),
+                    fields: object_create_spec.fields.into_iter().map(|(k, v)| (k.try_into().unwrap(), v.try_into().unwrap())).collect(),
+                };
+                program.instruction_data.add_object_create_params(object_create_params);
             }
         }
 

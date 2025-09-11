@@ -4,8 +4,13 @@ package example
 
 allow := r if {                                     # allow is true if...
     r := {
+<<<<<<< HEAD
         "allow": count(violation) == 0,             # there are zero violations.
         "violations": violation                     # return the violations found.
+=======
+        "allow": count(violation) == 0,                           # there are zero violations.
+        "violation": violation,                       # the violation set.
+>>>>>>> 67e002c (All tests passing)
     }
 }
 

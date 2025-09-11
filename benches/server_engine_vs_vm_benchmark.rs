@@ -11,7 +11,7 @@ default allow := false                              # unless otherwise defined, 
 
 allow := r if {                                     # allow is true if...
     r := {
-      "count": count(violation) == 0,               # there are zero violations.
+      "allow": count(violation) == 0,               # there are zero violations.
       "violation": violation,
     }
 }

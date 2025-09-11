@@ -2,8 +2,11 @@ package example
 
 default allow := false                              # unless otherwise defined, allow is false
 
-allow := true if {                                     # allow is true if...
-    count(violation) == 0                           # there are zero violations.
+allow := r if {                                     # allow is true if...
+    r := {
+        "allow": count(violation) == 0,                           # there are zero violations.
+        "violation": violation,                       # the violation set.
+    }
 }
 
 violation contains server.id if {                              # a server is in the violation set if...

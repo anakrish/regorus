@@ -1,0 +1,235 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# VM Default Rules Test Suite
+# Tests VM execution of default rules when complete rules have no successful definitions
+
+cases:
+  - note: vm_default_rule_basic_execution
+    data: {}
+    modules:
+      - |
+        package test
+        default allow := false
+        allow := true if {
+          false  # This will always fail in VM execution
+        }
+    query: data.test.allow
+    want_result: false
+
+  - note: vm_default_rule_register_handling
+    data: {}
+    modules:
+      - |
+        package test
+        default value := 123
+        value := 456 if {
+          input.trigger == "change"  # Will fail due to undefined input
+        }
+    query: data.test.value
+    want_result: 123
+
+  - note: vm_default_rule_call_stack_integrity
+    data: {}
+    modules:
+      - |
+        package test
+        default outer := helper_rule
+        helper_rule := "helper_success"
+        outer := "direct_success" if {
+          false  # This will fail, should fall back to default
+        }
+    query: data.test.outer
+    want_result: "helper_success"
+
+  - note: vm_default_rule_with_loop_failure
+    data: {}
+    modules:
+      - |
+        package test
+        default result := "no_match"
+        result := "found" if {
+          some x in [1, 2, 3]
+          x > 10  # This loop will never succeed
+        }
+    query: data.test.result
+    want_result: "no_match"
+
+  - note: vm_default_rule_nested_calls
+    data: {}
+    modules:
+      - |
+        package test
+        default level1 := level2
+        default level2 := "bottom_default"
+        level1 := "level1_success" if {
+          false  # This will fail
+        }
+        level2 := "level2_success" if {
+          false  # This will also fail
+        }
+    query: data.test.level1
+    want_result: "bottom_default"
+
+  - note: vm_default_rule_with_builtin_calls
+    data: {}
+    modules:
+      - |
+        package test
+        default message := sprintf("default_%s", ["value"])
+        message := sprintf("success_%s", ["value"]) if {
+          false  # This will fail
+        }
+    query: data.test.message
+    want_result: "default_value"
+
+  - note: vm_default_rule_cache_behavior
+    data: {}
+    modules:
+      - |
+        package test
+        default cached_rule := expensive_computation
+        expensive_computation := "computed_value"
+        cached_rule := "override" if {
+          false  # This will fail, should use cached default
+        }
+    query: data.test.cached_rule
+    want_result: "computed_value"
+
+  - note: vm_default_rule_error_handling
+    data: {}
+    modules:
+      - |
+        package test
+        default safe_value := 0
+        safe_value := 10 / input.divisor if {
+          input.divisor > 0  # Will fail due to undefined input
+        }
+    query: data.test.safe_value
+    want_result: 0
+
+  - note: vm_default_rule_multiple_definitions_execution_order
+    data: {}
+    modules:
+      - |
+        package test
+        default result := "default"
+        result := "first" if {
+          false  # Fails
+        }
+        result := "second" if {
+          false  # Fails
+        }
+        result := "third" if {
+          false  # Fails
+        }
+    query: data.test.result
+    want_result: "default"
+
+  - note: vm_default_rule_with_assertion_failure
+    data: {}
+    modules:
+      - |
+        package test
+        default result := "safe_default"
+        result := "success" if {
+          1 == 2  # This assertion will fail
+        }
+    query: data.test.result
+    want_result: "safe_default"
+
+  - note: vm_default_rule_partial_vs_complete
+    data: {}
+    modules:
+      - |
+        package test
+        # Complete rule with default
+        default complete_rule := "complete_default"
+        complete_rule := "complete_success" if {
+          false
+        }
+        # Partial rule (no default should be used)
+        partial_rule[1] := "partial_value" if {
+          false  # This will fail, but no default for partial rules
+        }
+    query: data.test
+    want_result:
+      complete_rule: "complete_default"
+
+  - note: vm_default_rule_instruction_count
+    data: {}
+    modules:
+      - |
+        package test
+        default result := "default"
+        result := "success" if {
+          # Complex condition that will ultimately fail
+          x := 1
+          y := 2
+          z := x + y
+          z == 10  # This will fail
+        }
+    query: data.test.result
+    want_result: "default"
+
+  - note: vm_default_rule_with_data_access
+    data:
+      external:
+        flag: false
+    modules:
+      - |
+        package test
+        default result := "default_when_no_flag"
+        result := "flag_is_true" if {
+          data.external.flag == true  # Will fail since flag is false
+        }
+    query: data.test.result
+    want_result: "default_when_no_flag"
+
+  - note: vm_default_rule_with_input_access
+    data: {}
+    input:
+      enabled: false
+    modules:
+      - |
+        package test
+        default result := "not_enabled"
+        result := "enabled" if {
+          input.enabled == true  # Will fail since enabled is false
+        }
+    query: data.test.result
+    want_result: "not_enabled"
+
+  - note: vm_default_rule_complex_object_construction
+    data: {}
+    modules:
+      - |
+        package test
+        default config := {
+          "mode": "safe",
+          "retries": 3,
+          "timeout": 30,
+          "features": {
+            "logging": true,
+            "metrics": false
+          }
+        }
+        config := {
+          "mode": "aggressive",
+          "retries": 1,
+          "timeout": 5,
+          "features": {
+            "logging": false,
+            "metrics": true
+          }
+        } if {
+          false  # This will fail
+        }
+    query: data.test.config
+    want_result:
+      mode: "safe"
+      retries: 3
+      timeout: 30
+      features:
+        logging: true
+        metrics: false

@@ -65,7 +65,7 @@ cases:
             input.ports[i].network == input.networks[j].id  # the port references a network in the input.networks collection and...
             input.networks[j].public                        # the network is public.
         }
-    query: data.example.public_server
+    query: data.example.allow
     want_result:
       outcome: false
       violations:

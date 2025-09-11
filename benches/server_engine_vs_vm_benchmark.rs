@@ -9,22 +9,25 @@ package example
 
 default allow := false                              # unless otherwise defined, allow is false
 
-allow := true if {                                     # allow is true if...
-    count(violation) == 0                           # there are zero violations.
+allow := r if {                                     # allow is true if...
+    r := {
+      "count": count(violation) == 0,               # there are zero violations.
+      "violation": violation,
+    }
 }
 
-violation[server.id] if {                              # a server is in the violation set if...
+violation contains server.id if {                   # a server is in the violation set if...
     some server
     public_server[server]                           # it exists in the 'public_server' set and...
     server.protocols[_] == "http"                   # it contains the insecure "http" protocol.
 }
 
-violation[server.id] if {                              # a server is in the violation set if...
+violation contains server.id if {                              # a server is in the violation set if...
     server := input.servers[_]                      # it exists in the input.servers collection and...
     server.protocols[_] == "telnet"                 # it contains the "telnet" protocol.
 }
 
-public_server[server]if  {                             # a server exists in the public_server set if...
+public_server contains server if  {                             # a server exists in the public_server set if...
     some i, j
     server := input.servers[_]                      # it exists in the input.servers collection and...
     server.ports[_] == input.ports[i].id            # it references a port in the input.ports collection and...
@@ -151,10 +154,6 @@ fn print_evaluation_outputs() {
         engine.set_input(input_value.clone());
         let engine_result = engine.eval_rule("data.example.allow".to_string()).unwrap();
         
-        // Get additional context from engine
-        engine.set_input(input_value.clone());
-        let violation_result = engine.eval_rule("data.example.allow".to_string()).unwrap_or(Value::Undefined);
-        
         // RVM result
         let module = PolicyModule {
             id: "server.rego".into(),
@@ -175,8 +174,7 @@ fn print_evaluation_outputs() {
         // Print results
         println!("  Engine allow result: {:?}", engine_result);
         println!("  RVM allow result:    {:?}", rvm_result);
-        println!("  Violations found:    {:?}", violation_result);
-        
+       
         // Verify consistency
         if engine_result != rvm_result {
             println!("  ⚠️  WARNING: Engine and RVM results differ!");

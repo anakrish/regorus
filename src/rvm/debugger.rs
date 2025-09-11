@@ -699,6 +699,7 @@ impl InteractiveDebugger {
                 Instruction::Move { dest, .. } => *dest as usize == reg,
                 Instruction::LoadInput { dest } => *dest as usize == reg,
                 Instruction::Index { dest, .. } => *dest as usize == reg,
+                Instruction::IndexLiteral { dest, .. } => *dest as usize == reg,
                 Instruction::Eq { dest, .. } => *dest as usize == reg,
                 Instruction::Add { dest, .. } => *dest as usize == reg,
                 Instruction::Sub { dest, .. } => *dest as usize == reg,
@@ -740,6 +741,13 @@ impl InteractiveDebugger {
                     Instruction::LoadInput { .. } => String::from("input"),
                     Instruction::Index { container, key, .. } => {
                         format!("R{}[R{}]", container, key)
+                    }
+                    Instruction::IndexLiteral { container, literal_idx, .. } => {
+                        if let Some(literal) = program.literals.get(*literal_idx as usize) {
+                            format!("R{}[{:?}]", container, literal)
+                        } else {
+                            format!("R{}[L({})]", container, literal_idx)
+                        }
                     }
                     Instruction::Eq { left, right, .. } => format!("R{} == R{}", left, right),
                     Instruction::Add { left, right, .. } => format!("R{} + R{}", left, right),

@@ -333,6 +333,13 @@ pub enum Instruction {
         key: u8,
     },
 
+    /// Index into container using literal key (optimization for Load + Index)
+    IndexLiteral {
+        dest: u8,
+        container: u8,
+        literal_idx: u16,
+    },
+
     /// Create empty array
     ArrayNew {
         dest: u8,
@@ -548,6 +555,11 @@ impl std::fmt::Display for Instruction {
                 container,
                 key,
             } => format!("INDEX R({}) R({}) R({})", dest, container, key),
+            Instruction::IndexLiteral {
+                dest,
+                container,
+                literal_idx,
+            } => format!("INDEX_LITERAL R({}) R({}) L({})", dest, container, literal_idx),
             Instruction::ArrayNew { dest } => format!("ARRAY_NEW R({})", dest),
             Instruction::ArrayPush { arr, value } => format!("ARRAY_PUSH R({}) R({})", arr, value),
             Instruction::SetNew { dest } => format!("SET_NEW R({})", dest),

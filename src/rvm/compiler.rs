@@ -73,6 +73,9 @@ pub struct Compiler<'a> {
     source_to_index: HashMap<String, usize>, // Maps source file paths to source indices (0-based)
     // Builtin management
     builtin_index_map: HashMap<String, u16>, // Maps builtin names to their assigned indices
+    // Input/Data loading optimization - track registers per rule definition
+    current_input_register: Option<Register>,   // Register holding input in current rule definition
+    current_data_register: Option<Register>,    // Register holding data in current rule definition
 }
 
 impl<'a> Compiler<'a> {
@@ -94,6 +97,8 @@ impl<'a> Compiler<'a> {
             loop_expr_register_map: BTreeMap::new(),
             source_to_index: HashMap::new(),
             builtin_index_map: HashMap::new(),
+            current_input_register: None,
+            current_data_register: None,
         }
     }
 
@@ -195,6 +200,13 @@ impl<'a> Compiler<'a> {
         if self.scopes.len() > 1 {
             self.scopes.pop();
         }
+    }
+
+    /// Reset input/data registers for a new rule definition
+    /// This ensures input and data are loaded only once per rule definition
+    pub fn reset_rule_definition_registers(&mut self) {
+        self.current_input_register = None;
+        self.current_data_register = None;
     }
 
     /// Push a new compilation context onto the context stack
@@ -350,21 +362,43 @@ impl<'a> Compiler<'a> {
         // Handle special built-in variables first
         match var_name {
             "input" => {
+                // Check if input is already loaded in current rule definition
+                if let Some(register) = self.current_input_register {
+                    debug!(
+                        "Variable 'input' already loaded in register {} for current rule definition",
+                        register
+                    );
+                    return Ok(register);
+                }
+
+                // Load input for the first time in this rule definition
                 let dest = self.alloc_register();
                 self.emit_instruction(Instruction::LoadInput { dest }, span);
+                self.current_input_register = Some(dest);
                 debug!(
-                    "Variable 'input' resolved to LoadInput instruction, register {}",
+                    "Variable 'input' resolved to LoadInput instruction, register {} (first load in rule definition)",
                     dest
                 );
                 return Ok(dest);
             }
             "data" => {
+                // Check if data is already loaded in current rule definition
+                if let Some(register) = self.current_data_register {
+                    debug!(
+                        "Variable 'data' already loaded in register {} for current rule definition",
+                        register
+                    );
+                    return Ok(register);
+                }
+
+                // Load data for the first time in this rule definition
                 // TODO: Fully qualified rule paths.
                 // TODO: data overrides rule in same path
                 let dest = self.alloc_register();
                 self.emit_instruction(Instruction::LoadData { dest }, span);
+                self.current_data_register = Some(dest);
                 debug!(
-                    "Variable 'data' resolved to LoadData instruction, register {}",
+                    "Variable 'data' resolved to LoadData instruction, register {} (first load in rule definition)",
                     dest
                 );
                 return Ok(dest);
@@ -971,24 +1005,16 @@ impl<'a> Compiler<'a> {
                 // The field is a (Span, Value) tuple - get the value
                 let field_value = &field.1;
 
-                // Create register for field key
-                let key_reg = self.alloc_register();
+                // Use IndexLiteral instruction for optimization - avoid loading literal into register
                 let literal_idx = self.add_literal(field_value.clone());
-                self.emit_instruction(
-                    Instruction::Load {
-                        dest: key_reg,
-                        literal_idx,
-                    },
-                    span,
-                );
 
-                // Get the field value
+                // Get the field value using IndexLiteral
                 let dest = self.alloc_register();
                 self.emit_instruction(
-                    Instruction::Index {
+                    Instruction::IndexLiteral {
                         dest,
                         container: obj_reg,
-                        key: key_reg,
+                        literal_idx,
                     },
                     span,
                 );
@@ -1273,6 +1299,8 @@ impl<'a> Compiler<'a> {
                             body_entry_points.push(body_entry_point);
 
                             self.push_scope();
+                            // Reset input/data registers for this rule body
+                            self.reset_rule_definition_registers();
 
                             self.emit_instruction(
                                 Instruction::RuleInit {
@@ -1300,6 +1328,9 @@ impl<'a> Compiler<'a> {
                         // Compile each body within this definition
                         for (body_idx, body) in bodies.iter().enumerate() {
                             self.push_scope();
+                            // Reset input/data registers for each rule body
+                            self.reset_rule_definition_registers();
+                            
                             let body_entry_point = self.program.instructions.len();
                             body_entry_points.push(body_entry_point);
 

@@ -31,19 +31,26 @@ cases:
     description: Test object creation and access
     example_rego: "obj := {\"key1\": \"value1\", \"key2\": 42}; obj.key1"  # Object creation and field access
     literals:
+      - {}
       - "key1"
       - "value1"
       - "key2"
       - 42
+    instruction_params:
+      object_create_params:
+        - dest: 0
+          template_literal_idx: 0
+          literal_key_fields: []
+          fields: []
     instructions:
-      - "ObjectNew { dest: 0 }"              # Create empty object in register 0
-      - "Load { dest: 1, literal_idx: 0 }"   # Load "key1" into register 1
-      - "Load { dest: 2, literal_idx: 1 }"   # Load "value1" into register 2
+      - "ObjectCreate { params_index: 0 }"   # Create empty object in register 0
+      - "Load { dest: 1, literal_idx: 1 }"   # Load "key1" into register 1
+      - "Load { dest: 2, literal_idx: 2 }"   # Load "value1" into register 2
       - "ObjectSet { obj: 0, key: 1, value: 2 }"  # Set obj["key1"] = "value1"
-      - "Load { dest: 3, literal_idx: 2 }"   # Load "key2" into register 3
-      - "Load { dest: 4, literal_idx: 3 }"   # Load 42 into register 4
+      - "Load { dest: 3, literal_idx: 3 }"   # Load "key2" into register 3
+      - "Load { dest: 4, literal_idx: 4 }"   # Load 42 into register 4
       - "ObjectSet { obj: 0, key: 3, value: 4 }"  # Set obj["key2"] = 42
-      - "Load { dest: 5, literal_idx: 0 }"   # Load "key1" again for lookup
+      - "Load { dest: 5, literal_idx: 1 }"   # Load "key1" again for lookup
       - "Index { dest: 6, container: 0, key: 5 }"  # Access obj["key1"], store in register 6
       - "Return { value: 6 }"                # Return the field value
     want_result: "value1"

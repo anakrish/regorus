@@ -76,6 +76,38 @@ impl FunctionCallParams {
     }
 }
 
+/// Object creation parameters stored in program's instruction data table
+#[repr(C)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectCreateParams {
+    /// Destination register to store the result object
+    pub dest: u8,
+    /// Literal index of template object with all keys (undefined values)
+    /// Always present - empty object if no literal keys
+    pub template_literal_idx: u16,
+    /// Fields with literal keys: (literal_key_index, value_register) in sorted order
+    pub literal_key_fields: Vec<(u16, u8)>,
+    /// Fields with non-literal keys: (key_register, value_register)
+    pub fields: Vec<(u8, u8)>,
+}
+
+impl ObjectCreateParams {
+    /// Get the total number of fields
+    pub fn field_count(&self) -> usize {
+        self.literal_key_fields.len() + self.fields.len()
+    }
+
+    /// Get literal key field pairs as a slice
+    pub fn literal_key_field_pairs(&self) -> &[(u16, u8)] {
+        &self.literal_key_fields
+    }
+
+    /// Get non-literal key field pairs as a slice
+    pub fn field_pairs(&self) -> &[(u8, u8)] {
+        &self.fields
+    }
+}
+
 /// Instruction data container for complex instruction parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstructionData {
@@ -85,6 +117,8 @@ pub struct InstructionData {
     pub builtin_call_params: Vec<BuiltinCallParams>,
     /// Function rule call parameter table for FunctionCall instructions
     pub function_call_params: Vec<FunctionCallParams>,
+    /// Object creation parameter table for ObjectCreate instructions
+    pub object_create_params: Vec<ObjectCreateParams>,
 }
 
 impl InstructionData {
@@ -94,6 +128,7 @@ impl InstructionData {
             loop_params: Vec::new(),
             builtin_call_params: Vec::new(),
             function_call_params: Vec::new(),
+            object_create_params: Vec::new(),
         }
     }
 
@@ -118,6 +153,13 @@ impl InstructionData {
         index as u16
     }
 
+    /// Add object create parameters and return the index
+    pub fn add_object_create_params(&mut self, params: ObjectCreateParams) -> u16 {
+        let index = self.object_create_params.len();
+        self.object_create_params.push(params);
+        index as u16
+    }
+
     /// Get loop parameters by index
     pub fn get_loop_params(&self, index: u16) -> Option<&LoopStartParams> {
         self.loop_params.get(index as usize)
@@ -131,6 +173,11 @@ impl InstructionData {
     /// Get function call parameters by index
     pub fn get_function_call_params(&self, index: u16) -> Option<&FunctionCallParams> {
         self.function_call_params.get(index as usize)
+    }
+
+    /// Get object create parameters by index
+    pub fn get_object_create_params(&self, index: u16) -> Option<&ObjectCreateParams> {
+        self.object_create_params.get(index as usize)
     }
 
     /// Get mutable reference to loop parameters by index
@@ -314,16 +361,17 @@ pub enum Instruction {
         value: u8,
     },
 
-    /// Create empty object
-    ObjectNew {
-        dest: u8,
-    },
-
     /// Set object field
     ObjectSet {
         obj: u8,
         key: u8,
         value: u8,
+    },
+
+    /// Create object with optimized field setting - uses parameter table
+    ObjectCreate {
+        /// Index into program's instruction_data.object_create_params table
+        params_index: u16,
     },
 
     /// Index into container (object, array, set)
@@ -428,6 +476,11 @@ impl Instruction {
         Self::FunctionCall { params_index }
     }
 
+    /// Create a new ObjectCreate instruction with parameter table index
+    pub fn object_create(params_index: u16) -> Self {
+        Self::ObjectCreate { params_index }
+    }
+
     /// Get detailed display string with parameter resolution for debugging
     pub fn display_with_params(&self, instruction_data: &InstructionData) -> String {
         match self {
@@ -477,6 +530,29 @@ impl Instruction {
                     )
                 } else {
                     format!("FUNCTION_CALL P({}) [INVALID INDEX]", params_index)
+                }
+            }
+            Instruction::ObjectCreate { params_index } => {
+                if let Some(params) = instruction_data.get_object_create_params(*params_index) {
+                    let mut field_parts = Vec::new();
+
+                    // Add literal key fields
+                    for &(literal_idx, value_reg) in params.literal_key_field_pairs() {
+                        field_parts.push(format!("L({}):R({})", literal_idx, value_reg));
+                    }
+
+                    // Add non-literal key fields
+                    for &(key_reg, value_reg) in params.field_pairs() {
+                        field_parts.push(format!("R({}):R({})", key_reg, value_reg));
+                    }
+
+                    let fields_str = field_parts.join(" ");
+                    format!(
+                        "OBJECT_CREATE R({}) L({}) [{}]",
+                        params.dest, params.template_literal_idx, fields_str
+                    )
+                } else {
+                    format!("OBJECT_CREATE P({}) [INVALID INDEX]", params_index)
                 }
             }
             _ => self.to_string(),
@@ -546,9 +622,11 @@ impl std::fmt::Display for Instruction {
                 format!("FUNCTION_CALL P({})", params_index)
             }
             Instruction::Return { value } => format!("RETURN R({})", value),
-            Instruction::ObjectNew { dest } => format!("OBJECT_NEW R({})", dest),
             Instruction::ObjectSet { obj, key, value } => {
                 format!("OBJECT_SET R({}) R({}) R({})", obj, key, value)
+            }
+            Instruction::ObjectCreate { params_index } => {
+                format!("OBJECT_CREATE P({})", params_index)
             }
             Instruction::Index {
                 dest,
@@ -559,7 +637,10 @@ impl std::fmt::Display for Instruction {
                 dest,
                 container,
                 literal_idx,
-            } => format!("INDEX_LITERAL R({}) R({}) L({})", dest, container, literal_idx),
+            } => format!(
+                "INDEX_LITERAL R({}) R({}) L({})",
+                dest, container, literal_idx
+            ),
             Instruction::ArrayNew { dest } => format!("ARRAY_NEW R({})", dest),
             Instruction::ArrayPush { arr, value } => format!("ARRAY_PUSH R({}) R({})", arr, value),
             Instruction::SetNew { dest } => format!("SET_NEW R({})", dest),

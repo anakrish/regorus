@@ -14,6 +14,7 @@ cases:
       # some x in []
       # x > 0  # false - no elements to satisfy condition
     literals:
+      - {}
       - 0  # comparison value
     instruction_params:
       loop_params:
@@ -27,7 +28,7 @@ cases:
     instructions:
       - "ArrayNew { dest: 0 }"              # Create empty array in register 0
       - "LoopStart { params_index: 0 }"
-      - "Load { dest: 7, literal_idx: 0 }"  # Load comparison value 0
+      - "Load { dest: 7, literal_idx: 1 }"  # Load comparison value 0
       - "Gt { dest: 8, left: 5, right: 7 }" # Check if current value > 0
       - "AssertCondition { condition: 8 }"  # Assert the condition
       - "LoopNext { body_start: 2, loop_end: 6 }"
@@ -40,6 +41,7 @@ cases:
       # every x in []
       # x > 0  # true - vacuously true (no elements to violate condition)
     literals:
+      - {}
       - 0  # comparison value
     instruction_params:
       loop_params:
@@ -53,7 +55,7 @@ cases:
     instructions:
       - "ArrayNew { dest: 0 }"              # Create empty array in register 0
       - "LoopStart { params_index: 0 }"
-      - "Load { dest: 7, literal_idx: 0 }"  # Load comparison value 0
+      - "Load { dest: 7, literal_idx: 1 }"  # Load comparison value 0
       - "Gt { dest: 8, left: 5, right: 7 }" # Check if current value > 0
       - "AssertCondition { condition: 8 }"  # Assert the condition
       - "LoopNext { body_start: 2, loop_end: 6 }"
@@ -66,6 +68,7 @@ cases:
       # [x + 1 | x = []; true]  # []
       # Transform each element by adding 1
     literals:
+      - {}
       - 1  # value to add
     instruction_params:
       loop_params:
@@ -80,7 +83,7 @@ cases:
       - "ArrayNew { dest: 0 }"              # Create empty input array in register 0
       - "ArrayNew { dest: 1 }"              # Create empty result array in register 1  
       - "LoopStart { params_index: 0 }"
-      - "Load { dest: 6, literal_idx: 0 }"  # Load 1 into register 6
+      - "Load { dest: 6, literal_idx: 1 }"  # Load 1 into register 6
       - "Add { dest: 7, left: 5, right: 6 }" # Add 1 to current value
       - "ArrayPush { arr: 1, value: 7 }"    # Push result to output array
       - "LoadBool { dest: 8, value: true }" # Load true (condition always passes)
@@ -95,6 +98,7 @@ cases:
       # {x + 1 | x = []; true}  # set()
       # Transform each element by adding 1 into a set
     literals:
+      - {}
       - 1  # value to add
     instruction_params:
       loop_params:
@@ -109,7 +113,7 @@ cases:
       - "ArrayNew { dest: 0 }"              # Create empty input array in register 0
       - "SetNew { dest: 1 }"                # Create empty result set in register 1
       - "LoopStart { params_index: 0 }"
-      - "Load { dest: 6, literal_idx: 0 }"  # Load 1 into register 6
+      - "Load { dest: 6, literal_idx: 1 }"  # Load 1 into register 6
       - "Add { dest: 7, left: 5, right: 6 }" # Add 1 to current value
       - "SetAdd { set: 1, value: 7 }"       # Add result to output set
       - "LoadBool { dest: 8, value: true }" # Load true (condition always passes)
@@ -125,8 +129,18 @@ cases:
       # {k: v + 1 | some k, v in {}; true}  # {}
       # Transform each key-value pair 
     literals:
+      - {}
       - 1  # value to add
     instruction_params:
+      object_create_params:
+        - dest: 0
+          template_literal_idx: 0
+          literal_key_fields: []
+          fields: []
+        - dest: 1
+          template_literal_idx: 0
+          literal_key_fields: []
+          fields: []
       loop_params:
         - mode: "ObjectComprehension"
           collection: 0
@@ -136,10 +150,10 @@ cases:
           body_start: 3
           loop_end: 8
     instructions:
-      - "ObjectNew { dest: 0 }"             # Create empty input object in register 0
-      - "ObjectNew { dest: 1 }"             # Create empty result object in register 1
+      - "ObjectCreate { params_index: 0 }"             
+      - "ObjectCreate { params_index: 1 }"             
       - "LoopStart { params_index: 0 }"
-      - "Load { dest: 6, literal_idx: 0 }"  # Load 1 into register 6  
+      - "Load { dest: 6, literal_idx: 1 }"  # Load 1 into register 6  
       - "Add { dest: 7, left: 5, right: 6 }" # Add 1 to current value
       - "ObjectSet { obj: 1, key: 4, value: 7 }" # Set key: (value + 1) in result object
       - "LoadBool { dest: 8, value: true }" # Load true (condition always passes)
@@ -154,6 +168,7 @@ cases:
       # some x in set()
       # x > 0  # false - no elements in set
     literals:
+      - {}
       - 0  # comparison value
     instruction_params:
       loop_params:
@@ -167,7 +182,7 @@ cases:
     instructions:
       - "SetNew { dest: 0 }"                # Create empty set in register 0
       - "LoopStart { params_index: 0 }"
-      - "Load { dest: 7, literal_idx: 0 }"  # Load comparison value 0
+      - "Load { dest: 7, literal_idx: 1 }"  # Load comparison value 0
       - "Gt { dest: 8, left: 5, right: 7 }" # Check if current value > 0
       - "AssertCondition { condition: 8 }"  # Assert the condition
       - "LoopNext { body_start: 2, loop_end: 6 }"
@@ -180,8 +195,14 @@ cases:
       # every k, v in {}
       # v > 0  # true - vacuously true (no key-value pairs to violate condition)
     literals:
+      - {}
       - 0  # comparison value
     instruction_params:
+      object_create_params:
+        - dest: 0
+          template_literal_idx: 0
+          literal_key_fields: []
+          fields: []
       loop_params:
         - mode: "Every"
           collection: 0
@@ -191,9 +212,9 @@ cases:
           body_start: 2
           loop_end: 6
     instructions:
-      - "ObjectNew { dest: 0 }"             # Create empty object in register 0
+      - "ObjectCreate { params_index: 0 }"             
       - "LoopStart { params_index: 0 }"
-      - "Load { dest: 7, literal_idx: 0 }"  # Load comparison value 0
+      - "Load { dest: 7, literal_idx: 1 }"  # Load comparison value 0
       - "Gt { dest: 8, left: 5, right: 7 }" # Check if current value > 0
       - "AssertCondition { condition: 8 }"  # Assert the condition
       - "LoopNext { body_start: 2, loop_end: 6 }"

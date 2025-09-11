@@ -57,7 +57,7 @@ fn generate_test_inputs() -> Vec<(&'static str, Value)> {
                 {"id": "p3", "network": "net2"}
             ]
         }).into()),
-        
+
         // Configuration with HTTP violation (public server with http)
         ("http_violation", json!({
             "servers": [
@@ -74,7 +74,7 @@ fn generate_test_inputs() -> Vec<(&'static str, Value)> {
                 {"id": "p3", "network": "net2"}
             ]
         }).into()),
-        
+
         // Configuration with telnet violation
         ("telnet_violation", json!({
             "servers": [
@@ -90,7 +90,7 @@ fn generate_test_inputs() -> Vec<(&'static str, Value)> {
                 {"id": "p2", "network": "net2"}
             ]
         }).into()),
-        
+
         // Large configuration with many servers
         ("large_config", json!({
             "servers": (0..50).map(|i| json!({
@@ -107,7 +107,7 @@ fn generate_test_inputs() -> Vec<(&'static str, Value)> {
                 "network": format!("net{}", i)
             })).collect::<Vec<_>>()
         }).into()),
-        
+
         // Complex configuration with multiple violations
         ("complex_violations", json!({
             "servers": [
@@ -129,7 +129,7 @@ fn generate_test_inputs() -> Vec<(&'static str, Value)> {
                 {"id": "p5", "network": "private_net"}
             ]
         }).into()),
-        
+
         // Edge case: empty configuration
         ("empty_config", json!({
             "servers": [],
@@ -145,7 +145,7 @@ fn print_evaluation_outputs() {
 
     for (input_name, input_value) in &test_inputs {
         println!("\n--- Input: {} ---", input_name);
-        
+
         // Engine result
         let mut engine = Engine::new();
         engine
@@ -153,7 +153,7 @@ fn print_evaluation_outputs() {
             .unwrap();
         engine.set_input(input_value.clone());
         let engine_result = engine.eval_rule("data.example.allow".to_string()).unwrap();
-        
+
         // RVM result
         let module = PolicyModule {
             id: "server.rego".into(),
@@ -163,18 +163,20 @@ fn print_evaluation_outputs() {
             Value::new_object(),
             &[module],
             "data.example.allow".into(),
-        ).unwrap();
-        
-        let program = Compiler::compile_from_policy(&compiled_policy, "data.example.allow").unwrap();
+        )
+        .unwrap();
+
+        let program =
+            Compiler::compile_from_policy(&compiled_policy, "data.example.allow").unwrap();
         let mut vm = RegoVM::new_with_policy(compiled_policy.clone());
         vm.load_program(program);
         vm.set_input(input_value.clone());
         let rvm_result = vm.execute().unwrap();
-        
+
         // Print results
         println!("  Engine allow result: {:?}", engine_result);
         println!("  RVM allow result:    {:?}", rvm_result);
-       
+
         // Verify consistency
         if engine_result != rvm_result {
             println!("  ⚠️  WARNING: Engine and RVM results differ!");
@@ -188,7 +190,7 @@ fn print_evaluation_outputs() {
 fn engine_vs_vm_comparison(c: &mut Criterion) {
     // Print outputs once before benchmarking
     print_evaluation_outputs();
-    
+
     let test_inputs = generate_test_inputs();
 
     let mut group = c.benchmark_group("Server Policy: Engine vs RVM");
@@ -395,7 +397,7 @@ fn server_policy_validation(c: &mut Criterion) {
                     .unwrap();
                 engine.set_input(input_value.clone());
                 let engine_result = engine.eval_rule("data.example.allow".to_string()).unwrap();
-                
+
                 // Compiled Policy result
                 let module = PolicyModule {
                     id: "server.rego".into(),
@@ -407,14 +409,14 @@ fn server_policy_validation(c: &mut Criterion) {
                     "data.example.allow".into(),
                 ).unwrap();
                 let compiled_result = compiled_policy.eval_with_input(input_value.clone()).unwrap();
-                
+
                 // RVM result
                 let program = Compiler::compile_from_policy(&compiled_policy, "data.example.allow").unwrap();
                 let mut vm = RegoVM::new_with_policy(compiled_policy.clone());
                 vm.load_program(program);
                 vm.set_input(input_value.clone());
                 let rvm_result = vm.execute().unwrap();
-                
+
                 // Verify all results match
                 assert_eq!(
                     engine_result, compiled_result,
@@ -426,7 +428,7 @@ fn server_policy_validation(c: &mut Criterion) {
                     "Engine vs RVM results differ for input '{}': engine={:?}, rvm={:?}",
                     input_name, engine_result, rvm_result
                 );
-                
+
                 black_box((engine_result, compiled_result, rvm_result));
             }
         });

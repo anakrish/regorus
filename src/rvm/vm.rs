@@ -625,12 +625,6 @@ impl RegoVM {
                     break;
                 }
 
-                Instruction::ObjectNew { dest } => {
-                    use std::collections::BTreeMap;
-                    let empty_object = Value::Object(Arc::new(BTreeMap::new()));
-                    self.registers[dest as usize] = empty_object;
-                }
-
                 Instruction::ObjectSet { obj, key, value } => {
                     let key_value = self.registers[key as usize].clone();
                     let value_value = self.registers[value as usize].clone();
@@ -647,6 +641,74 @@ impl RegoVM {
                         self.registers[obj as usize] = obj_value;
                         bail!("ObjectSet: register {} does not contain an object", obj);
                     }
+                }
+
+                Instruction::ObjectCreate { params_index } => {
+                    let params = program
+                        .instruction_data
+                        .get_object_create_params(params_index)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("Invalid object create params index: {}", params_index)
+                        })?;
+
+                    // Start with template object (always present)
+                    let mut obj_value = program
+                        .literals
+                        .get(params.template_literal_idx as usize)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "Invalid template literal index: {}",
+                                params.template_literal_idx
+                            )
+                        })?
+                        .clone();
+
+                    // Set all field values
+                    if let Ok(obj_mut) = obj_value.as_object_mut() {
+                        // Since literal_key_field_pairs is sorted and obj_mut.iter_mut() is also sorted,
+                        // we can do efficient parallel iteration for existing keys
+                        let mut literal_updates = params.literal_key_field_pairs().iter();
+                        let mut current_literal_update = literal_updates.next();
+
+                        // Update existing keys in the object (from template)
+                        for (key, value) in obj_mut.iter_mut() {
+                            if let Some(&(literal_idx, value_reg)) = current_literal_update {
+                                if let Some(literal_key) =
+                                    program.literals.get(literal_idx as usize)
+                                {
+                                    if key == literal_key {
+                                        // Found matching key - update the value
+                                        *value = self.registers[value_reg as usize].clone();
+                                        current_literal_update = literal_updates.next();
+                                    }
+                                }
+                            } else {
+                                // No more literal updates to process
+                                break;
+                            }
+                        }
+
+                        // Insert any remaining literal keys that weren't in the template
+                        while let Some(&(literal_idx, value_reg)) = current_literal_update {
+                            if let Some(key_value) = program.literals.get(literal_idx as usize) {
+                                let value_value = self.registers[value_reg as usize].clone();
+                                obj_mut.insert(key_value.clone(), value_value);
+                            }
+                            current_literal_update = literal_updates.next();
+                        }
+
+                        // Insert all non-literal key fields
+                        for &(key_reg, value_reg) in params.field_pairs() {
+                            let key_value = self.registers[key_reg as usize].clone();
+                            let value_value = self.registers[value_reg as usize].clone();
+                            obj_mut.insert(key_value, value_value);
+                        }
+                    } else {
+                        bail!("ObjectCreate: template is not an object");
+                    }
+
+                    // Store result in destination register
+                    self.registers[params.dest as usize] = obj_value;
                 }
 
                 Instruction::Index {
@@ -668,7 +730,7 @@ impl RegoVM {
                     literal_idx,
                 } => {
                     let container_value = &self.registers[container as usize];
-                    
+
                     // Get the literal key value from the program's literal table
                     if let Some(key_value) = self.program.literals.get(literal_idx as usize) {
                         // Use Value's built-in indexing - this handles objects, arrays, and sets efficiently

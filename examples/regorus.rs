@@ -2,7 +2,10 @@
 // Licensed under the MIT License.
 
 use anyhow::{anyhow, bail, Result};
-use regorus::rvm::{generate_assembly_listing, generate_tabular_assembly_listing, AssemblyListingConfig, Compiler, RegoVM};
+use regorus::rvm::{
+    generate_assembly_listing, generate_tabular_assembly_listing, AssemblyListingConfig, Compiler,
+    RegoVM,
+};
 
 mod helpers;
 
@@ -478,7 +481,7 @@ fn rego_debug(
     let rule_rc: Arc<str> = rule_name.clone().into();
     let compiled_policy = engine.compile_with_entrypoint(&rule_rc)?;
 
-    // Compile to RVM program  
+    // Compile to RVM program
     let program = Compiler::compile_from_policy(&compiled_policy, &rule_name)?;
 
     // Show assembly listing first
@@ -486,11 +489,15 @@ fn rego_debug(
     let config = AssemblyListingConfig::default();
     let listing = generate_assembly_listing(&program, &config);
     println!("{}", listing);
-    
+
     println!("\n=== STARTING DEBUG SESSION ===");
     println!("Rule: {}", rule_name);
-    println!("Instructions: {}, Literals: {}", program.instructions.len(), program.literals.len());
-    
+    println!(
+        "Instructions: {}, Literals: {}",
+        program.instructions.len(),
+        program.literals.len()
+    );
+
     // Set environment variables to enable debugging
     #[cfg(feature = "rvm-debug")]
     {
@@ -499,30 +506,30 @@ fn rego_debug(
         println!("Debug mode enabled. The debugger will break on the first instruction.");
         println!("Use debugger commands: (s)tep, (c)ontinue, (l)ist, (asm)embly, (r)egisters, (h)elp, (q)uit");
     }
-    
+
     #[cfg(not(feature = "rvm-debug"))]
     {
         println!("Note: Interactive debugging requires the 'rvm-debug' feature.");
         println!("Rebuild with: cargo build --example regorus --features rvm-debug");
         println!("Running without interactive debugging...");
     }
-    
+
     // Create VM (debugger will be automatically configured via environment variables)
     let mut vm = RegoVM::new();
-    
+
     // Load the program
     vm.load_program(program);
-    
+
     // Set data and input
     vm.set_data(engine.get_data());
     if let Some(input_data) = input_value {
         vm.set_input(input_data);
     }
-    
+
     println!("Debug mode enabled. The debugger will break on the first instruction.");
     println!("Use debugger commands: (s)tep, (c)ontinue, (l)ist, (asm)embly, (r)egisters, (h)elp, (q)uit");
     println!();
-    
+
     // Execute with debugging - the VM will automatically call the debugger
     match vm.execute() {
         Ok(result) => {

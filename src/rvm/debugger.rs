@@ -1,4 +1,6 @@
-use super::assembly_listing::{generate_assembly_listing, generate_tabular_assembly_listing, AssemblyListingConfig};
+use super::assembly_listing::{
+    generate_assembly_listing, generate_tabular_assembly_listing, AssemblyListingConfig,
+};
 use super::instructions::Instruction;
 use super::program::Program;
 use super::vm::{CallRuleContext, LoopContext};
@@ -350,18 +352,21 @@ impl InteractiveDebugger {
                         let col = if span.column > 0 { span.column - 1 } else { 0 };
                         if col < line_content.len() {
                             let end_col = (col + span.length).min(line_content.len());
-                            
+
                             // Only highlight if the span length is reasonable and not too large
                             // Be more restrictive: max 25 chars and max 1/4 of line length
-                            if span.length > 0 && span.length <= 25 && span.length <= line_content.len() / 4 {
+                            if span.length > 0
+                                && span.length <= 25
+                                && span.length <= line_content.len() / 4
+                            {
                                 // Split the line into: before expression | expression | after expression
                                 let before = &line_content[..col];
                                 let expression = &line_content[col..end_col];
                                 let after = &line_content[end_col..];
-                                
+
                                 // Use ANSI colors: \x1b[43m\x1b[30m for yellow background with black text
                                 let highlighted_line = format!(
-                                    "*** {:3}: {}\x1b[43m\x1b[30m{}\x1b[0m{}", 
+                                    "*** {:3}: {}\x1b[43m\x1b[30m{}\x1b[0m{}",
                                     line_num, before, expression, after
                                 );
                                 lines.push(highlighted_line);
@@ -379,7 +384,12 @@ impl InteractiveDebugger {
 
                     // Add cursor line if we have span info and it's reasonable
                     if let Some(span) = validated_span {
-                        if span.column > 0 && span.column <= line_content.len() + 1 && span.length > 0 && span.length <= 25 && span.length <= line_content.len() / 4 {
+                        if span.column > 0
+                            && span.column <= line_content.len() + 1
+                            && span.length > 0
+                            && span.length <= 25
+                            && span.length <= line_content.len() / 4
+                        {
                             let prefix_len = 8; // Length of "*** 123: "
                             let col_offset = span.column.saturating_sub(1);
                             let cursor_length = std::cmp::min(
@@ -421,9 +431,9 @@ impl InteractiveDebugger {
         let config = AssemblyListingConfig {
             show_addresses: true,
             show_bytes: false,
-            indent_size: 2,  // Smaller indent for side panel
+            indent_size: 2, // Smaller indent for side panel
             instruction_width: 30,
-            show_literal_values: false,  // Too verbose for side panel
+            show_literal_values: false, // Too verbose for side panel
             comment_column: 40,
         };
 
@@ -451,20 +461,20 @@ impl InteractiveDebugger {
         for (idx, line) in assembly_lines[start_idx..end_idx].iter().enumerate() {
             let actual_idx = start_idx + idx;
             let is_current = current_line_idx == Some(actual_idx);
-            
+
             // Skip comment lines (starting with ;) to save space
             if line.trim_start().starts_with(';') {
                 continue;
             }
-            
+
             let display_line = if is_current {
                 format!(">>> {}", line.trim())
             } else {
                 format!("    {}", line.trim())
             };
-            
+
             lines.push(display_line);
-            
+
             if lines.len() >= max_lines {
                 break;
             }
@@ -799,7 +809,11 @@ impl InteractiveDebugger {
                     Instruction::Index { container, key, .. } => {
                         format!("R{}[R{}]", container, key)
                     }
-                    Instruction::IndexLiteral { container, literal_idx, .. } => {
+                    Instruction::IndexLiteral {
+                        container,
+                        literal_idx,
+                        ..
+                    } => {
                         if let Some(literal) = program.literals.get(*literal_idx as usize) {
                             format!("R{}[{:?}]", container, literal)
                         } else {
@@ -1171,13 +1185,19 @@ impl InteractiveDebugger {
                 // Show cursor position if this is the current line
                 if is_current {
                     if let Some(span) = current_span {
-                        if span.column > 0 && span.column <= line_content.len() + 1 && span.length > 0 {
+                        if span.column > 0
+                            && span.column <= line_content.len() + 1
+                            && span.length > 0
+                        {
                             let prefix_len = 8; // ">>> 123: ".len()
                             let col_offset = span.column.saturating_sub(1);
-                            
+
                             // Sanity check: don't highlight if span is too large (likely corrupted data)
-                            let max_reasonable_length = line_content.len().saturating_sub(col_offset);
-                            let safe_cursor_length = if span.length > max_reasonable_length || span.length > line_content.len() / 2 {
+                            let max_reasonable_length =
+                                line_content.len().saturating_sub(col_offset);
+                            let safe_cursor_length = if span.length > max_reasonable_length
+                                || span.length > line_content.len() / 2
+                            {
                                 // If span is unreasonably large, just show a single character cursor
                                 1
                             } else {
@@ -1317,7 +1337,10 @@ impl InteractiveDebugger {
     fn show_enhanced_assembly_listing(&self, ctx: &DebugContext) {
         print!("\x1B[2J\x1B[H");
         println!("┌{}┐", "─".repeat(140));
-        println!("│ {:<138} │", "📋 Enhanced Assembly Listing with Current PC Highlighted");
+        println!(
+            "│ {:<138} │",
+            "📋 Enhanced Assembly Listing with Current PC Highlighted"
+        );
         println!("├{}┤", "─".repeat(140));
 
         let config = AssemblyListingConfig {
@@ -1353,19 +1376,19 @@ impl InteractiveDebugger {
         for (idx, line) in lines[start_idx..end_idx].iter().enumerate() {
             let actual_idx = start_idx + idx;
             let is_current = current_line_idx == Some(actual_idx);
-            
+
             let display_line = if is_current {
                 format!(">>> {}", line)
             } else {
                 format!("    {}", line)
             };
-            
+
             println!("│ {:<138} │", self.truncate_or_pad(&display_line, 138));
         }
 
         println!("└{}┘", "─".repeat(140));
         println!("Commands: (f)ull listing, (t)abular format, (Enter) return to debugger");
-        
+
         let mut input = String::new();
         std::io::stdin().read_line(&mut input).ok();
         match input.trim() {
@@ -1379,7 +1402,10 @@ impl InteractiveDebugger {
     fn show_full_assembly_listing(&self, ctx: &DebugContext) {
         print!("\x1B[2J\x1B[H");
         println!("┌{}┐", "─".repeat(160));
-        println!("│ {:<158} │", "📋 Full Enhanced Assembly Listing - All Instructions with Builtins & Rules");
+        println!(
+            "│ {:<158} │",
+            "📋 Full Enhanced Assembly Listing - All Instructions with Builtins & Rules"
+        );
         println!("├{}┤", "─".repeat(160));
 
         let config = AssemblyListingConfig {
@@ -1402,7 +1428,7 @@ impl InteractiveDebugger {
             } else {
                 format!("    {}", line)
             };
-            
+
             println!("│ {:<158} │", self.truncate_or_pad(&display_line, 158));
         }
 
@@ -1416,7 +1442,10 @@ impl InteractiveDebugger {
     fn show_tabular_assembly_listing(&self, ctx: &DebugContext) {
         print!("\x1B[2J\x1B[H");
         println!("┌{}┐", "─".repeat(120));
-        println!("│ {:<118} │", "📋 Tabular Assembly Listing - Compact Format");
+        println!(
+            "│ {:<118} │",
+            "📋 Tabular Assembly Listing - Compact Format"
+        );
         println!("├{}┤", "─".repeat(120));
 
         let config = AssemblyListingConfig::default();
@@ -1425,14 +1454,14 @@ impl InteractiveDebugger {
 
         for line in &lines {
             // Highlight current PC line if it contains the PC
-            let contains_current_pc = line.contains(&format!("{:>4}", ctx.pc)) || 
-                                     line.contains(&format!("{:03}", ctx.pc));
+            let contains_current_pc = line.contains(&format!("{:>4}", ctx.pc))
+                || line.contains(&format!("{:03}", ctx.pc));
             let display_line = if contains_current_pc && !line.starts_with(';') {
                 format!(">>> {}", line)
             } else {
                 format!("    {}", line)
             };
-            
+
             println!("│ {:<118} │", self.truncate_or_pad(&display_line, 118));
         }
 

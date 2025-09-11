@@ -42,7 +42,7 @@ This directory contains the Regorus VM test suite, organized into focused test f
 #### `/suites/data_structures.yaml`
 **Purpose**: Tests complex data type operations
 - `ArrayNew`, `ArrayPush`, `ArrayGet` - Array creation, modification, and access
-- `ObjectNew`, `ObjectSet`, `ObjectGet` - Object creation, field setting, and access
+- `ObjectCreate`, `ObjectSet`, `ObjectGet` - Object creation, field setting, and access
 - `SetNew`, `SetAdd`, `SetContains` - Set creation, element addition, and membership
 
 **Example Rego**: Data structure creation and access like `arr[0]`, `obj.field`, `x in set`

@@ -944,6 +944,92 @@ impl RegoVM {
         Ok(self.registers[0].clone())
     }
 
+    /// Shared rule definition execution logic with consistency checking
+    fn execute_rule_definitions(
+        &mut self,
+        rule_definitions: &[Vec<usize>],
+        rule_type: &crate::rvm::program::RuleType,
+        dest_reg: u8,
+        is_function_call: bool,
+    ) -> Result<(Value, bool)> {
+        let mut first_successful_result: Option<Value> = None;
+        let mut rule_failed_due_to_inconsistency = false;
+        let mut final_result = Value::Undefined;
+
+        for (def_idx, definition_bodies) in rule_definitions.iter().enumerate() {
+            for (body_entry_point_idx, body_entry_point) in definition_bodies.iter().enumerate() {
+                // Update call context if we have one
+                if let Some(ctx) = self.call_rule_stack.last_mut() {
+                    ctx.current_body_index = body_entry_point_idx;
+                    ctx.current_definition_index = def_idx;
+                }
+
+                debug!(
+                    "Executing rule definition {} at body {}, entry point {}",
+                    def_idx, body_entry_point_idx, body_entry_point
+                );
+
+                // Execute the body
+                match self.jump_to(*body_entry_point) {
+                    Ok(_) => {
+                        debug!("Body {} completed", body_entry_point_idx);
+
+                        // For complete rules and functions, check consistency of successful results
+                        if matches!(rule_type, crate::rvm::program::RuleType::Complete)
+                            || is_function_call
+                        {
+                            let current_result = self.registers[dest_reg as usize].clone();
+                            if current_result != Value::Undefined {
+                                if let Some(ref expected) = first_successful_result {
+                                    if *expected != current_result {
+                                        debug!(
+                                            "Rule consistency check failed - expected {:?}, got {:?}",
+                                            expected, current_result
+                                        );
+                                        // Definitions produced different values - rule fails
+                                        rule_failed_due_to_inconsistency = true;
+                                        final_result = Value::Undefined;
+                                        self.registers[dest_reg as usize] = Value::Undefined;
+                                        break;
+                                    } else {
+                                        debug!("Rule consistency check passed - result matches expected");
+                                    }
+                                } else {
+                                    // First successful result
+                                    first_successful_result = Some(current_result.clone());
+                                    final_result = current_result;
+                                    debug!("Rule - first successful result: {:?}", final_result);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        #[cfg(feature = "rvm-tracing")]
+                        debug!("Body {} failed: {:?}", body_entry_point_idx, e);
+                        #[cfg(not(feature = "rvm-tracing"))]
+                        let _ = e; // Suppress unused warning
+                                   // Body failed - skip this definition
+                        continue;
+                    }
+                }
+                debug!(
+                    "Body {} completed successfully for definition {} of {} definitions",
+                    body_entry_point_idx,
+                    def_idx,
+                    rule_definitions.len()
+                );
+            }
+
+            // Break out of definition loop if we had inconsistent results
+            if rule_failed_due_to_inconsistency {
+                debug!("Rule failed due to inconsistent results");
+                break;
+            }
+        }
+
+        Ok((final_result, rule_failed_due_to_inconsistency))
+    }
+
     /// Execute CallRule instruction with caching and call stack support
     fn execute_call_rule(&mut self, dest: u8, rule_index: u16) -> Result<()> {
         debug!(
@@ -997,7 +1083,7 @@ impl RegoVM {
             dest_reg: dest,
             result_reg: dest,
             rule_index,
-            rule_type,
+            rule_type: rule_type.clone(),
             current_definition_index: 0,
             current_body_index: 0,
         });
@@ -1009,38 +1095,17 @@ impl RegoVM {
             rule_definitions.len()
         );
 
-        for (def_idx, definition_bodies) in rule_definitions.iter().enumerate() {
-            for (body_entry_point_idx, body_entry_point) in definition_bodies.iter().enumerate() {
-                if let Some(ctx) = self.call_rule_stack.last_mut() {
-                    ctx.current_body_index = body_entry_point_idx;
-                    ctx.current_definition_index = def_idx;
-                }
-                debug!(
-                    "Executing rule definition {} at body {}, entry point {}",
-                    def_idx, body_entry_point_idx, body_entry_point
-                );
+        // Execute all rule definitions with consistency checking
+        let (final_result, rule_failed_due_to_inconsistency) = self.execute_rule_definitions(
+            &rule_definitions,
+            &rule_type,
+            dest,
+            false, // Not a function call
+        )?;
 
-                // Execute the body
-                match self.jump_to(*body_entry_point) {
-                    Ok(_) => {
-                        debug!("Body {} completed", body_entry_point_idx);
-                    }
-                    Err(e) => {
-                        #[cfg(feature = "rvm-tracing")]
-                        debug!("Body {} failed: {:?}", body_entry_point_idx, e);
-                        #[cfg(not(feature = "rvm-tracing"))]
-                        let _ = e; // Suppress unused warning
-                                   // Body failed - skip this definition
-                        continue;
-                    }
-                }
-                debug!(
-                    "Body {} completed successfully for definition {} of {} definitions",
-                    body_entry_point_idx,
-                    def_idx,
-                    rule_definitions.len()
-                );
-            }
+        // Update the destination register with the final result
+        if final_result != Value::Undefined {
+            self.registers[dest as usize] = final_result;
         }
 
         // Return from the call
@@ -1053,7 +1118,8 @@ impl RegoVM {
 
         // For partial set/object rules, if all definitions failed and we still have Undefined,
         // set the appropriate empty collection as the default
-        if self.registers[dest as usize] == Value::Undefined {
+        // For complete rules that failed due to inconsistency, keep Undefined
+        if self.registers[dest as usize] == Value::Undefined && !rule_failed_due_to_inconsistency {
             match call_context.rule_type {
                 crate::rvm::program::RuleType::PartialSet => {
                     debug!("All definitions failed for PartialSet rule - using empty set");
@@ -1346,73 +1412,24 @@ impl RegoVM {
         );
 
         let mut rule_result = Value::Undefined;
-        let mut first_successful_result: Option<Value> = None;
 
-        // Execute rule definitions
-        for definition_bodies in rule_definitions.iter() {
-            for body_entry_point in definition_bodies.iter() {
-                #[cfg(feature = "rvm-tracing")]
-                debug!(
-                    "Executing rule definition at body {}, entry point {}",
-                    body_entry_point, body_entry_point
-                );
+        // Execute rule definitions using shared logic
+        let (execution_result, rule_failed_due_to_inconsistency) = self.execute_rule_definitions(
+            &rule_definitions,
+            &rule_info.rule_type,
+            dest_reg,
+            is_function_call,
+        )?;
 
-                // Execute the rule body
-                match self.jump_to(*body_entry_point) {
-                    Ok(_) => {
-                        // Body completed successfully
-                        // For function calls, get the result from the destination register
-                        let result = if is_function_call {
-                            self.registers[dest_reg as usize].clone()
-                        } else {
-                            Value::Undefined // Not used for regular rule calls
-                        };
-
-                        #[cfg(feature = "rvm-tracing")]
-                        debug!("Rule body completed with result: {:?}", result);
-
-                        // For both function calls and complete rules, all definitions must produce the same value
-                        if let Some(ref expected) = first_successful_result {
-                            if *expected != result {
-                                debug!(
-                                    "Rule consistency check failed - expected {:?}, got {:?}",
-                                    expected, result
-                                );
-                                // Definitions produced different values - rule fails
-                                rule_result = Value::Undefined;
-                                break;
-                            } else {
-                                debug!("Rule consistency check passed - result matches expected");
-                            }
-                        } else {
-                            // First successful result
-                            first_successful_result = Some(result.clone());
-                            rule_result = result;
-                            debug!("Rule - first successful result: {:?}", rule_result);
-                        }
-                    }
-                    Err(e) => {
-                        #[cfg(feature = "rvm-tracing")]
-                        debug!("Rule body failed: {:?}", e);
-                        #[cfg(not(feature = "rvm-tracing"))]
-                        let _ = e; // Suppress unused warning
-                                   // Body failed - try next definition
-                        continue;
-                    }
-                }
-            }
-
-            // Break conditions - stop if we had inconsistent results
-            if matches!(rule_result, Value::Undefined) && first_successful_result.is_some() {
-                // Stop if we had inconsistent results
-                debug!("Rule failed due to inconsistent results");
-                break;
-            }
+        // Update rule_result based on execution outcome
+        if !rule_failed_due_to_inconsistency && execution_result != Value::Undefined {
+            rule_result = execution_result;
         }
 
-        // For complete rules, if all definitions failed, try using the pre-computed default value
+        // For complete rules, if all definitions failed (but not due to inconsistency), try using the pre-computed default value
         if matches!(rule_info.rule_type, crate::rvm::program::RuleType::Complete)
             && matches!(rule_result, Value::Undefined)
+            && !rule_failed_due_to_inconsistency
             && !is_function_call
         {
             // Check if there's a pre-computed default value in the literal table

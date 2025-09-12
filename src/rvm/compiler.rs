@@ -68,7 +68,7 @@ pub struct Compiler<'a> {
     scopes: Vec<Scope>,         // Stack of variable scopes (like the interpreter)
     policy: &'a CompiledPolicy, // Reference to the compiled policy for rule lookup
     current_package: String,    // Current package path (e.g., "data.test")
-    current_module_index: u32,  // Current module index for scheduler lookup (set from rule's source file index)
+    current_module_index: u32, // Current module index for scheduler lookup (set from rule's source file index)
     // Three-level hierarchy compilation fields
     rule_index_map: HashMap<String, u16>, // Maps rule paths to their assigned rule indices
     rule_worklist: Vec<String>,           // Rules that need to be compiled
@@ -938,7 +938,7 @@ impl<'a> Compiler<'a> {
     /// Find which module index contains the given rule
     fn find_module_index_for_rule(&self, rule_ref: &crate::ast::NodeRef<Rule>) -> Result<u32> {
         let rule_ptr = rule_ref.as_ref() as *const Rule;
-        
+
         // Search through all modules to find which one contains this rule
         for (module_idx, module) in self.policy.get_modules().iter().enumerate() {
             for policy_rule in &module.policy {
@@ -949,7 +949,7 @@ impl<'a> Compiler<'a> {
                 }
             }
         }
-        
+
         // If we can't find the module, default to 0
         debug!("Could not find module for rule, defaulting to module index 0");
         Ok(0)
@@ -1820,15 +1820,20 @@ impl<'a> Compiler<'a> {
         // Push a new scope for this query
         self.push_scope();
 
-        debug!("Compiling query with current_module_index: {}", self.current_module_index);
+        debug!(
+            "Compiling query with current_module_index: {}",
+            self.current_module_index
+        );
 
         let result = {
             let schedule = match &self.policy.inner.schedule {
                 Some(s) => {
-                    debug!("Looking up schedule for module_index: {}, qidx: {}", 
-                           self.current_module_index, query.qidx);
+                    debug!(
+                        "Looking up schedule for module_index: {}, qidx: {}",
+                        self.current_module_index, query.qidx
+                    );
                     s.queries.get(self.current_module_index, query.qidx)
-                },
+                }
                 None => {
                     debug!("No schedule available in policy, using default order");
                     None

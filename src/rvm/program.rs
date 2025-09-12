@@ -86,6 +86,8 @@ pub struct RuleInfo {
     pub function_info: Option<FunctionInfo>,
     /// Index into the program's literal table for default value (only for Complete rules)
     pub default_literal_index: Option<u16>,
+    /// Register allocated for this rule's result accumulation
+    pub result_reg: u8,
 }
 
 /// Information about function rules
@@ -98,13 +100,19 @@ pub struct FunctionInfo {
 }
 
 impl RuleInfo {
-    pub fn new(name: String, rule_type: RuleType, definitions: crate::Rc<Vec<Vec<usize>>>) -> Self {
+    pub fn new(
+        name: String,
+        rule_type: RuleType,
+        definitions: crate::Rc<Vec<Vec<usize>>>,
+        result_reg: u8,
+    ) -> Self {
         Self {
             name,
             rule_type,
             definitions,
             function_info: None,
             default_literal_index: None,
+            result_reg,
         }
     }
 
@@ -114,6 +122,7 @@ impl RuleInfo {
         rule_type: RuleType,
         definitions: crate::Rc<Vec<Vec<usize>>>,
         param_names: Vec<String>,
+        result_reg: u8,
     ) -> Self {
         let num_params = param_names.len();
         Self {
@@ -125,6 +134,7 @@ impl RuleInfo {
                 num_params,
             }),
             default_literal_index: None,
+            result_reg,
         }
     }
 

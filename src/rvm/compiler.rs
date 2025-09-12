@@ -75,6 +75,7 @@ pub struct Compiler<'a> {
     rule_definitions: Vec<Vec<Vec<usize>>>, // rule_index -> Vec<definition> where definition is Vec<body_entry_point>
     rule_types: Vec<RuleType>,              // rule_index -> true if set rule, false if regular rule
     rule_function_params: Vec<Option<Vec<String>>>, // rule_index -> Some(param_names) for function rules, None for others
+    rule_result_registers: Vec<u8>, // rule_index -> result register allocated for this rule
     // Context stack for output expression handling
     context_stack: Vec<CompilationContext>, // Stack of compilation contexts
     loop_expr_register_map: BTreeMap<ExprRef, Register>, // Map from loop expressions to their allocated registers
@@ -102,6 +103,7 @@ impl<'a> Compiler<'a> {
             rule_definitions: Vec::new(),
             rule_types: Vec::new(),
             rule_function_params: Vec::new(),
+            rule_result_registers: Vec::new(),
             context_stack: vec![], // Default context
             loop_expr_register_map: BTreeMap::new(),
             source_to_index: HashMap::new(),
@@ -896,6 +898,11 @@ impl<'a> Compiler<'a> {
                 self.rule_function_params.push(None); // Default to None (not a function)
             }
 
+            // Ensure rule_result_registers has enough capacity
+            while self.rule_result_registers.len() <= index as usize {
+                self.rule_result_registers.push(0); // Default to register 0
+            }
+
             debug!("Assigned rule index {} to '{}'", index, rule_path);
             Ok(index)
         }
@@ -984,6 +991,7 @@ impl<'a> Compiler<'a> {
             let definitions = self.rule_definitions[rule_index as usize].clone();
             let rule_type = self.rule_types[rule_index as usize].clone();
             let function_params = &self.rule_function_params[rule_index as usize];
+            let result_register = self.rule_result_registers[rule_index as usize];
 
             let rule_info = match function_params {
                 Some(param_names) => {
@@ -993,6 +1001,7 @@ impl<'a> Compiler<'a> {
                         rule_type,
                         crate::Rc::new(definitions),
                         param_names.clone(),
+                        result_register,
                     )
                 }
                 None => {
@@ -1001,6 +1010,7 @@ impl<'a> Compiler<'a> {
                         rule_path.clone(),
                         rule_type,
                         crate::Rc::new(definitions),
+                        result_register,
                     )
                 }
             };
@@ -1607,12 +1617,21 @@ impl<'a> Compiler<'a> {
         if let Some(rule_definitions) = rules.get(rule_path) {
             let rule_index = self.rule_index_map.get(rule_path).copied().unwrap_or(1);
             let rule_type = self.rule_types[rule_index as usize].clone();
-            let dest_register = self.alloc_register();
+            let result_register = self.alloc_register(); // Allocate separate result register
+
+            // Store the result register for this rule
+            // Ensure rule_result_registers has enough capacity
+            while self.rule_result_registers.len() <= rule_index as usize {
+                self.rule_result_registers.push(0); // Default to register 0
+            }
+            self.rule_result_registers[rule_index as usize] = result_register;
 
             debug!(
-                "Rule '{}' has {} definitions",
+                "Rule '{}' has {} definitions, dest_reg={}, result_reg={}",
                 rule_path,
-                rule_definitions.len()
+                rule_definitions.len(),
+                dest_register,
+                result_register
             );
 
             // Ensure rule_definitions vec has space for this rule
@@ -1621,7 +1640,7 @@ impl<'a> Compiler<'a> {
             }
 
             // Compile each definition (Rule::Spec)
-            for (def_idx, rule_ref) in rule_definitions.iter().enumerate() {
+            for (_def_idx, rule_ref) in rule_definitions.iter().enumerate() {
                 if let Rule::Spec { head, bodies, span } = rule_ref.as_ref() {
                     debug!(
                         "Compiling definition {} with {} bodies",
@@ -1696,7 +1715,7 @@ impl<'a> Compiler<'a> {
                     };
 
                     let context = CompilationContext {
-                        dest_register,
+                        dest_register: result_register,
                         context_type: ContextType::Rule(rule_type.clone()),
                         key_expr,
                         value_expr,
@@ -1720,21 +1739,15 @@ impl<'a> Compiler<'a> {
 
                             self.emit_instruction(
                                 Instruction::RuleInit {
-                                    result_reg: dest_register,
+                                    result_reg: result_register,
                                     rule_index,
                                 },
                                 value_expr.span(),
                             );
 
                             // Compile the assignment expression
-                            let value_reg = self.compile_rego_expr(&value_expr)?;
-                            self.emit_instruction(
-                                Instruction::Move {
-                                    dest: dest_register,
-                                    src: value_reg,
-                                },
-                                value_expr.span(),
-                            );
+                            // Call emit_context_yield to move the result to the result register
+                            self.emit_context_yield()?;
 
                             // Emit Rule Return
                             self.emit_instruction(Instruction::RuleReturn {}, value_expr.span());
@@ -1757,7 +1770,7 @@ impl<'a> Compiler<'a> {
 
                             self.emit_instruction(
                                 Instruction::RuleInit {
-                                    result_reg: dest_register,
+                                    result_reg: result_register,
                                     rule_index,
                                 },
                                 &body.span,
@@ -1776,7 +1789,7 @@ impl<'a> Compiler<'a> {
                                     let value_reg = self.compile_rego_expr(&value_expr)?;
                                     self.emit_instruction(
                                         Instruction::Move {
-                                            dest: dest_register,
+                                            dest: result_register,
                                             src: value_reg,
                                         },
                                         value_expr.span(),

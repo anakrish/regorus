@@ -193,6 +193,7 @@ mod tests {
                 definitions: crate::Rc::new(definitions),
                 function_info: None,
                 default_literal_index: rule_info_spec.default_literal_index,
+                result_reg: 0, // Use register 0 as a default for tests
             };
 
             program.rule_infos.push(rule_info);

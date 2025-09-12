@@ -46,13 +46,13 @@ mod tests {
             program.instructions.len(),
             program.literals.len()
         );
-        for (i, instr) in program.instructions.iter().enumerate() {
-            std::println!("  {}: {:?}", i, instr);
-        }
-        std::println!("Literals:");
-        for (i, literal) in program.literals.iter().enumerate() {
-            std::println!("  {}: {:?}", i, literal);
-        }
+
+        // Use proper assembly listing format
+        let assembly_listing = crate::rvm::assembly_listing::generate_assembly_listing(
+            &program,
+            &crate::rvm::assembly_listing::AssemblyListingConfig::default(),
+        );
+        std::println!("{}", assembly_listing);
 
         // Create a VM and load the program
         let mut vm = RegoVM::new();

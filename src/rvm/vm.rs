@@ -1081,7 +1081,7 @@ impl RegoVM {
         self.call_rule_stack.push(CallRuleContext {
             return_pc: self.pc,
             dest_reg: dest,
-            result_reg: dest,
+            result_reg: rule_info.result_reg,
             rule_index,
             rule_type: rule_type.clone(),
             current_definition_index: 0,
@@ -1096,10 +1096,12 @@ impl RegoVM {
         );
 
         // Execute all rule definitions with consistency checking
+        let result_reg = rule_info.result_reg;
+
         let (final_result, rule_failed_due_to_inconsistency) = self.execute_rule_definitions(
             &rule_definitions,
             &rule_type,
-            dest,
+            result_reg,
             false, // Not a function call
         )?;
 
@@ -1381,7 +1383,7 @@ impl RegoVM {
             self.call_rule_stack.push(CallRuleContext {
                 return_pc: saved_pc,
                 dest_reg,
-                result_reg: dest_reg, // Will be updated by RuleInit
+                result_reg: rule_info.result_reg, // Use rule's allocated result register
                 rule_index,
                 rule_type: rule_info.rule_type.clone(),
                 current_definition_index: 0,
@@ -1414,10 +1416,16 @@ impl RegoVM {
         let mut rule_result = Value::Undefined;
 
         // Execute rule definitions using shared logic
+        let function_result_reg = if is_function_call {
+            rule_info.result_reg
+        } else {
+            dest_reg
+        };
+
         let (execution_result, rule_failed_due_to_inconsistency) = self.execute_rule_definitions(
             &rule_definitions,
             &rule_info.rule_type,
-            dest_reg,
+            function_result_reg,
             is_function_call,
         )?;
 

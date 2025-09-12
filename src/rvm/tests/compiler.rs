@@ -164,13 +164,39 @@ mod tests {
 
             // Compile to get the compiled policy
             let entrypoint_ref = crate::Rc::from(case.query.as_str());
-            let compiled_policy = engine.compile_with_entrypoint(&entrypoint_ref)?;
+            let compilation_result = engine.compile_with_entrypoint(&entrypoint_ref);
 
             // Extract data for RVM execution
             let data = engine.get_data();
 
             // Get interpreter result for comparison with RVM
             let interpreter_result = engine.eval_rule(case.query.clone());
+
+            // Handle compilation errors for cases that expect errors
+            if let Err(compilation_error) = &compilation_result {
+                if let (None, Some(expected_error)) = (&case.want_result, &case.want_error) {
+                    // This is an error case and compilation failed - check if error matches
+                    let error_str = compilation_error.to_string();
+                    if error_str.contains(expected_error) {
+                        std::println!(
+                            "✓ RVM compilation error matches expected for case '{}'",
+                            case.note
+                        );
+                        std::println!("passed");
+                        continue;
+                    } else {
+                        panic!(
+                            "RVM compilation error does not match expected for case '{}':\nExpected: '{}'\nActual: '{}'",
+                            case.note, expected_error, error_str
+                        );
+                    }
+                } else {
+                    // This is a success case but compilation failed
+                    return Err(anyhow::anyhow!("Compilation failed: {}", compilation_error));
+                }
+            }
+
+            let compiled_policy = compilation_result.unwrap();
 
             match (&case.want_result, &case.want_error) {
                 (Some(expected_result), None) => {

@@ -281,10 +281,20 @@ mod tests {
                 let object_create_params = ObjectCreateParams {
                     dest: object_create_spec.dest.try_into().unwrap(),
                     template_literal_idx: object_create_spec.template_literal_idx,
-                    literal_key_fields: object_create_spec.literal_key_fields.into_iter().map(|(k, v)| (k, v.try_into().unwrap())).collect(),
-                    fields: object_create_spec.fields.into_iter().map(|(k, v)| (k.try_into().unwrap(), v.try_into().unwrap())).collect(),
+                    literal_key_fields: object_create_spec
+                        .literal_key_fields
+                        .into_iter()
+                        .map(|(k, v)| (k, v.try_into().unwrap()))
+                        .collect(),
+                    fields: object_create_spec
+                        .fields
+                        .into_iter()
+                        .map(|(k, v)| (k.try_into().unwrap(), v.try_into().unwrap()))
+                        .collect(),
                 };
-                program.instruction_data.add_object_create_params(object_create_params);
+                program
+                    .instruction_data
+                    .add_object_create_params(object_create_params);
             }
         }
 

@@ -18,6 +18,15 @@ use alloc::vec::Vec;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Represents an indexing operation for dynamic chaining
+#[derive(Debug, Clone)]
+enum IndexOperation {
+    /// Literal index (constant at compile time)
+    Literal(Value),
+    /// Dynamic index (needs to be computed at runtime)
+    Dynamic(ExprRef),
+}
+
 pub type Register = u8;
 use anyhow::{bail, Result};
 
@@ -59,7 +68,7 @@ pub struct Compiler<'a> {
     scopes: Vec<Scope>,         // Stack of variable scopes (like the interpreter)
     policy: &'a CompiledPolicy, // Reference to the compiled policy for rule lookup
     current_package: String,    // Current package path (e.g., "data.test")
-    current_module_index: u32,  // Current module index for scheduler lookup
+    current_module_index: u32,  // Current module index for scheduler lookup (set from rule's source file index)
     // Three-level hierarchy compilation fields
     rule_index_map: HashMap<String, u16>, // Maps rule paths to their assigned rule indices
     rule_worklist: Vec<String>,           // Rules that need to be compiled
@@ -87,7 +96,7 @@ impl<'a> Compiler<'a> {
             scopes: vec![Scope::default()],
             policy,
             current_package: package,
-            current_module_index: 0, // TODO: Determine proper module index
+            current_module_index: 0, // Will be set from rule's source file index during compilation
             rule_index_map: HashMap::new(),
             rule_worklist: Vec::new(),
             rule_definitions: Vec::new(),
@@ -352,6 +361,381 @@ impl<'a> Compiler<'a> {
         self.policy.inner.rules.contains_key(&rule_path)
     }
 
+    /// Compile chained reference expressions (Var, RefDot, RefBrack chains)
+    /// Implements the logic similar to eval_chained_ref_dot_or_brack in interpreter
+    fn compile_chained_ref(&mut self, expr: &ExprRef, span: &Span) -> Result<Register> {
+        // First, extract the constant prefix path and remaining dynamic parts
+        let (constant_path, remaining_expr) = self.extract_constant_path_prefix(expr)?;
+
+        // If we have no constant path, fall back to old behavior
+        if constant_path.is_empty() {
+            return self.compile_chained_ref_fallback(expr, span);
+        }
+
+        let path_parts: Vec<&str> = constant_path.split('.').collect();
+        let root_var = path_parts[0];
+
+        // Compile the constant prefix using chained reference logic
+        let base_reg = if root_var == "input" {
+            if path_parts.len() == 1 {
+                // Just "input"
+                self.resolve_variable("input", span)?
+            } else {
+                // "input.field1.field2..."
+                let input_reg = self.resolve_variable("input", span)?;
+                self.compile_field_access_chain(input_reg, &path_parts[1..], span)?
+            }
+        } else if root_var == "data" {
+            if path_parts.len() == 1 {
+                // Just "data" - this is typically an error as it accesses the entire data document
+                bail!("Direct access to 'data' root is not allowed. Use a specific path like 'data.package.rule'");
+            } else {
+                // "data.pkg.rule.field..." - find longest rule prefix
+                self.compile_data_reference(&path_parts[1..], span)?
+            }
+        } else {
+            // Check if it's a local variable first (precedence over rules)
+            if let Some(var_reg) = self.lookup_variable(root_var) {
+                if path_parts.len() == 1 {
+                    var_reg
+                } else {
+                    self.compile_field_access_chain(var_reg, &path_parts[1..], span)?
+                }
+            } else {
+                // Check if there's a rule in the current package that matches a prefix
+                let current_pkg_prefix = format!("{}.{}", &self.current_package, root_var);
+
+                // Try to find the longest matching rule prefix using the shared helper
+                if let Some(result) =
+                    self.try_rule_prefix_match(&current_pkg_prefix, &path_parts[1..], span)?
+                {
+                    result
+                } else {
+                    // No rule found - this might be an undefined variable, fall back to old behavior
+                    return self.compile_chained_ref_fallback(expr, span);
+                }
+            }
+        };
+
+        // Now apply any remaining dynamic indexing operations
+        if let Some(remaining) = remaining_expr {
+            self.compile_dynamic_indexing_chain(base_reg, &remaining, span)
+        } else {
+            Ok(base_reg)
+        }
+    }
+
+    /// Extract the constant (compile-time known) prefix of a path and return the remaining dynamic part
+    /// Returns (constant_path_string, remaining_expr_for_dynamic_indexing)
+    fn extract_constant_path_prefix(&self, expr: &ExprRef) -> Result<(String, Option<ExprRef>)> {
+        let mut path_components = Vec::new();
+        let mut current_expr = expr;
+
+        loop {
+            match current_expr.as_ref() {
+                Expr::Var { span: v, .. } => {
+                    // Variable name - this is the root of our path
+                    path_components.push(v.text().to_string());
+                    break;
+                }
+                Expr::RefDot { refr, field, .. } => {
+                    // Field access - always constant
+                    path_components.push(field.0.text().to_string());
+                    current_expr = refr;
+                }
+                Expr::RefBrack { refr, index, .. } => {
+                    // Bracket access - only constant if index is a string literal
+                    if let Expr::String { span: s, .. } = index.as_ref() {
+                        // String literal index - this is constant
+                        path_components.push(s.text().to_string());
+                        current_expr = refr;
+                    } else {
+                        // Dynamic index - stop here and return the remaining expression
+                        path_components.reverse();
+                        let constant_path = path_components.join(".");
+                        return Ok((constant_path, Some(current_expr.clone())));
+                    }
+                }
+                _ => {
+                    // Not a simple reference chain
+                    bail!("Not a simple reference chain");
+                }
+            }
+        }
+
+        // All components were constant
+        path_components.reverse();
+        Ok((path_components.join("."), None))
+    }
+
+    /// Compile dynamic indexing operations on top of a base register
+    fn compile_dynamic_indexing_chain(
+        &mut self,
+        base_reg: Register,
+        expr: &ExprRef,
+        span: &Span,
+    ) -> Result<Register> {
+        let mut current_expr = expr;
+        let mut index_stack = Vec::new();
+
+        // First, collect all the indexing operations in reverse order
+        loop {
+            match current_expr.as_ref() {
+                Expr::RefDot { refr, field, .. } => {
+                    // Field access - create a string literal for the field
+                    let field_value = Value::String(field.0.text().to_string().into());
+                    index_stack.push(IndexOperation::Literal(field_value));
+                    current_expr = refr;
+                }
+                Expr::RefBrack { refr, index, .. } => {
+                    // Bracket access - can be either literal or dynamic
+                    if let Expr::String { span: s, .. } = index.as_ref() {
+                        // String literal index
+                        let index_value = Value::String(s.text().to_string().into());
+                        index_stack.push(IndexOperation::Literal(index_value));
+                    } else {
+                        // Dynamic index - need to compile the index expression
+                        index_stack.push(IndexOperation::Dynamic(index.clone()));
+                    }
+                    current_expr = refr;
+                }
+                _ => {
+                    // Reached the base of the expression
+                    break;
+                }
+            }
+        }
+
+        // Optimize register allocation:
+        // - If we only have one operation, reuse the base register
+        // - For multiple operations, use only two registers (ping-pong pattern)
+        if index_stack.is_empty() {
+            return Ok(base_reg);
+        }
+
+        let stack_len = index_stack.len();
+        let mut current_reg = base_reg;
+        let mut temp_reg = None;
+
+        // Apply the indexing operations in correct order (reverse of how we collected them)
+        for (op_idx, index_op) in index_stack.into_iter().rev().enumerate() {
+            let dest_reg = if op_idx == 0 && stack_len == 1 {
+                // Single operation: reuse the base register
+                base_reg
+            } else {
+                // Multiple operations: use ping-pong pattern with two registers
+                match temp_reg {
+                    None => {
+                        // First operation with multiple ops: allocate one temp register
+                        let new_reg = self.alloc_register();
+                        temp_reg = Some(new_reg);
+                        new_reg
+                    }
+                    Some(temp) => {
+                        // Subsequent operations: alternate between current and temp
+                        if current_reg == base_reg {
+                            temp
+                        } else {
+                            base_reg
+                        }
+                    }
+                }
+            };
+
+            match index_op {
+                IndexOperation::Literal(value) => {
+                    let literal_idx = self.add_literal(value);
+                    self.emit_instruction(
+                        Instruction::IndexLiteral {
+                            dest: dest_reg,
+                            container: current_reg,
+                            literal_idx,
+                        },
+                        span,
+                    );
+                }
+                IndexOperation::Dynamic(index_expr) => {
+                    let index_reg =
+                        self.compile_rego_expr_with_span(&index_expr, index_expr.span(), false)?;
+                    self.emit_instruction(
+                        Instruction::Index {
+                            dest: dest_reg,
+                            container: current_reg,
+                            key: index_reg,
+                        },
+                        span,
+                    );
+                }
+            }
+
+            current_reg = dest_reg;
+        }
+
+        Ok(current_reg)
+    }
+
+    /// Try to match a rule prefix and compile the call with remaining field accesses
+    fn try_rule_prefix_match(
+        &mut self,
+        base_prefix: &str,
+        remaining_parts: &[&str],
+        span: &Span,
+    ) -> Result<Option<Register>> {
+        // Try to find the longest matching rule prefix
+        for i in (0..=remaining_parts.len()).rev() {
+            let rule_candidate = if i == 0 {
+                base_prefix.to_string()
+            } else {
+                format!("{}.{}", base_prefix, remaining_parts[0..i].join("."))
+            };
+
+            if self.policy.inner.rules.contains_key(&rule_candidate) {
+                // Found a matching rule - call it and then access remaining fields
+                let rule_index = self.get_or_assign_rule_index(&rule_candidate)?;
+                let rule_result_reg = self.alloc_register();
+                self.emit_instruction(
+                    Instruction::CallRule {
+                        dest: rule_result_reg,
+                        rule_index,
+                    },
+                    span,
+                );
+
+                if i == remaining_parts.len() {
+                    // Exact match - no remaining fields
+                    return Ok(Some(rule_result_reg));
+                } else {
+                    // Access remaining fields
+                    let final_reg = self.compile_field_access_chain(
+                        rule_result_reg,
+                        &remaining_parts[i..],
+                        span,
+                    )?;
+                    return Ok(Some(final_reg));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Compile data references: data.pkg.rule.field...
+    fn compile_data_reference(&mut self, path_parts: &[&str], span: &Span) -> Result<Register> {
+        if path_parts.is_empty() {
+            return self.resolve_variable("data", span);
+        }
+
+        let full_path = format!("data.{}", path_parts.join("."));
+
+        // Check if this path is a parent of any existing rules
+        // If so, we need to collect and merge values from all child rules
+        let is_parent_path = self
+            .policy
+            .inner
+            .rules
+            .keys()
+            .any(|rule_path| rule_path.starts_with(&format!("{full_path}.")));
+
+        if is_parent_path {
+            // For now, we'll handle this by loading data and accessing fields directly
+            // TODO: In the future, this should collect values from all child rules
+            // and merge them with the data document at this path
+            let data_reg = self.resolve_variable("data", span)?;
+            return self.compile_field_access_chain(data_reg, path_parts, span);
+        }
+
+        // Try to find the longest matching rule prefix in the rules table
+        self.find_longest_matching_rule(path_parts, span)
+    }
+
+    /// Find the longest matching rule prefix and compile accordingly
+    fn find_longest_matching_rule(&mut self, path_parts: &[&str], span: &Span) -> Result<Register> {
+        let base_prefix = format!("data.{}", path_parts[0]);
+
+        // Try to find a matching rule using the shared helper
+        if let Some(result) = self.try_rule_prefix_match(&base_prefix, &path_parts[1..], span)? {
+            return Ok(result);
+        }
+
+        // No rule found - load data and access fields directly
+        let data_reg = self.resolve_variable("data", span)?;
+        self.compile_field_access_chain(data_reg, path_parts, span)
+    }
+
+    /// Compile field access chain: obj.field1.field2...
+    fn compile_field_access_chain(
+        &mut self,
+        mut obj_reg: Register,
+        fields: &[&str],
+        span: &Span,
+    ) -> Result<Register> {
+        for field in fields {
+            let field_value = Value::String(field.to_string().into());
+            let literal_idx = self.add_literal(field_value);
+            let new_obj_reg = self.alloc_register();
+
+            self.emit_instruction(
+                Instruction::IndexLiteral {
+                    dest: new_obj_reg,
+                    container: obj_reg,
+                    literal_idx,
+                },
+                span,
+            );
+
+            obj_reg = new_obj_reg;
+        }
+        Ok(obj_reg)
+    }
+
+    /// Fallback to old compilation behavior for complex expressions
+    fn compile_chained_ref_fallback(&mut self, expr: &ExprRef, span: &Span) -> Result<Register> {
+        match expr.as_ref() {
+            Expr::Var { value, .. } => {
+                if let Value::String(var_name) = value {
+                    self.resolve_variable(var_name.as_ref(), span)
+                } else {
+                    let dest = self.alloc_register();
+                    let literal_idx = self.add_literal(value.clone());
+                    self.emit_instruction(Instruction::Load { dest, literal_idx }, span);
+                    Ok(dest)
+                }
+            }
+            Expr::RefDot { refr, field, .. } => {
+                let obj_reg = self.compile_chained_ref(refr, refr.span())?;
+                let field_value = &field.1;
+                let literal_idx = self.add_literal(field_value.clone());
+                let dest = self.alloc_register();
+                self.emit_instruction(
+                    Instruction::IndexLiteral {
+                        dest,
+                        container: obj_reg,
+                        literal_idx,
+                    },
+                    span,
+                );
+                Ok(dest)
+            }
+            Expr::RefBrack { refr, index, .. } => {
+                let obj_reg = self.compile_chained_ref(refr, refr.span())?;
+                let key_reg = self.compile_rego_expr_with_span(index, index.span(), false)?;
+                let dest = self.alloc_register();
+                self.emit_instruction(
+                    Instruction::Index {
+                        dest,
+                        container: obj_reg,
+                        key: key_reg,
+                    },
+                    span,
+                );
+                Ok(dest)
+            }
+            _ => {
+                bail!("Unsupported expression type in chained reference")
+            }
+        }
+    }
+
     /// Store a variable mapping (backward compatibility)
     /// Look up a variable, first in local scope, then as a rule reference
     fn resolve_variable(&mut self, var_name: &str, span: &Span) -> Result<Register> {
@@ -549,6 +933,26 @@ impl<'a> Compiler<'a> {
             self.source_to_index.insert(source_path.to_string(), index);
             index
         }
+    }
+
+    /// Find which module index contains the given rule
+    fn find_module_index_for_rule(&self, rule_ref: &crate::ast::NodeRef<Rule>) -> Result<u32> {
+        let rule_ptr = rule_ref.as_ref() as *const Rule;
+        
+        // Search through all modules to find which one contains this rule
+        for (module_idx, module) in self.policy.get_modules().iter().enumerate() {
+            for policy_rule in &module.policy {
+                let policy_rule_ptr = policy_rule.as_ref() as *const Rule;
+                if policy_rule_ptr == rule_ptr {
+                    debug!("Found rule in module index: {}", module_idx);
+                    return Ok(module_idx as u32);
+                }
+            }
+        }
+        
+        // If we can't find the module, default to 0
+        debug!("Could not find module for rule, defaulting to module index 0");
+        Ok(0)
     }
 
     pub fn emit_return(&mut self, result_reg: Register) {
@@ -1031,9 +1435,9 @@ impl<'a> Compiler<'a> {
             }
             Expr::Var { value, .. } => {
                 // Check if this is a variable reference that we should resolve
-                if let Value::String(var_name) = value {
-                    debug!("Resolving variable '{}' - looking up in scopes", var_name);
-                    return self.resolve_variable(var_name.as_ref(), span);
+                if let Value::String(_var_name) = value {
+                    debug!("Using chained reference compilation for variable");
+                    return self.compile_chained_ref(expr, span);
                 }
 
                 // Otherwise, load as literal value
@@ -1042,49 +1446,14 @@ impl<'a> Compiler<'a> {
                 self.emit_instruction(Instruction::Load { dest, literal_idx }, span);
                 dest
             }
-            // TODO: chained ref dot from interpreter
-            Expr::RefDot { refr, field, .. } => {
-                // Compile the object reference (don't assert)
-                let obj_reg = self.compile_rego_expr_with_span(refr, refr.span(), false)?;
-
-                // The field is a (Span, Value) tuple - get the value
-                let field_value = &field.1;
-
-                // Use IndexLiteral instruction for optimization - avoid loading literal into register
-                let literal_idx = self.add_literal(field_value.clone());
-
-                // Get the field value using IndexLiteral
-                let dest = self.alloc_register();
-                self.emit_instruction(
-                    Instruction::IndexLiteral {
-                        dest,
-                        container: obj_reg,
-                        literal_idx,
-                    },
-                    span,
-                );
-
-                dest
+            // Use sophisticated chained reference compilation
+            Expr::RefDot { .. } => {
+                debug!("Using chained reference compilation for RefDot");
+                return self.compile_chained_ref(expr, span);
             }
-            Expr::RefBrack { refr, index, .. } => {
-                // Compile the object reference (don't assert)
-                let obj_reg = self.compile_rego_expr_with_span(refr, refr.span(), false)?;
-
-                // Compile the index expression (don't assert)
-                let key_reg = self.compile_rego_expr_with_span(index, index.span(), false)?;
-
-                // Get the field value using the dynamic key
-                let dest = self.alloc_register();
-                self.emit_instruction(
-                    Instruction::Index {
-                        dest,
-                        container: obj_reg,
-                        key: key_reg,
-                    },
-                    span,
-                );
-
-                dest
+            Expr::RefBrack { .. } => {
+                debug!("Using chained reference compilation for RefBrack");
+                return self.compile_chained_ref(expr, span);
             }
             Expr::Membership {
                 value, collection, ..
@@ -1259,6 +1628,9 @@ impl<'a> Compiler<'a> {
                         def_idx,
                         bodies.len()
                     );
+
+                    // Set the current module index based on which module contains this rule
+                    self.current_module_index = self.find_module_index_for_rule(rule_ref)?;
 
                     let mut is_function_rule = false;
 
@@ -1448,13 +1820,19 @@ impl<'a> Compiler<'a> {
         // Push a new scope for this query
         self.push_scope();
 
+        debug!("Compiling query with current_module_index: {}", self.current_module_index);
+
         let result = {
-            let schedule = {
-                self.policy
-                    .inner
-                    .schedule
-                    .as_ref()
-                    .and_then(|s| s.queries.get(self.current_module_index, query.qidx))
+            let schedule = match &self.policy.inner.schedule {
+                Some(s) => {
+                    debug!("Looking up schedule for module_index: {}, qidx: {}", 
+                           self.current_module_index, query.qidx);
+                    s.queries.get(self.current_module_index, query.qidx)
+                },
+                None => {
+                    debug!("No schedule available in policy, using default order");
+                    None
+                }
             };
 
             let ordered_stmts: Vec<&crate::ast::LiteralStmt> = match schedule {

@@ -25,7 +25,7 @@ struct YamlTest {
     cases: Vec<TestCase>,
 }
 
-fn eval_test_case(dir: &Path, case: &TestCase) -> Result<Value> {
+fn setup_engine(dir: &Path, case: &TestCase) -> Result<Engine> {
     let mut engine = Engine::new();
     engine.set_rego_v0(true);
 
@@ -42,24 +42,30 @@ fn eval_test_case(dir: &Path, case: &TestCase) -> Result<Value> {
         }
     }
 
-    let mut engine_full = engine.clone();
-    let query_results = engine.eval_query(case.query.clone(), true)?;
+    Ok(engine)
+}
 
-    // Ensure that full evaluation produces the same results.
-    let query_results_full = engine_full.eval_query_and_all_rules(case.query.clone(), true)?;
-    assert_eq!(query_results, query_results_full);
+fn eval_test_case_interpreter(dir: &Path, case: &TestCase) -> Result<Value> {
+    let mut engine = setup_engine(dir, case)?;
 
-    let mut values = vec![];
-    for qr in query_results.result {
-        values.push(if !qr.bindings.as_object()?.is_empty() {
-            qr.bindings.clone()
-        } else if let Some(v) = qr.expressions.last() {
-            v.value.clone()
-        } else {
-            Value::Undefined
-        });
-    }
-    let result = Value::from(values);
+    // Use eval_rule instead of eval_query since we're evaluating specific rules
+    let result = engine.eval_rule(case.query.clone())?;
+
+    // Make result json compatible. (E.g: avoid sets).
+    Value::from_json_str(&result.to_string())
+}
+
+fn eval_test_case_rvm(dir: &Path, case: &TestCase) -> Result<Value> {
+    let mut engine = setup_engine(dir, case)?;
+
+    // Convert input to Value for compiled policy evaluation
+    let input = case.input.clone();
+
+    // Compile with entrypoint and evaluate using compiled policy
+    let rule = Rc::from(case.query.as_str());
+    let compiled = engine.compile_with_entrypoint(&rule)?;
+    let result = compiled.eval_with_input(input)?;
+
     // Make result json compatible. (E.g: avoid sets).
     Value::from_json_str(&result.to_string())
 }
@@ -82,28 +88,80 @@ fn run_aci_tests(dir: &Path) -> Result<()> {
 
         for case in &test.cases {
             print!("{:50}", case.note);
+
+            // Test with interpreter
             let start = Instant::now();
-            let results = eval_test_case(dir, case);
-            let duration = start.elapsed();
+            let interpreter_results = eval_test_case_interpreter(dir, case);
+            let interpreter_duration = start.elapsed();
 
-            match results {
-                Ok(actual) if actual == case.want_result => {
-                    println!("passed    {:?}", duration);
-                }
-                Ok(actual) => {
+            // Test with RVM
+            let start = Instant::now();
+            let rvm_results = eval_test_case_rvm(dir, case);
+            let rvm_duration = start.elapsed();
+
+            match (interpreter_results, rvm_results) {
+                (Ok(interpreter_actual), Ok(rvm_actual)) => {
+                    // First check interpreter against expected result
+                    if interpreter_actual != case.want_result {
+                        println!(
+                            "INTERPRETER DIFF {}",
+                            prettydiff::diff_chars(
+                                &serde_yaml::to_string(&case.want_result)?,
+                                &serde_yaml::to_string(&interpreter_actual)?
+                            )
+                        );
+                        nfailures += 1;
+                        continue;
+                    }
+
+                    // Then check RVM against expected result
+                    if rvm_actual != case.want_result {
+                        println!(
+                            "RVM DIFF {}",
+                            prettydiff::diff_chars(
+                                &serde_yaml::to_string(&case.want_result)?,
+                                &serde_yaml::to_string(&rvm_actual)?
+                            )
+                        );
+                        nfailures += 1;
+                        continue;
+                    }
+
+                    // Finally, assert that interpreter and RVM produce identical results
+                    if interpreter_actual != rvm_actual {
+                        println!(
+                            "INTERPRETER vs RVM DIFF {}",
+                            prettydiff::diff_chars(
+                                &serde_yaml::to_string(&interpreter_actual)?,
+                                &serde_yaml::to_string(&rvm_actual)?
+                            )
+                        );
+                        nfailures += 1;
+                        continue;
+                    }
+
                     println!(
-                        "DIFF {}",
-                        prettydiff::diff_chars(
-                            &serde_yaml::to_string(&case.want_result)?,
-                            &serde_yaml::to_string(&actual)?
-                        )
+                        "passed    interp: {:?}, rvm: {:?}",
+                        interpreter_duration, rvm_duration
                     );
-
+                }
+                (Ok(_), Err(rvm_error)) => {
+                    println!("RVM failed    {:?}", rvm_duration);
+                    println!("RVM error: {rvm_error}");
                     nfailures += 1;
                 }
-                Err(e) => {
-                    println!("failed    {:?}", duration);
-                    println!("{e}");
+                (Err(interpreter_error), Ok(_)) => {
+                    println!("INTERPRETER failed    {:?}", interpreter_duration);
+                    println!("Interpreter error: {interpreter_error}");
+                    nfailures += 1;
+                }
+                (Err(interpreter_error), Err(rvm_error)) => {
+                    println!(
+                        "BOTH failed    interp: {:?}, rvm: {:?}",
+                        interpreter_duration, rvm_duration
+                    );
+                    println!("Interpreter error: {interpreter_error}");
+                    println!("RVM error: {rvm_error}");
                     nfailures += 1;
                 }
             }

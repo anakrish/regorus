@@ -119,7 +119,7 @@ pub fn init_rvm_tracing() {
     }
 
     let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,regorus::rvm=debug".into());
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,regorus::rvm::vm=debug".into());
 
     let _ = tracing_subscriber::registry()
         .with(TreeLayer)

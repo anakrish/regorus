@@ -125,6 +125,12 @@ pub struct RegoVM {
     /// Call rule execution stack for managing nested rule calls
     call_rule_stack: Vec<CallRuleContext>,
 
+    /// Register stack for isolated register spaces during rule calls
+    register_stack: Vec<Vec<Value>>,
+
+    /// Base register window size for the main execution context
+    base_register_count: usize,
+
     /// Maximum number of instructions to execute (default: 25000)
     max_instructions: usize,
 
@@ -162,6 +168,8 @@ impl RegoVM {
             input: Value::Null,
             loop_stack: Vec::new(),
             call_rule_stack: Vec::new(),
+            register_stack: Vec::new(),
+            base_register_count: 2, // Default to 2 registers for basic operations
             max_instructions: 25000, // Default maximum instruction limit
             executed_instructions: 0,
             #[cfg(feature = "rvm-debug")]
@@ -183,10 +191,9 @@ impl RegoVM {
         self.program = program.clone();
 
         // Resize registers to match program requirements
-        // Ensure at least 1 register is allocated for safety
-        let required_registers = std::cmp::max(1, program.num_registers);
+        // Use the base register count instead of hardcoded value
         self.registers.clear();
-        self.registers.resize(required_registers, Value::Null);
+        self.registers.resize(self.base_register_count, Value::Null);
 
         // Initialize rule cache
         self.rule_cache = vec![(false, Value::Undefined); program.rule_infos.len()];
@@ -201,7 +208,7 @@ impl RegoVM {
             program.instructions.len(),
             program.literals.len(),
             program.rule_infos.len(),
-            required_registers
+            self.base_register_count
         );
         #[cfg(feature = "rvm-tracing")]
         {
@@ -240,6 +247,16 @@ impl RegoVM {
     /// Set the maximum number of instructions that can be executed
     pub fn set_max_instructions(&mut self, max: usize) {
         self.max_instructions = max;
+    }
+
+    /// Set the base register count for the main execution context
+    /// This determines how many registers are available in the root register window
+    pub fn set_base_register_count(&mut self, count: usize) {
+        self.base_register_count = count.max(1); // Ensure at least 1 register
+                                                 // If registers are already allocated, resize them
+        if !self.registers.is_empty() {
+            self.registers.resize(self.base_register_count, Value::Null);
+        }
     }
 
     /// Set the global data object
@@ -351,7 +368,10 @@ impl RegoVM {
 
             // Debugger integration
             #[cfg(feature = "rvm-debug")]
-            if self.debugger.should_break(self.pc, &instruction) {
+            if self
+                .debugger
+                .should_break(self.pc, &instruction, &self.call_rule_stack, &program)
+            {
                 let debug_ctx = crate::rvm::debugger::DebugContext {
                     pc: self.pc,
                     instruction: &instruction,
@@ -438,10 +458,10 @@ impl RegoVM {
                         left, a, right, b
                     );
 
-                    // Handle undefined values like the interpreter
+                    // Handle undefined values - treat as failure condition
                     if a == &Value::Undefined || b == &Value::Undefined {
-                        self.registers[dest as usize] = Value::Undefined;
-                        debug!("Add result - Undefined due to undefined operand");
+                        debug!("Add failed - undefined operand");
+                        self.handle_condition(false)?;
                     } else {
                         self.registers[dest as usize] = self.add_values(a, b)?;
                         debug!(
@@ -455,9 +475,9 @@ impl RegoVM {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
 
-                    // Handle undefined values like the interpreter
+                    // Handle undefined values - treat as failure condition
                     if a == &Value::Undefined || b == &Value::Undefined {
-                        self.registers[dest as usize] = Value::Undefined;
+                        self.handle_condition(false)?;
                     } else {
                         self.registers[dest as usize] = self.sub_values(a, b)?;
                     }
@@ -471,9 +491,9 @@ impl RegoVM {
                         left, a, right, b
                     );
 
-                    // Handle undefined values like the interpreter
+                    // Handle undefined values - treat as failure condition
                     if a == &Value::Undefined || b == &Value::Undefined {
-                        self.registers[dest as usize] = Value::Undefined;
+                        self.handle_condition(false)?;
                     } else {
                         self.registers[dest as usize] = self.mul_values(a, b)?;
                     }
@@ -483,9 +503,9 @@ impl RegoVM {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
 
-                    // Handle undefined values like the interpreter
+                    // Handle undefined values - treat as failure condition
                     if a == &Value::Undefined || b == &Value::Undefined {
-                        self.registers[dest as usize] = Value::Undefined;
+                        self.handle_condition(false)?;
                     } else {
                         self.registers[dest as usize] = self.div_values(a, b)?;
                     }
@@ -495,9 +515,9 @@ impl RegoVM {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
 
-                    // Handle undefined values like the interpreter
+                    // Handle undefined values - treat as failure condition
                     if a == &Value::Undefined || b == &Value::Undefined {
-                        self.registers[dest as usize] = Value::Undefined;
+                        self.handle_condition(false)?;
                     } else {
                         self.registers[dest as usize] = self.mod_values(a, b)?;
                     }
@@ -507,9 +527,9 @@ impl RegoVM {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
 
-                    // Handle undefined values like the interpreter
+                    // Handle undefined values - treat as failure condition
                     if a == &Value::Undefined || b == &Value::Undefined {
-                        self.registers[dest as usize] = Value::Undefined;
+                        self.handle_condition(false)?;
                     } else {
                         self.registers[dest as usize] = Value::Bool(a == b);
                     }
@@ -519,9 +539,9 @@ impl RegoVM {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
 
-                    // Handle undefined values like the interpreter
+                    // Handle undefined values - treat as failure condition
                     if a == &Value::Undefined || b == &Value::Undefined {
-                        self.registers[dest as usize] = Value::Undefined;
+                        self.handle_condition(false)?;
                     } else {
                         self.registers[dest as usize] = Value::Bool(a != b);
                     }
@@ -531,9 +551,9 @@ impl RegoVM {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
 
-                    // Handle undefined values like the interpreter
+                    // Handle undefined values - treat as failure condition
                     if a == &Value::Undefined || b == &Value::Undefined {
-                        self.registers[dest as usize] = Value::Undefined;
+                        self.handle_condition(false)?;
                     } else {
                         self.registers[dest as usize] = Value::Bool(a < b);
                     }
@@ -543,9 +563,9 @@ impl RegoVM {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
 
-                    // Handle undefined values like the interpreter
+                    // Handle undefined values - treat as failure condition
                     if a == &Value::Undefined || b == &Value::Undefined {
-                        self.registers[dest as usize] = Value::Undefined;
+                        self.handle_condition(false)?;
                     } else {
                         self.registers[dest as usize] = Value::Bool(a <= b);
                     }
@@ -555,9 +575,9 @@ impl RegoVM {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
 
-                    // Handle undefined values like the interpreter
+                    // Handle undefined values - treat as failure condition
                     if a == &Value::Undefined || b == &Value::Undefined {
-                        self.registers[dest as usize] = Value::Undefined;
+                        self.handle_condition(false)?;
                     } else {
                         self.registers[dest as usize] = Value::Bool(a > b);
                     }
@@ -567,9 +587,9 @@ impl RegoVM {
                     let a = &self.registers[left as usize];
                     let b = &self.registers[right as usize];
 
-                    // Handle undefined values like the interpreter
+                    // Handle undefined values - treat as failure condition
                     if a == &Value::Undefined || b == &Value::Undefined {
-                        self.registers[dest as usize] = Value::Undefined;
+                        self.handle_condition(false)?;
                     } else {
                         self.registers[dest as usize] = Value::Bool(a >= b);
                     }
@@ -826,83 +846,14 @@ impl RegoVM {
                         condition, value
                     );
 
-                    // Check if condition is false or undefined
-                    match value {
-                        Value::Bool(false) | Value::Undefined => {
-                            #[cfg(feature = "rvm-tracing")]
-                            {
-                                let condition_type = match value {
-                                    Value::Bool(false) => "false",
-                                    Value::Undefined => "undefined",
-                                    _ => unreachable!(),
-                                };
-                                debug!(
-                                    "AssertCondition failed ({}) - in loop: {}",
-                                    condition_type,
-                                    !self.loop_stack.is_empty()
-                                );
-                            }
-                            if !self.loop_stack.is_empty() {
-                                // In a loop - behavior depends on loop mode
-                                // Get the loop context values we need before mutable borrow
-                                let (loop_mode, loop_next_pc, loop_end, result_reg) = {
-                                    let loop_ctx = self.loop_stack.last().unwrap();
-                                    (
-                                        loop_ctx.mode.clone(),
-                                        loop_ctx.loop_next_pc,
-                                        loop_ctx.loop_end,
-                                        loop_ctx.result_reg,
-                                    )
-                                };
+                    // Convert value to boolean and handle the condition
+                    let condition_result = match value {
+                        Value::Bool(b) => *b,
+                        Value::Undefined => false,
+                        _ => true, // In Rego, only false and undefined are falsy
+                    };
 
-                                match loop_mode {
-                                    LoopMode::Any => {
-                                        // For SomeIn (existential): mark iteration failed and continue to next iteration
-                                        if let Some(loop_ctx_mut) = self.loop_stack.last_mut() {
-                                            loop_ctx_mut.current_iteration_failed = true;
-                                        }
-                                        debug!("AssertCondition failed in Any loop - jumping to loop_end={}", loop_end);
-
-                                        // Jump directly to the LoopNext instruction
-                                        self.pc = loop_next_pc as usize - 1; // -1 because PC will be incremented
-                                        #[cfg(feature = "rvm-tracing")]
-                                        self.pop_span();
-                                    }
-                                    LoopMode::Every => {
-                                        // For Every (universal): condition failure means entire loop fails
-                                        // Jump beyond the loop body to loop_end
-                                        debug!("AssertCondition failed in Every loop - jumping to loop_end={}", loop_end);
-                                        self.loop_stack.pop(); // Remove loop context
-                                        self.pc = loop_end as usize - 1; // -1 because PC will be incremented
-                                                                         // Set result to false since Every failed
-                                        self.registers[result_reg as usize] = Value::Bool(false);
-                                        #[cfg(feature = "rvm-tracing")]
-                                        self.pop_span();
-                                    }
-                                    _ => {
-                                        // For comprehensions: mark iteration failed and continue
-                                        if let Some(loop_ctx_mut) = self.loop_stack.last_mut() {
-                                            loop_ctx_mut.current_iteration_failed = true;
-                                        }
-                                        // Jump directly to the LoopNext instruction
-                                        self.pc = loop_next_pc as usize - 1; // -1 because PC will be incremented
-                                        #[cfg(feature = "rvm-tracing")]
-                                        self.pop_span();
-                                    }
-                                }
-                            } else {
-                                // Outside of loop context, failed assertion means this body/definition fails
-                                debug!("AssertCondition failed outside loop - body failed");
-                                return Err(anyhow::anyhow!("Assertion failed"));
-                            }
-                        }
-                        _ => {
-                            debug!("AssertCondition passed - {:?}", value);
-                            // For other values, check if they're truthy
-                            // In Rego, only false, undefined, and null are falsy
-                            // Everything else (including 0, empty strings, empty arrays) is truthy
-                        }
-                    }
+                    self.handle_condition(condition_result)?;
                 }
 
                 Instruction::LoopStart { params_index } => {
@@ -945,16 +896,50 @@ impl RegoVM {
     }
 
     /// Shared rule definition execution logic with consistency checking
-    fn execute_rule_definitions(
+    fn execute_rule_definitions_common(
         &mut self,
         rule_definitions: &[Vec<usize>],
-        rule_type: &crate::rvm::program::RuleType,
-        dest_reg: u8,
-        is_function_call: bool,
+        rule_info: &crate::rvm::program::RuleInfo,
+        function_call_params: Option<&crate::rvm::instructions::FunctionCallParams>,
     ) -> Result<(Value, bool)> {
         let mut first_successful_result: Option<Value> = None;
         let mut rule_failed_due_to_inconsistency = false;
-        let mut final_result = Value::Undefined;
+        let is_function_call = rule_info.function_info.is_some();
+        let result_reg = rule_info.result_reg as usize;
+
+        let num_registers = rule_info.num_registers as usize;
+        let mut register_window = Vec::with_capacity(num_registers);
+
+        let num_retained_registers = match function_call_params {
+            Some(params) => {
+                // Return register.
+                register_window.push(Value::Undefined);
+                for arg in params.args[0..params.num_args as usize].iter() {
+                    register_window.push(self.registers[*arg as usize].clone());
+                }
+                // The return register is also retained in addition to the arguments
+                params.num_args as usize + 1
+            }
+            _ => {
+                match rule_info.rule_type {
+                    crate::rvm::program::RuleType::PartialSet
+                    | crate::rvm::program::RuleType::PartialObject => {
+                        // For partial sets and objects, retain the result register
+                        // since each definition contributes to it
+                        1
+                    }
+                    crate::rvm::program::RuleType::Complete => {
+                        // No registers need to be retained between definitions.
+                        0
+                    }
+                }
+            }
+        };
+
+        let mut old_registers = Vec::default();
+        core::mem::swap(&mut old_registers, &mut self.registers);
+        self.register_stack.push(old_registers);
+        self.registers = register_window;
 
         for (def_idx, definition_bodies) in rule_definitions.iter().enumerate() {
             for (body_entry_point_idx, body_entry_point) in definition_bodies.iter().enumerate() {
@@ -969,16 +954,21 @@ impl RegoVM {
                     def_idx, body_entry_point_idx, body_entry_point
                 );
 
+                // Reset register window while preserving retained registers
+                self.registers
+                    .resize(num_retained_registers, Value::Undefined);
+                self.registers.resize(num_registers, Value::Undefined);
+
                 // Execute the body
                 match self.jump_to(*body_entry_point) {
                     Ok(_) => {
                         debug!("Body {} completed", body_entry_point_idx);
 
                         // For complete rules and functions, check consistency of successful results
-                        if matches!(rule_type, crate::rvm::program::RuleType::Complete)
+                        if matches!(rule_info.rule_type, crate::rvm::program::RuleType::Complete)
                             || is_function_call
                         {
-                            let current_result = self.registers[dest_reg as usize].clone();
+                            let current_result = self.registers[result_reg].clone();
                             if current_result != Value::Undefined {
                                 if let Some(ref expected) = first_successful_result {
                                     if *expected != current_result {
@@ -988,8 +978,7 @@ impl RegoVM {
                                         );
                                         // Definitions produced different values - rule fails
                                         rule_failed_due_to_inconsistency = true;
-                                        final_result = Value::Undefined;
-                                        self.registers[dest_reg as usize] = Value::Undefined;
+                                        self.registers[result_reg] = Value::Undefined;
                                         break;
                                     } else {
                                         debug!("Rule consistency check passed - result matches expected");
@@ -997,8 +986,10 @@ impl RegoVM {
                                 } else {
                                     // First successful result
                                     first_successful_result = Some(current_result.clone());
-                                    final_result = current_result;
-                                    debug!("Rule - first successful result: {:?}", final_result);
+                                    debug!(
+                                        "Rule - first successful result: {:?}",
+                                        first_successful_result
+                                    );
                                 }
                             }
                         }
@@ -1027,11 +1018,30 @@ impl RegoVM {
             }
         }
 
+        let final_result = if rule_failed_due_to_inconsistency {
+            Value::Undefined
+        } else if let Some(successful_result) = first_successful_result {
+            // Use the first successful result if we have one
+            successful_result
+        } else {
+            // No successful definitions - use current register value (likely Undefined)
+            self.registers[result_reg].clone()
+        };
+
+        if let Some(old_registers) = self.register_stack.pop() {
+            self.registers = old_registers;
+        }
+
         Ok((final_result, rule_failed_due_to_inconsistency))
     }
 
-    /// Execute CallRule instruction with caching and call stack support
-    fn execute_call_rule(&mut self, dest: u8, rule_index: u16) -> Result<()> {
+    /// Execute calling rule with caching and call stack support
+    fn execute_call_rule_common(
+        &mut self,
+        dest: u8,
+        rule_index: u16,
+        function_call_params: Option<&crate::rvm::instructions::FunctionCallParams>,
+    ) -> Result<()> {
         debug!(
             "CallRule execution - dest={}, rule_index={}",
             dest, rule_index
@@ -1087,28 +1097,18 @@ impl RegoVM {
             current_definition_index: 0,
             current_body_index: 0,
         });
-        self.registers[dest as usize] = Value::Undefined; // Initialize destination register
 
+        // Execute all rule definitions with consistency checking
         debug!(
             "CallRule executing rule {} with {} definitions",
             rule_index,
             rule_definitions.len()
         );
 
-        // Execute all rule definitions with consistency checking
-        let result_reg = rule_info.result_reg;
+        let (final_result, rule_failed_due_to_inconsistency) = self
+            .execute_rule_definitions_common(&rule_definitions, &rule_info, function_call_params)?;
 
-        let (final_result, rule_failed_due_to_inconsistency) = self.execute_rule_definitions(
-            &rule_definitions,
-            &rule_type,
-            result_reg,
-            false, // Not a function call
-        )?;
-
-        // Update the destination register with the final result
-        if final_result != Value::Undefined {
-            self.registers[dest as usize] = final_result;
-        }
+        self.registers[dest as usize] = Value::Undefined; // Initialize destination register
 
         // Return from the call
         let call_context = self.call_rule_stack.pop().expect("Call stack underflow");
@@ -1117,6 +1117,17 @@ impl RegoVM {
             "CallRule returning from rule {} to PC {}",
             rule_index, self.pc
         );
+
+        // Copy result from the actual result_reg (from call_context) to dest_reg
+        // The call_context.result_reg gets updated by RuleInit during execution
+        let result_from_rule = if !rule_failed_due_to_inconsistency {
+            final_result
+        } else {
+            Value::Undefined
+        };
+
+        // Store the result in the destination register of the calling context
+        self.registers[dest as usize] = result_from_rule.clone();
 
         // For partial set/object rules, if all definitions failed and we still have Undefined,
         // set the appropriate empty collection as the default
@@ -1168,15 +1179,39 @@ impl RegoVM {
         }
 
         // Cache the final result
-        let result = self.registers[dest as usize].clone();
-        debug!("Set rule final result: {:?}", result);
-        self.rule_cache[rule_idx] = (true, result.clone());
+        let final_result = self.registers[dest as usize].clone();
+        debug!("Set rule final result: {:?}", final_result);
+        self.rule_cache[rule_idx] = (true, final_result);
 
         debug!(
             "CallRule completed - dest register {} set to {:?}",
             dest, self.registers[dest as usize]
         );
         Ok(())
+    }
+
+    /// Execute CallRule instruction with caching and call stack support
+    fn execute_call_rule(&mut self, dest: u8, rule_index: u16) -> Result<()> {
+        self.execute_call_rule_common(dest, rule_index, None)
+    }
+
+    /// Execute a function call to a user-defined function rule
+    fn execute_function_call(&mut self, params_index: u16) -> Result<()> {
+        #[cfg(feature = "rvm-tracing")]
+        {
+            let span = span!(tracing::Level::DEBUG, "execute_function_call");
+            self.push_span(span);
+        }
+
+        debug!(
+            "Executing function call with params_index: {}",
+            params_index
+        );
+
+        // Get parameters and extract needed values
+        let params =
+            self.program.instruction_data.function_call_params[params_index as usize].clone();
+        self.execute_call_rule_common(params.dest, params.func_rule_index, Some(&params))
     }
 
     /// Execute a function rule call with arguments
@@ -1258,234 +1293,6 @@ impl RegoVM {
         Ok(())
     }
 
-    /// Execute a function call to a user-defined function rule
-    fn execute_function_call(&mut self, params_index: u16) -> Result<()> {
-        #[cfg(feature = "rvm-tracing")]
-        {
-            let span = span!(tracing::Level::DEBUG, "execute_function_call");
-            self.push_span(span);
-        }
-
-        debug!(
-            "Executing function call with params_index: {}",
-            params_index
-        );
-
-        // Get parameters and extract needed values
-        let (rule_index, dest_reg, arg_regs) = {
-            let params = &self.program.instruction_data.function_call_params[params_index as usize];
-            (
-                params.func_rule_index,
-                params.dest,
-                params.arg_registers().to_vec(),
-            )
-        };
-
-        debug!(
-            "Function call: rule_index={}, dest_reg={}, arg_count={}",
-            rule_index,
-            dest_reg,
-            arg_regs.len()
-        );
-
-        // Collect arguments from registers
-        let mut args = Vec::new();
-        #[cfg(feature = "rvm-tracing")]
-        for (i, &arg_reg) in arg_regs.iter().enumerate() {
-            let arg_value = self.registers[arg_reg as usize].clone();
-            debug!("Argument {}: register {} = {:?}", i, arg_reg, arg_value);
-            args.push(arg_value);
-        }
-        #[cfg(not(feature = "rvm-tracing"))]
-        for &arg_reg in arg_regs.iter() {
-            let arg_value = self.registers[arg_reg as usize].clone();
-            args.push(arg_value);
-        }
-
-        // Execute the function rule with arguments
-        debug!(
-            "Calling execute_rule_with_args for rule_index: {}",
-            rule_index
-        );
-        let result = self.execute_rule_with_args(rule_index, Some(args))?;
-        debug!("Function call result: {:?}", result);
-        self.registers[dest_reg as usize] = result.clone();
-        debug!("Stored result in register {}", dest_reg);
-
-        #[cfg(feature = "rvm-tracing")]
-        self.pop_span();
-
-        Ok(())
-    }
-
-    /// Shared rule execution logic for both function calls and regular rule calls
-    fn execute_rule_with_args(
-        &mut self,
-        rule_index: u16,
-        args: Option<Vec<Value>>,
-    ) -> Result<Value> {
-        #[cfg(feature = "rvm-tracing")]
-        {
-            let span = span!(tracing::Level::DEBUG, "execute_rule");
-            self.push_span(span);
-        }
-
-        debug!(
-            rule_index = rule_index,
-            args = ?args,
-            "executing rule"
-        );
-
-        let rule_idx = rule_index as usize;
-
-        // Check bounds
-        if rule_idx >= self.rule_cache.len() {
-            bail!("Rule index {} out of bounds", rule_index);
-        }
-
-        let rule_info = self
-            .program
-            .rule_infos
-            .get(rule_idx)
-            .ok_or_else(|| anyhow::anyhow!("Rule index {} has no info", rule_index))?
-            .clone();
-
-        let rule_definitions = rule_info.definitions.clone();
-
-        if rule_definitions.is_empty() {
-            // No definitions - return undefined
-            debug!(
-                rule_index = rule_index,
-                "rule has no definitions - returning undefined"
-            );
-            return Ok(Value::Undefined);
-        }
-
-        // Save current execution state
-        let saved_pc = self.pc;
-        let saved_registers = if args.is_some() {
-            Some(self.registers.clone())
-        } else {
-            None
-        };
-
-        // Create call context for function calls
-        let is_function_call = args.is_some();
-        let dest_reg = if is_function_call {
-            // For function calls, we'll use register 0 as the destination for the result
-            0
-        } else {
-            0 // Not used for non-function calls
-        };
-
-        if is_function_call {
-            // Create call context so RuleReturn has something to work with
-            self.call_rule_stack.push(CallRuleContext {
-                return_pc: saved_pc,
-                dest_reg,
-                result_reg: rule_info.result_reg, // Use rule's allocated result register
-                rule_index,
-                rule_type: rule_info.rule_type.clone(),
-                current_definition_index: 0,
-                current_body_index: 0,
-            });
-        }
-
-        // Set up function arguments if this is a function call
-        if let Some(function_args) = args {
-            // Set up function arguments in the beginning of register space
-            // Argument registers start from register 1 (register 0 is typically for return values)
-            for (i, arg) in function_args.iter().enumerate() {
-                if i + 1 < self.registers.len() {
-                    self.registers[i + 1] = arg.clone();
-                } else {
-                    bail!("Too many arguments for function call - register space exceeded");
-                }
-            }
-
-            // Initialize return register (register 0) to undefined
-            self.registers[0] = Value::Undefined;
-        }
-
-        debug!(
-            "Rule execution - rule {} with {} definitions",
-            rule_index,
-            rule_definitions.len()
-        );
-
-        let mut rule_result = Value::Undefined;
-
-        // Execute rule definitions using shared logic
-        let function_result_reg = if is_function_call {
-            rule_info.result_reg
-        } else {
-            dest_reg
-        };
-
-        let (execution_result, rule_failed_due_to_inconsistency) = self.execute_rule_definitions(
-            &rule_definitions,
-            &rule_info.rule_type,
-            function_result_reg,
-            is_function_call,
-        )?;
-
-        // Update rule_result based on execution outcome
-        if !rule_failed_due_to_inconsistency && execution_result != Value::Undefined {
-            rule_result = execution_result;
-        }
-
-        // For complete rules, if all definitions failed (but not due to inconsistency), try using the pre-computed default value
-        if matches!(rule_info.rule_type, crate::rvm::program::RuleType::Complete)
-            && matches!(rule_result, Value::Undefined)
-            && !rule_failed_due_to_inconsistency
-            && !is_function_call
-        {
-            // Check if there's a pre-computed default value in the literal table
-            if let Some(default_literal_index) = rule_info.default_literal_index {
-                debug!("All regular definitions failed for complete rule '{}', using pre-computed default value from literal index {}", rule_info.name, default_literal_index);
-
-                // Get the default value from the literal table
-                if let Some(default_value) =
-                    self.program.literals.get(default_literal_index as usize)
-                {
-                    rule_result = default_value.clone();
-                    debug!("Using default value: {:?}", rule_result);
-                } else {
-                    debug!(
-                        "Default literal index {} is out of bounds in literal table",
-                        default_literal_index
-                    );
-                }
-            } else {
-                debug!(
-                    "No pre-computed default value available for complete rule '{}'",
-                    rule_info.name
-                );
-            }
-        }
-
-        // Clean up call context for function calls
-        if is_function_call {
-            self.call_rule_stack.pop();
-        }
-
-        // Restore execution state if this was a function call
-        if let Some(original_registers) = saved_registers {
-            self.pc = saved_pc;
-            self.registers = original_registers;
-        }
-
-        debug!(
-            "FunctionCall completed - returning result: {:?}",
-            rule_result
-        );
-
-        #[cfg(feature = "rvm-tracing")]
-        self.pop_span();
-
-        Ok(rule_result)
-    }
-
     /// Execute RuleInit instruction
     fn execute_rule_init(&mut self, result_reg: u8, _rule_index: u16) -> Result<()> {
         let current_ctx = self
@@ -1498,7 +1305,8 @@ impl RegoVM {
                 self.registers[result_reg as usize] = Value::Undefined;
             }
             crate::rvm::program::RuleType::PartialSet => {
-                if current_ctx.current_definition_index == 0 {
+                if current_ctx.current_definition_index == 0 && current_ctx.current_body_index == 0
+                {
                     self.registers[result_reg as usize] = Value::new_set();
                 }
                 debug!(
@@ -1507,7 +1315,8 @@ impl RegoVM {
                 );
             }
             crate::rvm::program::RuleType::PartialObject => {
-                if current_ctx.current_definition_index == 0 {
+                if current_ctx.current_definition_index == 0 && current_ctx.current_body_index == 0
+                {
                     self.registers[result_reg as usize] = Value::new_object();
                 }
             }
@@ -1522,24 +1331,13 @@ impl RegoVM {
             .last_mut()
             .expect("Call stack underflow");
 
-        let result_reg = current_ctx.result_reg;
-        let dest_reg = current_ctx.dest_reg;
+        let _result_reg = current_ctx.result_reg;
 
-        // Copy result to destination register (same logic for both function calls and regular calls)
+        // RuleReturn just signals completion - the result is already in result_reg
+        // The copying to dest_reg happens when we return from CallRule
         debug!(
-            "RuleReturn - copying from result_reg {} to dest_reg {}",
-            result_reg, dest_reg
-        );
-        debug!(
-            "RuleReturn - result_reg {} contains: {:?}",
-            result_reg, self.registers[result_reg as usize]
-        );
-
-        self.registers[dest_reg as usize] = self.registers[result_reg as usize].clone();
-
-        debug!(
-            "RuleReturn - dest_reg {} now contains: {:?}",
-            dest_reg, self.registers[dest_reg as usize]
+            "RuleReturn - rule completed with result in result_reg {}: {:?}",
+            _result_reg, self.registers[_result_reg as usize]
         );
         Ok(())
     }
@@ -2062,5 +1860,80 @@ impl RegoVM {
             (LoopMode::ObjectComprehension, _) => LoopAction::Continue,
             _ => LoopAction::Continue,
         }
+    }
+
+    /// Handle condition evaluation result (for assertions and other conditions)
+    fn handle_condition(&mut self, condition_passed: bool) -> Result<()> {
+        if condition_passed {
+            debug!("Condition passed");
+            return Ok(());
+        }
+
+        debug!(
+            "Condition failed - in loop: {}",
+            !self.loop_stack.is_empty()
+        );
+
+        if !self.loop_stack.is_empty() {
+            // In a loop - behavior depends on loop mode
+            // Get the loop context values we need before mutable borrow
+            let (loop_mode, loop_next_pc, loop_end, result_reg) = {
+                let loop_ctx = self.loop_stack.last().unwrap();
+                (
+                    loop_ctx.mode.clone(),
+                    loop_ctx.loop_next_pc,
+                    loop_ctx.loop_end,
+                    loop_ctx.result_reg,
+                )
+            };
+
+            match loop_mode {
+                LoopMode::Any => {
+                    // For SomeIn (existential): mark iteration failed and continue to next iteration
+                    if let Some(loop_ctx_mut) = self.loop_stack.last_mut() {
+                        loop_ctx_mut.current_iteration_failed = true;
+                    }
+                    debug!(
+                        "Condition failed in Any loop - jumping to loop_end={}",
+                        loop_end
+                    );
+
+                    // Jump directly to the LoopNext instruction
+                    self.pc = loop_next_pc as usize - 1; // -1 because PC will be incremented
+                    #[cfg(feature = "rvm-tracing")]
+                    self.pop_span();
+                }
+                LoopMode::Every => {
+                    // For Every (universal): condition failure means entire loop fails
+                    // Jump beyond the loop body to loop_end
+                    debug!(
+                        "Condition failed in Every loop - jumping to loop_end={}",
+                        loop_end
+                    );
+                    self.loop_stack.pop(); // Remove loop context
+                    self.pc = loop_end as usize - 1; // -1 because PC will be incremented
+                                                     // Set result to false since Every failed
+                    self.registers[result_reg as usize] = Value::Bool(false);
+                    #[cfg(feature = "rvm-tracing")]
+                    self.pop_span();
+                }
+                _ => {
+                    // For comprehensions: mark iteration failed and continue
+                    if let Some(loop_ctx_mut) = self.loop_stack.last_mut() {
+                        loop_ctx_mut.current_iteration_failed = true;
+                    }
+                    // Jump directly to the LoopNext instruction
+                    self.pc = loop_next_pc as usize - 1; // -1 because PC will be incremented
+                    #[cfg(feature = "rvm-tracing")]
+                    self.pop_span();
+                }
+            }
+        } else {
+            // Outside of loop context, failed condition means this body/definition fails
+            debug!("Condition failed outside loop - body failed");
+            return Err(anyhow::anyhow!("Assertion failed"));
+        }
+
+        Ok(())
     }
 }

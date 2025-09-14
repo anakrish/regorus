@@ -12,7 +12,6 @@ cases:
     example_rego: "add_ten(5) where add_ten(x) := x + 10"
     literals:
       - {}
-      - 0  # Rule index for add_ten function
       - 5  # Argument value
       - 10 # Constant 10 for addition
     instruction_params:
@@ -22,21 +21,20 @@ cases:
           literal_key_fields: []
           fields: []
       function_call_params:
-        - func: 0      # Register containing function rule index
+        - func: 0      # Rule index for add_ten function (rule 0)
           dest: 2      # Destination register for result
           args: [1]    # Argument registers
     rule_infos:
       - rule_type: Complete
         definitions:
-          - [4]  # Entry point for add_ten function body (PC 4)
+          - [3]  # Entry point for add_ten function body (PC 3)
     instructions:
-      - "Load { dest: 0, literal_idx: 1 }"      # Load rule index into register 0
-      - "Load { dest: 1, literal_idx: 2 }"      # Load argument 5 into register 1
+      - "Load { dest: 1, literal_idx: 1 }"      # Load argument 5 into register 1
       - "FunctionCall { params_index: 0 }"      # Call function
       - "Return { value: 2 }"                   # Return result
-      # Function body starts at PC 4 (entry point)
+      # Function body starts at PC 3 (entry point)
       - "RuleInit { result_reg: 0, rule_index: 0 }"  # Initialize result register
-      - "Load { dest: 3, literal_idx: 3 }"      # Load constant 10 into register 3
+      - "Load { dest: 3, literal_idx: 2 }"      # Load constant 10 into register 3
       - "Add { dest: 0, left: 1, right: 3 }"   # Add argument + 10 (result in register 0)
       - "RuleReturn {}"                         # Return from function
     want_result: 15

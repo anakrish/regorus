@@ -76,6 +76,7 @@ pub struct Compiler<'a> {
     rule_types: Vec<RuleType>,              // rule_index -> true if set rule, false if regular rule
     rule_function_params: Vec<Option<Vec<String>>>, // rule_index -> Some(param_names) for function rules, None for others
     rule_result_registers: Vec<u8>, // rule_index -> result register allocated for this rule
+    rule_num_registers: Vec<u8>,    // rule_index -> number of registers used by this rule
     // Context stack for output expression handling
     context_stack: Vec<CompilationContext>, // Stack of compilation contexts
     loop_expr_register_map: BTreeMap<ExprRef, Register>, // Map from loop expressions to their allocated registers
@@ -104,6 +105,7 @@ impl<'a> Compiler<'a> {
             rule_types: Vec::new(),
             rule_function_params: Vec::new(),
             rule_result_registers: Vec::new(),
+            rule_num_registers: Vec::new(),
             context_stack: vec![], // Default context
             loop_expr_register_map: BTreeMap::new(),
             source_to_index: HashMap::new(),
@@ -992,6 +994,7 @@ impl<'a> Compiler<'a> {
             let rule_type = self.rule_types[rule_index as usize].clone();
             let function_params = &self.rule_function_params[rule_index as usize];
             let result_register = self.rule_result_registers[rule_index as usize];
+            let num_registers = self.rule_num_registers[rule_index as usize];
 
             let rule_info = match function_params {
                 Some(param_names) => {
@@ -1002,6 +1005,7 @@ impl<'a> Compiler<'a> {
                         crate::Rc::new(definitions),
                         param_names.clone(),
                         result_register,
+                        num_registers,
                     )
                 }
                 None => {
@@ -1011,6 +1015,7 @@ impl<'a> Compiler<'a> {
                         rule_type,
                         crate::Rc::new(definitions),
                         result_register,
+                        num_registers,
                     )
                 }
             };
@@ -1142,7 +1147,7 @@ impl<'a> Compiler<'a> {
                 self.emit_instruction(Instruction::Load { dest, literal_idx }, span);
                 dest
             }
-            Expr::String { value, .. } => {
+            Expr::String { value, .. } | Expr::RawString { value, .. } => {
                 let dest = self.alloc_register();
                 let literal_idx = self.add_literal(value.clone());
                 self.emit_instruction(Instruction::Load { dest, literal_idx }, span);
@@ -1333,9 +1338,15 @@ impl<'a> Compiler<'a> {
                             span,
                         );
                     }
-                    _ => {
-                        // For other operations, just return the left operand for now
-                        return Ok(lhs_reg);
+                    crate::ast::ArithOp::Mod => {
+                        self.emit_instruction(
+                            Instruction::Mod {
+                                dest,
+                                left: lhs_reg,
+                                right: rhs_reg,
+                            },
+                            span,
+                        );
                     }
                 }
                 dest
@@ -1397,10 +1408,15 @@ impl<'a> Compiler<'a> {
                             span,
                         );
                     }
-                    _ => {
-                        // For other operations, return true for now
-                        let literal_idx = self.add_literal(Value::Bool(true));
-                        self.emit_instruction(Instruction::Load { dest, literal_idx }, span);
+                    crate::ast::BoolOp::Ne => {
+                        self.emit_instruction(
+                            Instruction::Ne {
+                                dest,
+                                left: lhs_reg,
+                                right: rhs_reg,
+                            },
+                            span,
+                        );
                     }
                 }
                 dest
@@ -1438,32 +1454,32 @@ impl<'a> Compiler<'a> {
 
                     // Return the register containing the assigned value
                     return Ok(lhs_reg);
+                } else {
+                    // Return the register containing the assigned value
+                    return Ok(rhs_reg);
                 }
-
-                // Return the register containing the assigned value
-                return Ok(rhs_reg); // Note: assignments don't get asserted
             }
             Expr::Var { value, .. } => {
                 // Check if this is a variable reference that we should resolve
                 if let Value::String(_var_name) = value {
                     debug!("Using chained reference compilation for variable");
-                    return self.compile_chained_ref(expr, span);
+                    self.compile_chained_ref(expr, span)?
+                } else {
+                    // Otherwise, load as literal value
+                    let dest = self.alloc_register();
+                    let literal_idx = self.add_literal(value.clone());
+                    self.emit_instruction(Instruction::Load { dest, literal_idx }, span);
+                    dest
                 }
-
-                // Otherwise, load as literal value
-                let dest = self.alloc_register();
-                let literal_idx = self.add_literal(value.clone());
-                self.emit_instruction(Instruction::Load { dest, literal_idx }, span);
-                dest
             }
             // Use sophisticated chained reference compilation
             Expr::RefDot { .. } => {
                 debug!("Using chained reference compilation for RefDot");
-                return self.compile_chained_ref(expr, span);
+                self.compile_chained_ref(expr, span)?
             }
             Expr::RefBrack { .. } => {
                 debug!("Using chained reference compilation for RefBrack");
-                return self.compile_chained_ref(expr, span);
+                self.compile_chained_ref(expr, span)?
             }
             Expr::Membership {
                 value, collection, ..
@@ -1506,11 +1522,102 @@ impl<'a> Compiler<'a> {
                 // Compile function call
                 self.compile_function_call(fcn, params, span.clone())?
             }
-            _ => {
-                // For other expression types, return null for now
+            Expr::UnaryExpr { expr, .. } => {
+                // Handle unary minus operator (only for numeric literals)
+                match expr.as_ref() {
+                    Expr::Number { .. } if !expr.span().text().starts_with('-') => {
+                        // Compile the operand
+                        let operand_reg =
+                            self.compile_rego_expr_with_span(expr, expr.span(), false)?;
+
+                        // Create a zero literal
+                        let zero_literal_idx = self.add_literal(Value::from(0));
+                        let zero_reg = self.alloc_register();
+                        self.emit_instruction(
+                            Instruction::Load {
+                                dest: zero_reg,
+                                literal_idx: zero_literal_idx,
+                            },
+                            span,
+                        );
+
+                        // Subtract operand from zero (0 - operand = -operand)
+                        let dest = self.alloc_register();
+                        self.emit_instruction(
+                            Instruction::Sub {
+                                dest,
+                                left: zero_reg,
+                                right: operand_reg,
+                            },
+                            span,
+                        );
+                        dest
+                    }
+                    _ => {
+                        bail!(span.error("unary - can only be used with numeric literals"));
+                    }
+                }
+            }
+            Expr::BinExpr { op, lhs, rhs, .. } => {
+                // Handle binary operators: union (|) and intersection (&)
+                // Don't assert conditions for operands
+                let lhs_reg = self.compile_rego_expr_with_span(lhs, lhs.span(), false)?;
+                let rhs_reg = self.compile_rego_expr_with_span(rhs, rhs.span(), false)?;
+
                 let dest = self.alloc_register();
-                let literal_idx = self.add_literal(Value::Null);
-                self.emit_instruction(Instruction::Load { dest, literal_idx }, span);
+
+                match op {
+                    crate::ast::BinOp::Union => {
+                        // Create builtin call for sets.union
+                        let builtin_index = self.get_builtin_index("sets.union")?;
+                        let params = crate::rvm::instructions::BuiltinCallParams {
+                            dest,
+                            builtin_index,
+                            num_args: 2,
+                            args: [lhs_reg, rhs_reg, 0, 0, 0, 0, 0, 0],
+                        };
+                        let params_index = self
+                            .program
+                            .instruction_data
+                            .add_builtin_call_params(params);
+                        self.emit_instruction(Instruction::BuiltinCall { params_index }, span);
+                    }
+                    crate::ast::BinOp::Intersection => {
+                        // Create builtin call for sets.intersection
+                        let builtin_index = self.get_builtin_index("sets.intersection")?;
+                        let params = crate::rvm::instructions::BuiltinCallParams {
+                            dest,
+                            builtin_index,
+                            num_args: 2,
+                            args: [lhs_reg, rhs_reg, 0, 0, 0, 0, 0, 0],
+                        };
+                        let params_index = self
+                            .program
+                            .instruction_data
+                            .add_builtin_call_params(params);
+                        self.emit_instruction(Instruction::BuiltinCall { params_index }, span);
+                    }
+                }
+                dest
+            }
+            #[cfg(feature = "rego-extensions")]
+            Expr::OrExpr { lhs, rhs, .. } => {
+                // Handle logical OR expression: lhs || rhs
+                // If lhs is false, null, or undefined, return rhs; otherwise return lhs
+                let lhs_reg = self.compile_rego_expr_with_span(lhs, lhs.span(), false)?;
+                let rhs_reg = self.compile_rego_expr_with_span(rhs, rhs.span(), false)?;
+
+                let dest = self.alloc_register();
+
+                // Use the Or instruction for logical OR
+                self.emit_instruction(
+                    Instruction::Or {
+                        dest,
+                        left: lhs_reg,
+                        right: rhs_reg,
+                    },
+                    span,
+                );
                 dest
             }
         };
@@ -1535,7 +1642,6 @@ impl<'a> Compiler<'a> {
             "compile_from_policy",
             rule_name = rule_name
         );
-        let _enter = _span.enter();
         info!("Starting compilation for rule: {}", rule_name);
 
         // Extract package name from rule_name
@@ -1607,17 +1713,20 @@ impl<'a> Compiler<'a> {
         rule_path: &str,
         rules: &HashMap<String, Vec<crate::ast::NodeRef<Rule>>>,
     ) -> Result<()> {
-        let _span = span!(
+        /*let _span = span!(
             tracing::Level::DEBUG,
             "compile_worklist_rule",
             rule_path = rule_path
-        );
+        );*/
         debug!("Starting compilation of worklist rule: '{}'", rule_path);
 
+        let saved_register_counter = self.register_counter;
         if let Some(rule_definitions) = rules.get(rule_path) {
             let rule_index = self.rule_index_map.get(rule_path).copied().unwrap_or(1);
             let rule_type = self.rule_types[rule_index as usize].clone();
-            let result_register = self.alloc_register(); // Allocate separate result register
+
+            // All rules will return their results in register 0.
+            let result_register = 0;
 
             // Store the result register for this rule
             // Ensure rule_result_registers has enough capacity
@@ -1627,10 +1736,9 @@ impl<'a> Compiler<'a> {
             self.rule_result_registers[rule_index as usize] = result_register;
 
             debug!(
-                "Rule '{}' has {} definitions, dest_reg={}, result_reg={}",
+                "Rule '{}' has {} definitions, result_reg={}",
                 rule_path,
                 rule_definitions.len(),
-                dest_register,
                 result_register
             );
 
@@ -1639,8 +1747,11 @@ impl<'a> Compiler<'a> {
                 self.rule_definitions.push(Vec::new());
             }
 
+            let mut num_registers_used = 0;
+
             // Compile each definition (Rule::Spec)
-            for (_def_idx, rule_ref) in rule_definitions.iter().enumerate() {
+            for (def_idx, rule_ref) in rule_definitions.iter().enumerate() {
+                core::convert::identity(def_idx);
                 if let Rule::Spec { head, bodies, span } = rule_ref.as_ref() {
                     debug!(
                         "Compiling definition {} with {} bodies",
@@ -1648,10 +1759,16 @@ impl<'a> Compiler<'a> {
                         bodies.len()
                     );
 
+                    // Set up register window for this rule definition - each rule starts with registers from 0
+                    self.push_scope();
+                    self.register_counter = 0; // Reset to 0 for this rule's window
+                    debug!("Rule '{}' register window starts at 0", rule_path);
+
+                    // Allocate result register within the window (starts at 0)
+                    let result_register = self.alloc_register(); // This will be 0
+
                     // Set the current module index based on which module contains this rule
                     self.current_module_index = self.find_module_index_for_rule(rule_ref)?;
-
-                    let mut is_function_rule = false;
 
                     let (key_expr, value_expr) = match head {
                         RuleHead::Compr { refr, assign, .. } => {
@@ -1673,32 +1790,30 @@ impl<'a> Compiler<'a> {
                             (None, key.clone())
                         }
                         RuleHead::Func { assign, args, .. } => {
-                            // Allocate registers for function parameters and add them to scope
-                            // Function parameters start from register 1 (register 0 is for return value)
-                            self.push_scope();
+                            // Set up function parameters for THIS definition
+                            // Each definition gets the same parameter mapping
                             let mut param_names = Vec::new();
-                            for (i, arg) in args.iter().enumerate() {
+
+                            for arg in args.iter() {
                                 if let Expr::Var {
                                     value: Value::String(param_name),
                                     ..
                                 } = arg.as_ref()
                                 {
                                     param_names.push(param_name.to_string());
-                                    let param_reg = (i + 1) as u8; // Parameters start at register 1
+                                    let param_reg = self.alloc_register(); // This will be 1, 2, 3, etc.
                                     self.scopes
                                         .last_mut()
                                         .unwrap()
                                         .bound_vars
                                         .insert(param_name.to_string(), param_reg);
                                     debug!(
-                                        "Function parameter '{}' assigned to register {}",
-                                        param_name, param_reg
+                                        "Function parameter '{}' assigned to register {} in definition {}",
+                                        param_name, param_reg, def_idx
                                     );
+                                    self.store_variable(param_name.to_string(), param_reg);
                                 }
                             }
-                            // Store function parameters for this rule
-                            self.rule_function_params[rule_index as usize] = Some(param_names);
-                            is_function_rule = true;
 
                             // For function rules, the output expression comes from the assignment
                             match assign {
@@ -1757,12 +1872,14 @@ impl<'a> Compiler<'a> {
                         // Compile each body within this definition
                         for (body_idx, body) in bodies.iter().enumerate() {
                             self.push_scope();
+
                             // Reset input/data registers for each rule body
                             self.reset_rule_definition_registers();
 
                             let body_entry_point = self.program.instructions.len();
                             body_entry_points.push(body_entry_point);
 
+                            core::convert::identity(body_idx);
                             debug!(
                                 "Compiling body {} at entry point {}",
                                 body_idx, body_entry_point
@@ -1799,16 +1916,19 @@ impl<'a> Compiler<'a> {
 
                             // 2. Emit Rule Return
                             self.emit_instruction(Instruction::RuleReturn {}, &body.span);
+
                             self.pop_scope();
                         }
                     }
 
-                    if is_function_rule {
-                        self.pop_scope(); // Pop function parameter scope
-                    }
+                    self.pop_scope();
 
                     // Store the body entry points for this definition
                     self.rule_definitions[rule_index as usize].push(body_entry_points);
+
+                    if self.register_counter > num_registers_used {
+                        num_registers_used = self.register_counter;
+                    }
 
                     debug!(
                         "Definition {} compiled with {} bodies",
@@ -1823,6 +1943,22 @@ impl<'a> Compiler<'a> {
                 rule_path,
                 rule_definitions.len()
             );
+
+            // Calculate the number of registers used by this rule (window starts at 0)
+            debug!(
+                "Rule '{}' used {} registers in all definitions",
+                rule_path, num_registers_used
+            );
+
+            // Store the number of registers used by this rule
+            // Ensure rule_num_registers has enough capacity
+            while self.rule_num_registers.len() <= rule_index as usize {
+                self.rule_num_registers.push(0); // Default to 0 registers
+            }
+            self.rule_num_registers[rule_index as usize] = num_registers_used;
+
+            // Restore the global register counter
+            self.register_counter = saved_register_counter;
         }
 
         Ok(())
@@ -2365,11 +2501,11 @@ impl<'a> Compiler<'a> {
                 // we continue with the next statement
                 debug!("Every quantifier completed - continuing with next statements");
             }
-            crate::ast::Literal::SomeVars { span, vars } => {
+            crate::ast::Literal::SomeVars { span: _span, vars } => {
                 debug!(
                     "Compiling SomeVars statement with {:?} variables at span {:?}",
                     vars.iter().map(|v| v.text()),
-                    span
+                    _span
                 );
                 // Add each variable to the current scope's unbound variables
                 for var in vars {
@@ -2605,10 +2741,10 @@ impl<'a> Compiler<'a> {
                 "Checking if variable '{}' is now in scope...",
                 clean_var_name
             );
-            if let Some(reg) = self.lookup_variable(&clean_var_name) {
+            if let Some(_reg) = self.lookup_variable(&clean_var_name) {
                 debug!(
                     "Yes, variable '{}' found at register {}",
-                    clean_var_name, reg
+                    clean_var_name, _reg
                 );
             } else {
                 debug!(
@@ -2655,19 +2791,22 @@ impl<'a> Compiler<'a> {
             body_start, loop_end
         );
 
-        // Debug: Print all instructions generated for this loop
-        debug!(
-            "Generated {} instructions for SomeIn loop:",
-            self.program.instructions.len()
-        );
-        for (i, instr) in self.program.instructions.iter().enumerate() {
-            debug!("  {}: {:?}", i, instr);
-        }
+        #[cfg(feature = "rvm-debug")]
+        {
+            // Debug: Print all instructions generated for this loop
+            debug!(
+                "Generated {} instructions for SomeIn loop:",
+                self.program.instructions.len()
+            );
+            for (i, instr) in self.program.instructions.iter().enumerate() {
+                debug!("  {i}: {instr:?}");
+            }
 
-        // Debug: Print literals table
-        debug!("Literals table:");
-        for (i, literal) in self.program.literals.iter().enumerate() {
-            debug!("  literal_idx {}: {:?}", i, literal);
+            // Debug: Print literals table
+            debug!("Literals table:");
+            for (i, literal) in self.program.literals.iter().enumerate() {
+                debug!("  literal_idx {i}: {literal:?}");
+            }
         }
 
         Ok(result_reg)
@@ -2924,7 +3063,7 @@ impl<'a> Compiler<'a> {
 
                     // Add the computed value to the literal table
                     let literal_index = self.add_literal(computed_value);
-                    return Some(literal_index as u16);
+                    return Some(literal_index);
                 }
             }
             Err(_e) => {

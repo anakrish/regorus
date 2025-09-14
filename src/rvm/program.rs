@@ -88,6 +88,8 @@ pub struct RuleInfo {
     pub default_literal_index: Option<u16>,
     /// Register allocated for this rule's result accumulation
     pub result_reg: u8,
+    /// Number of registers used by this rule (for register windowing)
+    pub num_registers: u8,
 }
 
 /// Information about function rules
@@ -105,6 +107,7 @@ impl RuleInfo {
         rule_type: RuleType,
         definitions: crate::Rc<Vec<Vec<usize>>>,
         result_reg: u8,
+        num_registers: u8,
     ) -> Self {
         Self {
             name,
@@ -113,6 +116,7 @@ impl RuleInfo {
             function_info: None,
             default_literal_index: None,
             result_reg,
+            num_registers,
         }
     }
 
@@ -123,6 +127,7 @@ impl RuleInfo {
         definitions: crate::Rc<Vec<Vec<usize>>>,
         param_names: Vec<String>,
         result_reg: u8,
+        num_registers: u8,
     ) -> Self {
         let num_params = param_names.len();
         Self {
@@ -135,6 +140,7 @@ impl RuleInfo {
             }),
             default_literal_index: None,
             result_reg,
+            num_registers,
         }
     }
 

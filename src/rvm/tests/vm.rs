@@ -143,6 +143,10 @@ mod tests {
     ) -> Result<Value> {
         let mut vm = RegoVM::new();
 
+        // Set a larger base register count for VM tests to accommodate test cases
+        // that use higher register indices (e.g., tests using register 6, 7, 8, etc.)
+        vm.set_base_register_count(50);
+
         // Set global data and input if provided
         if let Some(data_value) = data {
             let processed_data = process_value(&data_value)?;
@@ -187,13 +191,24 @@ mod tests {
                 .map(|def| def.iter().map(|&x| x as usize).collect())
                 .collect();
 
+            // For function calls, use result_reg 0; for other rules, use result_reg 1
+            let result_reg = if instruction_params
+                .as_ref()
+                .map_or(false, |params| !params.function_call_params.is_empty())
+            {
+                0 // Function calls use register 0 as return register
+            } else {
+                1 // Regular rules use register 1
+            };
+
             let rule_info = RuleInfo {
                 name: String::from("test_rule"),
                 rule_type,
                 definitions: crate::Rc::new(definitions),
                 function_info: None,
                 default_literal_index: rule_info_spec.default_literal_index,
-                result_reg: 0, // Use register 0 as a default for tests
+                result_reg,
+                num_registers: 50, // Increased to accommodate test cases with higher register indices
             };
 
             program.rule_infos.push(rule_info);

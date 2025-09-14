@@ -41,7 +41,7 @@ impl Default for AssemblyListingConfig {
 /// Generate annotated assembly listing for a compiled program
 pub fn generate_assembly_listing(program: &Program, config: &AssemblyListingConfig) -> String {
     let mut output = String::new();
-    let mut indent_level = 0;
+    let mut indent_level: usize = 0;
     let mut current_rule_index: Option<u16> = None;
 
     // Add header
@@ -87,35 +87,28 @@ pub fn generate_assembly_listing(program: &Program, config: &AssemblyListingConf
 
     for (pc, instruction) in program.instructions.iter().enumerate() {
         // Handle rule transitions and add gaps
-        match instruction {
-            Instruction::RuleInit { rule_index, .. } => {
-                // Add gap before new rule (except for the first rule)
-                if current_rule_index.is_some() {
-                    writeln!(output).unwrap();
-                }
-                current_rule_index = Some(*rule_index);
-
-                // Add rule name prefix
-                if let Some(rule_info) = program.rule_infos.get(*rule_index as usize) {
-                    writeln!(output, "; ===== RULE: {} =====", rule_info.name).unwrap();
-                } else {
-                    writeln!(output, "; ===== RULE: rule_{} =====", rule_index).unwrap();
-                }
+        if let Instruction::RuleInit { rule_index, .. } = instruction {
+            // Add gap before new rule (except for the first rule)
+            if current_rule_index.is_some() {
+                writeln!(output).unwrap();
             }
-            _ => {}
+            current_rule_index = Some(*rule_index);
+
+            // Add rule name prefix
+            if let Some(rule_info) = program.rule_infos.get(*rule_index as usize) {
+                writeln!(output, "; ===== RULE: {} =====", rule_info.name).unwrap();
+            } else {
+                writeln!(output, "; ===== RULE: rule_{} =====", rule_index).unwrap();
+            }
         }
 
         // Handle loop indentation - check for loop end instructions
         match instruction {
             Instruction::LoopNext { .. } => {
-                if indent_level > 0 {
-                    indent_level -= 1;
-                }
+                indent_level = indent_level.saturating_sub(1);
             }
             Instruction::RuleReturn { .. } => {
-                if indent_level > 0 {
-                    indent_level -= 1;
-                }
+                indent_level = indent_level.saturating_sub(1);
             }
             _ => {}
         }
@@ -511,7 +504,7 @@ fn format_instruction_readable(
                 "{}}} continue → {} or exit → {}",
                 indent, body_start, loop_end
             );
-            let comment = format!("Next iteration or exit loop");
+            let comment = "Next iteration or exit loop".to_string();
             align_comment(&base, &comment, config.comment_column)
         }
         Instruction::CallRule { dest, rule_index } => {
@@ -559,7 +552,7 @@ pub fn generate_tabular_assembly_listing(
     _config: &AssemblyListingConfig,
 ) -> String {
     let mut output = String::new();
-    let mut indent_level = 0;
+    let mut indent_level: usize = 0;
 
     // Add header
     writeln!(output, "; RVM Assembly (Tabular Format)").unwrap();
@@ -578,14 +571,10 @@ pub fn generate_tabular_assembly_listing(
         // Handle loop indentation
         match instruction {
             Instruction::LoopNext { .. } => {
-                if indent_level > 0 {
-                    indent_level -= 1;
-                }
+                indent_level = indent_level.saturating_sub(1);
             }
             Instruction::RuleReturn { .. } => {
-                if indent_level > 0 {
-                    indent_level -= 1;
-                }
+                indent_level = indent_level.saturating_sub(1);
             }
             _ => {}
         }

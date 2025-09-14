@@ -6,7 +6,7 @@ use super::program::Program;
 use super::vm::{CallRuleContext, LoopContext};
 use crate::value::Value;
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use std::collections::HashSet;
 use std::io::Write;
@@ -23,19 +23,43 @@ pub struct DebugContext<'a> {
     pub program: &'a Program,
 }
 
+/// Stepping mode for debugger control
+#[derive(Debug, Clone, PartialEq)]
+pub enum StepMode {
+    /// Run until next breakpoint
+    Continue,
+    /// Step one instruction
+    StepInto,
+    /// Step over function calls (stop at next instruction at same or higher level)
+    StepOver,
+    /// Step out of current function (stop when returning to caller)
+    StepOut,
+    /// Finish current rule execution (stop when rule completes)
+    FinishRule,
+}
+
 /// Interactive debugger for RVM execution
 /// Enhanced version with comprehensive debugging features
 #[derive(Debug)]
 pub struct InteractiveDebugger {
     pub enabled: bool,
-    pub step_mode: bool,
+    pub step_mode: StepMode,
     pub breakpoints: HashSet<usize>,
+    pub rule_breakpoints: HashSet<String>, // Function/rule name breakpoints
     pub auto_break_on_loops: bool,
     pub auto_break_on_rules: bool,
+    pub auto_break_on_assert: bool, // Toggle for breaking on assert conditions
+    pub auto_break_on_first_instruction: bool, // Toggle for breaking on first instruction
     pub last_valid_source_index: usize,
     pub last_valid_line: usize,
     pub recently_changed_registers: Vec<usize>, // Track recently changed registers
     pub previous_registers: Vec<Value>,         // Previous register values for comparison
+
+    // Advanced stepping control
+    pub target_call_depth: Option<usize>, // For step out/finish operations
+    pub target_rule_index: Option<u16>,   // For finish rule operation
+    pub current_call_depth: usize,        // Track current call stack depth
+    pub first_instruction_executed: bool, // Track if first instruction has been executed
 }
 
 impl Default for InteractiveDebugger {
@@ -50,9 +74,14 @@ impl InteractiveDebugger {
             enabled: std::env::var("RVM_INTERACTIVE_DEBUG")
                 .map(|v| v == "1" || v.to_lowercase() == "true")
                 .unwrap_or(false),
-            step_mode: std::env::var("RVM_STEP_MODE")
+            step_mode: if std::env::var("RVM_STEP_MODE")
                 .map(|v| v == "1" || v.to_lowercase() == "true")
-                .unwrap_or(false),
+                .unwrap_or(false)
+            {
+                StepMode::StepInto
+            } else {
+                StepMode::Continue
+            },
             breakpoints: {
                 let mut set = HashSet::new();
                 if let Ok(bp_str) = std::env::var("RVM_BREAKPOINT") {
@@ -64,39 +93,140 @@ impl InteractiveDebugger {
                 }
                 set
             },
+            rule_breakpoints: {
+                let mut set = HashSet::new();
+                if let Ok(rbp_str) = std::env::var("RVM_RULE_BREAKPOINT") {
+                    for rbp in rbp_str.split(',') {
+                        set.insert(rbp.trim().to_string());
+                    }
+                }
+                set
+            },
             auto_break_on_loops: std::env::var("RVM_BREAK_ON_LOOPS")
                 .map(|v| v == "1" || v.to_lowercase() == "true")
                 .unwrap_or(false),
             auto_break_on_rules: std::env::var("RVM_BREAK_ON_RULES")
                 .map(|v| v == "1" || v.to_lowercase() == "true")
                 .unwrap_or(false),
+            auto_break_on_assert: std::env::var("RVM_BREAK_ON_ASSERT")
+                .map(|v| v == "1" || v.to_lowercase() == "true")
+                .unwrap_or(true), // Default to true for debugging assert conditions
+            auto_break_on_first_instruction: std::env::var("RVM_BREAK_ON_FIRST")
+                .map(|v| v == "1" || v.to_lowercase() == "true")
+                .unwrap_or(false),
             last_valid_source_index: 0,
             last_valid_line: 1,
             recently_changed_registers: Vec::new(),
             previous_registers: Vec::new(),
+            target_call_depth: None,
+            target_rule_index: None,
+            current_call_depth: 0,
+            first_instruction_executed: false,
         }
     }
 
-    pub fn should_break(&self, pc: usize, instruction: &Instruction) -> bool {
+    pub fn should_break(
+        &mut self,
+        pc: usize,
+        instruction: &Instruction,
+        call_rule_stack: &[CallRuleContext],
+        program: &Program,
+    ) -> bool {
         if !self.enabled {
             return false;
         }
 
-        // Always break in step mode
-        if self.step_mode {
+        // Update current call depth
+        self.current_call_depth = call_rule_stack.len();
+
+        // Check if this is the first instruction and we should break on it
+        if !self.first_instruction_executed && self.auto_break_on_first_instruction {
+            self.first_instruction_executed = true;
             return true;
         }
+        self.first_instruction_executed = true;
 
-        // Break on specific breakpoints
+        // Check step mode conditions
+        match &self.step_mode {
+            StepMode::Continue => {
+                // Only break on explicit breakpoints or special conditions
+            }
+            StepMode::StepInto => {
+                // Break on every instruction
+                return true;
+            }
+            StepMode::StepOver => {
+                // Break if we're at the same call depth or higher (returned from a call)
+                if let Some(target_depth) = self.target_call_depth {
+                    if self.current_call_depth <= target_depth {
+                        self.target_call_depth = None; // Clear target
+                        return true;
+                    }
+                } else {
+                    // No target set, treat as step into
+                    return true;
+                }
+            }
+            StepMode::StepOut => {
+                // Break when we return to a higher level (lower call depth)
+                if let Some(target_depth) = self.target_call_depth {
+                    if self.current_call_depth < target_depth {
+                        self.target_call_depth = None; // Clear target
+                        return true;
+                    }
+                } else {
+                    // No target set, set it to current depth - 1
+                    if self.current_call_depth > 0 {
+                        self.target_call_depth = Some(self.current_call_depth - 1);
+                    } else {
+                        // Already at top level, continue
+                        self.step_mode = StepMode::Continue;
+                    }
+                }
+            }
+            StepMode::FinishRule => {
+                // Break when we finish the target rule
+                if let Some(target_rule) = self.target_rule_index {
+                    // Check if we're returning from the target rule
+                    if matches!(instruction, Instruction::RuleReturn {}) {
+                        if let Some(current_call) = call_rule_stack.last() {
+                            if current_call.rule_index == target_rule {
+                                self.target_rule_index = None; // Clear target
+                                return true;
+                            }
+                        }
+                    }
+                } else {
+                    // No target set, set it to current rule if we're in one
+                    if let Some(current_call) = call_rule_stack.last() {
+                        self.target_rule_index = Some(current_call.rule_index);
+                    } else {
+                        // Not in a rule, continue
+                        self.step_mode = StepMode::Continue;
+                    }
+                }
+            }
+        }
+
+        // Break on specific PC breakpoints
         if self.breakpoints.contains(&pc) {
             return true;
         }
 
-        // Auto-break on certain instruction types
+        // Break on rule/function breakpoints
+        if let Instruction::CallRule { rule_index, .. } = instruction {
+            if let Some(rule_info) = program.rule_infos.get(*rule_index as usize) {
+                if self.rule_breakpoints.contains(&rule_info.name) {
+                    return true;
+                }
+            }
+        }
+
+        // Auto-break on certain instruction types (now toggleable)
         match instruction {
             Instruction::LoopStart { .. } if self.auto_break_on_loops => true,
             Instruction::CallRule { .. } if self.auto_break_on_rules => true,
-            Instruction::AssertCondition { .. } => true, // Always break on assertions for debugging
+            Instruction::AssertCondition { .. } if self.auto_break_on_assert => true,
             _ => false,
         }
     }
@@ -298,7 +428,7 @@ impl InteractiveDebugger {
 
         // Find the correct source file and line info, with fallback to last valid info
         let (source_lines, current_line, validated_span) = if let Some(span) = current_span {
-            if is_valid_span(&span) && span.source_index < program.sources.len() {
+            if is_valid_span(span) && span.source_index < program.sources.len() {
                 // Update last valid source info only for valid spans
                 self.last_valid_source_index = span.source_index;
                 self.last_valid_line = span.line;
@@ -622,7 +752,12 @@ impl InteractiveDebugger {
         println!("├{}┤", "─".repeat(width - 2));
         println!(
             "│ {:<width$} │",
-            "💻 Commands: (c)ontinue (s)tep (l)ist (asm)embly (r)egisters (cs)call-stack (ls)loop-stack (h)elp (q)uit",
+            "💻 Commands: (c)ontinue (s)tep (n)ext (so)stepout (fr)finishrule (b)reak (bp)breakpoints",
+            width = width - 4
+        );
+        println!(
+            "│ {:<width$} │",
+            "           (r)egisters (r <num>)register (t)oggle (h)elp (q)uit",
             width = width - 4
         );
         println!("└{}┘", "─".repeat(width - 2));
@@ -653,15 +788,39 @@ impl InteractiveDebugger {
 
                 match command.as_str() {
                     "c" | "continue" => {
-                        self.step_mode = false;
+                        self.step_mode = StepMode::Continue;
+                        self.target_call_depth = None;
+                        self.target_rule_index = None;
                         break;
                     }
-                    "s" | "step" => {
-                        self.step_mode = true;
+                    "s" | "step" | "si" | "stepi" => {
+                        self.step_mode = StepMode::StepInto;
+                        self.target_call_depth = None;
+                        self.target_rule_index = None;
                         break;
                     }
                     "n" | "next" => {
-                        self.step_mode = true;
+                        self.step_mode = StepMode::StepOver;
+                        self.target_call_depth = Some(self.current_call_depth);
+                        self.target_rule_index = None;
+                        break;
+                    }
+                    "so" | "stepout" | "finish" => {
+                        self.step_mode = StepMode::StepOut;
+                        self.target_call_depth = if self.current_call_depth > 0 {
+                            Some(self.current_call_depth - 1)
+                        } else {
+                            None
+                        };
+                        self.target_rule_index = None;
+                        break;
+                    }
+                    "fr" | "finishrule" => {
+                        self.step_mode = StepMode::FinishRule;
+                        self.target_call_depth = None;
+                        if let Some(current_call) = ctx.call_rule_stack.last() {
+                            self.target_rule_index = Some(current_call.rule_index);
+                        }
                         break;
                     }
                     "l" | "list" => {
@@ -696,12 +855,18 @@ impl InteractiveDebugger {
                         self.show_extended_source(ctx.pc, ctx.program);
                         return;
                     }
+                    "bp" | "breakpoints" => {
+                        self.show_breakpoints(ctx.program);
+                        return;
+                    }
                     "q" | "quit" => {
                         self.enabled = false;
                         std::process::exit(0); // Exit the entire program
                     }
                     _ if command.starts_with("b ") => {
-                        if let Ok(break_pc) = command[2..].trim().parse::<usize>() {
+                        let target = command[2..].trim();
+                        if let Ok(break_pc) = target.parse::<usize>() {
+                            // PC breakpoint
                             self.breakpoints.insert(break_pc);
                             print!("\x1B[2J\x1B[H");
                             println!("✅ Breakpoint set at PC {}", break_pc);
@@ -710,21 +875,140 @@ impl InteractiveDebugger {
                             std::io::stdin().read_line(&mut _dummy).ok();
                             continue;
                         } else {
+                            // Rule/function name breakpoint
+                            self.rule_breakpoints.insert(target.to_string());
                             print!("\x1B[2J\x1B[H");
-                            println!("❌ Invalid PC number");
+                            println!("✅ Rule breakpoint set for '{}'", target);
                             println!("Press Enter to continue...");
                             let mut _dummy = String::new();
                             std::io::stdin().read_line(&mut _dummy).ok();
                             continue;
                         }
                     }
+                    _ if command.starts_with("db ") => {
+                        let target = command[3..].trim();
+                        if let Ok(break_pc) = target.parse::<usize>() {
+                            // Delete PC breakpoint
+                            if self.breakpoints.remove(&break_pc) {
+                                print!("\x1B[2J\x1B[H");
+                                println!("✅ Breakpoint removed from PC {}", break_pc);
+                            } else {
+                                print!("\x1B[2J\x1B[H");
+                                println!("❌ No breakpoint found at PC {}", break_pc);
+                            }
+                            println!("Press Enter to continue...");
+                            let mut _dummy = String::new();
+                            std::io::stdin().read_line(&mut _dummy).ok();
+                            continue;
+                        } else {
+                            // Delete rule breakpoint
+                            if self.rule_breakpoints.remove(target) {
+                                print!("\x1B[2J\x1B[H");
+                                println!("✅ Rule breakpoint removed for '{}'", target);
+                            } else {
+                                print!("\x1B[2J\x1B[H");
+                                println!("❌ No rule breakpoint found for '{}'", target);
+                            }
+                            println!("Press Enter to continue...");
+                            let mut _dummy = String::new();
+                            std::io::stdin().read_line(&mut _dummy).ok();
+                            continue;
+                        }
+                    }
+                    "toggle" | "t" => {
+                        self.show_toggle_menu();
+                        continue;
+                    }
+                    _ if command.starts_with("r ") => {
+                        let reg_str = command[2..].trim();
+                        if let Ok(reg_num) = reg_str.parse::<usize>() {
+                            self.show_register(ctx, reg_num);
+                        } else {
+                            print!("\x1B[2J\x1B[H");
+                            println!("❌ Invalid register number: {}", reg_str);
+                            println!("Press Enter to continue...");
+                            let mut _dummy = String::new();
+                            std::io::stdin().read_line(&mut _dummy).ok();
+                        }
+                        continue;
+                    }
+                    _ if command.starts_with("toggle ") || command.starts_with("t ") => {
+                        let toggle_target = if command.starts_with("toggle ") {
+                            &command[7..]
+                        } else {
+                            &command[2..]
+                        }
+                        .trim();
+
+                        match toggle_target {
+                            "loops" | "loop" => {
+                                self.auto_break_on_loops = !self.auto_break_on_loops;
+                                print!("\x1B[2J\x1B[H");
+                                println!(
+                                    "🔄 Auto-break on loops: {}",
+                                    if self.auto_break_on_loops {
+                                        "ON"
+                                    } else {
+                                        "OFF"
+                                    }
+                                );
+                            }
+                            "rules" | "rule" => {
+                                self.auto_break_on_rules = !self.auto_break_on_rules;
+                                print!("\x1B[2J\x1B[H");
+                                println!(
+                                    "📞 Auto-break on rules: {}",
+                                    if self.auto_break_on_rules {
+                                        "ON"
+                                    } else {
+                                        "OFF"
+                                    }
+                                );
+                            }
+                            "assert" | "assertions" => {
+                                self.auto_break_on_assert = !self.auto_break_on_assert;
+                                print!("\x1B[2J\x1B[H");
+                                println!(
+                                    "⚠️  Auto-break on assertions: {}",
+                                    if self.auto_break_on_assert {
+                                        "ON"
+                                    } else {
+                                        "OFF"
+                                    }
+                                );
+                            }
+                            "first" | "firstinstruction" => {
+                                self.auto_break_on_first_instruction =
+                                    !self.auto_break_on_first_instruction;
+                                print!("\x1B[2J\x1B[H");
+                                println!(
+                                    "🚀 Auto-break on first instruction: {}",
+                                    if self.auto_break_on_first_instruction {
+                                        "ON"
+                                    } else {
+                                        "OFF"
+                                    }
+                                );
+                            }
+                            _ => {
+                                print!("\x1B[2J\x1B[H");
+                                println!("❌ Unknown toggle target '{}'. Available: loops, rules, assert, first", toggle_target);
+                            }
+                        }
+                        println!("Press Enter to continue...");
+                        let mut _dummy = String::new();
+                        std::io::stdin().read_line(&mut _dummy).ok();
+                        continue;
+                    }
                     "help" | "h" => {
                         self.show_help();
                         continue;
                     }
                     "" => {
-                        // Empty command, just step
-                        self.step_mode = true;
+                        // Empty command, step into
+                        self.step_mode = StepMode::StepInto;
+                        self.target_call_depth = None;
+                        self.target_rule_index = None;
                         break;
                     }
                     _ => {
@@ -1257,77 +1541,296 @@ impl InteractiveDebugger {
     /// Show help information
     fn show_help(&self) {
         print!("\x1B[2J\x1B[H");
-        println!("┌{}┐", "─".repeat(80));
-        println!("│ {:<78} │", "📖 RVM Interactive Debugger - Enhanced Help");
-        println!("├{}┤", "─".repeat(80));
-        println!("│ {:<78} │", "🚀 Basic Commands:");
+        println!("┌{}┐", "─".repeat(100));
+        println!("│ {:<98} │", "📖 RVM Interactive Debugger - Enhanced Help");
+        println!("├{}┤", "─".repeat(100));
+        println!("│ {:<98} │", "🚀 Execution Control Commands:");
         println!(
-            "│ {:<78} │",
-            "  c, continue - Continue execution until next breakpoint"
-        );
-        println!("│ {:<78} │", "  s, step     - Step one instruction");
-        println!(
-            "│ {:<78} │",
-            "  n, next     - Step one instruction (alias for step)"
+            "│ {:<98} │",
+            "  c, continue        - Continue execution until next breakpoint"
         );
         println!(
-            "│ {:<78} │",
-            "  q, quit     - Exit debugger and continue execution"
-        );
-        println!("│ {:<78} │", "");
-        println!("│ {:<78} │", "🔍 Inspection Commands:");
-        println!(
-            "│ {:<78} │",
-            "  l, list     - Show enhanced assembly listing (context)"
+            "│ {:<98} │",
+            "  s, step, si, stepi - Step into (one instruction)"
         );
         println!(
-            "│ {:<78} │",
-            "  lt, list-tabular - Show tabular assembly format"
+            "│ {:<98} │",
+            "  n, next           - Step over (skip function calls)"
         );
         println!(
-            "│ {:<78} │",
-            "  asm, assembly    - Show full enhanced assembly listing"
+            "│ {:<98} │",
+            "  so, stepout, finish - Step out of current function"
         );
         println!(
-            "│ {:<78} │",
-            "  r, registers- Show all registers and their values"
-        );
-        println!("│ {:<78} │", "  cs, call-stack - Show detailed call stack");
-        println!("│ {:<78} │", "  ls, loop-stack - Show detailed loop stack");
-        println!("│ {:<78} │", "  ctx, context   - Show complete VM context");
-        println!(
-            "│ {:<78} │",
-            "  src, source    - Show extended source view with cursor"
-        );
-        println!("│ {:<78} │", "");
-        println!("│ {:<78} │", "🔴 Breakpoint Commands:");
-        println!(
-            "│ {:<78} │",
-            "  b [pc]      - Set breakpoint at specific PC"
-        );
-        println!("│ {:<78} │", "");
-        println!("│ {:<78} │", "⚙️  Environment Variables:");
-        println!(
-            "│ {:<78} │",
-            "  RVM_INTERACTIVE_DEBUG=1  - Enable interactive debugging"
+            "│ {:<98} │",
+            "  fr, finishrule     - Finish current rule execution"
         );
         println!(
-            "│ {:<78} │",
-            "  RVM_STEP_MODE=1         - Break on every instruction"
+            "│ {:<98} │",
+            "  q, quit           - Exit debugger and terminate program"
+        );
+        println!("│ {:<98} │", "");
+        println!("│ {:<98} │", "🔴 Breakpoint Commands:");
+        println!(
+            "│ {:<98} │",
+            "  b [pc|rule_name]  - Set breakpoint at PC or rule/function name"
         );
         println!(
-            "│ {:<78} │",
-            "  RVM_BREAK_ON_LOOPS=1    - Auto-break on loop starts"
+            "│ {:<98} │",
+            "  db [pc|rule_name] - Delete breakpoint at PC or rule/function name"
         );
         println!(
-            "│ {:<78} │",
-            "  RVM_BREAK_ON_RULES=1    - Auto-break on rule calls"
+            "│ {:<98} │",
+            "  bp, breakpoints   - Show all active breakpoints"
+        );
+        println!("│ {:<98} │", "");
+        println!("│ {:<98} │", "🎛️  Toggle Commands:");
+        println!("│ {:<98} │", "  toggle, t         - Show toggle menu");
+        println!(
+            "│ {:<98} │",
+            "  toggle loops      - Toggle auto-break on loop starts"
         );
         println!(
-            "│ {:<78} │",
-            "  RVM_BREAKPOINT=pc1,pc2  - Set initial breakpoints"
+            "│ {:<98} │",
+            "  toggle rules      - Toggle auto-break on rule calls"
         );
-        println!("└{}┘", "─".repeat(80));
+        println!(
+            "│ {:<98} │",
+            "  toggle assert     - Toggle auto-break on assertions"
+        );
+        println!(
+            "│ {:<98} │",
+            "  toggle first      - Toggle auto-break on first instruction"
+        );
+        println!("│ {:<98} │", "");
+        println!("│ {:<98} │", "🔍 Inspection Commands:");
+        println!(
+            "│ {:<98} │",
+            "  l, list           - Show enhanced assembly listing (context)"
+        );
+        println!(
+            "│ {:<98} │",
+            "  lt, list-tabular  - Show tabular assembly format"
+        );
+        println!(
+            "│ {:<98} │",
+            "  asm, assembly     - Show full enhanced assembly listing"
+        );
+        println!(
+            "│ {:<98} │",
+            "  r, registers      - Show all registers and their values"
+        );
+        println!(
+            "│ {:<98} │",
+            "  r <num>           - Show detailed view of specific register"
+        );
+        println!(
+            "│ {:<98} │",
+            "  cs, call-stack    - Show detailed call stack"
+        );
+        println!(
+            "│ {:<98} │",
+            "  ls, loop-stack    - Show detailed loop stack"
+        );
+        println!(
+            "│ {:<98} │",
+            "  ctx, context      - Show complete VM context"
+        );
+        println!(
+            "│ {:<98} │",
+            "  src, source       - Show extended source view with cursor"
+        );
+        println!("│ {:<98} │", "");
+        println!("│ {:<98} │", "⚙️  Environment Variables:");
+        println!(
+            "│ {:<98} │",
+            "  RVM_INTERACTIVE_DEBUG=1     - Enable interactive debugging"
+        );
+        println!(
+            "│ {:<98} │",
+            "  RVM_STEP_MODE=1            - Start in step mode"
+        );
+        println!(
+            "│ {:<98} │",
+            "  RVM_BREAK_ON_LOOPS=1       - Auto-break on loop starts"
+        );
+        println!(
+            "│ {:<98} │",
+            "  RVM_BREAK_ON_RULES=1       - Auto-break on rule calls"
+        );
+        println!(
+            "│ {:<98} │",
+            "  RVM_BREAK_ON_ASSERT=1      - Auto-break on assertions"
+        );
+        println!(
+            "│ {:<98} │",
+            "  RVM_BREAK_ON_FIRST=1       - Auto-break on first instruction"
+        );
+        println!(
+            "│ {:<98} │",
+            "  RVM_BREAKPOINT=pc1,pc2     - Set initial PC breakpoints"
+        );
+        println!(
+            "│ {:<98} │",
+            "  RVM_RULE_BREAKPOINT=r1,r2  - Set initial rule breakpoints"
+        );
+        println!("│ {:<98} │", "");
+        println!("│ {:<98} │", "💡 Examples:");
+        println!(
+            "│ {:<98} │",
+            "  b 42                       - Break at PC 42"
+        );
+        println!(
+            "│ {:<98} │",
+            "  b data.example.my_function - Break at function entry"
+        );
+        println!(
+            "│ {:<98} │",
+            "  n                          - Step over function calls"
+        );
+        println!(
+            "│ {:<98} │",
+            "  so                         - Step out of current function"
+        );
+        println!("└{}┘", "─".repeat(100));
+        println!("Press Enter to return to debugger...");
+        let mut _dummy = String::new();
+        std::io::stdin().read_line(&mut _dummy).ok();
+    }
+
+    /// Show all active breakpoints
+    fn show_breakpoints(&self, program: &Program) {
+        print!("\x1B[2J\x1B[H");
+        println!("┌{}┐", "─".repeat(100));
+        println!("│ {:<98} │", "🔴 Active Breakpoints");
+        println!("├{}┤", "─".repeat(100));
+
+        // Show PC breakpoints
+        if !self.breakpoints.is_empty() {
+            println!("│ {:<98} │", "📍 PC Breakpoints:");
+            let mut pc_breakpoints: Vec<_> = self.breakpoints.iter().collect();
+            pc_breakpoints.sort();
+            for &pc in pc_breakpoints {
+                println!("│ {:<98} │", format!("  PC {}", pc));
+            }
+            println!("│ {:<98} │", "");
+        }
+
+        // Show rule breakpoints
+        if !self.rule_breakpoints.is_empty() {
+            println!("│ {:<98} │", "🎯 Rule/Function Breakpoints:");
+            let mut rule_breakpoints: Vec<_> = self.rule_breakpoints.iter().collect();
+            rule_breakpoints.sort();
+            for rule_name in rule_breakpoints {
+                // Try to find if this rule exists in the program
+                let exists = program
+                    .rule_infos
+                    .iter()
+                    .any(|rule| &rule.name == rule_name);
+                let status = if exists { "✅" } else { "❓" };
+                println!("│ {:<98} │", format!("  {} {}", status, rule_name));
+            }
+            println!("│ {:<98} │", "");
+        }
+
+        if self.breakpoints.is_empty() && self.rule_breakpoints.is_empty() {
+            println!("│ {:<98} │", "  No breakpoints set");
+        }
+
+        // Show current step mode
+        let step_mode_desc = match &self.step_mode {
+            StepMode::Continue => "Continue (run until breakpoint)",
+            StepMode::StepInto => "Step Into (break on every instruction)",
+            StepMode::StepOver => "Step Over (skip function calls)",
+            StepMode::StepOut => "Step Out (return to caller)",
+            StepMode::FinishRule => "Finish Rule (complete current rule)",
+        };
+        println!(
+            "│ {:<98} │",
+            format!("🎛️  Current Mode: {}", step_mode_desc)
+        );
+
+        if let Some(depth) = self.target_call_depth {
+            println!("│ {:<98} │", format!("📊 Target Call Depth: {}", depth));
+        }
+        if let Some(rule_idx) = self.target_rule_index {
+            if let Some(rule_info) = program.rule_infos.get(rule_idx as usize) {
+                println!("│ {:<98} │", format!("🎯 Target Rule: {}", rule_info.name));
+            }
+        }
+
+        println!("└{}┘", "─".repeat(100));
+        println!("Press Enter to return to debugger...");
+        let mut _dummy = String::new();
+        std::io::stdin().read_line(&mut _dummy).ok();
+    }
+
+    /// Show toggle menu for debugger behaviors
+    fn show_toggle_menu(&self) {
+        print!("\x1B[2J\x1B[H");
+        println!("┌{}┐", "─".repeat(100));
+        println!("│ {:<98} │", "🎛️  Debugger Behavior Toggles");
+        println!("├{}┤", "─".repeat(100));
+
+        println!("│ {:<98} │", "Current Settings:");
+        println!("│ {:<98} │", "");
+
+        let on_off = |enabled: bool| if enabled { "ON ✅" } else { "OFF ❌" };
+
+        println!(
+            "│ {:<98} │",
+            format!(
+                "  🔄 Auto-break on loops:        {}",
+                on_off(self.auto_break_on_loops)
+            )
+        );
+        println!(
+            "│ {:<98} │",
+            format!(
+                "  📞 Auto-break on rules:        {}",
+                on_off(self.auto_break_on_rules)
+            )
+        );
+        println!(
+            "│ {:<98} │",
+            format!(
+                "  ⚠️  Auto-break on assertions:   {}",
+                on_off(self.auto_break_on_assert)
+            )
+        );
+        println!(
+            "│ {:<98} │",
+            format!(
+                "  🚀 Auto-break on first instr:  {}",
+                on_off(self.auto_break_on_first_instruction)
+            )
+        );
+        println!("│ {:<98} │", "");
+
+        println!("│ {:<98} │", "Commands to toggle:");
+        println!(
+            "│ {:<98} │",
+            "  toggle loops      - Toggle breaking on loop starts"
+        );
+        println!(
+            "│ {:<98} │",
+            "  toggle rules      - Toggle breaking on rule calls"
+        );
+        println!(
+            "│ {:<98} │",
+            "  toggle assert     - Toggle breaking on assert conditions"
+        );
+        println!(
+            "│ {:<98} │",
+            "  toggle first      - Toggle breaking on first instruction"
+        );
+        println!("│ {:<98} │", "");
+        println!(
+            "│ {:<98} │",
+            "Or use short forms: t loops, t rules, t assert, t first"
+        );
+
+        println!("└{}┘", "─".repeat(100));
         println!("Press Enter to return to debugger...");
         let mut _dummy = String::new();
         std::io::stdin().read_line(&mut _dummy).ok();
@@ -1469,5 +1972,113 @@ impl InteractiveDebugger {
         println!("Press Enter to return to debugger...");
         let mut _dummy = String::new();
         std::io::stdin().read_line(&mut _dummy).ok();
+    }
+
+    fn show_register(&self, ctx: &DebugContext, reg_num: usize) {
+        print!("\x1B[2J\x1B[H");
+
+        if reg_num >= ctx.registers.len() {
+            println!(
+                "❌ Register R{} is out of bounds (max: R{})",
+                reg_num,
+                ctx.registers.len().saturating_sub(1)
+            );
+            println!("Press Enter to continue...");
+            let mut _dummy = String::new();
+            std::io::stdin().read_line(&mut _dummy).ok();
+            return;
+        }
+
+        println!("┌{}┐", "─".repeat(80));
+        println!("│ {:<78} │", format!("📊 Register R{}", reg_num));
+        println!("├{}┤", "─".repeat(80));
+
+        let value = &ctx.registers[reg_num];
+        let formatted = self.format_value_detailed(value);
+        for line in formatted.lines() {
+            println!("│ {:<78} │", line);
+        }
+
+        println!("└{}┘", "─".repeat(80));
+        println!("Press Enter to continue...");
+        let mut _dummy = String::new();
+        std::io::stdin().read_line(&mut _dummy).ok();
+    }
+
+    fn format_value(&self, value: &Value) -> String {
+        match value {
+            Value::Undefined => "undefined".to_string(),
+            Value::Null => "null".to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Number(n) => format!("{:?}", n),
+            Value::String(s) => format!("\"{}\"", s),
+            Value::Array(arr) => format!("[...] (len: {})", arr.len()),
+            Value::Object(obj) => format!("{{...}} (keys: {})", obj.len()),
+            Value::Set(set) => format!("{{...}} (size: {})", set.len()),
+        }
+    }
+
+    fn format_value_detailed(&self, value: &Value) -> String {
+        match value {
+            Value::Undefined => "Type: Undefined\nValue: undefined".to_string(),
+            Value::Null => "Type: Null\nValue: null".to_string(),
+            Value::Bool(b) => format!("Type: Boolean\nValue: {}", b),
+            Value::Number(n) => format!("Type: Number\nValue: {:?}", n),
+            Value::String(s) => format!("Type: String\nLength: {}\nValue: {:?}", s.len(), s),
+            Value::Array(arr) => {
+                let mut result = format!("Type: Array\nLength: {}\n", arr.len());
+                if arr.len() <= 10 {
+                    result.push_str("Elements:\n");
+                    for (i, elem) in arr.iter().enumerate() {
+                        let elem_str = self.format_value(elem);
+                        let truncated = if elem_str.len() > 40 {
+                            format!("{}...", &elem_str[..37])
+                        } else {
+                            elem_str
+                        };
+                        result.push_str(&format!("  [{}]: {}\n", i, truncated));
+                    }
+                } else {
+                    result.push_str("Elements: (too many to display, use array inspection)\n");
+                }
+                result
+            }
+            Value::Object(obj) => {
+                let mut result = format!("Type: Object\nKeys: {}\n", obj.len());
+                if obj.len() <= 10 {
+                    result.push_str("Fields:\n");
+                    for (key, val) in obj.iter() {
+                        let val_str = self.format_value(val);
+                        let truncated = if val_str.len() > 40 {
+                            format!("{}...", &val_str[..37])
+                        } else {
+                            val_str
+                        };
+                        result.push_str(&format!("  {}: {}\n", key, truncated));
+                    }
+                } else {
+                    result.push_str("Fields: (too many to display, use object inspection)\n");
+                }
+                result
+            }
+            Value::Set(set) => {
+                let mut result = format!("Type: Set\nSize: {}\n", set.len());
+                if set.len() <= 10 {
+                    result.push_str("Elements:\n");
+                    for (i, elem) in set.iter().enumerate() {
+                        let elem_str = self.format_value(elem);
+                        let truncated = if elem_str.len() > 40 {
+                            format!("{}...", &elem_str[..37])
+                        } else {
+                            elem_str
+                        };
+                        result.push_str(&format!("  {}: {}\n", i, truncated));
+                    }
+                } else {
+                    result.push_str("Elements: (too many to display, use set inspection)\n");
+                }
+                result
+            }
+        }
     }
 }

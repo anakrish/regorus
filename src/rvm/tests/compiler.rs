@@ -81,20 +81,26 @@ mod tests {
             entrypoint
         );
 
+        // Enable debugger environment variables BEFORE creating the VM
+        std::env::set_var("RVM_INTERACTIVE_DEBUG", "1");
+        std::env::set_var("RVM_STEP_MODE", "1");
+        std::env::set_var("RVM_BREAK_ON_FIRST", "1"); // Break on first instruction instead of assert
+
+        // Disable other auto-break behaviors to ensure clean debugging experience
+        std::env::set_var("RVM_BREAK_ON_ASSERT", "0"); // Disable auto-break on assertions
+        std::env::set_var("RVM_BREAK_ON_LOOPS", "0"); // Disable auto-break on loops
+        std::env::set_var("RVM_BREAK_ON_RULES", "0"); // Disable auto-break on rules
+
         // Compile the policy to RVM instructions
         let program = Compiler::compile_from_policy(compiled_policy, entrypoint)?;
 
-        // Create a VM and load the program
+        // Create a VM and load the program (debugger will read env vars during VM creation)
         let mut vm = RegoVM::new();
         vm.load_program(program);
 
         // Set data and input in the VM
         vm.set_data(data.clone());
         vm.set_input(input.clone());
-
-        // Enable debugger environment variables for this run
-        std::env::set_var("RVM_INTERACTIVE_DEBUG", "1");
-        std::env::set_var("RVM_STEP_MODE", "1");
 
         // Run the VM with debugger enabled
         let result = vm.execute()?;

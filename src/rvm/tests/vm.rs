@@ -337,7 +337,7 @@ mod tests {
         vm.load_program(program);
 
         // Execute
-        vm.execute()
+        vm.execute().map_err(|e| anyhow::anyhow!("{}", e))
     }
 
     fn run_vm_test_suite(file: &str) -> Result<()> {

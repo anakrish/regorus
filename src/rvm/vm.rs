@@ -7,7 +7,82 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
-use anyhow::{bail, Result};
+use thiserror::Error;
+
+/// VM execution errors
+#[derive(Error, Debug)]
+pub enum VmError {
+    #[error("Execution stopped: exceeded maximum instruction limit of {limit}")]
+    InstructionLimitExceeded { limit: usize },
+    
+    #[error("Literal index {index} out of bounds")]
+    LiteralIndexOutOfBounds { index: usize },
+    
+    #[error("Register {register} does not contain an object")]
+    RegisterNotObject { register: u8 },
+    
+    #[error("ObjectCreate: template is not an object")]
+    ObjectCreateInvalidTemplate,
+    
+    #[error("Register {register} does not contain an array")]
+    RegisterNotArray { register: u8 },
+    
+    #[error("Register {register} does not contain a set")]
+    RegisterNotSet { register: u8 },
+    
+    #[error("Rule index {index} out of bounds")]
+    RuleIndexOutOfBounds { index: u16 },
+    
+    #[error("Rule index {index} has no info")]
+    RuleInfoMissing { index: u16 },
+    
+    #[error("Invalid object create params index: {index}")]
+    InvalidObjectCreateParams { index: u16 },
+    
+    #[error("Invalid template literal index: {index}")]
+    InvalidTemplateLiteralIndex { index: u16 },
+    
+    #[error("Builtin function expects exactly {expected} arguments, got {actual}")]
+    BuiltinArgumentMismatch { expected: u16, actual: usize },
+    
+    #[error("Builtin function not resolved: {name}")]
+    BuiltinNotResolved { name: String },
+    
+    #[error("Cannot add {left:?} and {right:?}")]
+    InvalidAddition { left: Value, right: Value },
+    
+    #[error("Cannot subtract {left:?} and {right:?}")]
+    InvalidSubtraction { left: Value, right: Value },
+    
+    #[error("Cannot multiply {left:?} and {right:?}")]
+    InvalidMultiplication { left: Value, right: Value },
+    
+    #[error("Cannot divide {left:?} and {right:?}")]
+    InvalidDivision { left: Value, right: Value },
+    
+    #[error("modulo on floating-point number")]
+    ModuloOnFloat,
+    
+    #[error("Cannot modulo {left:?} and {right:?}")]
+    InvalidModulo { left: Value, right: Value },
+    
+    #[error("Cannot iterate over {value:?}")]
+    InvalidIteration { value: Value },
+    
+    #[error("Assertion failed")]
+    AssertionFailed,
+    
+    #[error("Arithmetic error: {0}")]
+    ArithmeticError(String),
+}
+
+impl From<anyhow::Error> for VmError {
+    fn from(err: anyhow::Error) -> Self {
+        VmError::ArithmeticError(alloc::format!("{}", err))
+    }
+}
+
+pub type Result<T> = core::result::Result<T, VmError>;
 
 extern crate alloc;
 
@@ -340,10 +415,9 @@ impl RegoVM {
         while self.pc < program.instructions.len() {
             // Check instruction execution limit
             if self.executed_instructions >= self.max_instructions {
-                bail!(
-                    "Execution stopped: exceeded maximum instruction limit of {}",
-                    self.max_instructions
-                );
+                return Err(VmError::InstructionLimitExceeded {
+                    limit: self.max_instructions,
+                });
             }
 
             self.executed_instructions += 1;
@@ -407,7 +481,9 @@ impl RegoVM {
                             dest, self.registers[dest as usize]
                         );
                     } else {
-                        bail!("Literal index {} out of bounds", literal_idx);
+                        return Err(VmError::LiteralIndexOutOfBounds {
+                            index: literal_idx as usize,
+                        });
                     }
                 }
 
@@ -657,9 +733,9 @@ impl RegoVM {
                         obj_mut.insert(key_value, value_value);
                         self.registers[obj as usize] = obj_value;
                     } else {
-                        // Restore the original value and bail
+                        // Restore the original value and return error
                         self.registers[obj as usize] = obj_value;
-                        bail!("ObjectSet: register {} does not contain an object", obj);
+                        return Err(VmError::RegisterNotObject { register: obj });
                     }
                 }
 
@@ -668,7 +744,9 @@ impl RegoVM {
                         .instruction_data
                         .get_object_create_params(params_index)
                         .ok_or_else(|| {
-                            anyhow::anyhow!("Invalid object create params index: {}", params_index)
+                            VmError::InvalidObjectCreateParams {
+                                index: params_index,
+                            }
                         })?;
 
                     // Start with template object (always present)
@@ -676,10 +754,9 @@ impl RegoVM {
                         .literals
                         .get(params.template_literal_idx as usize)
                         .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "Invalid template literal index: {}",
-                                params.template_literal_idx
-                            )
+                            VmError::InvalidTemplateLiteralIndex {
+                                index: params.template_literal_idx,
+                            }
                         })?
                         .clone();
 
@@ -724,7 +801,7 @@ impl RegoVM {
                             obj_mut.insert(key_value, value_value);
                         }
                     } else {
-                        bail!("ObjectCreate: template is not an object");
+                        return Err(VmError::ObjectCreateInvalidTemplate);
                     }
 
                     // Store result in destination register
@@ -757,7 +834,9 @@ impl RegoVM {
                         let result = container_value[key_value].clone();
                         self.registers[dest as usize] = result;
                     } else {
-                        bail!("IndexLiteral: literal index {} out of bounds", literal_idx);
+                        return Err(VmError::LiteralIndexOutOfBounds {
+                            index: literal_idx as usize,
+                        });
                     }
                 }
 
@@ -777,9 +856,9 @@ impl RegoVM {
                         arr_mut.push(value_to_push);
                         self.registers[arr as usize] = arr_value;
                     } else {
-                        // Restore the original value and bail
+                        // Restore the original value and return error
                         self.registers[arr as usize] = arr_value;
-                        bail!("ArrayPush: register {} does not contain an array", arr);
+                        return Err(VmError::RegisterNotArray { register: arr });
                     }
                 }
 
@@ -800,9 +879,9 @@ impl RegoVM {
                         set_mut.insert(value_to_add);
                         self.registers[set as usize] = set_value;
                     } else {
-                        // Restore the original value and bail
+                        // Restore the original value and return error
                         self.registers[set as usize] = set_value;
-                        bail!("SetAdd: register {} does not contain a set", set);
+                        return Err(VmError::RegisterNotSet { register: set });
                     }
                 }
 
@@ -1050,7 +1129,7 @@ impl RegoVM {
 
         // Check bounds
         if rule_idx >= self.rule_cache.len() {
-            bail!("Rule index {} out of bounds", rule_index);
+            return Err(VmError::RuleIndexOutOfBounds { index: rule_index });
         }
 
         // Check cache first
@@ -1069,7 +1148,7 @@ impl RegoVM {
             .program
             .rule_infos
             .get(rule_idx)
-            .ok_or_else(|| anyhow::anyhow!("Rule index {} has no info", rule_index))?
+            .ok_or_else(|| VmError::RuleInfoMissing { index: rule_index })?
             .clone();
 
         let rule_type = rule_info.rule_type.clone();
@@ -1250,12 +1329,10 @@ impl RegoVM {
                 builtin_info.num_args,
                 args.len()
             );
-            bail!(
-                "Builtin function {} expects exactly {} arguments, got {}",
-                builtin_info.name,
-                builtin_info.num_args,
-                args.len()
-            );
+            return Err(VmError::BuiltinArgumentMismatch {
+                expected: builtin_info.num_args,
+                actual: args.len(),
+            });
         }
 
         // Use resolved builtin from program via vector indexing
@@ -1287,7 +1364,9 @@ impl RegoVM {
             debug!("Stored builtin result in register {}", params.dest);
         } else {
             debug!("Builtin function not resolved: {}", builtin_info.name);
-            bail!("Builtin function not resolved: {}", builtin_info.name);
+            return Err(VmError::BuiltinNotResolved {
+                name: builtin_info.name.clone(),
+            });
         }
 
         Ok(())
@@ -1346,7 +1425,10 @@ impl RegoVM {
     fn add_values(&self, a: &Value, b: &Value) -> Result<Value> {
         match (a, b) {
             (Value::Number(x), Value::Number(y)) => Ok(Value::from(x.add(y)?)),
-            _ => bail!("Cannot add {:?} and {:?}", a, b),
+            _ => Err(VmError::InvalidAddition {
+                left: a.clone(),
+                right: b.clone(),
+            }),
         }
     }
 
@@ -1354,7 +1436,10 @@ impl RegoVM {
     fn sub_values(&self, a: &Value, b: &Value) -> Result<Value> {
         match (a, b) {
             (Value::Number(x), Value::Number(y)) => Ok(Value::from(x.sub(y)?)),
-            _ => bail!("Cannot subtract {:?} and {:?}", a, b),
+            _ => Err(VmError::InvalidSubtraction {
+                left: a.clone(),
+                right: b.clone(),
+            }),
         }
     }
 
@@ -1362,7 +1447,10 @@ impl RegoVM {
     fn mul_values(&self, a: &Value, b: &Value) -> Result<Value> {
         match (a, b) {
             (Value::Number(x), Value::Number(y)) => Ok(Value::from(x.mul(y)?)),
-            _ => bail!("Cannot multiply {:?} and {:?}", a, b),
+            _ => Err(VmError::InvalidMultiplication {
+                left: a.clone(),
+                right: b.clone(),
+            }),
         }
     }
 
@@ -1379,7 +1467,10 @@ impl RegoVM {
 
                 Ok(Value::from(x.clone().divide(y)?))
             }
-            _ => bail!("Cannot divide {:?} and {:?}", a, b),
+            _ => Err(VmError::InvalidDivision {
+                left: a.clone(),
+                right: b.clone(),
+            }),
         }
     }
 
@@ -1396,12 +1487,15 @@ impl RegoVM {
 
                 // Check for integer requirement like the interpreter
                 if !x.is_integer() || !y.is_integer() {
-                    bail!("modulo on floating-point number");
+                    return Err(VmError::ModuloOnFloat);
                 }
 
                 Ok(Value::from(x.clone().modulo(y)?))
             }
-            _ => bail!("Cannot modulo {:?} and {:?}", a, b),
+            _ => Err(VmError::InvalidModulo {
+                left: a.clone(),
+                right: b.clone(),
+            }),
         }
     }
 
@@ -1490,7 +1584,9 @@ impl RegoVM {
                 }
             }
             _ => {
-                bail!("Cannot iterate over {:?}", collection_value);
+                return Err(VmError::InvalidIteration {
+                    value: collection_value.clone(),
+                });
             }
         };
 
@@ -1931,7 +2027,7 @@ impl RegoVM {
         } else {
             // Outside of loop context, failed condition means this body/definition fails
             debug!("Condition failed outside loop - body failed");
-            return Err(anyhow::anyhow!("Assertion failed"));
+            return Err(VmError::AssertionFailed);
         }
 
         Ok(())

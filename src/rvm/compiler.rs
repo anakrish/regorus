@@ -28,7 +28,60 @@ enum IndexOperation {
 }
 
 pub type Register = u8;
-use anyhow::{bail, Result};
+
+#[derive(thiserror::Error, Debug)]
+pub enum CompilerError {
+    #[error("Not a builtin function: {name}")]
+    NotBuiltinFunction { name: String },
+
+    #[error("Unknown builtin function: {name}")]
+    UnknownBuiltinFunction { name: String },
+
+    #[error("internal: missing context for yield")]
+    MissingYieldContext,
+
+    #[error(
+        "Direct access to 'data' root is not allowed. Use a specific path like 'data.package.rule'"
+    )]
+    DirectDataAccess,
+
+    #[error("Not a simple reference chain")]
+    NotSimpleReferenceChain,
+
+    #[error("Unsupported expression type in chained reference")]
+    UnsupportedChainedExpression,
+
+    #[error("internal: no rule type found for '{rule_path}'")]
+    RuleTypeNotFound { rule_path: String },
+
+    #[error("unary - can only be used with numeric literals")]
+    InvalidUnaryMinus,
+
+    #[error("Unknown function: '{name}'")]
+    UnknownFunction { name: String },
+
+    #[error("SomeIn should have been hoisted as a loop")]
+    SomeInNotHoisted,
+
+    #[error("Invalid function expression")]
+    InvalidFunctionExpression,
+
+    #[error("Invalid function expression with package")]
+    InvalidFunctionExpressionWithPackage,
+
+    #[error("Compilation error: {message}")]
+    General { message: String },
+}
+
+impl From<anyhow::Error> for CompilerError {
+    fn from(err: anyhow::Error) -> Self {
+        CompilerError::General {
+            message: alloc::format!("{}", err),
+        }
+    }
+}
+
+pub type Result<T> = core::result::Result<T, CompilerError>;
 
 #[derive(Debug, Clone, Default)]
 struct Scope {
@@ -128,7 +181,9 @@ impl<'a> Compiler<'a> {
     /// Get builtin index for a builtin function
     fn get_builtin_index(&mut self, builtin_name: &str) -> Result<u16> {
         if !self.is_builtin(builtin_name) {
-            bail!("Not a builtin function: {}", builtin_name);
+            return Err(CompilerError::NotBuiltinFunction {
+                name: builtin_name.to_string(),
+            });
         }
 
         // Check if we already have an index for this builtin
@@ -142,7 +197,9 @@ impl<'a> Compiler<'a> {
         } else if let Some(builtin_fcn) = builtins::BUILTINS.get(builtin_name) {
             builtin_fcn.1 as u16 // Second element is the number of arguments
         } else {
-            bail!("Unknown builtin function: {}", builtin_name);
+            return Err(CompilerError::UnknownBuiltinFunction {
+                name: builtin_name.to_string(),
+            });
         };
 
         // Create builtin info and add it to the program
@@ -307,7 +364,7 @@ impl<'a> Compiler<'a> {
             }
             Ok(())
         } else {
-            bail!("internal: missing context for yield")
+            return Err(CompilerError::MissingYieldContext);
         }
     }
 
@@ -392,7 +449,7 @@ impl<'a> Compiler<'a> {
         } else if root_var == "data" {
             if path_parts.len() == 1 {
                 // Just "data" - this is typically an error as it accesses the entire data document
-                bail!("Direct access to 'data' root is not allowed. Use a specific path like 'data.package.rule'");
+                return Err(CompilerError::DirectDataAccess);
             } else {
                 // "data.pkg.rule.field..." - find longest rule prefix
                 self.compile_data_reference(&path_parts[1..], span)?
@@ -462,7 +519,7 @@ impl<'a> Compiler<'a> {
                 }
                 _ => {
                     // Not a simple reference chain
-                    bail!("Not a simple reference chain");
+                    return Err(CompilerError::NotSimpleReferenceChain);
                 }
             }
         }
@@ -735,7 +792,7 @@ impl<'a> Compiler<'a> {
                 Ok(dest)
             }
             _ => {
-                bail!("Unsupported expression type in chained reference")
+                return Err(CompilerError::UnsupportedChainedExpression);
             }
         }
     }
@@ -856,17 +913,21 @@ impl<'a> Compiler<'a> {
             .collect();
 
         if rule_types.len() > 1 {
-            bail!(
-                "internal: rule '{}' has multiple types: {:?}",
-                rule_path,
-                rule_types
-            );
+            return Err(CompilerError::General {
+                message: alloc::format!(
+                    "internal: rule '{}' has multiple types: {:?}",
+                    rule_path,
+                    rule_types
+                ),
+            });
         }
 
         rule_types
             .into_iter()
             .next()
-            .ok_or_else(|| anyhow::anyhow!("internal: no rule type found for '{}'", rule_path))
+            .ok_or_else(|| CompilerError::RuleTypeNotFound {
+                rule_path: rule_path.to_string(),
+            })
     }
 
     /// Get or assign a rule index for CallRule instructions
@@ -1554,7 +1615,7 @@ impl<'a> Compiler<'a> {
                         dest
                     }
                     _ => {
-                        bail!(span.error("unary - can only be used with numeric literals"));
+                        return Err(CompilerError::InvalidUnaryMinus);
                     }
                 }
             }
@@ -2286,7 +2347,7 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn hoist_loops_and_emit_context_yield(&mut self) -> Result<(), anyhow::Error> {
+    fn hoist_loops_and_emit_context_yield(&mut self) -> Result<()> {
         // Check if we're in an Every quantifier context - if so, don't emit context yield
         // Every quantifiers are assertions, not value-producing expressions
         if let Some(context) = self.context_stack.last() {
@@ -2485,7 +2546,7 @@ impl<'a> Compiler<'a> {
             }
             crate::ast::Literal::SomeIn { .. } => {
                 // Should have been handled by loop hoisting
-                return Err(anyhow::anyhow!("SomeIn should have been hoisted as a loop"));
+                return Err(CompilerError::SomeInNotHoisted);
             }
             crate::ast::Literal::Every {
                 key,
@@ -2935,8 +2996,8 @@ impl<'a> Compiler<'a> {
         span: Span,
     ) -> Result<Register> {
         // Get the function path
-        let fcn_path = get_path_string(fcn, None)
-            .map_err(|_| anyhow::anyhow!("Invalid function expression"))?;
+        let fcn_path =
+            get_path_string(fcn, None).map_err(|_| CompilerError::InvalidFunctionExpression)?;
 
         let _span = span!(tracing::Level::DEBUG, "compile_function_call");
         let _enter = _span.enter();
@@ -2954,7 +3015,7 @@ impl<'a> Compiler<'a> {
         } else {
             // If not found, try with current package prefix
             let with_package = get_path_string(fcn, Some(&self.current_package))
-                .map_err(|_| anyhow::anyhow!("Invalid function expression with package"))?;
+                .map_err(|_| CompilerError::InvalidFunctionExpressionWithPackage)?;
             debug!("Trying with package prefix: '{}'", with_package);
             with_package
         };
@@ -3031,7 +3092,9 @@ impl<'a> Compiler<'a> {
                 "Function '{}' not found as user-defined or builtin",
                 original_fcn_path
             );
-            bail!("Unknown function: '{}'", original_fcn_path);
+            return Err(CompilerError::UnknownFunction {
+                name: original_fcn_path.to_string(),
+            });
         }
 
         debug!(

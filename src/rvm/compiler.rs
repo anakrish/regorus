@@ -18,15 +18,6 @@ use alloc::vec::Vec;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Represents an indexing operation for dynamic chaining
-#[derive(Debug, Clone)]
-enum IndexOperation {
-    /// Literal index (constant at compile time)
-    Literal(Value),
-    /// Dynamic index (needs to be computed at runtime)
-    Dynamic(ExprRef),
-}
-
 pub type Register = u8;
 
 #[derive(thiserror::Error, Debug)]
@@ -59,6 +50,9 @@ pub enum CompilerError {
 
     #[error("Unknown function: '{name}'")]
     UnknownFunction { name: String },
+
+    #[error("Undefined variable: '{name}'")]
+    UndefinedVariable { name: String },
 
     #[error("SomeIn should have been hoisted as a loop")]
     SomeInNotHoisted,
@@ -126,8 +120,9 @@ pub struct Compiler<'a> {
     rule_index_map: HashMap<String, u16>, // Maps rule paths to their assigned rule indices
     rule_worklist: Vec<String>,           // Rules that need to be compiled
     rule_definitions: Vec<Vec<Vec<usize>>>, // rule_index -> Vec<definition> where definition is Vec<body_entry_point>
-    rule_types: Vec<RuleType>,              // rule_index -> true if set rule, false if regular rule
-    rule_function_params: Vec<Option<Vec<String>>>, // rule_index -> Some(param_names) for function rules, None for others
+    rule_definition_function_params: Vec<Vec<Option<Vec<String>>>>, // rule_index -> Vec<definition> -> Some(param_names) for function defs, None for others
+    rule_types: Vec<RuleType>, // rule_index -> true if set rule, false if regular rule
+    rule_function_param_count: Vec<Option<usize>>, // rule_index -> Some(param_count) for function rules, None for others
     rule_result_registers: Vec<u8>, // rule_index -> result register allocated for this rule
     rule_num_registers: Vec<u8>,    // rule_index -> number of registers used by this rule
     // Context stack for output expression handling
@@ -143,20 +138,21 @@ pub struct Compiler<'a> {
 }
 
 impl<'a> Compiler<'a> {
-    pub fn with_policy(policy: &'a CompiledPolicy, package: String) -> Self {
+    pub fn with_policy(policy: &'a CompiledPolicy) -> Self {
         Self {
             program: Program::new(),
             spans: Vec::new(),
             register_counter: 1,
             scopes: vec![Scope::default()],
             policy,
-            current_package: package,
+            current_package: "".to_string(), // Default package, will be set dynamically during compilation
             current_module_index: 0, // Will be set from rule's source file index during compilation
             rule_index_map: HashMap::new(),
             rule_worklist: Vec::new(),
             rule_definitions: Vec::new(),
+            rule_definition_function_params: Vec::new(),
             rule_types: Vec::new(),
-            rule_function_params: Vec::new(),
+            rule_function_param_count: Vec::new(),
             rule_result_registers: Vec::new(),
             rule_num_registers: Vec::new(),
             context_stack: vec![], // Default context
@@ -425,12 +421,77 @@ impl<'a> Compiler<'a> {
     /// Compile chained reference expressions (Var, RefDot, RefBrack chains)
     /// Implements the logic similar to eval_chained_ref_dot_or_brack in interpreter
     fn compile_chained_ref(&mut self, expr: &ExprRef, span: &Span) -> Result<Register> {
-        // First, extract the constant prefix path and remaining dynamic parts
-        let (constant_path, remaining_expr) = self.extract_constant_path_prefix(expr)?;
+        // Extract constant path prefix and remaining dynamic parts inline
+        let mut path_components = Vec::new();
+        let mut current_expr = expr;
+        loop {
+            match current_expr.as_ref() {
+                Expr::Var { span: v, .. } => {
+                    // Variable name - this is the root of our path
+                    path_components.push(v.text().to_string());
+                    break;
+                }
+                Expr::RefDot { refr, field, .. } => {
+                    // Field access - always constant
+                    path_components.push(field.0.text().to_string());
+                    current_expr = refr;
+                }
+                Expr::RefBrack { refr, index, .. } => {
+                    // Bracket access - only constant if index is a string literal
+                    if let Expr::String { span: s, .. } = index.as_ref() {
+                        // String literal index - this is constant
+                        path_components.push(s.text().to_string());
+                        current_expr = refr;
+                    } else {
+                        // Dynamic index - we need to handle this properly:
+                        // 1. Compile the refr part recursively
+                        let base_reg = self.compile_chained_ref(refr, refr.span())?;
 
-        // If we have no constant path, fall back to old behavior
+                        // 2. Compile the index expression
+                        let index_reg =
+                            self.compile_rego_expr_with_span(index, index.span(), false)?;
+
+                        // 3. Emit indexing instruction
+                        let result_reg = self.alloc_register();
+                        self.emit_instruction(
+                            Instruction::Index {
+                                dest: result_reg,
+                                container: base_reg,
+                                key: index_reg,
+                            },
+                            span,
+                        );
+
+                        // 4. Apply any accumulated suffix path components (field accesses)
+                        if path_components.is_empty() {
+                            return Ok(result_reg);
+                        } else {
+                            path_components.reverse();
+                            return self.compile_field_access_chain(
+                                result_reg,
+                                &path_components
+                                    .iter()
+                                    .map(|s| s.as_str())
+                                    .collect::<Vec<_>>(),
+                                span,
+                            );
+                        }
+                    }
+                }
+                _ => {
+                    // Not a simple reference chain - this should be a compile error
+                    return Err(CompilerError::UnsupportedChainedExpression);
+                }
+            }
+        }
+
+        // Build constant path
+        path_components.reverse();
+        let constant_path = path_components.join(".");
+
+        // If we have no constant path, this is an internal error - should never happen
         if constant_path.is_empty() {
-            return self.compile_chained_ref_fallback(expr, span);
+            panic!("Internal error: constant_path is empty after processing chained reference");
         }
 
         let path_parts: Vec<&str> = constant_path.split('.').collect();
@@ -448,8 +509,8 @@ impl<'a> Compiler<'a> {
             }
         } else if root_var == "data" {
             if path_parts.len() == 1 {
-                // Just "data" - this is typically an error as it accesses the entire data document
-                return Err(CompilerError::DirectDataAccess);
+                // Just "data" - load data register
+                self.resolve_variable("data", span)?
             } else {
                 // "data.pkg.rule.field..." - find longest rule prefix
                 self.compile_data_reference(&path_parts[1..], span)?
@@ -472,167 +533,15 @@ impl<'a> Compiler<'a> {
                 {
                     result
                 } else {
-                    // No rule found - this might be an undefined variable, fall back to old behavior
-                    return self.compile_chained_ref_fallback(expr, span);
+                    // No rule found - this is an undefined variable
+                    return Err(CompilerError::UndefinedVariable {
+                        name: root_var.to_string(),
+                    });
                 }
             }
         };
 
-        // Now apply any remaining dynamic indexing operations
-        if let Some(remaining) = remaining_expr {
-            self.compile_dynamic_indexing_chain(base_reg, &remaining, span)
-        } else {
-            Ok(base_reg)
-        }
-    }
-
-    /// Extract the constant (compile-time known) prefix of a path and return the remaining dynamic part
-    /// Returns (constant_path_string, remaining_expr_for_dynamic_indexing)
-    fn extract_constant_path_prefix(&self, expr: &ExprRef) -> Result<(String, Option<ExprRef>)> {
-        let mut path_components = Vec::new();
-        let mut current_expr = expr;
-
-        loop {
-            match current_expr.as_ref() {
-                Expr::Var { span: v, .. } => {
-                    // Variable name - this is the root of our path
-                    path_components.push(v.text().to_string());
-                    break;
-                }
-                Expr::RefDot { refr, field, .. } => {
-                    // Field access - always constant
-                    path_components.push(field.0.text().to_string());
-                    current_expr = refr;
-                }
-                Expr::RefBrack { refr, index, .. } => {
-                    // Bracket access - only constant if index is a string literal
-                    if let Expr::String { span: s, .. } = index.as_ref() {
-                        // String literal index - this is constant
-                        path_components.push(s.text().to_string());
-                        current_expr = refr;
-                    } else {
-                        // Dynamic index - stop here and return the remaining expression
-                        path_components.reverse();
-                        let constant_path = path_components.join(".");
-                        return Ok((constant_path, Some(current_expr.clone())));
-                    }
-                }
-                _ => {
-                    // Not a simple reference chain
-                    return Err(CompilerError::NotSimpleReferenceChain);
-                }
-            }
-        }
-
-        // All components were constant
-        path_components.reverse();
-        Ok((path_components.join("."), None))
-    }
-
-    /// Compile dynamic indexing operations on top of a base register
-    fn compile_dynamic_indexing_chain(
-        &mut self,
-        base_reg: Register,
-        expr: &ExprRef,
-        span: &Span,
-    ) -> Result<Register> {
-        let mut current_expr = expr;
-        let mut index_stack = Vec::new();
-
-        // First, collect all the indexing operations in reverse order
-        loop {
-            match current_expr.as_ref() {
-                Expr::RefDot { refr, field, .. } => {
-                    // Field access - create a string literal for the field
-                    let field_value = Value::String(field.0.text().to_string().into());
-                    index_stack.push(IndexOperation::Literal(field_value));
-                    current_expr = refr;
-                }
-                Expr::RefBrack { refr, index, .. } => {
-                    // Bracket access - can be either literal or dynamic
-                    if let Expr::String { span: s, .. } = index.as_ref() {
-                        // String literal index
-                        let index_value = Value::String(s.text().to_string().into());
-                        index_stack.push(IndexOperation::Literal(index_value));
-                    } else {
-                        // Dynamic index - need to compile the index expression
-                        index_stack.push(IndexOperation::Dynamic(index.clone()));
-                    }
-                    current_expr = refr;
-                }
-                _ => {
-                    // Reached the base of the expression
-                    break;
-                }
-            }
-        }
-
-        // Optimize register allocation:
-        // - If we only have one operation, reuse the base register
-        // - For multiple operations, use only two registers (ping-pong pattern)
-        if index_stack.is_empty() {
-            return Ok(base_reg);
-        }
-
-        let stack_len = index_stack.len();
-        let mut current_reg = base_reg;
-        let mut temp_reg = None;
-
-        // Apply the indexing operations in correct order (reverse of how we collected them)
-        for (op_idx, index_op) in index_stack.into_iter().rev().enumerate() {
-            let dest_reg = if op_idx == 0 && stack_len == 1 {
-                // Single operation: reuse the base register
-                base_reg
-            } else {
-                // Multiple operations: use ping-pong pattern with two registers
-                match temp_reg {
-                    None => {
-                        // First operation with multiple ops: allocate one temp register
-                        let new_reg = self.alloc_register();
-                        temp_reg = Some(new_reg);
-                        new_reg
-                    }
-                    Some(temp) => {
-                        // Subsequent operations: alternate between current and temp
-                        if current_reg == base_reg {
-                            temp
-                        } else {
-                            base_reg
-                        }
-                    }
-                }
-            };
-
-            match index_op {
-                IndexOperation::Literal(value) => {
-                    let literal_idx = self.add_literal(value);
-                    self.emit_instruction(
-                        Instruction::IndexLiteral {
-                            dest: dest_reg,
-                            container: current_reg,
-                            literal_idx,
-                        },
-                        span,
-                    );
-                }
-                IndexOperation::Dynamic(index_expr) => {
-                    let index_reg =
-                        self.compile_rego_expr_with_span(&index_expr, index_expr.span(), false)?;
-                    self.emit_instruction(
-                        Instruction::Index {
-                            dest: dest_reg,
-                            container: current_reg,
-                            key: index_reg,
-                        },
-                        span,
-                    );
-                }
-            }
-
-            current_reg = dest_reg;
-        }
-
-        Ok(current_reg)
+        Ok(base_reg)
     }
 
     /// Try to match a rule prefix and compile the call with remaining field accesses
@@ -747,54 +656,6 @@ impl<'a> Compiler<'a> {
             obj_reg = new_obj_reg;
         }
         Ok(obj_reg)
-    }
-
-    /// Fallback to old compilation behavior for complex expressions
-    fn compile_chained_ref_fallback(&mut self, expr: &ExprRef, span: &Span) -> Result<Register> {
-        match expr.as_ref() {
-            Expr::Var { value, .. } => {
-                if let Value::String(var_name) = value {
-                    self.resolve_variable(var_name.as_ref(), span)
-                } else {
-                    let dest = self.alloc_register();
-                    let literal_idx = self.add_literal(value.clone());
-                    self.emit_instruction(Instruction::Load { dest, literal_idx }, span);
-                    Ok(dest)
-                }
-            }
-            Expr::RefDot { refr, field, .. } => {
-                let obj_reg = self.compile_chained_ref(refr, refr.span())?;
-                let field_value = &field.1;
-                let literal_idx = self.add_literal(field_value.clone());
-                let dest = self.alloc_register();
-                self.emit_instruction(
-                    Instruction::IndexLiteral {
-                        dest,
-                        container: obj_reg,
-                        literal_idx,
-                    },
-                    span,
-                );
-                Ok(dest)
-            }
-            Expr::RefBrack { refr, index, .. } => {
-                let obj_reg = self.compile_chained_ref(refr, refr.span())?;
-                let key_reg = self.compile_rego_expr_with_span(index, index.span(), false)?;
-                let dest = self.alloc_register();
-                self.emit_instruction(
-                    Instruction::Index {
-                        dest,
-                        container: obj_reg,
-                        key: key_reg,
-                    },
-                    span,
-                );
-                Ok(dest)
-            }
-            _ => {
-                return Err(CompilerError::UnsupportedChainedExpression);
-            }
-        }
     }
 
     /// Store a variable mapping (backward compatibility)
@@ -956,9 +817,14 @@ impl<'a> Compiler<'a> {
             }
             self.rule_types[index as usize] = rule_type;
 
-            // Ensure rule_function_params has enough capacity
-            while self.rule_function_params.len() <= index as usize {
-                self.rule_function_params.push(None); // Default to None (not a function)
+            // Ensure rule_definition_function_params has enough capacity
+            while self.rule_definition_function_params.len() <= index as usize {
+                self.rule_definition_function_params.push(Vec::new()); // Default to empty vec for definitions
+            }
+
+            // Ensure rule_function_param_count has enough capacity
+            while self.rule_function_param_count.len() <= index as usize {
+                self.rule_function_param_count.push(None); // Default to None (not a function)
             }
 
             // Ensure rule_result_registers has enough capacity
@@ -1025,6 +891,56 @@ impl<'a> Compiler<'a> {
         Ok(0)
     }
 
+    /// Find the module package and index for a rule given its rule path
+    fn find_module_package_and_index_for_rule(
+        &self,
+        rule_path: &str,
+        rules: &HashMap<String, Vec<crate::ast::NodeRef<Rule>>>,
+    ) -> Result<(String, u32)> {
+        // Get the rule definitions for this rule path
+        if let Some(rule_definitions) = rules.get(rule_path) {
+            if let Some(first_rule_ref) = rule_definitions.first() {
+                // Find which module contains this rule
+                let rule_ptr = first_rule_ref.as_ref() as *const Rule;
+
+                for (module_index, module) in self.policy.get_modules().iter().enumerate() {
+                    for policy_rule in &module.policy {
+                        let policy_rule_ptr = policy_rule.as_ref() as *const Rule;
+                        if policy_rule_ptr == rule_ptr {
+                            // Found the module, extract its package
+                            let package_path =
+                                crate::utils::get_path_string(&module.package.refr, Some("data"))
+                                    .map_err(|e| CompilerError::General {
+                                    message: format!(
+                                        "Failed to get package path for module: {}",
+                                        e
+                                    ),
+                                })?;
+                            debug!(
+                                "Found rule '{}' in module {} with package '{}'",
+                                rule_path, module_index, package_path
+                            );
+                            return Ok((package_path, module_index as u32));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: extract package from rule path if we can't find the module
+        debug!(
+            "Could not find module for rule '{}', falling back to path extraction",
+            rule_path
+        );
+        let package = if let Some(last_dot) = rule_path.rfind('.') {
+            rule_path[..last_dot].to_string()
+        } else {
+            "data".to_string()
+        };
+        // Default to module index 0 for fallback
+        Ok((package, 0))
+    }
+
     pub fn emit_return(&mut self, result_reg: Register) {
         // Add return instruction
         self.program
@@ -1053,18 +969,28 @@ impl<'a> Compiler<'a> {
         for (rule_path, &rule_index) in &self.rule_index_map {
             let definitions = self.rule_definitions[rule_index as usize].clone();
             let rule_type = self.rule_types[rule_index as usize].clone();
-            let function_params = &self.rule_function_params[rule_index as usize];
+            let function_param_count = &self.rule_function_param_count[rule_index as usize];
             let result_register = self.rule_result_registers[rule_index as usize];
             let num_registers = self.rule_num_registers[rule_index as usize];
 
-            let rule_info = match function_params {
-                Some(param_names) => {
-                    // This is a function rule
+            let rule_info = match function_param_count {
+                Some(param_count) => {
+                    // This is a function rule - use first definition's param names as template
+                    let definition_params =
+                        &self.rule_definition_function_params[rule_index as usize];
+                    let param_names =
+                        if let Some(Some(first_def_params)) = definition_params.first() {
+                            first_def_params.clone()
+                        } else {
+                            // Fallback: generate generic parameter names
+                            (0..*param_count).map(|i| format!("param_{}", i)).collect()
+                        };
+
                     crate::rvm::program::RuleInfo::new_function(
                         rule_path.clone(),
                         rule_type,
                         crate::Rc::new(definitions),
-                        param_names.clone(),
+                        param_names,
                         result_register,
                         num_registers,
                     )
@@ -1705,15 +1631,7 @@ impl<'a> Compiler<'a> {
         );
         info!("Starting compilation for rule: {}", rule_name);
 
-        // Extract package name from rule_name
-        let package = if let Some(last_dot) = rule_name.rfind('.') {
-            rule_name[..last_dot].to_string()
-        } else {
-            "data".to_string()
-        };
-        debug!("Extracted package: {}", package);
-
-        let mut compiler = Compiler::with_policy(policy, package);
+        let mut compiler = Compiler::with_policy(policy);
         let rules = policy.get_rules();
 
         #[cfg(feature = "rvm-tracing")]
@@ -1781,6 +1699,20 @@ impl<'a> Compiler<'a> {
         );*/
         debug!("Starting compilation of worklist rule: '{}'", rule_path);
 
+        // Find the module that contains this rule and use its package and index
+        let (module_package, module_index) =
+            self.find_module_package_and_index_for_rule(rule_path, rules)?;
+
+        // Set up compilation context for this rule's package and module
+        let saved_package = self.current_package.clone();
+        let saved_module_index = self.current_module_index;
+        self.current_package = module_package.clone();
+        self.current_module_index = module_index;
+        debug!(
+            "Set current_package to '{}' and current_module_index to {} for rule compilation '{}'",
+            self.current_package, self.current_module_index, rule_path
+        );
+
         let saved_register_counter = self.register_counter;
         if let Some(rule_definitions) = rules.get(rule_path) {
             let rule_index = self.rule_index_map.get(rule_path).copied().unwrap_or(1);
@@ -1808,7 +1740,13 @@ impl<'a> Compiler<'a> {
                 self.rule_definitions.push(Vec::new());
             }
 
+            // Ensure rule_definition_function_params vec has space for this rule
+            while self.rule_definition_function_params.len() <= rule_index as usize {
+                self.rule_definition_function_params.push(Vec::new());
+            }
+
             let mut num_registers_used = 0;
+            let mut rule_param_count: Option<usize> = None;
 
             // Compile each definition (Rule::Spec)
             for (def_idx, rule_ref) in rule_definitions.iter().enumerate() {
@@ -1833,6 +1771,9 @@ impl<'a> Compiler<'a> {
 
                     let (key_expr, value_expr) = match head {
                         RuleHead::Compr { refr, assign, .. } => {
+                            // Store None for non-function definition
+                            self.rule_definition_function_params[rule_index as usize].push(None);
+
                             let output_expr = assign.as_ref().map(|assign| assign.value.clone());
                             let key_expr = match refr.as_ref() {
                                 Expr::RefBrack { index, .. } => {
@@ -1847,32 +1788,68 @@ impl<'a> Compiler<'a> {
                             (key_expr, output_expr)
                         }
                         RuleHead::Set { key, .. } => {
+                            // Store None for non-function definition
+                            self.rule_definition_function_params[rule_index as usize].push(None);
+
                             // For set rules, no separate key_expr, output_expr is the key
                             (None, key.clone())
                         }
                         RuleHead::Func { assign, args, .. } => {
                             // Set up function parameters for THIS definition
-                            // Each definition gets the same parameter mapping
                             let mut param_names = Vec::new();
 
-                            for arg in args.iter() {
-                                if let Expr::Var {
-                                    value: Value::String(param_name),
-                                    ..
-                                } = arg.as_ref()
-                                {
-                                    param_names.push(param_name.to_string());
-                                    let param_reg = self.alloc_register(); // This will be 1, 2, 3, etc.
-                                    self.scopes
-                                        .last_mut()
-                                        .unwrap()
-                                        .bound_vars
-                                        .insert(param_name.to_string(), param_reg);
+                            for (arg_idx, arg) in args.iter().enumerate() {
+                                let param_name = match arg.as_ref() {
+                                    Expr::Var {
+                                        value: Value::String(param_name),
+                                        ..
+                                    } => param_name.to_string(),
+                                    _ => {
+                                        // For structural pattern matching or other non-variable expressions,
+                                        // generate a parameter name
+                                        format!("__param_{}", arg_idx)
+                                    }
+                                };
+
+                                param_names.push(param_name.clone());
+                                let param_reg = self.alloc_register(); // This will be 1, 2, 3, etc.
+                                self.scopes
+                                    .last_mut()
+                                    .unwrap()
+                                    .bound_vars
+                                    .insert(param_name.clone(), param_reg);
+                                debug!(
+                                    "Function parameter '{}' assigned to register {} in definition {}",
+                                    param_name, param_reg, def_idx
+                                );
+                                self.store_variable(param_name.clone(), param_reg);
+                            }
+
+                            // Store the parameter names for this definition
+                            self.rule_definition_function_params[rule_index as usize]
+                                .push(Some(param_names.clone()));
+
+                            // Validate and set rule-level parameter count
+                            match rule_param_count {
+                                None => {
+                                    // First definition sets the parameter count
+                                    rule_param_count = Some(param_names.len());
                                     debug!(
-                                        "Function parameter '{}' assigned to register {} in definition {}",
-                                        param_name, param_reg, def_idx
+                                        "Rule '{}' is a function with {} parameters",
+                                        rule_path,
+                                        param_names.len()
                                     );
-                                    self.store_variable(param_name.to_string(), param_reg);
+                                }
+                                Some(expected_count) => {
+                                    // Subsequent definitions must have the same parameter count
+                                    if param_names.len() != expected_count {
+                                        return Err(CompilerError::General {
+                                            message: format!(
+                                                "Function rule '{}' definition {} has {} parameters but expected {} parameters",
+                                                rule_path, def_idx, param_names.len(), expected_count
+                                            ),
+                                        });
+                                    }
                                 }
                             }
 
@@ -2018,8 +1995,18 @@ impl<'a> Compiler<'a> {
             }
             self.rule_num_registers[rule_index as usize] = num_registers_used;
 
-            // Restore the global register counter
+            // Store the rule-level function parameter count
+            self.rule_function_param_count[rule_index as usize] = rule_param_count;
+
+            debug!(
+                "Rule '{}' parameter count: {:?}",
+                rule_path, rule_param_count
+            );
+
+            // Restore the global register counter and package context
             self.register_counter = saved_register_counter;
+            self.current_package = saved_package;
+            self.current_module_index = saved_module_index;
         }
 
         Ok(())
@@ -2573,9 +2560,28 @@ impl<'a> Compiler<'a> {
                     self.add_unbound_variable(var.text());
                 }
             }
-            _ => {
-                debug!("Skipping complex literal: {:?}", stmt.literal);
-                // For other literal types, skip for now
+            crate::ast::Literal::NotExpr { expr, .. } => {
+                debug!("Compiling NotExpr statement");
+                // Compile the expression (don't assert it directly)
+                let expr_reg = self.compile_rego_expr_with_span(expr, expr.span(), false)?;
+
+                // Negate the expression using the Not instruction
+                let negated_reg = self.alloc_register();
+                self.emit_instruction(
+                    Instruction::Not {
+                        dest: negated_reg,
+                        operand: expr_reg,
+                    },
+                    &stmt.span,
+                );
+
+                // Assert that the negated expression is true (original expression is false)
+                self.emit_instruction(
+                    Instruction::AssertCondition {
+                        condition: negated_reg,
+                    },
+                    &stmt.span,
+                );
             }
         }
         Ok(())
@@ -2747,7 +2753,7 @@ impl<'a> Compiler<'a> {
 
         // Add LoopStart instruction with parameters
         let loop_params_index = self.program.add_loop_params(LoopStartParams {
-            mode: LoopMode::SetComprehension, // Use SetComprehension for set rules with some...in
+            mode: LoopMode::ForEach, // Use ForEach for some...in loops
             collection: collection_reg,
             key_reg,
             value_reg,
@@ -2771,11 +2777,12 @@ impl<'a> Compiler<'a> {
                 value: var_name, ..
             } = key_expr.as_ref()
             {
+                let var_name = var_name.as_string()?.to_string();
                 debug!(
                     "Storing loop key variable '{}' at register {}",
                     var_name, key_reg
                 );
-                self.store_variable(var_name.to_string(), key_reg);
+                self.store_variable(var_name, key_reg);
             }
         }
 
@@ -2783,36 +2790,12 @@ impl<'a> Compiler<'a> {
             value: var_name, ..
         } = value.as_ref()
         {
-            debug!("Variable name value: {:?}", var_name);
-
-            // Extract the string value from the Value
-            let clean_var_name = match var_name {
-                crate::value::Value::String(s) => s.to_string(),
-                _ => var_name.to_string(),
-            };
-
+            let var_name = var_name.as_string()?.to_string();
             debug!(
-                "Storing loop value variable '{}' at register {} (from '{:?}')",
-                clean_var_name, value_reg, var_name
+                "Storing loop key variable '{}' at register {}",
+                var_name, value_reg
             );
-            self.store_variable(clean_var_name.clone(), value_reg);
-
-            // Debug: Check if variable is actually stored
-            debug!(
-                "Checking if variable '{}' is now in scope...",
-                clean_var_name
-            );
-            if let Some(_reg) = self.lookup_variable(&clean_var_name) {
-                debug!(
-                    "Yes, variable '{}' found at register {}",
-                    clean_var_name, _reg
-                );
-            } else {
-                debug!(
-                    "ERROR - variable '{}' not found after storing!",
-                    clean_var_name
-                );
-            }
+            self.store_variable(var_name, value_reg);
         }
 
         // Compile the loop body statements

@@ -7,6 +7,16 @@ use regorus::rvm::{
     RegoVM,
 };
 
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum EvalEngine {
+    /// Use the interpreter engine.
+    Interpreter,
+    /// Use the RVM (Rego Virtual Machine) engine.
+    Rvm,
+    /// Use the VM engine (alias for RVM).
+    Vm,
+}
+
 #[allow(dead_code)]
 fn read_file(path: &String) -> Result<String> {
     std::fs::read_to_string(path).map_err(|_| anyhow!("could not read {path}"))
@@ -113,6 +123,7 @@ fn rego_eval(
     files: &[String],
     input: Option<String>,
     query: String,
+    eval_engine: EvalEngine,
     enable_tracing: bool,
     non_strict: bool,
     #[cfg(feature = "coverage")] coverage: bool,
@@ -167,7 +178,8 @@ fn rego_eval(
         }
     }
 
-    if let Some(file) = input {
+    // Load input data if provided
+    let input_data = if let Some(file) = input {
         let input = if file.ends_with(".json") {
             read_value_from_json_file(&file)?
         } else if file.ends_with(".yaml") {
@@ -175,25 +187,63 @@ fn rego_eval(
         } else {
             bail!("Unsupported input file `{file}`. Must be json or yaml.")
         };
-        engine.set_input(input);
-    }
+        engine.set_input(input.clone());
+        Some(input)
+    } else {
+        None
+    };
 
-    // Note: The `eval_query` function is used below since it produces output
-    // in the same format as OPA. It also allows evaluating arbitrary statements
-    // as queries.
-    //
-    // Most applications will want to use `eval_rule` instead.
-    // It is faster since it does not have to parse the query string.
-    // It also returns the value of the rule directly and thus is easier
-    // to use.
-    let results = engine.eval_query(query, enable_tracing)?;
+    // Evaluate based on the selected engine
+    match eval_engine {
+        EvalEngine::Interpreter => {
+            // Use the interpreter engine (existing behavior)
+            let results = engine.eval_query(query, enable_tracing)?;
+            println!("{}", serde_json::to_string_pretty(&results)?);
 
-    println!("{}", serde_json::to_string_pretty(&results)?);
+            #[cfg(feature = "coverage")]
+            if coverage {
+                let report = engine.get_coverage_report()?;
+                println!("{}", report.to_string_pretty()?);
+            }
+        }
+        EvalEngine::Rvm | EvalEngine::Vm => {
+            // Use the RVM/VM engine
+            // Compile the policy first
+            use std::sync::Arc;
+            let rule_rc: Arc<str> = query.clone().into();
+            let compiled_policy = engine.compile_with_entrypoint(&rule_rc)?;
 
-    #[cfg(feature = "coverage")]
-    if coverage {
-        let report = engine.get_coverage_report()?;
-        println!("{}", report.to_string_pretty()?);
+            // Compile to RVM program
+            let program = Compiler::compile_from_policy(&compiled_policy, &query)?;
+
+            // Create and execute VM
+            let mut vm = RegoVM::new();
+            vm.load_program(program);
+            vm.set_data(engine.get_data());
+
+            // Set input if we have it
+            if let Some(input_data) = input_data {
+                vm.set_input(input_data);
+            }
+
+            let result = vm.execute()?;
+
+            // Format result to match interpreter output structure
+            let formatted_result = serde_json::json!({
+                "result": [{
+                    "expressions": [{
+                        "value": result,
+                        "text": query,
+                        "location": {
+                            "row": 1,
+                            "col": 1
+                        }
+                    }]
+                }]
+            });
+
+            println!("{}", serde_json::to_string_pretty(&formatted_result)?);
+        }
     }
 
     Ok(())
@@ -347,6 +397,10 @@ enum RegorusCommand {
 
         /// Query. Rego query block.
         query: String,
+
+        /// Engine to use for evaluation.
+        #[arg(long, value_enum, default_value = "interpreter")]
+        engine: EvalEngine,
 
         /// Enable tracing.
         #[arg(long, short)]
@@ -545,6 +599,7 @@ fn main() -> Result<()> {
             data,
             input,
             query,
+            engine,
             trace,
             non_strict,
             #[cfg(feature = "coverage")]
@@ -555,6 +610,7 @@ fn main() -> Result<()> {
             &data,
             input,
             query,
+            engine,
             trace,
             non_strict,
             #[cfg(feature = "coverage")]

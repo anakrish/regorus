@@ -108,6 +108,112 @@ impl ObjectCreateParams {
     }
 }
 
+/// Represents either a literal index or a register number for path components
+#[repr(C)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum LiteralOrRegister {
+    /// Index into the program's literal table
+    Literal(u16),
+    /// Register number containing the value
+    Register(u8),
+}
+
+/// Virtual data document lookup parameters for data namespace access with rule evaluation
+#[repr(C)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VirtualDataDocumentLookupParams {
+    /// Destination register to store the result
+    pub dest: u8,
+    /// Path components in order (e.g., for data.users[input.name].config)
+    /// This would be [Literal("users"), Register(5), Literal("config")]
+    /// where register 5 contains the value from input.name
+    pub path_components: Vec<LiteralOrRegister>,
+}
+
+impl VirtualDataDocumentLookupParams {
+    /// Get the number of path components
+    pub fn component_count(&self) -> usize {
+        self.path_components.len()
+    }
+
+    /// Check if all components are literals (can be optimized at compile time)
+    pub fn all_literals(&self) -> bool {
+        self.path_components
+            .iter()
+            .all(|c| matches!(c, LiteralOrRegister::Literal(_)))
+    }
+
+    /// Get just the literal indices (for debugging/display)
+    pub fn literal_indices(&self) -> Vec<u16> {
+        self.path_components
+            .iter()
+            .filter_map(|c| match c {
+                LiteralOrRegister::Literal(idx) => Some(*idx),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Get just the register numbers (for debugging/display)
+    pub fn register_numbers(&self) -> Vec<u8> {
+        self.path_components
+            .iter()
+            .filter_map(|c| match c {
+                LiteralOrRegister::Register(reg) => Some(*reg),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// Chained index parameters for multi-level object access (input, locals, non-rule data paths)
+#[repr(C)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChainedIndexParams {
+    /// Destination register to store the result
+    pub dest: u8,
+    /// Root register containing the base object (input, local var, data subset)
+    pub root: u8,
+    /// Path components to traverse from the root
+    pub path_components: Vec<LiteralOrRegister>,
+}
+
+impl ChainedIndexParams {
+    /// Get the number of path components
+    pub fn component_count(&self) -> usize {
+        self.path_components.len()
+    }
+
+    /// Check if all components are literals (can be optimized)
+    pub fn all_literals(&self) -> bool {
+        self.path_components
+            .iter()
+            .all(|c| matches!(c, LiteralOrRegister::Literal(_)))
+    }
+
+    /// Get just the literal indices (for debugging/display)
+    pub fn literal_indices(&self) -> Vec<u16> {
+        self.path_components
+            .iter()
+            .filter_map(|c| match c {
+                LiteralOrRegister::Literal(idx) => Some(*idx),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Get just the register numbers (for debugging/display)
+    pub fn register_numbers(&self) -> Vec<u8> {
+        self.path_components
+            .iter()
+            .filter_map(|c| match c {
+                LiteralOrRegister::Register(reg) => Some(*reg),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
 /// Instruction data container for complex instruction parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstructionData {
@@ -119,6 +225,10 @@ pub struct InstructionData {
     pub function_call_params: Vec<FunctionCallParams>,
     /// Object creation parameter table for ObjectCreate instructions
     pub object_create_params: Vec<ObjectCreateParams>,
+    /// Virtual data document lookup parameter table for VirtualDataDocumentLookup instructions
+    pub virtual_data_document_lookup_params: Vec<VirtualDataDocumentLookupParams>,
+    /// Chained index parameter table for ChainedIndex instructions
+    pub chained_index_params: Vec<ChainedIndexParams>,
 }
 
 impl InstructionData {
@@ -129,6 +239,8 @@ impl InstructionData {
             builtin_call_params: Vec::new(),
             function_call_params: Vec::new(),
             object_create_params: Vec::new(),
+            virtual_data_document_lookup_params: Vec::new(),
+            chained_index_params: Vec::new(),
         }
     }
 
@@ -178,6 +290,36 @@ impl InstructionData {
     /// Get object create parameters by index
     pub fn get_object_create_params(&self, index: u16) -> Option<&ObjectCreateParams> {
         self.object_create_params.get(index as usize)
+    }
+
+    /// Add virtual data document lookup parameters and return the index
+    pub fn add_virtual_data_document_lookup_params(
+        &mut self,
+        params: VirtualDataDocumentLookupParams,
+    ) -> u16 {
+        let index = self.virtual_data_document_lookup_params.len();
+        self.virtual_data_document_lookup_params.push(params);
+        index as u16
+    }
+
+    /// Get virtual data document lookup parameters by index
+    pub fn get_virtual_data_document_lookup_params(
+        &self,
+        index: u16,
+    ) -> Option<&VirtualDataDocumentLookupParams> {
+        self.virtual_data_document_lookup_params.get(index as usize)
+    }
+
+    /// Add chained index parameters and return the index
+    pub fn add_chained_index_params(&mut self, params: ChainedIndexParams) -> u16 {
+        let index = self.chained_index_params.len();
+        self.chained_index_params.push(params);
+        index as u16
+    }
+
+    /// Get chained index parameters by index
+    pub fn get_chained_index_params(&self, index: u16) -> Option<&ChainedIndexParams> {
+        self.chained_index_params.get(index as usize)
     }
 
     /// Get mutable reference to loop parameters by index
@@ -388,6 +530,12 @@ pub enum Instruction {
         literal_idx: u16,
     },
 
+    /// Multi-level chained indexing (e.g., obj.field1[expr].field2)
+    ChainedIndex {
+        /// Index into program's instruction_data.chained_index_params table
+        params_index: u16,
+    },
+
     /// Create empty array
     ArrayNew {
         dest: u8,
@@ -451,6 +599,12 @@ pub enum Instruction {
 
         /// The rule number of the rule
         rule_index: u16,
+    },
+
+    /// Lookup in data namespace virtual documents (rules + base data)
+    VirtualDataDocumentLookup {
+        /// Index into program's instruction_data.virtual_data_document_lookup_params table
+        params_index: u16,
     },
 
     /// Return from rule execution
@@ -555,6 +709,30 @@ impl Instruction {
                     format!("OBJECT_CREATE P({}) [INVALID INDEX]", params_index)
                 }
             }
+            Instruction::VirtualDataDocumentLookup { params_index } => {
+                if let Some(params) =
+                    instruction_data.get_virtual_data_document_lookup_params(*params_index)
+                {
+                    let components_str = params
+                        .path_components
+                        .iter()
+                        .map(|comp| match comp {
+                            LiteralOrRegister::Literal(idx) => format!("L({})", idx),
+                            LiteralOrRegister::Register(reg) => format!("R({})", reg),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    format!(
+                        "VIRTUAL_DATA_DOCUMENT_LOOKUP R({}) [data.{}]",
+                        params.dest, components_str
+                    )
+                } else {
+                    format!(
+                        "VIRTUAL_DATA_DOCUMENT_LOOKUP P({}) [INVALID INDEX]",
+                        params_index
+                    )
+                }
+            }
             _ => self.to_string(),
         }
     }
@@ -641,6 +819,9 @@ impl std::fmt::Display for Instruction {
                 "INDEX_LITERAL R({}) R({}) L({})",
                 dest, container, literal_idx
             ),
+            Instruction::ChainedIndex { params_index } => {
+                format!("CHAINED_INDEX P({})", params_index)
+            }
             Instruction::ArrayNew { dest } => format!("ARRAY_NEW R({})", dest),
             Instruction::ArrayPush { arr, value } => format!("ARRAY_PUSH R({}) R({})", arr, value),
             Instruction::SetNew { dest } => format!("SET_NEW R({})", dest),
@@ -664,6 +845,9 @@ impl std::fmt::Display for Instruction {
             }
             Instruction::CallRule { dest, rule_index } => {
                 format!("CALL_RULE R({}) {}", dest, rule_index)
+            }
+            Instruction::VirtualDataDocumentLookup { params_index } => {
+                format!("VIRTUAL_DATA_DOCUMENT_LOOKUP P({})", params_index)
             }
             Instruction::RuleReturn {} => String::from("RULE_RETURN"),
 

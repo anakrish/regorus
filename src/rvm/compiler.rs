@@ -1,4 +1,7 @@
-use super::instructions::{LoopMode, LoopStartParams, ObjectCreateParams};
+use super::instructions::{
+    ChainedIndexParams, LiteralOrRegister, LoopMode, LoopStartParams, ObjectCreateParams,
+    VirtualDataDocumentLookupParams,
+};
 use super::program::Program;
 use super::Instruction;
 use crate::ast::{Expr, ExprRef, Rule, RuleHead};
@@ -19,6 +22,78 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub type Register = u8;
+
+/// Component of a reference chain - either a literal field or a dynamic expression
+#[derive(Debug, Clone)]
+enum AccessComponent {
+    /// Static field access (e.g., .field_name)
+    Field(String),
+    /// Dynamic access (e.g., [expr])
+    Expression(ExprRef),
+}
+
+/// Represents a chained reference like data.a.b[expr].c[expr]
+#[derive(Debug, Clone)]
+struct ReferenceChain {
+    /// The root variable (e.g., "data", "input", "local_var")
+    root: String,
+    /// Chain of field accesses - either literal field names or dynamic expressions
+    components: Vec<AccessComponent>,
+}
+
+impl ReferenceChain {
+    /// Get the static prefix path (all literal components from the start)
+    fn get_static_prefix(&self) -> Vec<&str> {
+        let mut prefix = vec![self.root.as_str()];
+        for component in &self.components {
+            match component {
+                AccessComponent::Field(field) => prefix.push(field.as_str()),
+                AccessComponent::Expression(_) => break,
+            }
+        }
+        prefix
+    }
+}
+
+/// Parse a chained reference expression into a ReferenceChain
+fn parse_reference_chain(expr: &ExprRef) -> Result<ReferenceChain> {
+    let mut components = Vec::new();
+    let mut current_expr = expr;
+
+    // Walk the chain backwards to collect components
+    loop {
+        match current_expr.as_ref() {
+            Expr::Var { span, .. } => {
+                // Found the root variable
+                let root = span.text().to_string();
+                components.reverse(); // We built backwards, so reverse
+                return Ok(ReferenceChain { root, components });
+            }
+            Expr::RefDot { refr, field, .. } => {
+                // Static field access
+                components.push(AccessComponent::Field(field.0.text().to_string()));
+                current_expr = refr;
+            }
+            Expr::RefBrack { refr, index, .. } => {
+                // Bracket access - check if it's a string literal or dynamic
+                match index.as_ref() {
+                    Expr::String { span, .. } => {
+                        // String literal - treat as static field
+                        components.push(AccessComponent::Field(span.text().to_string()));
+                    }
+                    _ => {
+                        // Dynamic expression
+                        components.push(AccessComponent::Expression(index.clone()));
+                    }
+                }
+                current_expr = refr;
+            }
+            _ => {
+                return Err(CompilerError::NotSimpleReferenceChain);
+            }
+        }
+    }
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum CompilerError {
@@ -419,149 +494,48 @@ impl<'a> Compiler<'a> {
     }
 
     /// Compile chained reference expressions (Var, RefDot, RefBrack chains)
-    /// Implements the logic similar to eval_chained_ref_dot_or_brack in interpreter
+    /// Uses ReferenceChain to analyze and optimize the access pattern
     fn compile_chained_ref(&mut self, expr: &ExprRef, span: &Span) -> Result<Register> {
-        // Extract constant path prefix and remaining dynamic parts inline
-        let mut path_components = Vec::new();
-        let mut current_expr = expr;
-        loop {
-            match current_expr.as_ref() {
-                Expr::Var { span: v, .. } => {
-                    // Variable name - this is the root of our path
-                    path_components.push(v.text().to_string());
-                    break;
-                }
-                Expr::RefDot { refr, field, .. } => {
-                    // Field access - always constant
-                    path_components.push(field.0.text().to_string());
-                    current_expr = refr;
-                }
-                Expr::RefBrack { refr, index, .. } => {
-                    // Bracket access - only constant if index is a string literal
-                    if let Expr::String { span: s, .. } = index.as_ref() {
-                        // String literal index - this is constant
-                        path_components.push(s.text().to_string());
-                        current_expr = refr;
-                    } else {
-                        // Dynamic index - we need to handle this properly:
-                        // 1. Compile the refr part recursively
-                        let base_reg = self.compile_chained_ref(refr, refr.span())?;
+        // Parse the expression into a reference chain
+        let chain = parse_reference_chain(expr)?;
 
-                        // 2. Compile the index expression
-                        let index_reg =
-                            self.compile_rego_expr_with_span(index, index.span(), false)?;
-
-                        // 3. Emit indexing instruction
-                        let result_reg = self.alloc_register();
-                        self.emit_instruction(
-                            Instruction::Index {
-                                dest: result_reg,
-                                container: base_reg,
-                                key: index_reg,
-                            },
-                            span,
-                        );
-
-                        // 4. Apply any accumulated suffix path components (field accesses)
-                        if path_components.is_empty() {
-                            return Ok(result_reg);
-                        } else {
-                            path_components.reverse();
-                            return self.compile_field_access_chain(
-                                result_reg,
-                                &path_components
-                                    .iter()
-                                    .map(|s| s.as_str())
-                                    .collect::<Vec<_>>(),
-                                span,
-                            );
-                        }
-                    }
-                }
-                _ => {
-                    // Not a simple reference chain - this should be a compile error
-                    return Err(CompilerError::UnsupportedChainedExpression);
-                }
-            }
+        match chain.root.as_str() {
+            "input" => self.compile_input_chain(&chain, span),
+            "data" => self.compile_data_chain(&chain, span),
+            _ => self.compile_local_var_chain(&chain, span),
         }
-
-        // Build constant path
-        path_components.reverse();
-        let constant_path = path_components.join(".");
-
-        // If we have no constant path, this is an internal error - should never happen
-        if constant_path.is_empty() {
-            panic!("Internal error: constant_path is empty after processing chained reference");
-        }
-
-        let path_parts: Vec<&str> = constant_path.split('.').collect();
-        let root_var = path_parts[0];
-
-        // Compile the constant prefix using chained reference logic
-        let base_reg = if root_var == "input" {
-            if path_parts.len() == 1 {
-                // Just "input"
-                self.resolve_variable("input", span)?
-            } else {
-                // "input.field1.field2..."
-                let input_reg = self.resolve_variable("input", span)?;
-                self.compile_field_access_chain(input_reg, &path_parts[1..], span)?
-            }
-        } else if root_var == "data" {
-            if path_parts.len() == 1 {
-                // Just "data" - load data register
-                self.resolve_variable("data", span)?
-            } else {
-                // "data.pkg.rule.field..." - find longest rule prefix
-                self.compile_data_reference(&path_parts[1..], span)?
-            }
-        } else {
-            // Check if it's a local variable first (precedence over rules)
-            if let Some(var_reg) = self.lookup_variable(root_var) {
-                if path_parts.len() == 1 {
-                    var_reg
-                } else {
-                    self.compile_field_access_chain(var_reg, &path_parts[1..], span)?
-                }
-            } else {
-                // Check if there's a rule in the current package that matches a prefix
-                let current_pkg_prefix = format!("{}.{}", &self.current_package, root_var);
-
-                // Try to find the longest matching rule prefix using the shared helper
-                if let Some(result) =
-                    self.try_rule_prefix_match(&current_pkg_prefix, &path_parts[1..], span)?
-                {
-                    result
-                } else {
-                    // No rule found - this is an undefined variable
-                    return Err(CompilerError::UndefinedVariable {
-                        name: root_var.to_string(),
-                    });
-                }
-            }
-        };
-
-        Ok(base_reg)
     }
 
-    /// Try to match a rule prefix and compile the call with remaining field accesses
-    fn try_rule_prefix_match(
-        &mut self,
-        base_prefix: &str,
-        remaining_parts: &[&str],
-        span: &Span,
-    ) -> Result<Option<Register>> {
-        // Try to find the longest matching rule prefix
-        for i in (0..=remaining_parts.len()).rev() {
-            let rule_candidate = if i == 0 {
-                base_prefix.to_string()
-            } else {
-                format!("{}.{}", base_prefix, remaining_parts[0..i].join("."))
-            };
+    /// Compile input variable access chain
+    fn compile_input_chain(&mut self, chain: &ReferenceChain, span: &Span) -> Result<Register> {
+        let input_reg = self.resolve_variable("input", span)?;
 
-            if self.policy.inner.rules.contains_key(&rule_candidate) {
-                // Found a matching rule - call it and then access remaining fields
-                let rule_index = self.get_or_assign_rule_index(&rule_candidate)?;
+        if chain.components.is_empty() {
+            // Just "input"
+            return Ok(input_reg);
+        }
+
+        self.compile_chain_access(input_reg, &chain.components, span)
+    }
+
+    /// Compile data namespace access chain (may involve rules)
+    fn compile_data_chain(&mut self, chain: &ReferenceChain, span: &Span) -> Result<Register> {
+        if chain.components.is_empty() {
+            // Just "data" - direct access to data root is not allowed
+            return Err(CompilerError::DirectDataAccess);
+        }
+
+        // Build the static prefix path components for rule matching
+        let static_prefix = chain.get_static_prefix();
+
+        // Try to find the longest matching rule prefix
+        // Start from the full path and work backwards
+        for i in (1..static_prefix.len()).rev() {
+            // Start from 1 to skip just "data"
+            let rule_candidate = static_prefix[0..=i].join(".");
+
+            if let Ok(rule_index) = self.get_or_assign_rule_index(&rule_candidate) {
+                // Found a rule match! Call the rule
                 let rule_result_reg = self.alloc_register();
                 self.emit_instruction(
                     Instruction::CallRule {
@@ -571,91 +545,217 @@ impl<'a> Compiler<'a> {
                     span,
                 );
 
-                if i == remaining_parts.len() {
-                    // Exact match - no remaining fields
-                    return Ok(Some(rule_result_reg));
-                } else {
-                    // Access remaining fields
-                    let final_reg = self.compile_field_access_chain(
-                        rule_result_reg,
-                        &remaining_parts[i..],
+                // Handle remaining components after the matched rule
+                let consumed_components = i;
+                if consumed_components < chain.components.len() {
+                    let remaining_components = &chain.components[consumed_components..];
+                    return self.compile_chain_access(rule_result_reg, remaining_components, span);
+                }
+
+                return Ok(rule_result_reg);
+            }
+        }
+
+        // Check if this path could be a prefix of any rules (for virtual document lookup)
+        let full_path = static_prefix.join(".");
+        let matching_rules: Vec<String> = self
+            .rule_index_map
+            .keys()
+            .filter(|rule_path| rule_path.starts_with(&format!("{full_path}.")))
+            .cloned()
+            .collect();
+
+        if !matching_rules.is_empty() {
+            // This path is a prefix of some rules - use DataVirtualDocumentLookup
+            for rule_path in &matching_rules {
+                if !self.rule_worklist.contains(rule_path) {
+                    self.rule_worklist.push(rule_path.clone());
+                }
+            }
+
+            return self.compile_data_virtual_lookup(&chain.components, span);
+        }
+
+        // No rules involved - simple data access
+        let data_reg = self.resolve_variable("data", span)?;
+        self.compile_chain_access(data_reg, &chain.components, span)
+    }
+
+    /// Compile local variable access chain
+    fn compile_local_var_chain(&mut self, chain: &ReferenceChain, span: &Span) -> Result<Register> {
+        // Check if it's a local variable first (precedence over rules)
+        if let Some(var_reg) = self.lookup_variable(&chain.root) {
+            if chain.components.is_empty() {
+                return Ok(var_reg);
+            }
+            return self.compile_chain_access(var_reg, &chain.components, span);
+        }
+
+        // Check if there's a rule in the current package that matches
+        let current_pkg_prefix = format!("{}.{}", &self.current_package, &chain.root);
+
+        std::dbg!(&current_pkg_prefix);
+        // Build static path for rule matching
+        let mut rule_path_parts = vec![current_pkg_prefix.as_str()];
+        for component in &chain.components {
+            match component {
+                AccessComponent::Field(field) => rule_path_parts.push(field.as_str()),
+                AccessComponent::Expression(_) => break, // Stop at first dynamic component
+            }
+        }
+
+        std::dbg!(&rule_path_parts);
+        // Try to find the longest matching rule prefix
+        for i in (0..rule_path_parts.len()).rev() {
+            let rule_candidate = rule_path_parts[0..=i].join(".");
+
+            if let Ok(rule_index) = self.get_or_assign_rule_index(&rule_candidate) {
+                let rule_result_reg = self.alloc_register();
+                self.emit_instruction(
+                    Instruction::CallRule {
+                        dest: rule_result_reg,
+                        rule_index,
+                    },
+                    span,
+                );
+
+                // Handle remaining components after the matched rule
+                let consumed_components = i; // Number of components consumed by the rule (excluding root)
+                if consumed_components < chain.components.len() {
+                    let remaining_components = &chain.components[consumed_components..];
+                    return self.compile_chain_access(rule_result_reg, remaining_components, span);
+                }
+
+                return Ok(rule_result_reg);
+            }
+        }
+
+        // No rule found - undefined variable
+        Err(CompilerError::UndefinedVariable {
+            name: chain.root.clone(),
+        })
+    }
+
+    /// Compile chain access using appropriate instructions based on chain length and complexity
+    fn compile_chain_access(
+        &mut self,
+        root_reg: Register,
+        components: &[AccessComponent],
+        span: &Span,
+    ) -> Result<Register> {
+        if components.is_empty() {
+            return Ok(root_reg);
+        }
+
+        if components.len() == 1 {
+            // Single level access - use optimized instructions
+            match &components[0] {
+                AccessComponent::Field(field) => {
+                    let dest_reg = self.alloc_register();
+                    let literal_idx = self.add_literal(Value::String(field.clone().into()));
+                    self.emit_instruction(
+                        Instruction::IndexLiteral {
+                            dest: dest_reg,
+                            container: root_reg,
+                            literal_idx,
+                        },
                         span,
-                    )?;
-                    return Ok(Some(final_reg));
+                    );
+                    Ok(dest_reg)
+                }
+                AccessComponent::Expression(expr) => {
+                    let dest_reg = self.alloc_register();
+                    let key_reg = self.compile_rego_expr_with_span(expr, expr.span(), false)?;
+                    self.emit_instruction(
+                        Instruction::Index {
+                            dest: dest_reg,
+                            container: root_reg,
+                            key: key_reg,
+                        },
+                        span,
+                    );
+                    Ok(dest_reg)
+                }
+            }
+        } else {
+            // Multi-level access - use ChainedIndex
+            let dest_reg = self.alloc_register();
+            let mut path_components = Vec::new();
+
+            for component in components {
+                match component {
+                    AccessComponent::Field(field) => {
+                        let literal_idx = self.add_literal(Value::String(field.clone().into()));
+                        path_components.push(LiteralOrRegister::Literal(literal_idx));
+                    }
+                    AccessComponent::Expression(expr) => {
+                        let reg = self.compile_rego_expr_with_span(expr, expr.span(), false)?;
+                        path_components.push(LiteralOrRegister::Register(reg));
+                    }
+                }
+            }
+
+            let params = ChainedIndexParams {
+                dest: dest_reg,
+                root: root_reg,
+                path_components,
+            };
+
+            let params_index = self.program.instruction_data.chained_index_params.len() as u16;
+            self.program
+                .instruction_data
+                .chained_index_params
+                .push(params);
+
+            self.emit_instruction(Instruction::ChainedIndex { params_index }, span);
+
+            Ok(dest_reg)
+        }
+    }
+
+    /// Compile data virtual document lookup for rule-involved data access
+    fn compile_data_virtual_lookup(
+        &mut self,
+        components: &[AccessComponent],
+        span: &Span,
+    ) -> Result<Register> {
+        let dest_reg = self.alloc_register();
+        let mut path_components = Vec::new();
+
+        for component in components {
+            match component {
+                AccessComponent::Field(field) => {
+                    let literal_idx = self.add_literal(Value::String(field.clone().into()));
+                    path_components.push(LiteralOrRegister::Literal(literal_idx));
+                }
+                AccessComponent::Expression(expr) => {
+                    let reg = self.compile_rego_expr_with_span(expr, expr.span(), false)?;
+                    path_components.push(LiteralOrRegister::Register(reg));
                 }
             }
         }
 
-        Ok(None)
-    }
+        let params = VirtualDataDocumentLookupParams {
+            dest: dest_reg,
+            path_components,
+        };
 
-    /// Compile data references: data.pkg.rule.field...
-    fn compile_data_reference(&mut self, path_parts: &[&str], span: &Span) -> Result<Register> {
-        if path_parts.is_empty() {
-            return self.resolve_variable("data", span);
-        }
+        let params_index = self
+            .program
+            .instruction_data
+            .virtual_data_document_lookup_params
+            .len() as u16;
+        self.program
+            .instruction_data
+            .virtual_data_document_lookup_params
+            .push(params);
 
-        let full_path = format!("data.{}", path_parts.join("."));
+        self.emit_instruction(
+            Instruction::VirtualDataDocumentLookup { params_index },
+            span,
+        );
 
-        // Check if this path is a parent of any existing rules
-        // If so, we need to collect and merge values from all child rules
-        let is_parent_path = self
-            .policy
-            .inner
-            .rules
-            .keys()
-            .any(|rule_path| rule_path.starts_with(&format!("{full_path}.")));
-
-        if is_parent_path {
-            // For now, we'll handle this by loading data and accessing fields directly
-            // TODO: In the future, this should collect values from all child rules
-            // and merge them with the data document at this path
-            let data_reg = self.resolve_variable("data", span)?;
-            return self.compile_field_access_chain(data_reg, path_parts, span);
-        }
-
-        // Try to find the longest matching rule prefix in the rules table
-        self.find_longest_matching_rule(path_parts, span)
-    }
-
-    /// Find the longest matching rule prefix and compile accordingly
-    fn find_longest_matching_rule(&mut self, path_parts: &[&str], span: &Span) -> Result<Register> {
-        let base_prefix = format!("data.{}", path_parts[0]);
-
-        // Try to find a matching rule using the shared helper
-        if let Some(result) = self.try_rule_prefix_match(&base_prefix, &path_parts[1..], span)? {
-            return Ok(result);
-        }
-
-        // No rule found - load data and access fields directly
-        let data_reg = self.resolve_variable("data", span)?;
-        self.compile_field_access_chain(data_reg, path_parts, span)
-    }
-
-    /// Compile field access chain: obj.field1.field2...
-    fn compile_field_access_chain(
-        &mut self,
-        mut obj_reg: Register,
-        fields: &[&str],
-        span: &Span,
-    ) -> Result<Register> {
-        for field in fields {
-            let field_value = Value::String(field.to_string().into());
-            let literal_idx = self.add_literal(field_value);
-            let new_obj_reg = self.alloc_register();
-
-            self.emit_instruction(
-                Instruction::IndexLiteral {
-                    dest: new_obj_reg,
-                    container: obj_reg,
-                    literal_idx,
-                },
-                span,
-            );
-
-            obj_reg = new_obj_reg;
-        }
-        Ok(obj_reg)
+        Ok(dest_reg)
     }
 
     /// Store a variable mapping (backward compatibility)
@@ -739,11 +839,9 @@ impl<'a> Compiler<'a> {
 
     fn compute_rule_type(&self, rule_path: &str) -> Result<RuleType> {
         let Some(definitions) = self.policy.inner.rules.get(rule_path) else {
-            panic!(
-                "internal: no definitions found for rule path '{}'",
-                rule_path
-            );
-            //bail!("{rule_path} is not a valid rule path");
+            return Err(CompilerError::General {
+                message: format!("no definitions found for rule path '{}'", rule_path),
+            });
         };
 
         let rule_types: BTreeSet<RuleType> = definitions

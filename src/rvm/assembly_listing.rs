@@ -539,6 +539,67 @@ fn format_instruction_readable(
             let base = format!("{}}} return from rule", indent);
             align_comment(&base, "End of rule evaluation", config.comment_column)
         }
+        Instruction::ChainedIndex { params_index } => {
+            let (base, comment) =
+                if let Some(params) = instruction_data.get_chained_index_params(*params_index) {
+                    let chain_parts: Vec<String> = params
+                        .path_components
+                        .iter()
+                        .map(|component| match component {
+                            crate::rvm::instructions::LiteralOrRegister::Literal(idx) => {
+                                if let Some(literal) = program.literals.get(*idx as usize) {
+                                    match literal {
+                                        crate::Value::String(s) => format!(".{}", s.as_ref()),
+                                        other => format!(
+                                            "[{}]",
+                                            serde_json::to_string(other)
+                                                .unwrap_or_else(|_| "?".to_string())
+                                        ),
+                                    }
+                                } else {
+                                    format!("[L{}?]", idx)
+                                }
+                            }
+                            crate::rvm::instructions::LiteralOrRegister::Register(reg) => {
+                                format!("[r{}]", reg)
+                            }
+                        })
+                        .collect();
+
+                    let chain_display = if chain_parts.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" r{}{}", params.root, chain_parts.join(""))
+                    };
+
+                    let base_str = format!(
+                        "{}ChainedIndex r{} ← r{}{}",
+                        indent, params.dest, params.root, chain_display
+                    );
+                    let comment_str = format!(
+                        "Multi-level chained indexing: r{} → r{}",
+                        params.root, params.dest
+                    );
+                    (base_str, comment_str)
+                } else {
+                    let base_str = format!("{}ChainedIndex chained_index", indent);
+                    let comment_str = "Multi-level chained indexing (invalid params)".to_string();
+                    (base_str, comment_str)
+                };
+
+            align_comment(&base, &comment, config.comment_column)
+        }
+        Instruction::VirtualDataDocumentLookup { .. } => {
+            let base = format!(
+                "{}VirtualDataDocumentLookup virtual_data_document_lookup",
+                indent
+            );
+            align_comment(
+                &base,
+                "Lookup in data namespace virtual documents",
+                config.comment_column,
+            )
+        }
         Instruction::Halt => {
             let base = format!("{}Halt         halt", indent);
             align_comment(&base, "Stop execution", config.comment_column)
@@ -646,6 +707,8 @@ fn get_instruction_name(instruction: &Instruction) -> &'static str {
         Instruction::CallRule { .. } => "CALL_RULE",
         Instruction::RuleInit { .. } => "RULE_INIT",
         Instruction::RuleReturn { .. } => "RULE_RET",
+        Instruction::ChainedIndex { .. } => "CHAINED_INDEX",
+        Instruction::VirtualDataDocumentLookup { .. } => "VIRTUAL_DATA_DOC_LOOKUP",
         Instruction::Halt => "HALT",
     }
 }

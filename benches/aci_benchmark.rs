@@ -123,7 +123,7 @@ fn aci_policy_eval(c: &mut Criterion) {
             // Create RVM and load the program for validation
             let mut vm = RegoVM::new();
             vm.load_program(program.clone());
-            vm.set_data(data.clone());
+            vm.set_data(data.clone()).expect("Failed to set data");
             vm.set_input(input.clone());
 
             // Execute on RVM and validate result
@@ -147,7 +147,7 @@ fn aci_policy_eval(c: &mut Criterion) {
                         || {
                             let mut vm = RegoVM::new();
                             vm.load_program(program.clone());
-                            vm.set_data(data.clone());
+                            vm.set_data(data.clone()).expect("Failed to set data");
                             (vm, case.input.clone())
                         },
                         |(mut vm, input)| {

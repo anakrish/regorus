@@ -5,6 +5,7 @@ use crate::value::Value;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 extern crate alloc;
@@ -209,6 +210,11 @@ pub struct Program {
     /// Program metadata
     pub metadata: ProgramMetadata,
 
+    /// Rule tree for efficient rule lookup
+    /// Maps rule paths (e.g., "data.p1.r1") to rule indices
+    /// Structure: {"p1": {"r1": rule_index}, "p2": {"p3": {"r2": rule_index}}}
+    pub rule_tree: Value,
+
     /// Resolved builtins - actual builtin function values fetched from interpreter's builtin map
     /// This field is skipped during serialization and reinitialized after deserialization
     #[serde(skip)]
@@ -353,6 +359,7 @@ impl Program {
                 source_info: "unknown".to_string(),
                 optimization_level: 0,
             },
+            rule_tree: Value::new_object(),
             resolved_builtins: Vec::new(),
         }
     }
@@ -512,6 +519,110 @@ impl Program {
     /// Check if resolved builtins are initialized
     pub fn has_resolved_builtins(&self) -> bool {
         !self.resolved_builtins.is_empty()
+    }
+
+    /// Add a rule to the rule tree
+    /// path: Package path components (e.g., ["p1", "p2"] for data.p1.p2.rule)
+    /// rule_name: Rule name (e.g., "rule")
+    /// rule_index: Index of the rule in rule_infos
+    pub fn add_rule_to_tree(
+        &mut self,
+        path: &[String],
+        rule_name: &str,
+        rule_index: usize,
+    ) -> Result<()> {
+        // Create the full path including the rule name
+        let mut full_path = Vec::with_capacity(path.len() + 1);
+        full_path.extend(path.iter().map(|s| s.as_str()));
+        full_path.push(rule_name);
+
+        // Use make_or_get_value_mut to navigate/create the nested structure
+        let target = self.rule_tree.make_or_get_value_mut(&full_path)?;
+
+        // Set the rule index at the target location
+        *target = Value::Number(rule_index.into());
+
+        Ok(())
+    }
+
+    /// Check for conflicts between rule tree and data
+    /// Returns an error if any rule path conflicts with data paths
+    pub fn check_rule_data_conflicts(&self, data: &Value) -> Result<(), crate::rvm::vm::VmError> {
+        // Ignore "data" prefix in rule tree.
+        let actual_rule_tree = &self.rule_tree["data"];
+
+        // If rule tree is empty or undefined (no rules compiled), there can be no conflicts
+        match actual_rule_tree {
+            Value::Undefined => return Ok(()),
+            Value::Object(rule_obj) if rule_obj.is_empty() => return Ok(()),
+            _ => {}
+        }
+
+        self.check_conflicts_recursive(actual_rule_tree, data, &mut Vec::new())
+    }
+
+    /// Recursively check for conflicts between rule tree and data
+    fn check_conflicts_recursive(
+        &self,
+        rule_tree: &Value,
+        data: &Value,
+        current_path: &mut Vec<String>,
+    ) -> Result<(), crate::rvm::vm::VmError> {
+        match rule_tree {
+            Value::Object(rule_obj) => {
+                for (key, rule_value) in rule_obj.iter() {
+                    if let Value::String(key_str) = key {
+                        current_path.push(key_str.to_string());
+
+                        // Check if data has the same path
+                        let data_value = &data[key];
+
+                        match rule_value {
+                            Value::Number(_) => {
+                                // This is a leaf rule - check for conflict
+                                if data_value != &Value::Undefined {
+                                    return Err(crate::rvm::vm::VmError::RuleDataConflict(format!(
+                                        "Conflict: rule defines path '{}' but data also provides this path",
+                                        current_path.join(".")
+                                    )));
+                                }
+                            }
+                            Value::Object(_) => {
+                                // This is an intermediate node - recurse if data also has an object
+                                if let Value::Object(_) = data_value {
+                                    self.check_conflicts_recursive(
+                                        rule_value,
+                                        data_value,
+                                        current_path,
+                                    )?;
+                                } else if data_value != &Value::Undefined {
+                                    return Err(crate::rvm::vm::VmError::RuleDataConflict(format!(
+                                        "Conflict: rule defines subpaths under '{}' but data provides a non-object value at this path",
+                                        current_path.join(".")
+                                    )));
+                                }
+                            }
+                            _ => {
+                                // Unexpected rule tree structure
+                                return Err(crate::rvm::vm::VmError::RuleDataConflict(format!(
+                                    "Invalid rule tree structure at path '{}'",
+                                    current_path.join(".")
+                                )));
+                            }
+                        }
+
+                        current_path.pop();
+                    }
+                }
+            }
+            _ => {
+                return Err(crate::rvm::vm::VmError::RuleDataConflict(
+                    "Rule tree root must be an object".to_string(),
+                ));
+            }
+        }
+
+        Ok(())
     }
 }
 

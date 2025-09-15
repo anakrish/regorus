@@ -161,6 +161,8 @@ pub struct TestCase {
     pub want_error_code: Option<String>,
     #[serde(default = "default_strict")]
     pub strict: bool,
+    /// Allow interpreter to succeed when RVM fails with conflict detection
+    pub allow_interpreter_success: Option<bool>,
 }
 
 fn default_strict() -> bool {

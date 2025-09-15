@@ -75,7 +75,7 @@ fn eval_test_case_rvm(dir: &Path, case: &TestCase) -> Result<Value> {
     // Create RVM and load the program
     let mut vm = RegoVM::new();
     vm.load_program(program);
-    vm.set_data(data);
+    vm.set_data(data)?;
     vm.set_input(input);
 
     // Execute on RVM

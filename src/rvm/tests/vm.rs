@@ -150,7 +150,7 @@ mod tests {
         // Set global data and input if provided
         if let Some(data_value) = data {
             let processed_data = process_value(&data_value)?;
-            vm.set_data(processed_data);
+            vm.set_data(processed_data)?;
         }
         if let Some(input_value) = input {
             let processed_input = process_value(&input_value)?;

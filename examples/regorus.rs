@@ -219,7 +219,8 @@ fn rego_eval(
             // Create and execute VM
             let mut vm = RegoVM::new();
             vm.load_program(program);
-            vm.set_data(engine.get_data());
+            vm.set_data(engine.get_data())
+                .map_err(|e| anyhow::anyhow!("Failed to set data: {}", e))?;
 
             // Set input if we have it
             if let Some(input_data) = input_data {
@@ -542,7 +543,8 @@ fn rego_debug(
     vm.load_program(program);
 
     // Set data and input
-    vm.set_data(engine.get_data());
+    vm.set_data(engine.get_data())
+        .map_err(|e| anyhow::anyhow!("Failed to set data: {}", e))?;
     if let Some(input_data) = input_value {
         vm.set_input(input_data);
     }

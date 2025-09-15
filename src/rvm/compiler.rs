@@ -2003,6 +2003,28 @@ impl<'a> Compiler<'a> {
                 rule_path, rule_param_count
             );
 
+            // Add the compiled rule to the rule tree for efficient lookups
+            // Parse the rule path to extract package path and rule name
+            let rule_path_parts: Vec<&str> = rule_path.split('.').collect();
+            if let Some((rule_name, package_parts)) = rule_path_parts.split_last() {
+                let package_path: Vec<String> =
+                    package_parts.iter().map(|s| s.to_string()).collect();
+
+                if let Err(_e) =
+                    self.program
+                        .add_rule_to_tree(&package_path, rule_name, rule_index as usize)
+                {
+                    debug!("Failed to add rule '{}' to tree: {:?}", rule_path, _e);
+                } else {
+                    debug!(
+                        "Added rule '{}' to rule tree at index {}",
+                        rule_path, rule_index
+                    );
+                }
+            } else {
+                debug!("Could not parse rule path '{}'", rule_path);
+            }
+
             // Restore the global register counter and package context
             self.register_counter = saved_register_counter;
             self.current_package = saved_package;

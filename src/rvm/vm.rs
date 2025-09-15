@@ -72,6 +72,9 @@ pub enum VmError {
     #[error("Assertion failed")]
     AssertionFailed,
 
+    #[error("Rule-data conflict: {0}")]
+    RuleDataConflict(String),
+
     #[error("Arithmetic error: {0}")]
     ArithmeticError(String),
 }
@@ -337,8 +340,12 @@ impl RegoVM {
     }
 
     /// Set the global data object
-    pub fn set_data(&mut self, data: Value) {
+    pub fn set_data(&mut self, data: Value) -> Result<()> {
+        // Check for conflicts between rule tree and data
+        self.program.check_rule_data_conflicts(&data)?;
+
         self.data = data;
+        Ok(())
     }
 
     /// Set the global input object

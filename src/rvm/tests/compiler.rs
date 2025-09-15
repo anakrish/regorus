@@ -59,7 +59,7 @@ mod tests {
         vm.load_program(program);
 
         // Set data and input in the VM
-        vm.set_data(data.clone());
+        vm.set_data(data.clone())?;
         vm.set_input(input.clone());
 
         // Run the VM
@@ -99,7 +99,7 @@ mod tests {
         vm.load_program(program);
 
         // Set data and input in the VM
-        vm.set_data(data.clone());
+        vm.set_data(data.clone())?;
         vm.set_input(input.clone());
 
         // Run the VM with debugger enabled
@@ -272,10 +272,19 @@ mod tests {
                             // RVM failed - check if interpreter also failed
                             match &interpreter_result {
                                 Ok(interpreter_value) => {
-                                    panic!(
-                                        "RVM failed for case '{}' but interpreter succeeded:\nRVM error: {}\nInterpreter result: {:?}",
-                                        case.note, e, interpreter_value
-                                    );
+                                    // RVM failed but interpreter succeeded
+                                    if case.allow_interpreter_success == Some(true) {
+                                        // This is acceptable - RVM detected a conflict that interpreter didn't
+                                        std::println!(
+                                            "✓ RVM detected conflict for case '{}' (interpreter success allowed): {}",
+                                            case.note, e
+                                        );
+                                    } else {
+                                        panic!(
+                                            "RVM failed for case '{}' but interpreter succeeded:\nRVM error: {}\nInterpreter result: {:?}",
+                                            case.note, e, interpreter_value
+                                        );
+                                    }
                                 }
                                 Err(_interpreter_error) => {
                                     // Both failed - this could be expected, but for success cases it's not
@@ -318,10 +327,26 @@ mod tests {
                             // RVM failed - check if interpreter also failed consistently
                             match &interpreter_result {
                                 Ok(interpreter_value) => {
-                                    panic!(
-                                        "RVM failed for case '{}' but interpreter succeeded:\nRVM error: {}\nInterpreter result: {:?}",
-                                        case.note, actual_error, interpreter_value
-                                    );
+                                    // RVM failed but interpreter succeeded
+                                    if case.allow_interpreter_success == Some(true) {
+                                        // This is acceptable - RVM detected a conflict that interpreter didn't
+                                        let actual_error_str = actual_error.to_string();
+                                        if !actual_error_str.contains(expected_error) {
+                                            panic!(
+                                                "Error message mismatch for case '{}':\nExpected to contain: {}\nActual: {}",
+                                                case.note, expected_error, actual_error_str
+                                            );
+                                        }
+                                        std::println!(
+                                            "✓ RVM error matches expected for case '{}' (interpreter success allowed)",
+                                            case.note
+                                        );
+                                    } else {
+                                        panic!(
+                                            "RVM failed for case '{}' but interpreter succeeded:\nRVM error: {}\nInterpreter result: {:?}",
+                                            case.note, actual_error, interpreter_value
+                                        );
+                                    }
                                 }
                                 Err(_interpreter_error) => {
                                     // Both failed - check if RVM error matches expected

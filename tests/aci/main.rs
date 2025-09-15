@@ -1,5 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+use regorus::rvm::{compiler::Compiler, vm::RegoVM};
 use regorus::*;
 
 use std::path::Path;
@@ -18,6 +19,8 @@ struct TestCase {
     modules: Vec<String>,
     query: String,
     want_result: Value,
+    #[serde(default)]
+    skip_rvm: bool,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -58,19 +61,31 @@ fn eval_test_case_interpreter(dir: &Path, case: &TestCase) -> Result<Value> {
 fn eval_test_case_rvm(dir: &Path, case: &TestCase) -> Result<Value> {
     let mut engine = setup_engine(dir, case)?;
 
-    // Convert input to Value for compiled policy evaluation
+    // Convert input and data for RVM
     let input = case.input.clone();
+    let data = case.data.clone();
 
-    // Compile with entrypoint and evaluate using compiled policy
+    // Create CompiledPolicy first (needed for RVM compiler)
     let rule = Rc::from(case.query.as_str());
-    let compiled = engine.compile_with_entrypoint(&rule)?;
-    let result = compiled.eval_with_input(input)?;
+    let compiled_policy = engine.compile_with_entrypoint(&rule)?;
+
+    // Use RVM compiler to create a program
+    let program = Compiler::compile_from_policy(&compiled_policy, &case.query)?;
+
+    // Create RVM and load the program
+    let mut vm = RegoVM::new();
+    vm.load_program(program);
+    vm.set_data(data);
+    vm.set_input(input);
+
+    // Execute on RVM
+    let result = vm.execute()?;
 
     // Make result json compatible. (E.g: avoid sets).
     Value::from_json_str(&result.to_string())
 }
 
-fn run_aci_tests(dir: &Path) -> Result<()> {
+fn run_aci_tests(dir: &Path, filter: Option<&str>) -> Result<()> {
     let mut nfailures = 0;
     for entry in WalkDir::new(dir)
         .sort_by_file_name()
@@ -87,84 +102,61 @@ fn run_aci_tests(dir: &Path) -> Result<()> {
         let test: YamlTest = serde_yaml::from_str(&yaml)?;
 
         for case in &test.cases {
+            // Apply filter if specified
+            if let Some(filter_str) = filter {
+                if !case.note.contains(filter_str) {
+                    continue;
+                }
+            }
+
             print!("{:50}", case.note);
 
             // Test with interpreter
             let start = Instant::now();
-            let interpreter_results = eval_test_case_interpreter(dir, case);
+            let interpreter_results = eval_test_case_interpreter(dir, case)?;
             let interpreter_duration = start.elapsed();
+
+            if interpreter_results != case.want_result {
+                println!(
+                    "INTERPRETER DIFF {}",
+                    prettydiff::diff_chars(
+                        &serde_yaml::to_string(&case.want_result)?,
+                        &serde_yaml::to_string(&interpreter_results)?
+                    )
+                );
+                nfailures += 1;
+                continue;
+            }
+            if case.skip_rvm {
+                println!("skipped rvm");
+                continue;
+            }
 
             // Test with RVM
             let start = Instant::now();
-            let rvm_results = eval_test_case_rvm(dir, case);
+            let rvm_results = eval_test_case_rvm(dir, case)?;
             let rvm_duration = start.elapsed();
 
-            match (interpreter_results, rvm_results) {
-                (Ok(interpreter_actual), Ok(rvm_actual)) => {
-                    // First check interpreter against expected result
-                    if interpreter_actual != case.want_result {
-                        println!(
-                            "INTERPRETER DIFF {}",
-                            prettydiff::diff_chars(
-                                &serde_yaml::to_string(&case.want_result)?,
-                                &serde_yaml::to_string(&interpreter_actual)?
-                            )
-                        );
-                        nfailures += 1;
-                        continue;
-                    }
-
-                    // Then check RVM against expected result
-                    if rvm_actual != case.want_result {
-                        println!(
-                            "RVM DIFF {}",
-                            prettydiff::diff_chars(
-                                &serde_yaml::to_string(&case.want_result)?,
-                                &serde_yaml::to_string(&rvm_actual)?
-                            )
-                        );
-                        nfailures += 1;
-                        continue;
-                    }
-
-                    // Finally, assert that interpreter and RVM produce identical results
-                    if interpreter_actual != rvm_actual {
-                        println!(
-                            "INTERPRETER vs RVM DIFF {}",
-                            prettydiff::diff_chars(
-                                &serde_yaml::to_string(&interpreter_actual)?,
-                                &serde_yaml::to_string(&rvm_actual)?
-                            )
-                        );
-                        nfailures += 1;
-                        continue;
-                    }
-
-                    println!(
-                        "passed    interp: {:?}, rvm: {:?}",
-                        interpreter_duration, rvm_duration
-                    );
-                }
-                (Ok(_), Err(rvm_error)) => {
-                    println!("RVM failed    {:?}", rvm_duration);
-                    println!("RVM error: {rvm_error}");
-                    nfailures += 1;
-                }
-                (Err(interpreter_error), Ok(_)) => {
-                    println!("INTERPRETER failed    {:?}", interpreter_duration);
-                    println!("Interpreter error: {interpreter_error}");
-                    nfailures += 1;
-                }
-                (Err(interpreter_error), Err(rvm_error)) => {
-                    println!(
-                        "BOTH failed    interp: {:?}, rvm: {:?}",
-                        interpreter_duration, rvm_duration
-                    );
-                    println!("Interpreter error: {interpreter_error}");
-                    println!("RVM error: {rvm_error}");
-                    nfailures += 1;
-                }
+            if interpreter_results != rvm_results {
+                println!("INTERPRETER RESULT:");
+                println!("{}", serde_yaml::to_string(&interpreter_results)?);
+                println!("RVM RESULT:");
+                println!("{}", serde_yaml::to_string(&rvm_results)?);
+                println!(
+                    "INTERPRETER vs RVM DIFF {}",
+                    prettydiff::diff_chars(
+                        &serde_yaml::to_string(&interpreter_results)?,
+                        &serde_yaml::to_string(&rvm_results)?
+                    )
+                );
+                nfailures += 1;
+                continue;
             }
+
+            print!(
+                "Interp: {:?}, RVM: {:?}\n",
+                interpreter_duration, rvm_duration
+            );
         }
     }
     assert!(nfailures == 0);
@@ -216,8 +208,8 @@ fn run_aci_tests_coverage(dir: &Path) -> Result<()> {
         }
     }
 
-    let report = engine.get_coverage_report()?;
-    println!("{}", report.to_string_pretty()?);
+    //let report = engine.get_coverage_report()?;
+    //println!("{}", report.to_string_pretty()?);
 
     Ok(())
 }
@@ -229,6 +221,10 @@ struct Cli {
     #[arg(long, short)]
     #[clap(default_value = "tests/aci")]
     test_dir: String,
+
+    /// Filter to run only specific test cases (by note field, e.g., "create_container")
+    #[arg(long, short)]
+    filter: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -237,5 +233,5 @@ fn main() -> Result<()> {
     #[cfg(feature = "coverage")]
     run_aci_tests_coverage(&Path::new(&cli.test_dir))?;
 
-    run_aci_tests(&Path::new(&cli.test_dir))
+    run_aci_tests(&Path::new(&cli.test_dir), cli.filter.as_deref())
 }

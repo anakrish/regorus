@@ -298,9 +298,11 @@ impl RegoVM {
             debug!("VM rule infos:");
             for (rule_idx, rule_info) in program.rule_infos.iter().enumerate() {
                 debug!(
-                    "  VM Rule {}: {} definitions",
+                    "  VM Rule {} with idx {}: {} definitions with {} registers",
+                    rule_info.name,
                     rule_idx,
-                    rule_info.definitions.len()
+                    rule_info.definitions.len(),
+                    rule_info.num_registers
                 );
                 for (def_idx, bodies) in rule_info.definitions.iter().enumerate() {
                     debug!(
@@ -515,15 +517,7 @@ impl RegoVM {
 
                 Instruction::Move { dest, src } => {
                     debug!("Move instruction - dest={}, src={}", dest, src);
-                    debug!(
-                        "Before Move - src register {} contains: {:?}",
-                        src, self.registers[src as usize]
-                    );
                     self.registers[dest as usize] = self.registers[src as usize].clone();
-                    debug!(
-                        "After Move - dest register {} contains: {:?}",
-                        dest, self.registers[dest as usize]
-                    );
                 }
 
                 Instruction::Add { dest, left, right } => {
@@ -985,10 +979,11 @@ impl RegoVM {
         let num_registers = rule_info.num_registers as usize;
         let mut register_window = Vec::with_capacity(num_registers);
 
+        // Return register.
+        register_window.push(Value::Undefined);
+
         let num_retained_registers = match function_call_params {
             Some(params) => {
-                // Return register.
-                register_window.push(Value::Undefined);
                 for arg in params.args[0..params.num_args as usize].iter() {
                     register_window.push(self.registers[*arg as usize].clone());
                 }
@@ -1013,10 +1008,21 @@ impl RegoVM {
 
         let mut old_registers = Vec::default();
         core::mem::swap(&mut old_registers, &mut self.registers);
+
+        // Backup loop stack during function calls to prevent register index conflicts
+        let mut old_loop_stack = Vec::default();
+        core::mem::swap(&mut old_loop_stack, &mut self.loop_stack);
+
         self.register_stack.push(old_registers);
         self.registers = register_window;
 
         for (def_idx, definition_bodies) in rule_definitions.iter().enumerate() {
+            debug!(
+                "Executing rule definition {} with {} bodies",
+                def_idx,
+                definition_bodies.len()
+            );
+
             for (body_entry_point_idx, body_entry_point) in definition_bodies.iter().enumerate() {
                 // Update call context if we have one
                 if let Some(ctx) = self.call_rule_stack.last_mut() {
@@ -1033,6 +1039,10 @@ impl RegoVM {
                 self.registers
                     .resize(num_retained_registers, Value::Undefined);
                 self.registers.resize(num_registers, Value::Undefined);
+                debug!(
+                    "Register window reset - retained {} registers, total {} registers",
+                    num_retained_registers, num_registers
+                );
 
                 // Execute the body
                 match self.jump_to(*body_entry_point) {
@@ -1107,6 +1117,9 @@ impl RegoVM {
             self.registers = old_registers;
         }
 
+        // Restore loop stack after function call
+        self.loop_stack = old_loop_stack;
+
         Ok((final_result, rule_failed_due_to_inconsistency))
     }
 
@@ -1128,24 +1141,53 @@ impl RegoVM {
             return Err(VmError::RuleIndexOutOfBounds { index: rule_index });
         }
 
-        // Check cache first
-        let (computed, cached_result) = &self.rule_cache[rule_idx];
-        if *computed {
-            // Cache hit - return cached result
-            debug!(
-                "Cache hit for rule {} - result: {:?}",
-                rule_index, cached_result
-            );
-            self.registers[dest as usize] = cached_result.clone();
-            return Ok(());
-        }
-
+        // Get rule info first to check if it's a function rule
         let rule_info = self
             .program
             .rule_infos
             .get(rule_idx)
             .ok_or_else(|| VmError::RuleInfoMissing { index: rule_index })?
             .clone();
+
+        // Push span for the rule being called
+        #[cfg(feature = "rvm-tracing")]
+        {
+            let span = span!(
+                tracing::Level::DEBUG,
+                "call_rule",
+                rule_name = rule_info.name.as_str()
+            );
+            self.push_span(span);
+        }
+
+        // Check if this is a function rule (has parameters)
+        let is_function_rule = rule_info.function_info.is_some();
+
+        // Check cache first (but skip caching for function rules)
+        if !is_function_rule {
+            let (computed, cached_result) = &self.rule_cache[rule_idx];
+            if *computed {
+                // Cache hit - return cached result
+                debug!(
+                    "Cache hit for rule {} - result: {:?}",
+                    rule_index, cached_result
+                );
+                self.registers[dest as usize] = cached_result.clone();
+                #[cfg(feature = "rvm-tracing")]
+                self.pop_span();
+                return Ok(());
+            }
+        }
+
+        debug!(
+            "CallRule rule_info - rule_index={}, name='{}', type={:?}, num_registers={}, result_reg={}, definitions={}",
+            rule_index,
+            rule_info.name,
+            rule_info.rule_type,
+            rule_info.num_registers,
+            rule_info.result_reg,
+            rule_info.definitions.len()
+        );
 
         let rule_type = rule_info.rule_type.clone();
         let rule_definitions = rule_info.definitions.clone();
@@ -1157,8 +1199,13 @@ impl RegoVM {
                 rule_index
             );
             let result = Value::Undefined;
-            self.rule_cache[rule_idx] = (true, result.clone());
+            // Cache result only for non-function rules
+            if !is_function_rule {
+                self.rule_cache[rule_idx] = (true, result.clone());
+            }
             self.registers[dest as usize] = result;
+            #[cfg(feature = "rvm-tracing")]
+            self.pop_span();
             return Ok(());
         }
 
@@ -1175,7 +1222,8 @@ impl RegoVM {
 
         // Execute all rule definitions with consistency checking
         debug!(
-            "CallRule executing rule {} with {} definitions",
+            "CallRule executing rule '{}' (index {}) with {} definitions",
+            rule_info.name,
             rule_index,
             rule_definitions.len()
         );
@@ -1253,15 +1301,23 @@ impl RegoVM {
             }
         }
 
-        // Cache the final result
+        // Cache the final result (but skip caching for function rules)
         let final_result = self.registers[dest as usize].clone();
         debug!("Set rule final result: {:?}", final_result);
-        self.rule_cache[rule_idx] = (true, final_result);
+        if !is_function_rule {
+            self.rule_cache[rule_idx] = (true, final_result);
+        } else {
+            debug!("Skipping cache for function rule {}", rule_index);
+        }
 
         debug!(
             "CallRule completed - dest register {} set to {:?}",
             dest, self.registers[dest as usize]
         );
+
+        #[cfg(feature = "rvm-tracing")]
+        self.pop_span();
+
         Ok(())
     }
 
@@ -1286,7 +1342,13 @@ impl RegoVM {
         // Get parameters and extract needed values
         let params =
             self.program.instruction_data.function_call_params[params_index as usize].clone();
-        self.execute_call_rule_common(params.dest, params.func_rule_index, Some(&params))
+        let result =
+            self.execute_call_rule_common(params.dest, params.func_rule_index, Some(&params));
+
+        #[cfg(feature = "rvm-tracing")]
+        self.pop_span();
+
+        result
     }
 
     /// Execute a function rule call with arguments
@@ -1334,13 +1396,13 @@ impl RegoVM {
         // Use resolved builtin from program via vector indexing
         if let Some(builtin_fcn) = self.program.get_resolved_builtin(params.builtin_index) {
             // Create a dummy span for the VM context
-            let dummy_source = crate::lexer::Source::from_contents(String::new(), String::new())?;
+            let dummy_source = crate::lexer::Source::from_contents("arg".into(), String::new())?;
             let dummy_span = crate::lexer::Span {
                 source: dummy_source,
-                line: 0,
-                col: 0,
+                line: 1,
+                col: 1,
                 start: 0,
-                end: 0,
+                end: 3,
             };
 
             // Create dummy expressions for each argument
@@ -1497,19 +1559,8 @@ impl RegoVM {
 
     fn to_bool(&self, value: &Value) -> bool {
         match value {
+            Value::Undefined => false,
             Value::Bool(b) => *b,
-            Value::Null => false,
-            Value::Number(n) => {
-                if let Some(f) = n.as_f64() {
-                    f != 0.0
-                } else {
-                    true
-                }
-            }
-            Value::String(s) => !s.is_empty(),
-            Value::Array(arr) => !arr.is_empty(),
-            Value::Object(obj) => !obj.is_empty(),
-            Value::Set(set) => !set.is_empty(),
             _ => true,
         }
     }
@@ -1541,7 +1592,8 @@ impl RegoVM {
         );
 
         let collection_value = self.registers[params.collection as usize].clone();
-        debug!("Loop collection: {:?}", collection_value);
+        //debug!("Loop collection: {:?}", collection_value);
+        debug!("Loop collection");
 
         // Validate collection is iterable and create iteration state
         let iteration_state = match &collection_value {
@@ -1580,9 +1632,9 @@ impl RegoVM {
                 }
             }
             _ => {
-                return Err(VmError::InvalidIteration {
-                    value: collection_value.clone(),
-                });
+                debug!("Undefined collection, treating as empty");
+                self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
+                return Ok(());
             }
         };
 
@@ -1828,18 +1880,18 @@ impl RegoVM {
                 if *index < items.len() {
                     if key_reg != value_reg {
                         let key_value = Value::from(*index as f64);
-                        debug!(
+                        /*debug!(
                             "Setting array iteration: key[{}] = {}, value[{}] = {:?}",
                             key_reg, index, value_reg, items[*index]
-                        );
+                        );*/
                         self.registers[key_reg as usize] = key_value;
                     }
                     let item_value = items[*index].clone();
                     self.registers[value_reg as usize] = item_value.clone();
-                    debug!(
+                    /*debug!(
                         "Array iteration setup complete: index={}, value={:?}",
                         index, item_value
-                    );
+                    );*/
                     Ok(true)
                 } else {
                     debug!(

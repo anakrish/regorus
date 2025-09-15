@@ -6,12 +6,71 @@ pub fn init_rvm_tracing() {
     use std::string::ToString;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-    struct TreeLayer;
+    struct TreeLayer {
+        spans: std::sync::Arc<
+            std::sync::Mutex<
+                std::collections::HashMap<
+                    tracing::span::Id,
+                    std::collections::HashMap<std::string::String, std::string::String>,
+                >,
+            >,
+        >,
+    }
+
+    impl TreeLayer {
+        fn new() -> Self {
+            Self {
+                spans: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            }
+        }
+    }
+
+    // Helper struct to extract span fields
+    struct FieldVisitor {
+        fields: std::vec::Vec<std::string::String>,
+    }
+
+    impl tracing::field::Visit for FieldVisitor {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.fields
+                .push(std::format!("{}={:?}", field.name(), value));
+        }
+
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.fields.push(std::format!("{}={}", field.name(), value));
+        }
+    }
 
     impl<S> tracing_subscriber::Layer<S> for TreeLayer
     where
         S: tracing::Subscriber + for<'lookup> tracing_subscriber::registry::LookupSpan<'lookup>,
     {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            id: &tracing::span::Id,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            // Extract span fields using FieldVisitor
+            let mut visitor = FieldVisitor {
+                fields: std::vec::Vec::new(),
+            };
+            attrs.record(&mut visitor);
+
+            // Convert to HashMap for easier access
+            let mut field_map = std::collections::HashMap::new();
+            for field in visitor.fields {
+                if let Some((key, value)) = field.split_once('=') {
+                    field_map.insert(key.to_string(), value.to_string());
+                }
+            }
+
+            // Store the fields for this span
+            if let Ok(mut spans) = self.spans.lock() {
+                spans.insert(id.clone(), field_map);
+            }
+        }
+
         fn on_event(
             &self,
             event: &tracing::Event<'_>,
@@ -111,9 +170,120 @@ pub fn init_rvm_tracing() {
 
         fn on_enter(&self, id: &tracing::span::Id, ctx: tracing_subscriber::layer::Context<'_, S>) {
             if let Some(span) = ctx.span(id) {
-                if let Some(_name) = span.name().strip_prefix("loop_") {
-                    // Don't show enter/exit for loop spans to reduce noise
+                // Skip noisy loop spans
+                if span.name().starts_with("loop_") {
+                    return;
                 }
+
+                // Calculate nesting level from span context
+                let scope = ctx.span_scope(id);
+                let mut level = 0;
+                if let Some(scope) = scope {
+                    level = scope.count().saturating_sub(1);
+                }
+
+                // Create tree-like indentation
+                let tree_prefix = match level {
+                    0 => "".to_string(),
+                    1 => "├── ".to_string(),
+                    2 => "│   ├── ".to_string(),
+                    3 => "│   │   ├── ".to_string(),
+                    4 => "│   │   │   ├── ".to_string(),
+                    5 => "│   │   │   │   ├── ".to_string(),
+                    _ => {
+                        let mut prefix = std::string::String::new();
+                        for _ in 0..level.saturating_sub(1) {
+                            prefix.push_str("│   ");
+                        }
+                        prefix.push_str("├── ");
+                        prefix
+                    }
+                };
+
+                // Get stored field values for this span
+                let mut fields_str = std::string::String::new();
+                if let Ok(spans) = self.spans.lock() {
+                    if let Some(field_map) = spans.get(id) {
+                        if !field_map.is_empty() {
+                            let field_strs: std::vec::Vec<std::string::String> = field_map
+                                .iter()
+                                .map(|(k, v)| std::format!("{}={}", k, v))
+                                .collect();
+                            fields_str = std::format!(" [{}]", field_strs.join(", "));
+                        }
+                    }
+                }
+
+                // Print span entry with green color for ENTER
+                std::println!(
+                    "{}▶ \x1b[32mENTER\x1b[0m {}{}",
+                    tree_prefix,
+                    span.name(),
+                    fields_str
+                );
+            }
+        }
+
+        fn on_exit(&self, id: &tracing::span::Id, ctx: tracing_subscriber::layer::Context<'_, S>) {
+            if let Some(span) = ctx.span(id) {
+                // Skip noisy loop spans
+                if span.name().starts_with("loop_") {
+                    return;
+                }
+
+                // Calculate nesting level from span context
+                let scope = ctx.span_scope(id);
+                let mut level = 0;
+                if let Some(scope) = scope {
+                    level = scope.count().saturating_sub(1);
+                }
+
+                // Create tree-like indentation
+                let tree_prefix = match level {
+                    0 => "".to_string(),
+                    1 => "└── ".to_string(),
+                    2 => "│   └── ".to_string(),
+                    3 => "│   │   └── ".to_string(),
+                    4 => "│   │   │   └── ".to_string(),
+                    5 => "│   │   │   │   └── ".to_string(),
+                    _ => {
+                        let mut prefix = std::string::String::new();
+                        for _ in 0..level.saturating_sub(1) {
+                            prefix.push_str("│   ");
+                        }
+                        prefix.push_str("└── ");
+                        prefix
+                    }
+                };
+
+                // Get stored field values for this span
+                let mut fields_str = std::string::String::new();
+                if let Ok(spans) = self.spans.lock() {
+                    if let Some(field_map) = spans.get(id) {
+                        if !field_map.is_empty() {
+                            let field_strs: std::vec::Vec<std::string::String> = field_map
+                                .iter()
+                                .map(|(k, v)| std::format!("{}={}", k, v))
+                                .collect();
+                            fields_str = std::format!(" [{}]", field_strs.join(", "));
+                        }
+                    }
+                }
+
+                // Print span exit with red color for EXIT
+                std::println!(
+                    "{}◀ \x1b[31mEXIT\x1b[0m {}{}",
+                    tree_prefix,
+                    span.name(),
+                    fields_str
+                );
+            }
+        }
+
+        fn on_close(&self, id: tracing::span::Id, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+            // Clean up stored field data to prevent memory leaks
+            if let Ok(mut spans) = self.spans.lock() {
+                spans.remove(&id);
             }
         }
     }
@@ -122,7 +292,7 @@ pub fn init_rvm_tracing() {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,regorus::rvm::vm=debug".into());
 
     let _ = tracing_subscriber::registry()
-        .with(TreeLayer)
+        .with(TreeLayer::new())
         .with(filter)
         .try_init();
 }

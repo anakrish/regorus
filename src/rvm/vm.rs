@@ -1,4 +1,4 @@
-use crate::rvm::instructions::{Instruction, LoopMode};
+use crate::rvm::instructions::{Instruction, LiteralOrRegister, LoopMode};
 use crate::rvm::program::Program;
 use crate::rvm::tracing_utils::{debug, info, span, trace};
 use crate::value::Value;
@@ -41,6 +41,9 @@ pub enum VmError {
 
     #[error("Invalid template literal index: {index}")]
     InvalidTemplateLiteralIndex { index: u16 },
+
+    #[error("Invalid chained index params index: {index}")]
+    InvalidChainedIndexParams { index: u16 },
 
     #[error("Builtin function expects exactly {expected} arguments, got {actual}")]
     BuiltinArgumentMismatch { expected: u16, actual: usize },
@@ -958,6 +961,51 @@ impl RegoVM {
                     #[cfg(feature = "rvm-tracing")]
                     self.clear_spans();
                     return Ok(self.registers[0].clone());
+                }
+
+                Instruction::ChainedIndex { params_index } => {
+                    let params = self
+                        .program
+                        .instruction_data
+                        .get_chained_index_params(params_index)
+                        .ok_or_else(|| VmError::InvalidChainedIndexParams {
+                            index: params_index,
+                        })?;
+
+                    // Start with the root object
+                    let mut current_value = self.registers[params.root as usize].clone();
+
+                    // Traverse each path component
+                    for component in &params.path_components {
+                        let key_value = match component {
+                            LiteralOrRegister::Literal(idx) => self
+                                .program
+                                .literals
+                                .get(*idx as usize)
+                                .ok_or_else(|| VmError::LiteralIndexOutOfBounds {
+                                    index: *idx as usize,
+                                })?
+                                .clone(),
+                            LiteralOrRegister::Register(reg) => {
+                                self.registers[*reg as usize].clone()
+                            }
+                        };
+
+                        // Use Value's built-in indexing for each step
+                        current_value = current_value[&key_value].clone();
+
+                        // If we hit Undefined at any step, stop traversal
+                        if current_value == Value::Undefined {
+                            break;
+                        }
+                    }
+
+                    // Store the final result
+                    self.registers[params.dest as usize] = current_value;
+                }
+
+                Instruction::VirtualDataDocumentLookup { .. } => {
+                    unimplemented!("VirtualDataDocumentLookup instruction not yet implemented")
                 }
             }
 

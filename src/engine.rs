@@ -100,6 +100,12 @@ impl Engine {
         self.rego_v1 = !rego_v0;
     }
 
+    /// Get the current Rego version setting.
+    /// Returns `true` if using Rego v0, `false` if using Rego v1.
+    pub fn is_rego_v0(&self) -> bool {
+        !self.rego_v1
+    }
+
     /// Add a policy.
     ///
     /// The policy file will be parsed and converted to AST representation.
@@ -522,6 +528,7 @@ impl Engine {
     pub fn compile_for_target(&mut self) -> Result<CompiledPolicy> {
         self.prepare_for_eval(false, true)?;
         self.interpreter.clean_internal_evaluation_state();
+        self.interpreter.set_rego_v0(!self.rego_v1);
         self.interpreter.compile(None).map(CompiledPolicy::new)
     }
 
@@ -646,6 +653,7 @@ impl Engine {
     pub fn compile_with_entrypoint(&mut self, rule: &Rc<str>) -> Result<CompiledPolicy> {
         self.prepare_for_eval(false, false)?;
         self.interpreter.clean_internal_evaluation_state();
+        self.interpreter.set_rego_v0(!self.rego_v1);
         self.interpreter
             .compile(Some(rule.clone()))
             .map(CompiledPolicy::new)

@@ -315,6 +315,10 @@ impl Interpreter {
         self.compiled_policy_mut().strict_builtin_errors = b;
     }
 
+    pub fn set_rego_v0(&mut self, b: bool) {
+        self.compiled_policy_mut().rego_v0 = b;
+    }
+
     pub fn set_input(&mut self, input: Value) {
         self.input = input;
     }

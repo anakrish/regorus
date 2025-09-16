@@ -12,6 +12,7 @@ use crate::rvm::program::RuleType;
 use crate::rvm::program::SpanInfo;
 use crate::rvm::tracing_utils::{debug, info, span};
 use crate::utils::get_path_string;
+use crate::Map;
 use crate::{CompiledPolicy, Value};
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
@@ -19,12 +20,7 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
-
-// Use HashMap when std is available for better performance, BTreeMap otherwise
-#[cfg(not(feature = "std"))]
-use alloc::collections::BTreeMap as Map;
-#[cfg(feature = "std")]
-use std::collections::HashMap as Map;
+use indexmap::IndexMap;
 
 pub type Register = u8;
 
@@ -241,8 +237,8 @@ pub struct Compiler<'a> {
     current_package: String,    // Current package path (e.g., "data.test")
     current_module_index: u32, // Current module index for scheduler lookup (set from rule's source file index)
     // Three-level hierarchy compilation fields
-    rule_index_map: Map<String, u16>, // Maps rule paths to their assigned rule indices
-    rule_worklist: Vec<WorklistEntry>, // Rules that need to be compiled with caller tracking
+    rule_index_map: BTreeMap<String, u16>, // Maps rule paths to their assigned rule indices
+    rule_worklist: Vec<WorklistEntry>,     // Rules that need to be compiled with caller tracking
     rule_definitions: Vec<Vec<Vec<usize>>>, // rule_index -> Vec<definition> where definition is Vec<body_entry_point>
     rule_definition_function_params: Vec<Vec<Option<Vec<String>>>>, // rule_index -> Vec<definition> -> Some(param_names) for function defs, None for others
     rule_types: Vec<RuleType>, // rule_index -> true if set rule, false if regular rule
@@ -253,9 +249,9 @@ pub struct Compiler<'a> {
     context_stack: Vec<CompilationContext>, // Stack of compilation contexts
     loop_expr_register_map: BTreeMap<ExprRef, Register>, // Map from loop expressions to their allocated registers
     // Source tracking for span information (0-based indices)
-    source_to_index: Map<String, usize>, // Maps source file paths to source indices (0-based)
+    source_to_index: BTreeMap<String, usize>, // Maps source file paths to source indices (0-based)
     // Builtin management
-    builtin_index_map: Map<String, u16>, // Maps builtin names to their assigned indices
+    builtin_index_map: BTreeMap<String, u16>, // Maps builtin names to their assigned indices
     // Input/Data loading optimization - track registers per rule definition
     current_input_register: Option<Register>, // Register holding input in current rule definition
     current_data_register: Option<Register>,  // Register holding data in current rule definition
@@ -264,20 +260,22 @@ pub struct Compiler<'a> {
     // Call stack tracking for recursion detection
     current_call_stack: Vec<u16>, // Stack of rule indices currently being compiled
     // Entry points tracking
-    entry_points: Map<String, usize>, // Maps entry point names to their instruction indices
+    entry_points: IndexMap<String, usize>, // Maps entry point names to their instruction indices
 }
 
 impl<'a> Compiler<'a> {
     pub fn with_policy(policy: &'a CompiledPolicy) -> Self {
+        let mut program = Program::new();
+        program.rego_v0 = policy.is_rego_v0();
         Self {
-            program: Program::new(),
+            program,
             spans: Vec::new(),
             register_counter: 1,
             scopes: vec![Scope::default()],
             policy,
             current_package: "".to_string(), // Default package, will be set dynamically during compilation
             current_module_index: 0, // Will be set from rule's source file index during compilation
-            rule_index_map: Map::new(),
+            rule_index_map: BTreeMap::new(),
             rule_worklist: Vec::new(),
             rule_definitions: Vec::new(),
             rule_definition_function_params: Vec::new(),
@@ -287,13 +285,13 @@ impl<'a> Compiler<'a> {
             rule_num_registers: Vec::new(),
             context_stack: vec![], // Default context
             loop_expr_register_map: BTreeMap::new(),
-            source_to_index: Map::new(),
-            builtin_index_map: Map::new(),
+            source_to_index: BTreeMap::new(),
+            builtin_index_map: BTreeMap::new(),
             current_input_register: None,
             current_data_register: None,
             current_rule_path: String::new(),
             current_call_stack: Vec::new(),
-            entry_points: Map::new(),
+            entry_points: IndexMap::new(),
         }
     }
 

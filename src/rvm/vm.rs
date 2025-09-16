@@ -1411,6 +1411,16 @@ impl RegoVM {
         path_components: &[LiteralOrRegister],
         rule_tree_subobject: &Value,
     ) -> Result<Value> {
+        // TODO: Cache optimization opportunity
+        // This function can be optimized to use subobject-level caching to reduce redundant
+        // rule evaluations during virtual document lookup. The scenario involves:
+        // 1. Multiple lookup paths that share common prefixes in the rule tree
+        // 2. Each shared subobject gets evaluated multiple times (e.g., 24 cache misses instead of 6)
+        // 3. Optimization would cache assembled subobjects at intermediate paths using Value::Undefined
+        //    as a cache marker in the evaluated cache structure
+        // 4. Cache lookup should navigate through root_path components and check for cached subobjects
+        // 5. This can significantly reduce cache hits for nested rule structures with overlapping paths
+
         // Convert path components to Values for use as root path
         let mut root_path = Vec::new();
         for component in path_components {
@@ -1707,7 +1717,7 @@ impl RegoVM {
             Value::Object(_) => {
                 // Case 4: Subobject found
                 let rule_tree_subobject = current_node.clone();
-                
+
                 if components_consumed == params.path_components.len() {
                     // Case 4a: All components consumed, evaluate entire subobject
                     let result = self.execute_virtual_data_document_lookup_subobject(
@@ -1723,7 +1733,7 @@ impl RegoVM {
                         consumed_components,
                         &rule_tree_subobject,
                     )?;
-                    
+
                     // Apply remaining path components to the subobject result
                     let mut result = subobject_result;
                     for component in &params.path_components[components_consumed..] {

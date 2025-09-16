@@ -680,7 +680,7 @@ impl<'a> Compiler<'a> {
 
         // Check how many components of the pattern the rule can match
         let match_length = rule_parts.len().min(pattern_parts.len());
-        
+
         // Check if the rule matches the pattern up to the available components
         for i in 0..match_length {
             let rule_part = rule_parts[i];
@@ -703,8 +703,11 @@ impl<'a> Compiler<'a> {
         // Rule matches if either:
         // 1. It's at least as long as the pattern, OR
         // 2. It matches all available components and the remaining pattern parts are wildcards
-        rule_parts.len() >= pattern_parts.len() || 
-        (match_length > 0 && pattern_parts[match_length..].iter().all(|&part| part == "*"))
+        rule_parts.len() >= pattern_parts.len()
+            || (match_length > 0
+                && pattern_parts[match_length..]
+                    .iter()
+                    .all(|&part| part == "*"))
     }
 
     /// Compile local variable access chain

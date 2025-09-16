@@ -71,7 +71,7 @@ fn eval_test_case_rvm(dir: &Path, case: &TestCase) -> Result<Value> {
     let compiled_policy = engine.compile_with_entrypoint(&rule)?;
 
     // Use RVM compiler to create a program
-    let program = Compiler::compile_from_policy(&compiled_policy, &case.query)?;
+    let program = Compiler::compile_from_policy(&compiled_policy, &[&case.query])?;
 
     // Test round-trip serialization
     test_round_trip_serialization(program.as_ref()).map_err(|e| {

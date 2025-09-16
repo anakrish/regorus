@@ -4,6 +4,7 @@
 pub mod analysis;
 pub mod assembly_listing;
 pub mod compiler;
+#[cfg(feature = "std")]
 pub mod debugger;
 pub mod instructions;
 pub mod program;
@@ -21,6 +22,7 @@ pub use assembly_listing::{
     generate_assembly_listing, generate_tabular_assembly_listing, AssemblyListingConfig,
 };
 pub use compiler::Compiler;
+#[cfg(feature = "std")]
 pub use debugger::InteractiveDebugger;
 pub use instructions::Instruction;
 pub use program::Program;

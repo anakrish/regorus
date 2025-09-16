@@ -1,7 +1,7 @@
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use std::fmt::Write;
+use core::fmt::Write;
 
 use crate::rvm::{
     instructions::{Instruction, InstructionData, LoopMode},

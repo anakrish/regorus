@@ -167,7 +167,7 @@ fn print_evaluation_outputs() {
         .unwrap();
 
         let program =
-            Compiler::compile_from_policy(&compiled_policy, "data.example.allow").unwrap();
+            Compiler::compile_from_policy(&compiled_policy, &["data.example.allow"]).unwrap();
         let mut vm = RegoVM::new_with_policy(compiled_policy.clone());
         vm.load_program(program);
         vm.set_input(input_value.clone());
@@ -235,7 +235,8 @@ fn engine_vs_vm_comparison(c: &mut Criterion) {
 
                 // Compile to RVM program
                 let program =
-                    Compiler::compile_from_policy(&compiled_policy, "data.example.allow").unwrap();
+                    Compiler::compile_from_policy(&compiled_policy, &["data.example.allow"])
+                        .unwrap();
 
                 b.iter(|| {
                     let mut vm = RegoVM::new_with_policy(compiled_policy.clone());
@@ -297,7 +298,8 @@ fn server_policy_throughput(c: &mut Criterion) {
 
                 // Compile to RVM program
                 let program =
-                    Compiler::compile_from_policy(&compiled_policy, "data.example.allow").unwrap();
+                    Compiler::compile_from_policy(&compiled_policy, &["data.example.allow"])
+                        .unwrap();
 
                 b.iter(|| {
                     let mut vm = RegoVM::new_with_policy(compiled_policy.clone());
@@ -364,7 +366,8 @@ fn server_policy_batch_evaluation(c: &mut Criterion) {
 
                 // Compile to RVM program
                 let program =
-                    Compiler::compile_from_policy(&compiled_policy, "data.example.allow").unwrap();
+                    Compiler::compile_from_policy(&compiled_policy, &["data.example.allow"])
+                        .unwrap();
 
                 b.iter(|| {
                     for i in 0..batch_size {
@@ -411,7 +414,7 @@ fn server_policy_validation(c: &mut Criterion) {
                 let compiled_result = compiled_policy.eval_with_input(input_value.clone()).unwrap();
 
                 // RVM result
-                let program = Compiler::compile_from_policy(&compiled_policy, "data.example.allow").unwrap();
+                let program = Compiler::compile_from_policy(&compiled_policy, &["data.example.allow"]).unwrap();
                 let mut vm = RegoVM::new_with_policy(compiled_policy.clone());
                 vm.load_program(program);
                 vm.set_input(input_value.clone());

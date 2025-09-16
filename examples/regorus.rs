@@ -104,7 +104,7 @@ fn rego_compile(
     let compiled_policy = engine.compile_with_entrypoint(&rule_name_rc)?;
 
     // Compile the rule to RVM bytecode
-    let program = Compiler::compile_from_policy(&compiled_policy, &rule_name)?;
+    let program = Compiler::compile_from_policy(&compiled_policy, &[&rule_name])?;
 
     // Generate assembly listing
     let config = AssemblyListingConfig::default();
@@ -216,7 +216,7 @@ fn rego_eval(
             let compiled_policy = engine.compile_with_entrypoint(&rule_rc)?;
 
             // Compile to RVM program
-            let program = Compiler::compile_from_policy(&compiled_policy, &query)?;
+            let program = Compiler::compile_from_policy(&compiled_policy, &[&query])?;
 
             // Create and execute VM
             let mut vm = RegoVM::new();
@@ -537,7 +537,7 @@ fn rego_debug(
     let compiled_policy = engine.compile_with_entrypoint(&rule_rc)?;
 
     // Compile to RVM program
-    let program = Compiler::compile_from_policy(&compiled_policy, &rule_name)?;
+    let program = Compiler::compile_from_policy(&compiled_policy, &[&rule_name])?;
 
     // Show assembly listing first
     println!("=== RVM ASSEMBLY LISTING ===");

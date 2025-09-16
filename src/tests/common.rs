@@ -163,6 +163,8 @@ pub struct TestCase {
     pub strict: bool,
     /// Allow interpreter to succeed when RVM fails with conflict detection
     pub allow_interpreter_success: Option<bool>,
+    /// Allow interpreter to produce incorrect results when RVM produces correct results
+    pub allow_interpreter_incorrect_behavior: Option<bool>,
 }
 
 fn default_strict() -> bool {

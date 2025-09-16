@@ -221,6 +221,9 @@ pub struct Program {
     /// This field is skipped during serialization and reinitialized after deserialization
     #[serde(skip)]
     pub resolved_builtins: Vec<BuiltinFcn>,
+
+    /// Flag indicating that VirtualDataDocumentLookup instruction was used and runtime recursion checking is needed
+    pub needs_runtime_recursion_check: bool,
 }
 
 /// Program compilation metadata
@@ -415,6 +418,7 @@ impl Program {
             },
             rule_tree: Value::new_object(),
             resolved_builtins: Vec::new(),
+            needs_runtime_recursion_check: false,
         }
     }
 
@@ -670,32 +674,6 @@ impl Program {
         }
 
         Ok(())
-    }
-
-    /// Test utility function for round-trip serialization
-    /// Serializes program, deserializes it, and serializes again to check for consistency
-    #[cfg(test)]
-    pub fn test_round_trip_serialization(&self) -> Result<(), String> {
-        // First serialization
-        let serialized1 = self.serialize_binary()?;
-
-        // Deserialize
-        let deserialized = Program::deserialize_binary(&serialized1)?;
-
-        // Second serialization
-        let serialized2 = deserialized.serialize_binary()?;
-
-        // Compare the two serialized versions
-        if serialized1 == serialized2 {
-            Ok(())
-        } else {
-            Err(format!(
-                "Round-trip serialization failed: serialized data differs. \
-                First serialization: {} bytes, Second: {} bytes",
-                serialized1.len(),
-                serialized2.len()
-            ))
-        }
     }
 }
 

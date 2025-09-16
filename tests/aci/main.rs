@@ -1,5 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+use regorus::rvm::test_utils::test_round_trip_serialization;
 use regorus::rvm::{compiler::Compiler, vm::RegoVM};
 use regorus::*;
 
@@ -73,7 +74,7 @@ fn eval_test_case_rvm(dir: &Path, case: &TestCase) -> Result<Value> {
     let program = Compiler::compile_from_policy(&compiled_policy, &case.query)?;
 
     // Test round-trip serialization
-    program.test_round_trip_serialization().map_err(|e| {
+    test_round_trip_serialization(program.as_ref()).map_err(|e| {
         anyhow::anyhow!(
             "Round-trip serialization test failed for case '{}': {}",
             case.note,

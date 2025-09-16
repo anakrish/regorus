@@ -183,6 +183,50 @@ pub struct CompilationContext {
     key_value_loops_hoisted: bool,
 }
 
+/// Entry in the rule compilation worklist that tracks both rule path and full call stack for recursion detection
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WorklistEntry {
+    /// Rule path to be compiled (e.g., "data.package.rule")
+    pub rule_path: String,
+    /// Call stack of rule indices leading to this rule (empty for entry point)
+    pub call_stack: Vec<u16>,
+}
+
+impl WorklistEntry {
+    pub fn new(rule_path: String, call_stack: Vec<u16>) -> Self {
+        Self {
+            rule_path,
+            call_stack,
+        }
+    }
+
+    pub fn entry_point(rule_path: String) -> Self {
+        Self {
+            rule_path,
+            call_stack: Vec::new(),
+        }
+    }
+
+    /// Create a new entry by extending the call stack with the caller's rule index
+    pub fn with_caller(
+        rule_path: String,
+        current_call_stack: &[u16],
+        caller_rule_index: u16,
+    ) -> Self {
+        let mut new_call_stack = current_call_stack.to_vec();
+        new_call_stack.push(caller_rule_index);
+        Self {
+            rule_path,
+            call_stack: new_call_stack,
+        }
+    }
+
+    /// Check if this entry would create a recursive call
+    pub fn would_create_recursion(&self, target_rule_index: u16) -> bool {
+        self.call_stack.contains(&target_rule_index)
+    }
+}
+
 pub struct Compiler<'a> {
     program: Program, // Program being built with instructions and parameter data
     spans: Vec<SpanInfo>,
@@ -193,7 +237,7 @@ pub struct Compiler<'a> {
     current_module_index: u32, // Current module index for scheduler lookup (set from rule's source file index)
     // Three-level hierarchy compilation fields
     rule_index_map: HashMap<String, u16>, // Maps rule paths to their assigned rule indices
-    rule_worklist: Vec<String>,           // Rules that need to be compiled
+    rule_worklist: Vec<WorklistEntry>,    // Rules that need to be compiled with caller tracking
     rule_definitions: Vec<Vec<Vec<usize>>>, // rule_index -> Vec<definition> where definition is Vec<body_entry_point>
     rule_definition_function_params: Vec<Vec<Option<Vec<String>>>>, // rule_index -> Vec<definition> -> Some(param_names) for function defs, None for others
     rule_types: Vec<RuleType>, // rule_index -> true if set rule, false if regular rule
@@ -210,6 +254,10 @@ pub struct Compiler<'a> {
     // Input/Data loading optimization - track registers per rule definition
     current_input_register: Option<Register>, // Register holding input in current rule definition
     current_data_register: Option<Register>,  // Register holding data in current rule definition
+    // Current rule being compiled for recursion detection
+    current_rule_path: String, // Path of the rule currently being compiled
+    // Call stack tracking for recursion detection
+    current_call_stack: Vec<u16>, // Stack of rule indices currently being compiled
 }
 
 impl<'a> Compiler<'a> {
@@ -236,6 +284,8 @@ impl<'a> Compiler<'a> {
             builtin_index_map: HashMap::new(),
             current_input_register: None,
             current_data_register: None,
+            current_rule_path: String::new(),
+            current_call_stack: Vec::new(),
         }
     }
 
@@ -557,19 +607,30 @@ impl<'a> Compiler<'a> {
         }
 
         // Check if this path could be a prefix of any rules (for virtual document lookup)
-        let full_path = static_prefix.join(".");
+        // Convert the full chain to a pattern that includes wildcards for dynamic components
+        let path_pattern = self.create_path_pattern(&chain.components);
         let matching_rules: Vec<String> = self
-            .rule_index_map
+            .policy
+            .inner
+            .rules
             .keys()
-            .filter(|rule_path| rule_path.starts_with(&format!("{full_path}.")))
+            .filter(|rule_path| self.matches_path_pattern(rule_path, &path_pattern))
             .cloned()
             .collect();
 
         if !matching_rules.is_empty() {
             // This path is a prefix of some rules - use DataVirtualDocumentLookup
             for rule_path in &matching_rules {
-                if !self.rule_worklist.contains(rule_path) {
-                    self.rule_worklist.push(rule_path.clone());
+                if !self
+                    .rule_worklist
+                    .iter()
+                    .any(|entry| entry.rule_path == *rule_path)
+                {
+                    // Assign a rule index for this rule before adding to worklist
+                    self.get_or_assign_rule_index(rule_path)?;
+                    let entry =
+                        WorklistEntry::new(rule_path.clone(), self.current_call_stack.clone());
+                    self.rule_worklist.push(entry);
                 }
             }
 
@@ -579,6 +640,71 @@ impl<'a> Compiler<'a> {
         // No rules involved - simple data access
         let data_reg = self.resolve_variable("data", span)?;
         self.compile_chain_access(data_reg, &chain.components, span)
+    }
+
+    /// Create a path pattern from access components, using '*' for dynamic components
+    /// e.g., [Field("a"), Expression(...), Field("b")] becomes "data.a.*.b"
+    fn create_path_pattern(&self, components: &[AccessComponent]) -> String {
+        let mut pattern_parts = vec!["data"];
+
+        for component in components {
+            match component {
+                AccessComponent::Field(field) => pattern_parts.push(field.as_str()),
+                AccessComponent::Expression(_) => pattern_parts.push("*"),
+            }
+        }
+
+        pattern_parts.join(".")
+    }
+
+    /// Check if a rule path matches the given pattern with wildcards
+    /// e.g., "data.test.users.alice_profile" matches "data.test.users.*"
+    fn matches_path_pattern(&self, rule_path: &str, pattern: &str) -> bool {
+        // Use simple string matching implementation that handles wildcard patterns
+        if pattern.contains('*') {
+            self.simple_wildcard_match(rule_path, pattern)
+        } else {
+            // Simple prefix match for patterns without wildcards
+            rule_path.starts_with(&format!("{}.", pattern)) || rule_path == pattern
+        }
+    }
+
+    /// Simple wildcard matching without regex dependencies
+    /// Checks if a rule path could be a prefix of the access pattern
+    /// e.g., rule "data.test.users.alice_data" matches pattern "data.*.*.*.*.* because
+    /// the rule could be accessed with the first 4 components of the pattern
+    /// Ensures exact component matching - "fee" will NOT match "feed"
+    fn simple_wildcard_match(&self, rule_path: &str, access_pattern: &str) -> bool {
+        let rule_parts: Vec<&str> = rule_path.split('.').collect();
+        let pattern_parts: Vec<&str> = access_pattern.split('.').collect();
+
+        // Check how many components of the pattern the rule can match
+        let match_length = rule_parts.len().min(pattern_parts.len());
+        
+        // Check if the rule matches the pattern up to the available components
+        for i in 0..match_length {
+            let rule_part = rule_parts[i];
+            let pattern_part = pattern_parts[i];
+
+            if pattern_part == "*" {
+                // Wildcard in pattern matches any non-empty rule component exactly
+                if rule_part.is_empty() {
+                    return false;
+                }
+                // Wildcard matches this exact component - continue to next
+            } else {
+                // Literal part in pattern must match rule part exactly
+                if rule_part != pattern_part {
+                    return false;
+                }
+            }
+        }
+
+        // Rule matches if either:
+        // 1. It's at least as long as the pattern, OR
+        // 2. It matches all available components and the remaining pattern parts are wildcards
+        rule_parts.len() >= pattern_parts.len() || 
+        (match_length > 0 && pattern_parts[match_length..].iter().all(|&part| part == "*"))
     }
 
     /// Compile local variable access chain
@@ -753,6 +879,9 @@ impl<'a> Compiler<'a> {
             span,
         );
 
+        // Set flag indicating runtime recursion check is needed
+        self.program.needs_runtime_recursion_check = true;
+
         Ok(dest_reg)
     }
 
@@ -899,7 +1028,8 @@ impl<'a> Compiler<'a> {
             let index = self.rule_index_map.len() as u16;
 
             self.rule_index_map.insert(rule_path.to_string(), index);
-            self.rule_worklist.push(rule_path.to_string());
+            let entry = WorklistEntry::new(rule_path.to_string(), self.current_call_stack.clone());
+            self.rule_worklist.push(entry);
 
             // Initialize rule definitions structure
             // Ensure rule_definitions has enough capacity
@@ -1722,6 +1852,7 @@ impl<'a> Compiler<'a> {
         info!("Starting compilation for rule: {}", rule_name);
 
         let mut compiler = Compiler::with_policy(policy);
+        compiler.current_rule_path = "".to_string(); // Entry point has no caller
         let rules = policy.get_rules();
 
         #[cfg(feature = "rvm-tracing")]
@@ -1766,11 +1897,82 @@ impl<'a> Compiler<'a> {
             self.rule_worklist.len()
         );
 
+        // Track compiled rules to avoid recompilation
+        let mut compiled_rules = std::collections::HashSet::new();
+        let mut call_stack = Vec::new(); // Track current call stack for recursion detection
+
         // Now compile all rules in the worklist (set rules referenced via CallRule)
         while !self.rule_worklist.is_empty() {
-            let rule_to_compile = self.rule_worklist.remove(0);
-            debug!("Compiling worklist rule: '{}'", rule_to_compile);
-            self.compile_worklist_rule(&rule_to_compile, rules)?;
+            let entry = self.rule_worklist.remove(0);
+
+            // Check for recursion using the call stack stored in the entry
+            if let Some(&target_rule_index) = self.rule_index_map.get(&entry.rule_path) {
+                if entry.call_stack.contains(&target_rule_index) {
+                    // Build the recursive chain for error message
+                    let mut chain = Vec::new();
+                    let mut found_start = false;
+                    for &rule_idx in &entry.call_stack {
+                        if rule_idx == target_rule_index {
+                            found_start = true;
+                        }
+                        if found_start {
+                            // Find rule path for this index
+                            if let Some((rule_path, _)) =
+                                self.rule_index_map.iter().find(|(_, &idx)| idx == rule_idx)
+                            {
+                                chain.push(rule_path.clone());
+                            }
+                        }
+                    }
+                    chain.push(entry.rule_path.clone());
+
+                    return Err(CompilerError::General {
+                        message: format!(
+                            "Compile-time recursion detected in rule call chain: {}",
+                            chain.join(" -> ")
+                        ),
+                    });
+                }
+            }
+
+            // Skip if already compiled
+            if compiled_rules.contains(&entry.rule_path) {
+                debug!("Skipping already compiled rule: '{}'", entry.rule_path);
+                continue;
+            }
+
+            // Get rule index for call stack tracking
+            let rule_index = if let Some(&index) = self.rule_index_map.get(&entry.rule_path) {
+                index
+            } else {
+                return Err(CompilerError::General {
+                    message: format!("Rule index not found for '{}'", entry.rule_path),
+                });
+            };
+
+            // Add to call stack
+            call_stack.push(entry.rule_path.clone());
+
+            debug!("Compiling worklist rule: '{}'", entry.rule_path);
+
+            // Set current rule context for tracking caller context
+            let old_rule_path = self.current_rule_path.clone();
+            let old_call_stack = self.current_call_stack.clone();
+            self.current_rule_path = entry.rule_path.clone();
+            self.current_call_stack = entry.call_stack.clone();
+            self.current_call_stack.push(rule_index);
+
+            let result = self.compile_worklist_rule(&entry.rule_path, rules);
+
+            // Restore previous rule context
+            self.current_rule_path = old_rule_path;
+            self.current_call_stack = old_call_stack;
+
+            // Remove from call stack
+            call_stack.pop();
+
+            result?;
+            compiled_rules.insert(entry.rule_path);
         }
         debug!("Worklist compilation completed");
         Ok(())
@@ -1805,7 +2007,14 @@ impl<'a> Compiler<'a> {
 
         let saved_register_counter = self.register_counter;
         if let Some(rule_definitions) = rules.get(rule_path) {
-            let rule_index = self.rule_index_map.get(rule_path).copied().unwrap_or(1);
+            let rule_index = self.rule_index_map.get(rule_path).copied().ok_or_else(|| {
+                CompilerError::General {
+                    message: format!(
+                        "Rule '{}' not found in rule index map during compilation",
+                        rule_path
+                    ),
+                }
+            })?;
             let rule_type = self.rule_types[rule_index as usize].clone();
 
             // All rules will return their results in register 0.
@@ -2094,25 +2303,33 @@ impl<'a> Compiler<'a> {
             );
 
             // Add the compiled rule to the rule tree for efficient lookups
-            // Parse the rule path to extract package path and rule name
-            let rule_path_parts: Vec<&str> = rule_path.split('.').collect();
-            if let Some((rule_name, package_parts)) = rule_path_parts.split_last() {
-                let package_path: Vec<String> =
-                    package_parts.iter().map(|s| s.to_string()).collect();
+            // Skip function rules since they require parameters and cannot be evaluated via virtual data document lookup
+            if rule_param_count.is_none() {
+                // Parse the rule path to extract package path and rule name
+                let rule_path_parts: Vec<&str> = rule_path.split('.').collect();
+                if let Some((rule_name, package_parts)) = rule_path_parts.split_last() {
+                    let package_path: Vec<String> =
+                        package_parts.iter().map(|s| s.to_string()).collect();
 
-                if let Err(_e) =
-                    self.program
-                        .add_rule_to_tree(&package_path, rule_name, rule_index as usize)
-                {
-                    debug!("Failed to add rule '{}' to tree: {:?}", rule_path, _e);
+                    if let Err(_e) =
+                        self.program
+                            .add_rule_to_tree(&package_path, rule_name, rule_index as usize)
+                    {
+                        debug!("Failed to add rule '{}' to tree: {:?}", rule_path, _e);
+                    } else {
+                        debug!(
+                            "Added rule '{}' to rule tree at index {}",
+                            rule_path, rule_index
+                        );
+                    }
                 } else {
-                    debug!(
-                        "Added rule '{}' to rule tree at index {}",
-                        rule_path, rule_index
-                    );
+                    debug!("Could not parse rule path '{}'", rule_path);
                 }
             } else {
-                debug!("Could not parse rule path '{}'", rule_path);
+                debug!(
+                    "Skipping function rule '{}' (param_count: {:?}) from rule tree - function rules require parameters",
+                    rule_path, rule_param_count
+                );
             }
 
             // Restore the global register counter and package context

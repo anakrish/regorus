@@ -594,7 +594,6 @@ impl<'a> Compiler<'a> {
         // Check if there's a rule in the current package that matches
         let current_pkg_prefix = format!("{}.{}", &self.current_package, &chain.root);
 
-        std::dbg!(&current_pkg_prefix);
         // Build static path for rule matching
         let mut rule_path_parts = vec![current_pkg_prefix.as_str()];
         for component in &chain.components {
@@ -604,7 +603,6 @@ impl<'a> Compiler<'a> {
             }
         }
 
-        std::dbg!(&rule_path_parts);
         // Try to find the longest matching rule prefix
         for i in (0..rule_path_parts.len()).rev() {
             let rule_candidate = rule_path_parts[0..=i].join(".");
@@ -1055,7 +1053,7 @@ impl<'a> Compiler<'a> {
         self.spans.push(SpanInfo::new(0, 0, 0, 0)); // Default span for call rule instruction
     }
 
-    pub fn finish(mut self) -> crate::rvm::program::Program {
+    pub fn finish(mut self) -> Result<crate::rvm::program::Program> {
         // Update the program with final values
         self.program.main_entry_point = 0;
         self.program.num_registers = self.register_counter as usize;
@@ -1181,20 +1179,14 @@ impl<'a> Compiler<'a> {
 
         // Initialize resolved builtins if we have builtin info
         if !self.program.builtin_info_table.is_empty() {
-            // Convert HashMap to BTreeMap for compatibility
-            let builtin_map: std::collections::BTreeMap<&'static str, crate::builtins::BuiltinFcn> =
-                crate::builtins::BUILTINS
-                    .iter()
-                    .map(|(&k, &v)| (k, v))
-                    .collect();
-            self.program.initialize_resolved_builtins(&builtin_map);
+            self.program.initialize_resolved_builtins()?;
             debug!(
                 "Initialized {} resolved builtins",
                 self.program.resolved_builtins.len()
             );
         }
 
-        self.program
+        Ok(self.program)
     }
 
     /// Compile a Rego expression to RVM instructions
@@ -1756,7 +1748,7 @@ impl<'a> Compiler<'a> {
         );
         compiler.compile_worklist_rules(rules)?;
 
-        let program = Arc::new(compiler.finish());
+        let program = Arc::new(compiler.finish()?);
         info!(
             "Compilation completed successfully, program has {} instructions",
             program.instructions.len()

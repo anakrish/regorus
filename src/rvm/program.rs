@@ -183,7 +183,8 @@ pub struct Program {
     /// Compiled bytecode instructions
     pub instructions: Vec<Instruction>,
 
-    /// Literal value table
+    /// Literal value table (skipped in serde, serialized separately as JSON)
+    #[serde(skip, default = "Vec::new")]
     pub literals: Vec<Value>,
 
     /// Complex instruction parameter data (for LoopStart, Call, etc.)
@@ -210,9 +211,10 @@ pub struct Program {
     /// Program metadata
     pub metadata: ProgramMetadata,
 
-    /// Rule tree for efficient rule lookup
+    /// Rule tree for efficient rule lookup (skipped in serde, serialized separately as JSON)
     /// Maps rule paths (e.g., "data.p1.r1") to rule indices
     /// Structure: {"p1": {"r1": rule_index}, "p2": {"p3": {"r2": rule_index}}}
+    #[serde(skip, default = "Value::new_object")]
     pub rule_tree: Value,
 
     /// Resolved builtins - actual builtin function values fetched from interpreter's builtin map
@@ -240,13 +242,19 @@ impl Program {
     /// Magic bytes to identify Regorus program files
     pub const MAGIC: [u8; 4] = *b"REGO";
 
-    /// Serialize program to binary format with version header
+    /// Serialize program to binary format with hybrid approach:
+    /// - Binary serialization for most data (fast)
+    /// - JSON serialization for Value fields (compatible)
     ///
     /// Binary format:
     /// - 4 bytes: Magic number "REGO"
     /// - 4 bytes: Version (little-endian u32)
-    /// - 4 bytes: Data length (little-endian u32)
-    /// - N bytes: Serialized program data
+    /// - 4 bytes: Binary data length (little-endian u32)
+    /// - 4 bytes: JSON literals length (little-endian u32)
+    /// - 4 bytes: JSON rule_tree length (little-endian u32)
+    /// - N bytes: Binary serialized program data (without Value fields)
+    /// - M bytes: JSON serialized literals
+    /// - P bytes: JSON serialized rule_tree
     pub fn serialize_binary(&self) -> Result<Vec<u8>, String> {
         let mut buffer = Vec::new();
 
@@ -254,22 +262,35 @@ impl Program {
         buffer.extend_from_slice(&Self::MAGIC);
         buffer.extend_from_slice(&Self::SERIALIZATION_VERSION.to_le_bytes());
 
-        // Serialize the program directly (no wrapper needed)
-        let json_data =
-            serde_json::to_vec(self).map_err(|e| format!("JSON serialization failed: {}", e))?;
+        // Serialize the main program structure (without Value fields) to binary using bincode
+        // Note: The Value fields are skipped via #[serde(skip)] so this won't include them
+        let binary_data = bincode::serialize(self)
+            .map_err(|e| format!("Program structure binary serialization failed: {}", e))?;
 
-        // Write length of data
-        buffer.extend_from_slice(&(json_data.len() as u32).to_le_bytes());
+        // Serialize Value fields to JSON
+        let literals_json = serde_json::to_vec(&self.literals)
+            .map_err(|e| format!("Literals JSON serialization failed: {}", e))?;
 
-        // Write the actual program data
-        buffer.extend_from_slice(&json_data);
+        let rule_tree_json = serde_json::to_vec(&self.rule_tree)
+            .map_err(|e| format!("Rule tree JSON serialization failed: {}", e))?;
+
+        // Write lengths
+        buffer.extend_from_slice(&(binary_data.len() as u32).to_le_bytes());
+        buffer.extend_from_slice(&(literals_json.len() as u32).to_le_bytes());
+        buffer.extend_from_slice(&(rule_tree_json.len() as u32).to_le_bytes());
+
+        // Write the actual data
+        buffer.extend_from_slice(&binary_data);
+        buffer.extend_from_slice(&literals_json);
+        buffer.extend_from_slice(&rule_tree_json);
 
         Ok(buffer)
     }
 
     /// Deserialize program from binary format with version checking
     pub fn deserialize_binary(data: &[u8]) -> Result<Self, String> {
-        if data.len() < 12 {
+        if data.len() < 20 {
+            // Updated minimum size for new format
             return Err("Data too short for header".to_string());
         }
 
@@ -288,18 +309,51 @@ impl Program {
             ));
         }
 
-        // Read data length
-        let data_len = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
-        if data.len() < 12 + data_len {
+        // Read lengths for the three data sections
+        let binary_len = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
+        let literals_len = u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as usize;
+        let rule_tree_len = u32::from_le_bytes([data[16], data[17], data[18], data[19]]) as usize;
+
+        let total_expected = 20 + binary_len + literals_len + rule_tree_len;
+        if data.len() < total_expected {
             return Err("Data truncated".to_string());
         }
 
         // Deserialize the program based on version
         match version {
             1 => {
-                // Current version - deserialize directly as Program
-                serde_json::from_slice(&data[12..12 + data_len])
-                    .map_err(|e| format!("JSON deserialization failed: {}", e))
+                // Extract data sections
+                let binary_start = 20;
+                let literals_start = binary_start + binary_len;
+                let rule_tree_start = literals_start + literals_len;
+
+                // Deserialize main program structure (without Value fields) using bincode
+                let mut program: Program =
+                    bincode::deserialize(&data[binary_start..literals_start]).map_err(|e| {
+                        format!("Program structure binary deserialization failed: {}", e)
+                    })?;
+
+                // Deserialize Value fields separately
+                let literals: Vec<Value> =
+                    serde_json::from_slice(&data[literals_start..rule_tree_start])
+                        .map_err(|e| format!("Literals deserialization failed: {}", e))?;
+
+                let rule_tree: Value =
+                    serde_json::from_slice(&data[rule_tree_start..rule_tree_start + rule_tree_len])
+                        .map_err(|e| format!("Rule tree deserialization failed: {}", e))?;
+
+                // Set the Value fields that were skipped during serde deserialization
+                program.literals = literals;
+                program.rule_tree = rule_tree;
+
+                // Initialize resolved builtins if we have builtin info
+                if !program.builtin_info_table.is_empty() {
+                    program
+                        .initialize_resolved_builtins()
+                        .map_err(|e| format!("Failed to initialize resolved builtins: {}", e))?;
+                }
+
+                Ok(program)
             }
             v => Err(format!("Unsupported version {}", v)),
         }
@@ -481,34 +535,27 @@ impl Program {
         index
     }
 
-    /// Initialize resolved builtins from interpreter's builtin map
+    /// Initialize resolved builtins directly from the BUILTINS HashMap
     /// This should be called after deserialization to populate the skipped field
-    pub fn initialize_resolved_builtins(
-        &mut self,
-        builtin_map: &std::collections::BTreeMap<&'static str, BuiltinFcn>,
-    ) {
+    /// Returns an error if any required builtin is missing
+    pub fn initialize_resolved_builtins(&mut self) -> anyhow::Result<()> {
         self.resolved_builtins.clear();
         self.resolved_builtins
             .reserve(self.builtin_info_table.len());
 
-        // Helper function for missing builtins
-        fn missing_builtin_error(
-            _span: &crate::lexer::Span,
-            _exprs: &[crate::ast::Ref<crate::ast::Expr>],
-            _args: &[Value],
-            _strict: bool,
-        ) -> anyhow::Result<Value> {
-            Err(anyhow::anyhow!("Builtin function not found"))
-        }
-
         for builtin_info in &self.builtin_info_table {
-            if let Some(&builtin_fcn) = builtin_map.get(builtin_info.name.as_str()) {
+            if let Some(&builtin_fcn) = crate::builtins::BUILTINS.get(builtin_info.name.as_str()) {
                 self.resolved_builtins.push(builtin_fcn);
             } else {
-                // Use a placeholder for missing builtins - this shouldn't happen in normal operation
-                self.resolved_builtins.push((missing_builtin_error, 0));
+                // Raise an error immediately when a builtin is missing
+                return Err(anyhow::anyhow!(
+                    "Missing builtin function: {}",
+                    builtin_info.name
+                ));
             }
         }
+
+        Ok(())
     }
 
     /// Get resolved builtin function by index
@@ -623,6 +670,32 @@ impl Program {
         }
 
         Ok(())
+    }
+
+    /// Test utility function for round-trip serialization
+    /// Serializes program, deserializes it, and serializes again to check for consistency
+    #[cfg(test)]
+    pub fn test_round_trip_serialization(&self) -> Result<(), String> {
+        // First serialization
+        let serialized1 = self.serialize_binary()?;
+
+        // Deserialize
+        let deserialized = Program::deserialize_binary(&serialized1)?;
+
+        // Second serialization
+        let serialized2 = deserialized.serialize_binary()?;
+
+        // Compare the two serialized versions
+        if serialized1 == serialized2 {
+            Ok(())
+        } else {
+            Err(format!(
+                "Round-trip serialization failed: serialized data differs. \
+                First serialization: {} bytes, Second: {} bytes",
+                serialized1.len(),
+                serialized2.len()
+            ))
+        }
     }
 }
 

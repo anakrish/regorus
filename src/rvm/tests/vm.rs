@@ -322,13 +322,12 @@ mod tests {
 
         // Initialize resolved builtins if we have builtin info
         if !program.builtin_info_table.is_empty() {
-            // Convert HashMap to BTreeMap for compatibility
-            let builtin_map: std::collections::BTreeMap<&'static str, crate::builtins::BuiltinFcn> =
-                crate::builtins::BUILTINS
-                    .iter()
-                    .map(|(&k, &v)| (k, v))
-                    .collect();
-            program.initialize_resolved_builtins(&builtin_map);
+            if let Err(e) = program.initialize_resolved_builtins() {
+                return Err(anyhow::anyhow!(
+                    "Failed to initialize resolved builtins: {}",
+                    e
+                ));
+            }
         }
 
         let program = Arc::new(program);

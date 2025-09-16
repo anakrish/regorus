@@ -47,6 +47,15 @@ mod tests {
             program.literals.len()
         );
 
+        // Test round-trip serialization
+        if let Err(e) = program.test_round_trip_serialization() {
+            return Err(anyhow::anyhow!(
+                "Round-trip serialization test failed: {}",
+                e
+            ));
+        }
+        std::println!("Debug: Round-trip serialization test passed");
+
         // Use proper assembly listing format
         let assembly_listing = crate::rvm::assembly_listing::generate_assembly_listing(
             &program,

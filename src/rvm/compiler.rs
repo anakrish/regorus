@@ -16,10 +16,15 @@ use crate::{CompiledPolicy, Value};
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
-use std::collections::HashMap;
-use std::sync::Arc;
+
+// Use HashMap when std is available for better performance, BTreeMap otherwise
+#[cfg(not(feature = "std"))]
+use alloc::collections::BTreeMap as Map;
+#[cfg(feature = "std")]
+use std::collections::HashMap as Map;
 
 pub type Register = u8;
 
@@ -236,8 +241,8 @@ pub struct Compiler<'a> {
     current_package: String,    // Current package path (e.g., "data.test")
     current_module_index: u32, // Current module index for scheduler lookup (set from rule's source file index)
     // Three-level hierarchy compilation fields
-    rule_index_map: HashMap<String, u16>, // Maps rule paths to their assigned rule indices
-    rule_worklist: Vec<WorklistEntry>,    // Rules that need to be compiled with caller tracking
+    rule_index_map: Map<String, u16>, // Maps rule paths to their assigned rule indices
+    rule_worklist: Vec<WorklistEntry>, // Rules that need to be compiled with caller tracking
     rule_definitions: Vec<Vec<Vec<usize>>>, // rule_index -> Vec<definition> where definition is Vec<body_entry_point>
     rule_definition_function_params: Vec<Vec<Option<Vec<String>>>>, // rule_index -> Vec<definition> -> Some(param_names) for function defs, None for others
     rule_types: Vec<RuleType>, // rule_index -> true if set rule, false if regular rule
@@ -248,9 +253,9 @@ pub struct Compiler<'a> {
     context_stack: Vec<CompilationContext>, // Stack of compilation contexts
     loop_expr_register_map: BTreeMap<ExprRef, Register>, // Map from loop expressions to their allocated registers
     // Source tracking for span information (0-based indices)
-    source_to_index: HashMap<String, usize>, // Maps source file paths to source indices (0-based)
+    source_to_index: Map<String, usize>, // Maps source file paths to source indices (0-based)
     // Builtin management
-    builtin_index_map: HashMap<String, u16>, // Maps builtin names to their assigned indices
+    builtin_index_map: Map<String, u16>, // Maps builtin names to their assigned indices
     // Input/Data loading optimization - track registers per rule definition
     current_input_register: Option<Register>, // Register holding input in current rule definition
     current_data_register: Option<Register>,  // Register holding data in current rule definition
@@ -258,6 +263,8 @@ pub struct Compiler<'a> {
     current_rule_path: String, // Path of the rule currently being compiled
     // Call stack tracking for recursion detection
     current_call_stack: Vec<u16>, // Stack of rule indices currently being compiled
+    // Entry points tracking
+    entry_points: Map<String, usize>, // Maps entry point names to their instruction indices
 }
 
 impl<'a> Compiler<'a> {
@@ -270,7 +277,7 @@ impl<'a> Compiler<'a> {
             policy,
             current_package: "".to_string(), // Default package, will be set dynamically during compilation
             current_module_index: 0, // Will be set from rule's source file index during compilation
-            rule_index_map: HashMap::new(),
+            rule_index_map: Map::new(),
             rule_worklist: Vec::new(),
             rule_definitions: Vec::new(),
             rule_definition_function_params: Vec::new(),
@@ -280,12 +287,13 @@ impl<'a> Compiler<'a> {
             rule_num_registers: Vec::new(),
             context_stack: vec![], // Default context
             loop_expr_register_map: BTreeMap::new(),
-            source_to_index: HashMap::new(),
-            builtin_index_map: HashMap::new(),
+            source_to_index: Map::new(),
+            builtin_index_map: Map::new(),
             current_input_register: None,
             current_data_register: None,
             current_rule_path: String::new(),
             current_call_stack: Vec::new(),
+            entry_points: Map::new(),
         }
     }
 
@@ -1124,7 +1132,7 @@ impl<'a> Compiler<'a> {
     fn find_module_package_and_index_for_rule(
         &self,
         rule_path: &str,
-        rules: &HashMap<String, Vec<crate::ast::NodeRef<Rule>>>,
+        rules: &Map<String, Vec<crate::ast::NodeRef<Rule>>>,
     ) -> Result<(String, u32)> {
         // Get the rule definitions for this rule path
         if let Some(rule_definitions) = rules.get(rule_path) {
@@ -1303,12 +1311,19 @@ impl<'a> Compiler<'a> {
         // Transfer spans to program (they already have correct source indices)
         self.program.instruction_spans = self.spans.into_iter().map(Some).collect();
 
+        // Transfer entry points to program
+        self.program.entry_points = self.entry_points;
+
         debug!(
             "Final program has {} instructions, {} rule infos",
             self.program.instructions.len(),
             self.program.rule_infos.len()
         );
         debug!("Program requires {} registers", self.program.num_registers);
+        debug!(
+            "Program has {} entry points",
+            self.program.entry_points.len()
+        );
 
         // Initialize resolved builtins if we have builtin info
         if !self.program.builtin_info_table.is_empty() {
@@ -1468,13 +1483,13 @@ impl<'a> Compiler<'a> {
                     template_keys.sort();
 
                     // Create template object with all literal keys set to undefined
-                    use std::collections::BTreeMap;
+                    use alloc::collections::BTreeMap;
                     let mut template_obj = BTreeMap::new();
                     for key in &template_keys {
                         template_obj.insert(key.clone(), Value::Undefined);
                     }
 
-                    let template_value = Value::Object(std::sync::Arc::new(template_obj));
+                    let template_value = Value::Object(crate::Rc::new(template_obj));
                     self.add_literal(template_value)
                 };
 
@@ -1846,13 +1861,16 @@ impl<'a> Compiler<'a> {
     }
 
     /// Compile from a CompiledPolicy to RVM Program
-    pub fn compile_from_policy(policy: &CompiledPolicy, rule_name: &str) -> Result<Arc<Program>> {
+    pub fn compile_from_policy(
+        policy: &CompiledPolicy,
+        entry_points: &[&str],
+    ) -> Result<Arc<Program>> {
         let _span = span!(
             tracing::Level::INFO,
             "compile_from_policy",
-            rule_name = rule_name
+            entry_points = ?entry_points
         );
-        info!("Starting compilation for rule: {}", rule_name);
+        info!("Starting compilation for entry points: {:?}", entry_points);
 
         let mut compiler = Compiler::with_policy(policy);
         compiler.current_rule_path = "".to_string(); // Entry point has no caller
@@ -1864,17 +1882,26 @@ impl<'a> Compiler<'a> {
             for (key, rule_list) in rules.iter() {
                 debug!("  Rule key: '{}' ({} variants)", key, rule_list.len());
             }
-            debug!("Looking for rule: '{}'", rule_name);
+            debug!("Looking for entry points: {:?}", entry_points);
         }
 
-        // Emit CallRule instruction for the main entry point
-        let result_reg = compiler.alloc_register();
-        let rule_idx = compiler.get_or_assign_rule_index(rule_name)?;
-        debug!("Assigned rule index {} for rule '{}'", rule_idx, rule_name);
-        compiler.emit_call_rule(result_reg, rule_idx);
+        // Emit CallRule instructions for each entry point and track their instruction indices
+        for &entry_point_name in entry_points {
+            let instruction_index = compiler.program.instructions.len();
+            let result_reg = compiler.alloc_register();
+            let rule_idx = compiler.get_or_assign_rule_index(entry_point_name)?;
+            debug!(
+                "Assigned rule index {} for entry point '{}'",
+                rule_idx, entry_point_name
+            );
+            compiler
+                .entry_points
+                .insert(entry_point_name.to_string(), instruction_index);
+            compiler.emit_call_rule(result_reg, rule_idx);
 
-        // Add Return instruction for main execution
-        compiler.emit_return(result_reg);
+            // Add Return instruction for this entry point
+            compiler.emit_return(result_reg);
+        }
 
         info!(
             "Starting worklist compilation for {} rule groups",
@@ -1892,7 +1919,7 @@ impl<'a> Compiler<'a> {
 
     fn compile_worklist_rules(
         &mut self,
-        rules: &HashMap<String, Vec<crate::ast::NodeRef<Rule>>>,
+        rules: &Map<String, Vec<crate::ast::NodeRef<Rule>>>,
     ) -> Result<()> {
         let _span = span!(tracing::Level::DEBUG, "compile_worklist_rules");
         debug!(
@@ -1901,7 +1928,7 @@ impl<'a> Compiler<'a> {
         );
 
         // Track compiled rules to avoid recompilation
-        let mut compiled_rules = std::collections::HashSet::new();
+        let mut compiled_rules = BTreeSet::new();
         let mut call_stack = Vec::new(); // Track current call stack for recursion detection
 
         // Now compile all rules in the worklist (set rules referenced via CallRule)
@@ -1985,7 +2012,7 @@ impl<'a> Compiler<'a> {
     fn compile_worklist_rule(
         &mut self,
         rule_path: &str,
-        rules: &HashMap<String, Vec<crate::ast::NodeRef<Rule>>>,
+        rules: &Map<String, Vec<crate::ast::NodeRef<Rule>>>,
     ) -> Result<()> {
         /*let _span = span!(
             tracing::Level::DEBUG,
@@ -3268,7 +3295,7 @@ impl<'a> Compiler<'a> {
         let result_reg = self.alloc_register();
 
         // Create empty template object
-        let template_literal_idx = self.add_literal(Value::Object(Arc::new(BTreeMap::new())));
+        let template_literal_idx = self.add_literal(Value::Object(crate::Rc::new(BTreeMap::new())));
 
         // Create ObjectCreate parameters for empty object
         let params = ObjectCreateParams {

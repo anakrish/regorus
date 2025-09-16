@@ -121,16 +121,16 @@ pub struct LoopContext {
 #[derive(Debug, Clone)]
 pub enum IterationState {
     Array {
-        items: Arc<Vec<Value>>,
+        items: crate::Rc<Vec<Value>>,
         index: usize,
     },
     Object {
-        obj: Arc<BTreeMap<Value, Value>>,
+        obj: crate::Rc<BTreeMap<Value, Value>>,
         current_key: Option<Value>,
         first_iteration: bool,
     },
     Set {
-        items: Arc<std::collections::BTreeSet<Value>>,
+        items: crate::Rc<alloc::collections::BTreeSet<Value>>,
         current_item: Option<Value>,
         first_iteration: bool,
     },
@@ -755,7 +755,7 @@ impl RegoVM {
 
                     // Swap the value from the register with Null, modify it, and put it back
                     let mut obj_value =
-                        std::mem::replace(&mut self.registers[obj as usize], Value::Null);
+                        core::mem::replace(&mut self.registers[obj as usize], Value::Null);
 
                     if let Ok(obj_mut) = obj_value.as_object_mut() {
                         obj_mut.insert(key_value, value_value);
@@ -865,7 +865,7 @@ impl RegoVM {
                 }
 
                 Instruction::ArrayNew { dest } => {
-                    let empty_array = Value::Array(Arc::new(Vec::new()));
+                    let empty_array = Value::Array(crate::Rc::new(Vec::new()));
                     self.registers[dest as usize] = empty_array;
                 }
 
@@ -874,7 +874,7 @@ impl RegoVM {
 
                     // Swap the value from the register with Null, modify it, and put it back
                     let mut arr_value =
-                        std::mem::replace(&mut self.registers[arr as usize], Value::Null);
+                        core::mem::replace(&mut self.registers[arr as usize], Value::Null);
 
                     if let Ok(arr_mut) = arr_value.as_array_mut() {
                         arr_mut.push(value_to_push);
@@ -887,8 +887,8 @@ impl RegoVM {
                 }
 
                 Instruction::SetNew { dest } => {
-                    use std::collections::BTreeSet;
-                    let empty_set = Value::Set(Arc::new(BTreeSet::new()));
+                    use alloc::collections::BTreeSet;
+                    let empty_set = Value::Set(crate::Rc::new(BTreeSet::new()));
                     self.registers[dest as usize] = empty_set;
                 }
 
@@ -897,7 +897,7 @@ impl RegoVM {
 
                     // Swap the value from the register with Null, modify it, and put it back
                     let mut set_value =
-                        std::mem::replace(&mut self.registers[set as usize], Value::Null);
+                        core::mem::replace(&mut self.registers[set as usize], Value::Null);
 
                     if let Ok(set_mut) = set_value.as_set_mut() {
                         set_mut.insert(value_to_add);
@@ -1478,11 +1478,11 @@ impl RegoVM {
 
             // Create entry if it doesn't exist
             if !map.contains_key(key) {
-                std::sync::Arc::make_mut(map).insert(key.clone(), Value::Undefined);
+                crate::Rc::make_mut(map).insert(key.clone(), Value::Undefined);
             }
 
             // Get mutable reference to the value at this key
-            if let Some(next_target) = std::sync::Arc::make_mut(map).get_mut(key) {
+            if let Some(next_target) = crate::Rc::make_mut(map).get_mut(key) {
                 Self::set_nested_value_static(next_target, &path[1..], value)?;
             }
         } else {
@@ -1718,44 +1718,12 @@ impl RegoVM {
                 // Case 4: Subobject found
                 let rule_tree_subobject = current_node.clone();
 
-                if components_consumed == params.path_components.len() {
-                    // Case 4a: All components consumed, evaluate entire subobject
-                    let result = self.execute_virtual_data_document_lookup_subobject(
-                        &params.path_components,
-                        &rule_tree_subobject,
-                    )?;
-                    self.registers[params.dest as usize] = result;
-                } else {
-                    // Case 4b: Subobject found with remaining components
-                    // First evaluate the subobject, then apply remaining components
-                    let consumed_components = &params.path_components[..components_consumed];
-                    let subobject_result = self.execute_virtual_data_document_lookup_subobject(
-                        consumed_components,
-                        &rule_tree_subobject,
-                    )?;
-
-                    // Apply remaining path components to the subobject result
-                    let mut result = subobject_result;
-                    for component in &params.path_components[components_consumed..] {
-                        let key_value = match component {
-                            LiteralOrRegister::Literal(idx) => self
-                                .program
-                                .literals
-                                .get(*idx as usize)
-                                .ok_or_else(|| VmError::LiteralIndexOutOfBounds {
-                                    index: *idx as usize,
-                                })?
-                                .clone(),
-                            LiteralOrRegister::Register(reg) => {
-                                self.registers[*reg as usize].clone()
-                            }
-                        };
-
-                        result = result[&key_value].clone();
-                    }
-
-                    self.registers[params.dest as usize] = result;
-                }
+                // Case 4a: All components consumed, evaluate entire subobject
+                let result = self.execute_virtual_data_document_lookup_subobject(
+                    &params.path_components,
+                    &rule_tree_subobject,
+                )?;
+                self.registers[params.dest as usize] = result;
             }
             _ => {
                 // Unexpected value type in rule tree
@@ -2025,7 +1993,7 @@ impl RegoVM {
             LoopMode::Any | LoopMode::Every | LoopMode::ForEach => Value::Bool(false),
             LoopMode::ArrayComprehension => Value::new_array(),
             LoopMode::SetComprehension => Value::new_set(),
-            LoopMode::ObjectComprehension => Value::Object(Arc::new(BTreeMap::new())),
+            LoopMode::ObjectComprehension => Value::Object(crate::Rc::new(BTreeMap::new())),
         };
         self.registers[params.result_reg as usize] = initial_result.clone();
         debug!(
@@ -2297,7 +2265,7 @@ impl RegoVM {
             LoopMode::ForEach => Value::Bool(false),
             LoopMode::ArrayComprehension => Value::new_array(),
             LoopMode::SetComprehension => Value::new_set(),
-            LoopMode::ObjectComprehension => Value::Object(Arc::new(BTreeMap::new())),
+            LoopMode::ObjectComprehension => Value::Object(crate::Rc::new(BTreeMap::new())),
         };
 
         self.registers[result_reg as usize] = result;
@@ -2364,8 +2332,8 @@ impl RegoVM {
                     if let Some(ref current) = current_key {
                         // Use range to get next key after current
                         let mut range_iter = obj.range((
-                            std::ops::Bound::Excluded(current),
-                            std::ops::Bound::Unbounded,
+                            core::ops::Bound::Excluded(current),
+                            core::ops::Bound::Unbounded,
                         ));
                         if let Some((key, value)) = range_iter.next() {
                             if key_reg != value_reg {
@@ -2403,8 +2371,8 @@ impl RegoVM {
                     if let Some(ref current) = current_item {
                         // Use range to get next item after current
                         let mut range_iter = items.range((
-                            std::ops::Bound::Excluded(current),
-                            std::ops::Bound::Unbounded,
+                            core::ops::Bound::Excluded(current),
+                            core::ops::Bound::Unbounded,
                         ));
                         if let Some(item) = range_iter.next() {
                             if key_reg != value_reg {

@@ -117,7 +117,7 @@ fn aci_policy_eval(c: &mut Criterion) {
                 .expect("compilation failed");
 
             // Use RVM compiler to create a program
-            let program = Compiler::compile_from_policy(&compiled_policy, &case.query)
+            let program = Compiler::compile_from_policy(&compiled_policy, &[&case.query])
                 .expect("RVM compilation failed");
 
             // Create RVM and load the program for validation
@@ -177,8 +177,14 @@ fn aci_policy_eval(c: &mut Criterion) {
                 &serialized_program,
                 |b, serialized_data| {
                     b.iter(|| {
-                        regorus::rvm::program::Program::deserialize_binary(serialized_data)
+                        match regorus::rvm::program::Program::deserialize_binary(serialized_data)
                             .expect("Deserialization failed")
+                        {
+                            regorus::rvm::program::DeserializationResult::Complete(program)
+                            | regorus::rvm::program::DeserializationResult::Partial(program) => {
+                                program
+                            }
+                        }
                     })
                 },
             );

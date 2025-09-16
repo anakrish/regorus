@@ -10,6 +10,12 @@ use serde::{Deserialize, Serialize};
 
 extern crate alloc;
 
+// Use HashMap when std is available for better performance, BTreeMap otherwise
+#[cfg(not(feature = "std"))]
+use alloc::collections::BTreeMap as Map;
+#[cfg(feature = "std")]
+use std::collections::HashMap as Map;
+
 /// Builtin function information stored in program's builtin info table
 #[repr(C)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -193,7 +199,12 @@ pub struct Program {
     /// Builtin function information table
     pub builtin_info_table: Vec<BuiltinInfo>,
 
-    /// Source files table with content
+    /// Entry points mapping from entry point path to rule index (skipped in serde, serialized separately as JSON)
+    #[serde(skip, default = "Map::new")]
+    pub entry_points: Map<String, usize>,
+
+    /// Source files table with content (skipped in serde, serialized separately as JSON)
+    #[serde(skip, default = "Vec::new")]
     pub sources: Vec<SourceFile>,
 
     /// Rule metadata: rule_index -> rule information
@@ -224,6 +235,12 @@ pub struct Program {
 
     /// Flag indicating that VirtualDataDocumentLookup instruction was used and runtime recursion checking is needed
     pub needs_runtime_recursion_check: bool,
+
+    /// Flag indicating that recompilation is needed due to partial deserialization failure
+    /// This is set to true when the artifact section was successfully read but the extensible
+    /// section failed to deserialize (e.g., due to version incompatibility)
+    #[serde(default)]
+    pub needs_recompilation: bool,
 }
 
 /// Program compilation metadata
@@ -239,6 +256,16 @@ pub struct ProgramMetadata {
     pub optimization_level: u8,
 }
 
+/// Result of program deserialization that explicitly indicates completeness
+#[derive(Debug, Clone)]
+pub enum DeserializationResult {
+    /// Full deserialization was successful - program is fully functional
+    Complete(Program),
+    /// Only artifact section was deserialized - extensible sections failed
+    /// The program contains entry_points and sources but requires recompilation
+    Partial(Program),
+}
+
 impl Program {
     /// Current serialization format version
     pub const SERIALIZATION_VERSION: u32 = 1;
@@ -249,15 +276,32 @@ impl Program {
     /// - Binary serialization for most data (fast)
     /// - JSON serialization for Value fields (compatible)
     ///
+    /// SERIALIZATION CONTRACT:
+    /// The artifact section (entry_points, sources) represents the original compilation
+    /// artifacts and MUST always be deserializable. These sections will never change
+    /// location or order, ensuring forward compatibility.
+    ///
+    /// The extensible section (binary data, literals, rule_tree) may evolve and can
+    /// fail to deserialize in newer format versions. When this happens, the deserializer
+    /// will set needs_recompilation=true to signal that regeneration is required.
+    ///
     /// Binary format:
     /// - 4 bytes: Magic number "REGO"
     /// - 4 bytes: Version (little-endian u32)
+    ///
+    /// ARTIFACT SECTION (always deserializable):
+    /// - 4 bytes: JSON entry_points length (little-endian u32)
+    /// - 4 bytes: JSON sources length (little-endian u32)
+    /// - N bytes: JSON serialized entry_points
+    /// - M bytes: JSON serialized sources
+    ///
+    /// EXTENSIBLE SECTION (may fail in newer versions):
     /// - 4 bytes: Binary data length (little-endian u32)
     /// - 4 bytes: JSON literals length (little-endian u32)
     /// - 4 bytes: JSON rule_tree length (little-endian u32)
-    /// - N bytes: Binary serialized program data (without Value fields)
-    /// - M bytes: JSON serialized literals
-    /// - P bytes: JSON serialized rule_tree
+    /// - P bytes: Binary serialized program data (without Value, entry_points, and sources fields)
+    /// - Q bytes: JSON serialized literals
+    /// - R bytes: JSON serialized rule_tree
     pub fn serialize_binary(&self) -> Result<Vec<u8>, String> {
         let mut buffer = Vec::new();
 
@@ -265,8 +309,15 @@ impl Program {
         buffer.extend_from_slice(&Self::MAGIC);
         buffer.extend_from_slice(&Self::SERIALIZATION_VERSION.to_le_bytes());
 
-        // Serialize the main program structure (without Value fields) to binary using bincode
-        // Note: The Value fields are skipped via #[serde(skip)] so this won't include them
+        // Serialize entry_points and sources to JSON first
+        let entry_points_json = serde_json::to_vec(&self.entry_points)
+            .map_err(|e| format!("Entry points JSON serialization failed: {}", e))?;
+
+        let sources_json = serde_json::to_vec(&self.sources)
+            .map_err(|e| format!("Sources JSON serialization failed: {}", e))?;
+
+        // Serialize the main program structure (without Value, entry_points, and sources fields) to binary using bincode
+        // Note: The Value, entry_points, and sources fields are skipped via #[serde(skip)] so this won't include them
         let binary_data = bincode::serialize(self)
             .map_err(|e| format!("Program structure binary serialization failed: {}", e))?;
 
@@ -277,12 +328,20 @@ impl Program {
         let rule_tree_json = serde_json::to_vec(&self.rule_tree)
             .map_err(|e| format!("Rule tree JSON serialization failed: {}", e))?;
 
-        // Write lengths
+        // Write lengths for entry_points and sources first
+        buffer.extend_from_slice(&(entry_points_json.len() as u32).to_le_bytes());
+        buffer.extend_from_slice(&(sources_json.len() as u32).to_le_bytes());
+
+        // Write the JSON data first (entry_points and sources)
+        buffer.extend_from_slice(&entry_points_json);
+        buffer.extend_from_slice(&sources_json);
+
+        // Write lengths for remaining data
         buffer.extend_from_slice(&(binary_data.len() as u32).to_le_bytes());
         buffer.extend_from_slice(&(literals_json.len() as u32).to_le_bytes());
         buffer.extend_from_slice(&(rule_tree_json.len() as u32).to_le_bytes());
 
-        // Write the actual data
+        // Write the remaining data
         buffer.extend_from_slice(&binary_data);
         buffer.extend_from_slice(&literals_json);
         buffer.extend_from_slice(&rule_tree_json);
@@ -290,10 +349,52 @@ impl Program {
         Ok(buffer)
     }
 
+    /// Deserialize only the artifact section (entry_points and sources) from binary format
+    /// This method is guaranteed to work across all format versions and provides access
+    /// to the original compilation artifacts even if the extensible section cannot be parsed.
+    pub fn deserialize_artifacts_only(
+        data: &[u8],
+    ) -> Result<(Map<String, usize>, Vec<SourceFile>), String> {
+        if data.len() < 16 {
+            return Err("Data too short for artifact header".to_string());
+        }
+
+        // Check magic number
+        if data[0..4] != Self::MAGIC {
+            return Err("Invalid file format - magic number mismatch".to_string());
+        }
+
+        // Check version (we support all versions for artifact section)
+        let _version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+
+        // Read lengths for entry_points and sources
+        let entry_points_len = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
+        let sources_len = u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as usize;
+
+        // Calculate positions
+        let entry_points_start = 16;
+        let sources_start = entry_points_start + entry_points_len;
+        let sources_end = sources_start + sources_len;
+
+        if data.len() < sources_end {
+            return Err("Data truncated in artifact section".to_string());
+        }
+
+        // Deserialize artifacts
+        let entry_points: Map<String, usize> =
+            serde_json::from_slice(&data[entry_points_start..sources_start])
+                .map_err(|e| format!("Entry points deserialization failed: {}", e))?;
+
+        let sources: Vec<SourceFile> = serde_json::from_slice(&data[sources_start..sources_end])
+            .map_err(|e| format!("Sources deserialization failed: {}", e))?;
+
+        Ok((entry_points, sources))
+    }
+
     /// Deserialize program from binary format with version checking
-    pub fn deserialize_binary(data: &[u8]) -> Result<Self, String> {
-        if data.len() < 20 {
-            // Updated minimum size for new format
+    pub fn deserialize_binary(data: &[u8]) -> Result<DeserializationResult, String> {
+        if data.len() < 28 {
+            // Updated minimum size for new format (8 + 4*5 = 28 bytes for header)
             return Err("Data too short for header".to_string());
         }
 
@@ -312,12 +413,41 @@ impl Program {
             ));
         }
 
-        // Read lengths for the three data sections
-        let binary_len = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
-        let literals_len = u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as usize;
-        let rule_tree_len = u32::from_le_bytes([data[16], data[17], data[18], data[19]]) as usize;
+        // Read lengths for entry_points and sources (first two sections)
+        let entry_points_len = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
+        let sources_len = u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as usize;
 
-        let total_expected = 20 + binary_len + literals_len + rule_tree_len;
+        // Calculate positions for entry_points and sources data
+        let entry_points_start = 16;
+        let sources_start = entry_points_start + entry_points_len;
+        let lengths_start = sources_start + sources_len;
+
+        // Ensure we have enough data for the lengths section
+        if data.len() < lengths_start + 12 {
+            return Err("Data too short for lengths section".to_string());
+        }
+
+        // Read lengths for the remaining three data sections
+        let binary_len = u32::from_le_bytes([
+            data[lengths_start],
+            data[lengths_start + 1],
+            data[lengths_start + 2],
+            data[lengths_start + 3],
+        ]) as usize;
+        let literals_len = u32::from_le_bytes([
+            data[lengths_start + 4],
+            data[lengths_start + 5],
+            data[lengths_start + 6],
+            data[lengths_start + 7],
+        ]) as usize;
+        let rule_tree_len = u32::from_le_bytes([
+            data[lengths_start + 8],
+            data[lengths_start + 9],
+            data[lengths_start + 10],
+            data[lengths_start + 11],
+        ]) as usize;
+
+        let total_expected = lengths_start + 12 + binary_len + literals_len + rule_tree_len;
         if data.len() < total_expected {
             return Err("Data truncated".to_string());
         }
@@ -325,38 +455,79 @@ impl Program {
         // Deserialize the program based on version
         match version {
             1 => {
-                // Extract data sections
-                let binary_start = 20;
+                // Extract data sections (entry_points first, then sources, then binary, then literals, then rule_tree)
+                let binary_start = lengths_start + 12;
                 let literals_start = binary_start + binary_len;
                 let rule_tree_start = literals_start + literals_len;
 
-                // Deserialize main program structure (without Value fields) using bincode
-                let mut program: Program =
-                    bincode::deserialize(&data[binary_start..literals_start]).map_err(|e| {
-                        format!("Program structure binary deserialization failed: {}", e)
-                    })?;
+                // ARTIFACT SECTION - Always deserialize these first (guaranteed to work)
+                let entry_points: Map<String, usize> =
+                    serde_json::from_slice(&data[entry_points_start..sources_start])
+                        .map_err(|e| format!("Entry points deserialization failed: {}", e))?;
 
-                // Deserialize Value fields separately
-                let literals: Vec<Value> =
-                    serde_json::from_slice(&data[literals_start..rule_tree_start])
-                        .map_err(|e| format!("Literals deserialization failed: {}", e))?;
+                let sources: Vec<SourceFile> =
+                    serde_json::from_slice(&data[sources_start..lengths_start])
+                        .map_err(|e| format!("Sources deserialization failed: {}", e))?;
 
-                let rule_tree: Value =
-                    serde_json::from_slice(&data[rule_tree_start..rule_tree_start + rule_tree_len])
-                        .map_err(|e| format!("Rule tree deserialization failed: {}", e))?;
+                // EXTENSIBLE SECTION - Try to deserialize, but allow graceful fallback
+                let mut needs_recompilation = false;
 
-                // Set the Value fields that were skipped during serde deserialization
+                // Try to deserialize binary program structure
+                let mut program =
+                    match bincode::deserialize::<Program>(&data[binary_start..literals_start]) {
+                        Ok(prog) => prog,
+                        Err(_e) => {
+                            // Binary section failed - create minimal program with artifacts only
+                            needs_recompilation = true;
+                            Program::new()
+                        }
+                    };
+
+                // Try to deserialize literals
+                let literals = match serde_json::from_slice::<Vec<Value>>(
+                    &data[literals_start..rule_tree_start],
+                ) {
+                    Ok(lit) => lit,
+                    Err(_e) => {
+                        // Literals deserialization failed - use empty literals
+                        needs_recompilation = true;
+                        Vec::new()
+                    }
+                };
+
+                // Try to deserialize rule tree
+                let rule_tree = match serde_json::from_slice::<Value>(
+                    &data[rule_tree_start..rule_tree_start + rule_tree_len],
+                ) {
+                    Ok(tree) => tree,
+                    Err(_e) => {
+                        // Rule tree deserialization failed - use empty rule tree
+                        needs_recompilation = true;
+                        Value::new_object()
+                    }
+                };
+
+                // Set all fields (artifacts always succeed, extensible may have fallback values)
+                program.entry_points = entry_points;
+                program.sources = sources;
                 program.literals = literals;
                 program.rule_tree = rule_tree;
+                program.needs_recompilation = needs_recompilation;
 
-                // Initialize resolved builtins if we have builtin info
+                // Try to initialize resolved builtins if we have builtin info
                 if !program.builtin_info_table.is_empty() {
-                    program
-                        .initialize_resolved_builtins()
-                        .map_err(|e| format!("Failed to initialize resolved builtins: {}", e))?;
+                    if let Err(_e) = program.initialize_resolved_builtins() {
+                        // Failed to initialize resolved builtins - recompilation needed
+                        program.needs_recompilation = true;
+                    }
                 }
 
-                Ok(program)
+                // Return appropriate enum variant based on whether recompilation is needed
+                if program.needs_recompilation {
+                    Ok(DeserializationResult::Partial(program))
+                } else {
+                    Ok(DeserializationResult::Complete(program))
+                }
             }
             v => Err(format!("Unsupported version {}", v)),
         }
@@ -405,6 +576,7 @@ impl Program {
             literals: Vec::new(),
             instruction_data: InstructionData::new(),
             builtin_info_table: Vec::new(),
+            entry_points: Map::new(),
             sources: Vec::new(),
             rule_infos: Vec::new(),
             instruction_spans: Vec::new(),
@@ -419,6 +591,7 @@ impl Program {
             rule_tree: Value::new_object(),
             resolved_builtins: Vec::new(),
             needs_runtime_recursion_check: false,
+            needs_recompilation: false,
         }
     }
 
@@ -570,6 +743,36 @@ impl Program {
     /// Check if resolved builtins are initialized
     pub fn has_resolved_builtins(&self) -> bool {
         !self.resolved_builtins.is_empty()
+    }
+
+    /// Add an entry point mapping from path to rule index
+    pub fn add_entry_point(&mut self, path: String, rule_index: usize) {
+        self.entry_points.insert(path, rule_index);
+    }
+
+    /// Get rule index for an entry point path
+    pub fn get_entry_point(&self, path: &str) -> Option<usize> {
+        self.entry_points.get(path).copied()
+    }
+
+    /// Get all entry points
+    pub fn get_entry_points(&self) -> &Map<String, usize> {
+        &self.entry_points
+    }
+
+    /// Check if recompilation is needed due to partial deserialization failure
+    pub fn needs_recompilation(&self) -> bool {
+        self.needs_recompilation
+    }
+
+    /// Mark that recompilation is needed
+    pub fn set_needs_recompilation(&mut self, needs_recompilation: bool) {
+        self.needs_recompilation = needs_recompilation;
+    }
+
+    /// Check if the program is fully functional (not needing recompilation)
+    pub fn is_fully_functional(&self) -> bool {
+        !self.needs_recompilation
     }
 
     /// Add a rule to the rule tree

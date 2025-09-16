@@ -38,7 +38,7 @@ mod tests {
         input: &Value,
     ) -> anyhow::Result<Value> {
         // Compile the policy to RVM instructions
-        let program = Compiler::compile_from_policy(compiled_policy, entrypoint)?;
+        let program = Compiler::compile_from_policy(compiled_policy, &[entrypoint])?;
 
         std::println!(
             "Debug: Generated {} instructions, {} literals",
@@ -100,7 +100,7 @@ mod tests {
         std::env::set_var("RVM_BREAK_ON_RULES", "0"); // Disable auto-break on rules
 
         // Compile the policy to RVM instructions
-        let program = Compiler::compile_from_policy(compiled_policy, entrypoint)?;
+        let program = Compiler::compile_from_policy(compiled_policy, &[entrypoint])?;
 
         // Create a VM and load the program (debugger will read env vars during VM creation)
         let mut vm = RegoVM::new();

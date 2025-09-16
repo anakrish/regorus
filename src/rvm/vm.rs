@@ -45,6 +45,15 @@ pub enum VmError {
     #[error("Invalid chained index params index: {index}")]
     InvalidChainedIndexParams { index: u16 },
 
+    #[error("Invalid virtual data document lookup params index: {index}")]
+    InvalidVirtualDataDocumentLookupParams { index: u16 },
+
+    #[error("Invalid rule index: {rule_index:?}")]
+    InvalidRuleIndex { rule_index: Value },
+
+    #[error("Invalid rule tree entry: {value:?}")]
+    InvalidRuleTreeEntry { value: Value },
+
     #[error("Builtin function expects exactly {expected} arguments, got {actual}")]
     BuiltinArgumentMismatch { expected: u16, actual: usize },
 
@@ -218,6 +227,13 @@ pub struct RegoVM {
     /// Current count of executed instructions
     executed_instructions: usize,
 
+    /// Cache for evaluated paths in virtual data document lookup
+    /// Structure: evaluated[path_component1][path_component2]...[Undefined] = result_value
+    evaluated: Value,
+
+    /// Counter for cache hits during virtual data document lookup evaluation
+    cache_hits: usize,
+
     /// Interactive debugger for step-by-step execution analysis
     #[cfg(feature = "rvm-debug")]
     debugger: crate::rvm::debugger::InteractiveDebugger,
@@ -253,6 +269,8 @@ impl RegoVM {
             base_register_count: 2, // Default to 2 registers for basic operations
             max_instructions: 25000, // Default maximum instruction limit
             executed_instructions: 0,
+            evaluated: Value::new_object(), // Initialize evaluation cache
+            cache_hits: 0,                  // Initialize cache hit counter
             #[cfg(feature = "rvm-debug")]
             debugger: crate::rvm::debugger::InteractiveDebugger::new(),
             #[cfg(feature = "rvm-tracing")]
@@ -366,6 +384,8 @@ impl RegoVM {
         // Reset execution state for each execution
         self.executed_instructions = 0;
         self.pc = 0;
+        self.evaluated = Value::new_object(); // Reset evaluation cache
+        self.cache_hits = 0; // Reset cache hit counter
 
         self.jump_to(0)
     }
@@ -389,6 +409,10 @@ impl RegoVM {
 
     pub fn get_loop_stack(&self) -> &Vec<LoopContext> {
         &self.loop_stack
+    }
+
+    pub fn get_cache_hits(&self) -> usize {
+        self.cache_hits
     }
 
     /// Push a new span onto the span stack for hierarchical tracing
@@ -1004,8 +1028,8 @@ impl RegoVM {
                     self.registers[params.dest as usize] = current_value;
                 }
 
-                Instruction::VirtualDataDocumentLookup { .. } => {
-                    unimplemented!("VirtualDataDocumentLookup instruction not yet implemented")
+                Instruction::VirtualDataDocumentLookup { params_index } => {
+                    self.execute_virtual_data_document_lookup(params_index)?;
                 }
             }
 
@@ -1379,6 +1403,359 @@ impl RegoVM {
     /// Execute CallRule instruction with caching and call stack support
     fn execute_call_rule(&mut self, dest: u8, rule_index: u16) -> Result<()> {
         self.execute_call_rule_common(dest, rule_index, None)
+    }
+
+    /// Execute subobject case for VirtualDataDocumentLookup
+    fn execute_virtual_data_document_lookup_subobject(
+        &mut self,
+        path_components: &[LiteralOrRegister],
+        rule_tree_subobject: &Value,
+    ) -> Result<Value> {
+        // Convert path components to Values for use as root path
+        let mut root_path = Vec::new();
+        for component in path_components {
+            let key_value = match component {
+                LiteralOrRegister::Literal(idx) => self
+                    .program
+                    .literals
+                    .get(*idx as usize)
+                    .ok_or_else(|| VmError::LiteralIndexOutOfBounds {
+                        index: *idx as usize,
+                    })?
+                    .clone(),
+                LiteralOrRegister::Register(reg) => self.registers[*reg as usize].clone(),
+            };
+            root_path.push(key_value);
+        }
+
+        // Start with the subobject at the same path in data (if not undefined) or an empty object
+        let mut data_subobject = self.data.clone();
+        for path_component in &root_path {
+            data_subobject = data_subobject[path_component].clone();
+        }
+
+        // If the data subobject is undefined, start with an empty object
+        let mut result_subobject = match data_subobject {
+            Value::Undefined => Value::new_object(),
+            _ => data_subobject,
+        };
+
+        // Traverse all nodes in the subobject in the rule_tree
+        self.traverse_rule_tree_subobject(rule_tree_subobject, &mut result_subobject, &root_path)?;
+
+        Ok(result_subobject)
+    }
+
+    /// Set a value at a nested path in an object, creating intermediate objects as needed
+    fn set_nested_value(&self, target: &mut Value, path: &[Value], value: Value) -> Result<()> {
+        Self::set_nested_value_static(target, path, value)
+    }
+
+    /// Static helper for setting nested values without borrowing self
+    fn set_nested_value_static(target: &mut Value, path: &[Value], value: Value) -> Result<()> {
+        if path.is_empty() {
+            *target = value;
+            return Ok(());
+        }
+
+        // Ensure target is an object
+        if *target == Value::Undefined {
+            *target = Value::new_object();
+        }
+
+        if let Value::Object(ref mut map) = target {
+            let key = &path[0];
+
+            // Create entry if it doesn't exist
+            if !map.contains_key(key) {
+                std::sync::Arc::make_mut(map).insert(key.clone(), Value::Undefined);
+            }
+
+            // Get mutable reference to the value at this key
+            if let Some(next_target) = std::sync::Arc::make_mut(map).get_mut(key) {
+                Self::set_nested_value_static(next_target, &path[1..], value)?;
+            }
+        } else {
+            return Err(VmError::InvalidRuleTreeEntry {
+                value: target.clone(),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Recursively traverse rule tree subobject and evaluate rules
+    fn traverse_rule_tree_subobject(
+        &mut self,
+        rule_tree_node: &Value,
+        result_subobject: &mut Value,
+        root_path: &[Value],
+    ) -> Result<()> {
+        self.traverse_rule_tree_subobject_with_path(
+            rule_tree_node,
+            result_subobject,
+            root_path,
+            &[],
+        )
+    }
+
+    /// Helper function for recursive traversal with both root and relative paths
+    fn traverse_rule_tree_subobject_with_path(
+        &mut self,
+        rule_tree_node: &Value,
+        result_subobject: &mut Value,
+        root_path: &[Value],
+        relative_path: &[Value],
+    ) -> Result<()> {
+        match rule_tree_node {
+            Value::Number(rule_idx) => {
+                // Found a rule index, check cache first
+                if let Some(rule_index) = rule_idx.as_u64() {
+                    // Build the full cache path: root_path + relative_path
+                    let mut full_cache_path = root_path.to_vec();
+                    full_cache_path.extend_from_slice(relative_path);
+
+                    // Check if this path has already been evaluated
+                    let cached_result = {
+                        let mut cache_lookup = &self.evaluated;
+                        let mut path_exists = true;
+
+                        for path_component in &full_cache_path {
+                            if let Value::Object(ref map) = cache_lookup {
+                                if let Some(next_value) = map.get(path_component) {
+                                    cache_lookup = next_value;
+                                } else {
+                                    path_exists = false;
+                                    break;
+                                }
+                            } else {
+                                path_exists = false;
+                                break;
+                            }
+                        }
+
+                        if path_exists {
+                            if let Value::Object(ref map) = cache_lookup {
+                                map.get(&Value::Undefined).cloned()
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
+
+                    let rule_result = if let Some(cached) = cached_result {
+                        // Cache hit - use cached result
+                        self.cache_hits += 1;
+                        cached
+                    } else {
+                        // Cache miss - evaluate the rule
+                        let temp_reg = self.registers.len() as u8;
+                        self.registers.push(Value::Undefined);
+                        self.execute_call_rule_common(temp_reg, rule_index as u16, None)?;
+                        let result = self.registers.pop().unwrap();
+
+                        // Cache the result: evaluated[full_cache_path][Undefined] = result
+                        let mut cache_path = full_cache_path.clone();
+                        cache_path.push(Value::Undefined);
+                        Self::set_nested_value_static(
+                            &mut self.evaluated,
+                            &cache_path,
+                            result.clone(),
+                        )?;
+
+                        result
+                    };
+
+                    // Add the rule result to the result subobject at the relative path
+                    self.set_nested_value(result_subobject, relative_path, rule_result)?;
+                } else {
+                    return Err(VmError::InvalidRuleIndex {
+                        rule_index: Value::Number(rule_idx.clone()),
+                    });
+                }
+            }
+            Value::Object(obj) => {
+                // Traverse each key-value pair in the object
+                for (key, value) in obj.iter() {
+                    let mut new_relative_path = relative_path.to_vec();
+                    new_relative_path.push(key.clone());
+                    self.traverse_rule_tree_subobject_with_path(
+                        value,
+                        result_subobject,
+                        root_path,
+                        &new_relative_path,
+                    )?;
+                }
+            }
+            _ => {
+                // Ignore other value types (like undefined)
+            }
+        }
+        Ok(())
+    }
+
+    /// Execute VirtualDataDocumentLookup instruction
+    fn execute_virtual_data_document_lookup(&mut self, params_index: u16) -> Result<()> {
+        let params = self
+            .program
+            .instruction_data
+            .get_virtual_data_document_lookup_params(params_index)
+            .ok_or_else(|| VmError::InvalidVirtualDataDocumentLookupParams {
+                index: params_index,
+            })?
+            .clone();
+
+        // Start with the rule tree data node
+        let mut current_node = &self.program.rule_tree["data"];
+        let mut components_consumed = 0;
+
+        // Navigate the rule tree with each path component
+        for (i, component) in params.path_components.iter().enumerate() {
+            let key_value = match component {
+                LiteralOrRegister::Literal(idx) => self
+                    .program
+                    .literals
+                    .get(*idx as usize)
+                    .ok_or_else(|| VmError::LiteralIndexOutOfBounds {
+                        index: *idx as usize,
+                    })?
+                    .clone(),
+                LiteralOrRegister::Register(reg) => self.registers[*reg as usize].clone(),
+            };
+
+            // Advance first, then check what we got
+            current_node = &current_node[&key_value];
+            components_consumed = i + 1;
+
+            // Break if we hit undefined or a rule number
+            match current_node {
+                Value::Undefined | Value::Number(_) => break,
+                _ => {} // Continue navigation
+            }
+        }
+
+        // Handle the different cases based on what we found
+        match current_node {
+            Value::Number(rule_index_value) => {
+                // Case 1 & 2: Rule index found
+                if let Some(rule_index) = rule_index_value.as_u64() {
+                    let rule_index = rule_index as u16;
+
+                    // Execute the rule by calling CallRule logic
+                    self.execute_call_rule_common(params.dest, rule_index, None)?;
+
+                    // If there are remaining components, apply them to the rule result
+                    if components_consumed < params.path_components.len() {
+                        // Case 2: Rule with remaining components
+                        let mut rule_result = self.registers[params.dest as usize].clone();
+
+                        // Apply remaining path components to the rule result
+                        for component in &params.path_components[components_consumed..] {
+                            let key_value = match component {
+                                LiteralOrRegister::Literal(idx) => self
+                                    .program
+                                    .literals
+                                    .get(*idx as usize)
+                                    .ok_or_else(|| VmError::LiteralIndexOutOfBounds {
+                                        index: *idx as usize,
+                                    })?
+                                    .clone(),
+                                LiteralOrRegister::Register(reg) => {
+                                    self.registers[*reg as usize].clone()
+                                }
+                            };
+
+                            rule_result = rule_result[&key_value].clone();
+                        }
+
+                        self.registers[params.dest as usize] = rule_result;
+                    }
+                    // Case 1: All components consumed, rule result already in dest register
+                } else {
+                    return Err(VmError::InvalidRuleIndex {
+                        rule_index: Value::Number(rule_index_value.clone()),
+                    });
+                }
+            }
+            Value::Undefined | Value::Object(_)
+                if components_consumed != params.path_components.len() =>
+            {
+                // Case 3: Apply components directly to data
+                // (Both undefined and partial object navigation end up here)
+                let mut result = self.data.clone();
+
+                for component in &params.path_components {
+                    let key_value = match component {
+                        LiteralOrRegister::Literal(idx) => self
+                            .program
+                            .literals
+                            .get(*idx as usize)
+                            .ok_or_else(|| VmError::LiteralIndexOutOfBounds {
+                                index: *idx as usize,
+                            })?
+                            .clone(),
+                        LiteralOrRegister::Register(reg) => self.registers[*reg as usize].clone(),
+                    };
+
+                    result = result[&key_value].clone();
+                }
+
+                self.registers[params.dest as usize] = result;
+            }
+            Value::Object(_) => {
+                // Case 4: Subobject found
+                let rule_tree_subobject = current_node.clone();
+                
+                if components_consumed == params.path_components.len() {
+                    // Case 4a: All components consumed, evaluate entire subobject
+                    let result = self.execute_virtual_data_document_lookup_subobject(
+                        &params.path_components,
+                        &rule_tree_subobject,
+                    )?;
+                    self.registers[params.dest as usize] = result;
+                } else {
+                    // Case 4b: Subobject found with remaining components
+                    // First evaluate the subobject, then apply remaining components
+                    let consumed_components = &params.path_components[..components_consumed];
+                    let subobject_result = self.execute_virtual_data_document_lookup_subobject(
+                        consumed_components,
+                        &rule_tree_subobject,
+                    )?;
+                    
+                    // Apply remaining path components to the subobject result
+                    let mut result = subobject_result;
+                    for component in &params.path_components[components_consumed..] {
+                        let key_value = match component {
+                            LiteralOrRegister::Literal(idx) => self
+                                .program
+                                .literals
+                                .get(*idx as usize)
+                                .ok_or_else(|| VmError::LiteralIndexOutOfBounds {
+                                    index: *idx as usize,
+                                })?
+                                .clone(),
+                            LiteralOrRegister::Register(reg) => {
+                                self.registers[*reg as usize].clone()
+                            }
+                        };
+
+                        result = result[&key_value].clone();
+                    }
+
+                    self.registers[params.dest as usize] = result;
+                }
+            }
+            _ => {
+                // Unexpected value type in rule tree
+                return Err(VmError::InvalidRuleTreeEntry {
+                    value: current_node.clone(),
+                });
+            }
+        }
+
+        Ok(())
     }
 
     /// Execute a function call to a user-defined function rule

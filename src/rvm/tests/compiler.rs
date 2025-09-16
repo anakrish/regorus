@@ -8,6 +8,7 @@ mod tests {
     //! Set TEST_CASE_FILTER=pattern to run specific test cases
 
     use crate::rvm::compiler::Compiler;
+    use crate::rvm::test_utils::test_round_trip_serialization;
     use crate::rvm::vm::RegoVM;
     use crate::tests::common::{check_output, value_or_vec_to_vec, YamlTest};
     use crate::value::Value;
@@ -36,8 +37,6 @@ mod tests {
         data: &Value,
         input: &Value,
     ) -> anyhow::Result<Value> {
-        std::println!("Debug: Compiling entrypoint: {}", entrypoint);
-
         // Compile the policy to RVM instructions
         let program = Compiler::compile_from_policy(compiled_policy, entrypoint)?;
 
@@ -48,7 +47,7 @@ mod tests {
         );
 
         // Test round-trip serialization
-        if let Err(e) = program.test_round_trip_serialization() {
+        if let Err(e) = test_round_trip_serialization(program.as_ref()) {
             return Err(anyhow::anyhow!(
                 "Round-trip serialization test failed: {}",
                 e
@@ -252,15 +251,24 @@ mod tests {
                                             }
                                         }
 
-                                        panic!(
-                                            "RVM result does not match interpreter result for case '{}':\nRVM result: {:?}\nInterpreter result: {:?}",
-                                            case.note, actual_result, interpreter_value
+                                        // Check if this is an allowed interpreter incorrect behavior case
+                                        if case.allow_interpreter_incorrect_behavior == Some(true) {
+                                            std::println!(
+                                                "✓ RVM result differs from interpreter for case '{}' (interpreter incorrect behavior allowed):\nRVM result: {:?}\nInterpreter result: {:?}",
+                                                case.note, actual_result, interpreter_value
+                                            );
+                                        } else {
+                                            panic!(
+                                                "RVM result does not match interpreter result for case '{}':\nRVM result: {:?}\nInterpreter result: {:?}",
+                                                case.note, actual_result, interpreter_value
+                                            );
+                                        }
+                                    } else {
+                                        std::println!(
+                                            "✓ RVM matches interpreter for case '{}'",
+                                            case.note
                                         );
                                     }
-                                    std::println!(
-                                        "✓ RVM matches interpreter for case '{}'",
-                                        case.note
-                                    );
                                 }
                                 Err(interpreter_error) => {
                                     panic!(

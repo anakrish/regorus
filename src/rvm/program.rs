@@ -10,11 +10,8 @@ use serde::{Deserialize, Serialize};
 
 extern crate alloc;
 
-// Use HashMap when std is available for better performance, BTreeMap otherwise
-#[cfg(not(feature = "std"))]
-use alloc::collections::BTreeMap as Map;
-#[cfg(feature = "std")]
-use std::collections::HashMap as Map;
+// Use IndexMap for ordered, fast-lookup collections
+use indexmap::IndexMap;
 
 /// Builtin function information stored in program's builtin info table
 #[repr(C)]
@@ -199,9 +196,9 @@ pub struct Program {
     /// Builtin function information table
     pub builtin_info_table: Vec<BuiltinInfo>,
 
-    /// Entry points mapping from entry point path to rule index (skipped in serde, serialized separately as JSON)
-    #[serde(skip, default = "Map::new")]
-    pub entry_points: Map<String, usize>,
+    /// Entry points mapping with preserved insertion order (skipped in serde, serialized separately as JSON)
+    #[serde(skip, default = "IndexMap::new")]
+    pub entry_points: IndexMap<String, usize>,
 
     /// Source files table with content (skipped in serde, serialized separately as JSON)
     #[serde(skip, default = "Vec::new")]
@@ -241,6 +238,11 @@ pub struct Program {
     /// section failed to deserialize (e.g., due to version incompatibility)
     #[serde(default)]
     pub needs_recompilation: bool,
+
+    /// Rego language version used for compilation (true for Rego v0, false for Rego v1)
+    /// This must be preserved during recompilation to maintain policy semantics
+    #[serde(default)]
+    pub rego_v0: bool,
 }
 
 /// Program compilation metadata
@@ -354,7 +356,7 @@ impl Program {
     /// to the original compilation artifacts even if the extensible section cannot be parsed.
     pub fn deserialize_artifacts_only(
         data: &[u8],
-    ) -> Result<(Map<String, usize>, Vec<SourceFile>), String> {
+    ) -> Result<(IndexMap<String, usize>, Vec<SourceFile>), String> {
         if data.len() < 16 {
             return Err("Data too short for artifact header".to_string());
         }
@@ -380,13 +382,13 @@ impl Program {
             return Err("Data truncated in artifact section".to_string());
         }
 
-        // Deserialize artifacts
-        let entry_points: Map<String, usize> =
+        // Try to deserialize artifacts, fallback to empty if corrupted
+        let entry_points: IndexMap<String, usize> =
             serde_json::from_slice(&data[entry_points_start..sources_start])
-                .map_err(|e| format!("Entry points deserialization failed: {}", e))?;
+                .unwrap_or_else(|_| IndexMap::new());
 
         let sources: Vec<SourceFile> = serde_json::from_slice(&data[sources_start..sources_end])
-            .map_err(|e| format!("Sources deserialization failed: {}", e))?;
+            .unwrap_or_else(|_| Vec::new());
 
         Ok((entry_points, sources))
     }
@@ -460,8 +462,8 @@ impl Program {
                 let literals_start = binary_start + binary_len;
                 let rule_tree_start = literals_start + literals_len;
 
-                // ARTIFACT SECTION - Always deserialize these first (guaranteed to work)
-                let entry_points: Map<String, usize> =
+                // ARTIFACT SECTION - Must succeed for recompilation to work
+                let entry_points: IndexMap<String, usize> =
                     serde_json::from_slice(&data[entry_points_start..sources_start])
                         .map_err(|e| format!("Entry points deserialization failed: {}", e))?;
 
@@ -576,7 +578,7 @@ impl Program {
             literals: Vec::new(),
             instruction_data: InstructionData::new(),
             builtin_info_table: Vec::new(),
-            entry_points: Map::new(),
+            entry_points: IndexMap::new(),
             sources: Vec::new(),
             rule_infos: Vec::new(),
             instruction_spans: Vec::new(),
@@ -592,6 +594,7 @@ impl Program {
             resolved_builtins: Vec::new(),
             needs_runtime_recursion_check: false,
             needs_recompilation: false,
+            rego_v0: false, // Default to Rego v1
         }
     }
 
@@ -755,8 +758,8 @@ impl Program {
         self.entry_points.get(path).copied()
     }
 
-    /// Get all entry points
-    pub fn get_entry_points(&self) -> &Map<String, usize> {
+    /// Get all entry points as IndexMap
+    pub fn get_entry_points(&self) -> &IndexMap<String, usize> {
         &self.entry_points
     }
 
@@ -877,6 +880,77 @@ impl Program {
         }
 
         Ok(())
+    }
+
+    /// Compile a partial deserialized program to a complete one
+    ///
+    /// This method takes a partial program (containing only entry_points and sources)
+    /// and recompiles it to create a complete program with all instructions and data.
+    ///
+    /// # Arguments
+    /// * `partial_program` - A program that contains entry_points and sources but needs recompilation
+    ///
+    /// # Returns
+    /// A complete, fully functional Program
+    pub fn compile_from_partial(partial_program: Program) -> Result<Program, String> {
+        use crate::rvm::compiler::Compiler;
+        use crate::Engine;
+        use alloc::string::ToString;
+        use alloc::sync::Arc;
+
+        // Validate that we have the necessary data
+        if partial_program.entry_points.is_empty() {
+            return Err("Partial program must contain entry points".to_string());
+        }
+        if partial_program.sources.is_empty() {
+            return Err("Partial program must contain sources".to_string());
+        }
+
+        // Create a new engine
+        let mut engine = Engine::new();
+        engine.set_rego_v0(partial_program.rego_v0);
+
+        // Add all sources to the engine
+        for source_file in &partial_program.sources {
+            engine
+                .add_policy(source_file.name.clone(), source_file.content.clone())
+                .map_err(|e| format!("Failed to add policy '{}': {}", source_file.name, e))?;
+        }
+
+        // Get all entry point names as a vector of string references
+        let entry_point_names: Vec<&str> = partial_program
+            .entry_points
+            .keys()
+            .map(|s| s.as_str())
+            .collect();
+
+        if entry_point_names.is_empty() {
+            return Err("No entry points found in partial program".to_string());
+        }
+
+        // Use the first entry point to create a compiled policy
+        let first_entry_point = crate::Rc::from(entry_point_names[0]);
+        let compiled_policy = engine
+            .compile_with_entrypoint(&first_entry_point)
+            .map_err(|e| {
+                format!(
+                    "Failed to compile policy with entry point '{}': {}",
+                    entry_point_names[0], e
+                )
+            })?;
+
+        // Use the RVM compiler to create a complete program with all entry points
+        let arc_program = Compiler::compile_from_policy(&compiled_policy, &entry_point_names)
+            .map_err(|e| format!("Failed to compile RVM program: {}", e))?;
+
+        // Extract the program from Arc
+        let mut complete_program = Arc::try_unwrap(arc_program)
+            .map_err(|_| "Failed to extract program from Arc".to_string())?;
+
+        // Preserve the original Rego version setting
+        complete_program.rego_v0 = partial_program.rego_v0;
+
+        Ok(complete_program)
     }
 }
 

@@ -43,6 +43,11 @@ impl CompiledPolicy {
     pub fn get_modules(&self) -> &Vec<Ref<Module>> {
         &self.inner.modules
     }
+
+    /// Check if this policy uses Rego v0 semantics
+    pub fn is_rego_v0(&self) -> bool {
+        self.inner.rego_v0
+    }
 }
 
 impl CompiledPolicy {
@@ -220,6 +225,9 @@ pub(crate) struct CompiledPolicyData {
 
     // Evaluation settings
     pub(crate) strict_builtin_errors: bool,
+
+    // Rego version (v0 = true, v1 = false)
+    pub(crate) rego_v0: bool,
 
     // The semantics of extensions ought to be changes to be more Clone friendly.
     pub(crate) extensions: Map<String, (u8, Rc<Box<dyn Extension>>)>,

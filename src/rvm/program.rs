@@ -241,7 +241,8 @@ pub struct Program {
 
     /// Rego language version used for compilation (true for Rego v0, false for Rego v1)
     /// This must be preserved during recompilation to maintain policy semantics
-    #[serde(default)]
+    /// Serialized separately in the artifact section for guaranteed availability
+    #[serde(skip, default)]
     pub rego_v0: bool,
 }
 
@@ -292,18 +293,17 @@ impl Program {
     /// - 4 bytes: Version (little-endian u32)
     ///
     /// ARTIFACT SECTION (always deserializable):
-    /// - 4 bytes: JSON entry_points length (little-endian u32)
-    /// - 4 bytes: JSON sources length (little-endian u32)
-    /// - N bytes: JSON serialized entry_points
-    /// - M bytes: JSON serialized sources
+    /// - 4 bytes: Bincode entry_points length (little-endian u32)
+    /// - 4 bytes: Bincode sources length (little-endian u32)
+    /// - 1 byte: rego_v0 flag (0 = Rego v1, 1 = Rego v0)
+    /// - N bytes: Bincode serialized entry_points
+    /// - M bytes: Bincode serialized sources
     ///
     /// EXTENSIBLE SECTION (may fail in newer versions):
     /// - 4 bytes: Binary data length (little-endian u32)
-    /// - 4 bytes: JSON literals length (little-endian u32)
-    /// - 4 bytes: JSON rule_tree length (little-endian u32)
-    /// - P bytes: Binary serialized program data (without Value, entry_points, and sources fields)
-    /// - Q bytes: JSON serialized literals
-    /// - R bytes: JSON serialized rule_tree
+    /// - P bytes: Binary serialized program data (without Value, entry_points, sources, and rego_v0 fields)
+    /// - 4 bytes: JSON data length (little-endian u32)
+    /// - Q bytes: Combined JSON data containing {"literals": [...], "rule_tree": {...}}
     pub fn serialize_binary(&self) -> Result<Vec<u8>, String> {
         let mut buffer = Vec::new();
 
@@ -311,42 +311,38 @@ impl Program {
         buffer.extend_from_slice(&Self::MAGIC);
         buffer.extend_from_slice(&Self::SERIALIZATION_VERSION.to_le_bytes());
 
-        // Serialize entry_points and sources to JSON first
-        let entry_points_json = serde_json::to_vec(&self.entry_points)
-            .map_err(|e| format!("Entry points JSON serialization failed: {}", e))?;
+        // Serialize entry_points and sources to bincode for better performance
+        let entry_points_bin = bincode::serialize(&self.entry_points)
+            .map_err(|e| format!("Entry points bincode serialization failed: {}", e))?;
 
-        let sources_json = serde_json::to_vec(&self.sources)
-            .map_err(|e| format!("Sources JSON serialization failed: {}", e))?;
+        let sources_bin = bincode::serialize(&self.sources)
+            .map_err(|e| format!("Sources bincode serialization failed: {}", e))?;
 
         // Serialize the main program structure (without Value, entry_points, and sources fields) to binary using bincode
         // Note: The Value, entry_points, and sources fields are skipped via #[serde(skip)] so this won't include them
         let binary_data = bincode::serialize(self)
             .map_err(|e| format!("Program structure binary serialization failed: {}", e))?;
 
-        // Serialize Value fields to JSON
-        let literals_json = serde_json::to_vec(&self.literals)
-            .map_err(|e| format!("Literals JSON serialization failed: {}", e))?;
+        // Create combined JSON object for extensible data
+        let combined_json_data = serde_json::json!({
+            "literals": self.literals,
+            "rule_tree": self.rule_tree
+        });
+        let json_data = serde_json::to_vec(&combined_json_data)
+            .map_err(|e| format!("Combined JSON serialization failed: {}", e))?;
 
-        let rule_tree_json = serde_json::to_vec(&self.rule_tree)
-            .map_err(|e| format!("Rule tree JSON serialization failed: {}", e))?;
+        // Write artifact section lengths and data
+        buffer.extend_from_slice(&(entry_points_bin.len() as u32).to_le_bytes());
+        buffer.extend_from_slice(&(sources_bin.len() as u32).to_le_bytes());
+        buffer.push(if self.rego_v0 { 1 } else { 0 }); // rego_v0 flag
+        buffer.extend_from_slice(&entry_points_bin);
+        buffer.extend_from_slice(&sources_bin);
 
-        // Write lengths for entry_points and sources first
-        buffer.extend_from_slice(&(entry_points_json.len() as u32).to_le_bytes());
-        buffer.extend_from_slice(&(sources_json.len() as u32).to_le_bytes());
-
-        // Write the JSON data first (entry_points and sources)
-        buffer.extend_from_slice(&entry_points_json);
-        buffer.extend_from_slice(&sources_json);
-
-        // Write lengths for remaining data
+        // Write extensible section lengths and data (binary first, then JSON)
         buffer.extend_from_slice(&(binary_data.len() as u32).to_le_bytes());
-        buffer.extend_from_slice(&(literals_json.len() as u32).to_le_bytes());
-        buffer.extend_from_slice(&(rule_tree_json.len() as u32).to_le_bytes());
-
-        // Write the remaining data
         buffer.extend_from_slice(&binary_data);
-        buffer.extend_from_slice(&literals_json);
-        buffer.extend_from_slice(&rule_tree_json);
+        buffer.extend_from_slice(&(json_data.len() as u32).to_le_bytes());
+        buffer.extend_from_slice(&json_data);
 
         Ok(buffer)
     }
@@ -356,8 +352,8 @@ impl Program {
     /// to the original compilation artifacts even if the extensible section cannot be parsed.
     pub fn deserialize_artifacts_only(
         data: &[u8],
-    ) -> Result<(IndexMap<String, usize>, Vec<SourceFile>), String> {
-        if data.len() < 16 {
+    ) -> Result<(IndexMap<String, usize>, Vec<SourceFile>, bool), String> {
+        if data.len() < 17 {
             return Err("Data too short for artifact header".to_string());
         }
 
@@ -373,8 +369,11 @@ impl Program {
         let entry_points_len = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
         let sources_len = u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as usize;
 
+        // Read rego_v0 flag
+        let rego_v0 = data[16] != 0;
+
         // Calculate positions
-        let entry_points_start = 16;
+        let entry_points_start = 17;
         let sources_start = entry_points_start + entry_points_len;
         let sources_end = sources_start + sources_len;
 
@@ -382,21 +381,21 @@ impl Program {
             return Err("Data truncated in artifact section".to_string());
         }
 
-        // Try to deserialize artifacts, fallback to empty if corrupted
+        // Try to deserialize artifacts using bincode, fallback to empty if corrupted
         let entry_points: IndexMap<String, usize> =
-            serde_json::from_slice(&data[entry_points_start..sources_start])
+            bincode::deserialize(&data[entry_points_start..sources_start])
                 .unwrap_or_else(|_| IndexMap::new());
 
-        let sources: Vec<SourceFile> = serde_json::from_slice(&data[sources_start..sources_end])
-            .unwrap_or_else(|_| Vec::new());
+        let sources: Vec<SourceFile> =
+            bincode::deserialize(&data[sources_start..sources_end]).unwrap_or_else(|_| Vec::new());
 
-        Ok((entry_points, sources))
+        Ok((entry_points, sources, rego_v0))
     }
 
     /// Deserialize program from binary format with version checking
     pub fn deserialize_binary(data: &[u8]) -> Result<DeserializationResult, String> {
-        if data.len() < 28 {
-            // Updated minimum size for new format (8 + 4*5 = 28 bytes for header)
+        if data.len() < 25 {
+            // Updated minimum size for new format (8 + 4*4 + 1 = 25 bytes for header)
             return Err("Data too short for header".to_string());
         }
 
@@ -419,37 +418,34 @@ impl Program {
         let entry_points_len = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
         let sources_len = u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as usize;
 
+        // Read rego_v0 flag
+        let rego_v0 = data[16] != 0;
+
         // Calculate positions for entry_points and sources data
-        let entry_points_start = 16;
+        let entry_points_start = 17;
         let sources_start = entry_points_start + entry_points_len;
         let lengths_start = sources_start + sources_len;
 
         // Ensure we have enough data for the lengths section
-        if data.len() < lengths_start + 12 {
+        if data.len() < lengths_start + 8 {
             return Err("Data too short for lengths section".to_string());
         }
 
-        // Read lengths for the remaining three data sections
+        // Read lengths for the remaining two data sections (binary and JSON)
         let binary_len = u32::from_le_bytes([
             data[lengths_start],
             data[lengths_start + 1],
             data[lengths_start + 2],
             data[lengths_start + 3],
         ]) as usize;
-        let literals_len = u32::from_le_bytes([
+        let json_len = u32::from_le_bytes([
             data[lengths_start + 4],
             data[lengths_start + 5],
             data[lengths_start + 6],
             data[lengths_start + 7],
         ]) as usize;
-        let rule_tree_len = u32::from_le_bytes([
-            data[lengths_start + 8],
-            data[lengths_start + 9],
-            data[lengths_start + 10],
-            data[lengths_start + 11],
-        ]) as usize;
 
-        let total_expected = lengths_start + 12 + binary_len + literals_len + rule_tree_len;
+        let total_expected = lengths_start + 8 + binary_len + json_len;
         if data.len() < total_expected {
             return Err("Data truncated".to_string());
         }
@@ -457,18 +453,17 @@ impl Program {
         // Deserialize the program based on version
         match version {
             1 => {
-                // Extract data sections (entry_points first, then sources, then binary, then literals, then rule_tree)
-                let binary_start = lengths_start + 12;
-                let literals_start = binary_start + binary_len;
-                let rule_tree_start = literals_start + literals_len;
+                // Extract data sections (entry_points first, then sources, then binary, then combined JSON)
+                let binary_start = lengths_start + 8;
+                let json_start = binary_start + binary_len;
 
                 // ARTIFACT SECTION - Must succeed for recompilation to work
                 let entry_points: IndexMap<String, usize> =
-                    serde_json::from_slice(&data[entry_points_start..sources_start])
+                    bincode::deserialize(&data[entry_points_start..sources_start])
                         .map_err(|e| format!("Entry points deserialization failed: {}", e))?;
 
                 let sources: Vec<SourceFile> =
-                    serde_json::from_slice(&data[sources_start..lengths_start])
+                    bincode::deserialize(&data[sources_start..lengths_start])
                         .map_err(|e| format!("Sources deserialization failed: {}", e))?;
 
                 // EXTENSIBLE SECTION - Try to deserialize, but allow graceful fallback
@@ -476,7 +471,7 @@ impl Program {
 
                 // Try to deserialize binary program structure
                 let mut program =
-                    match bincode::deserialize::<Program>(&data[binary_start..literals_start]) {
+                    match bincode::deserialize::<Program>(&data[binary_start..json_start]) {
                         Ok(prog) => prog,
                         Err(_e) => {
                             // Binary section failed - create minimal program with artifacts only
@@ -485,27 +480,34 @@ impl Program {
                         }
                     };
 
-                // Try to deserialize literals
-                let literals = match serde_json::from_slice::<Vec<Value>>(
-                    &data[literals_start..rule_tree_start],
+                // Try to deserialize combined JSON data
+                let (literals, rule_tree) = match serde_json::from_slice::<serde_json::Value>(
+                    &data[json_start..json_start + json_len],
                 ) {
-                    Ok(lit) => lit,
-                    Err(_e) => {
-                        // Literals deserialization failed - use empty literals
-                        needs_recompilation = true;
-                        Vec::new()
-                    }
-                };
+                    Ok(combined) => {
+                        // Extract literals and rule_tree from combined JSON
+                        let literals = combined
+                            .get("literals")
+                            .and_then(|v| serde_json::from_value::<Vec<Value>>(v.clone()).ok())
+                            .unwrap_or_else(|| {
+                                needs_recompilation = true;
+                                Vec::new()
+                            });
 
-                // Try to deserialize rule tree
-                let rule_tree = match serde_json::from_slice::<Value>(
-                    &data[rule_tree_start..rule_tree_start + rule_tree_len],
-                ) {
-                    Ok(tree) => tree,
+                        let rule_tree = combined
+                            .get("rule_tree")
+                            .and_then(|v| serde_json::from_value::<Value>(v.clone()).ok())
+                            .unwrap_or_else(|| {
+                                needs_recompilation = true;
+                                Value::new_object()
+                            });
+
+                        (literals, rule_tree)
+                    }
                     Err(_e) => {
-                        // Rule tree deserialization failed - use empty rule tree
+                        // Combined JSON deserialization failed - use empty values
                         needs_recompilation = true;
-                        Value::new_object()
+                        (Vec::new(), Value::new_object())
                     }
                 };
 
@@ -514,6 +516,7 @@ impl Program {
                 program.sources = sources;
                 program.literals = literals;
                 program.rule_tree = rule_tree;
+                program.rego_v0 = rego_v0; // Set rego version from artifact section
                 program.needs_recompilation = needs_recompilation;
 
                 // Try to initialize resolved builtins if we have builtin info

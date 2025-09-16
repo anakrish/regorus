@@ -158,6 +158,30 @@ fn aci_policy_eval(c: &mut Criterion) {
                     )
                 },
             );
+
+            // Benchmark program serialization
+            c.bench_with_input(
+                BenchmarkId::new("program_serialize", &case.note),
+                &program,
+                |b, program| b.iter(|| program.serialize_binary().expect("Serialization failed")),
+            );
+
+            // Pre-serialize for deserialization benchmark
+            let serialized_program = program
+                .serialize_binary()
+                .expect("Pre-serialization failed");
+
+            // Benchmark program deserialization
+            c.bench_with_input(
+                BenchmarkId::new("program_deserialize", &case.note),
+                &serialized_program,
+                |b, serialized_data| {
+                    b.iter(|| {
+                        regorus::rvm::program::Program::deserialize_binary(serialized_data)
+                            .expect("Deserialization failed")
+                    })
+                },
+            );
         }
     }
 }

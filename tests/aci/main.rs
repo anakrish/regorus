@@ -72,6 +72,15 @@ fn eval_test_case_rvm(dir: &Path, case: &TestCase) -> Result<Value> {
     // Use RVM compiler to create a program
     let program = Compiler::compile_from_policy(&compiled_policy, &case.query)?;
 
+    // Test round-trip serialization
+    program.test_round_trip_serialization().map_err(|e| {
+        anyhow::anyhow!(
+            "Round-trip serialization test failed for case '{}': {}",
+            case.note,
+            e
+        )
+    })?;
+
     // Create RVM and load the program
     let mut vm = RegoVM::new();
     vm.load_program(program);

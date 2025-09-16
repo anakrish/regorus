@@ -430,7 +430,7 @@ cases:
       - "Load { dest: 0, literal_idx: 0 }"      # Load 42 into register 0
       - "BuiltinCall { params_index: 0 }"       # Call nonexistent_function(register[0]), should error
       - "Return { value: 1 }"                   # Return result
-    want_error: "Builtin function not found"
+    want_error: "Missing builtin function: nonexistent_function"
 
   # Test sets and union builtin
   - note: "union([{1, 2}, {2, 3}]) should return {1, 2, 3}"

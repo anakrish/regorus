@@ -253,6 +253,9 @@ fn aci_multi_entrypoint_serialization(c: &mut Criterion) {
         .serialize_binary()
         .expect("Multi-entrypoint pre-serialization failed");
 
+    std::fs::write("target/original_program.bin", &serialized_program)
+        .expect("Failed to write original program");
+
     // Benchmark multi-entrypoint program deserialization
     c.bench_with_input(
         BenchmarkId::new("multi_entrypoint_deserialize", "framework_rules"),
@@ -291,9 +294,7 @@ fn aci_multi_entrypoint_serialization(c: &mut Criterion) {
                 .serialize_binary()
                 .expect("Multi-entrypoint pre-serialization failed");
             if serialized_program != reserialized_program {
-                // Dump both programs to files for analysis
-                std::fs::write("target/original_program.bin", &serialized_program)
-                    .expect("Failed to write original program");
+                // Dump program to files for analysis
                 std::fs::write("target/reserialized_program.bin", &reserialized_program)
                     .expect("Failed to write reserialized program");
 

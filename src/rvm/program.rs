@@ -85,7 +85,7 @@ pub struct RuleInfo {
     /// Rule type
     pub rule_type: RuleType,
     /// Definitions
-    pub definitions: crate::Rc<Vec<Vec<usize>>>,
+    pub definitions: crate::Rc<Vec<Vec<u32>>>,
     /// Function-specific information (only present for function rules)
     pub function_info: Option<FunctionInfo>,
     /// Index into the program's literal table for default value (only for Complete rules)
@@ -94,6 +94,9 @@ pub struct RuleInfo {
     pub result_reg: u8,
     /// Number of registers used by this rule (for register windowing)
     pub num_registers: u8,
+    /// Optional destructuring block entry point per definition
+    /// Index: definition_index → Some(entry_point) | None
+    pub destructuring_blocks: Vec<Option<u32>>,
 }
 
 /// Information about function rules
@@ -102,17 +105,18 @@ pub struct FunctionInfo {
     /// Parameter names in order
     pub param_names: Vec<String>,
     /// Number of parameters
-    pub num_params: usize,
+    pub num_params: u32,
 }
 
 impl RuleInfo {
     pub fn new(
         name: String,
         rule_type: RuleType,
-        definitions: crate::Rc<Vec<Vec<usize>>>,
+        definitions: crate::Rc<Vec<Vec<u32>>>,
         result_reg: u8,
         num_registers: u8,
     ) -> Self {
+        let num_definitions = definitions.len();
         Self {
             name,
             rule_type,
@@ -121,6 +125,7 @@ impl RuleInfo {
             default_literal_index: None,
             result_reg,
             num_registers,
+            destructuring_blocks: alloc::vec![None; num_definitions],
         }
     }
 
@@ -128,12 +133,13 @@ impl RuleInfo {
     pub fn new_function(
         name: String,
         rule_type: RuleType,
-        definitions: crate::Rc<Vec<Vec<usize>>>,
+        definitions: crate::Rc<Vec<Vec<u32>>>,
         param_names: Vec<String>,
         result_reg: u8,
         num_registers: u8,
     ) -> Self {
-        let num_params = param_names.len();
+        let num_params = param_names.len() as u32;
+        let num_definitions = definitions.len();
         Self {
             name,
             rule_type,
@@ -145,6 +151,7 @@ impl RuleInfo {
             default_literal_index: None,
             result_reg,
             num_registers,
+            destructuring_blocks: alloc::vec![None; num_definitions],
         }
     }
 
@@ -424,28 +431,37 @@ impl Program {
         // Calculate positions for entry_points and sources data
         let entry_points_start = 17;
         let sources_start = entry_points_start + entry_points_len;
-        let lengths_start = sources_start + sources_len;
+        let binary_len_start = sources_start + sources_len;
 
-        // Ensure we have enough data for the lengths section
-        if data.len() < lengths_start + 8 {
-            return Err("Data too short for lengths section".to_string());
+        // Ensure we have enough data for the binary length
+        if data.len() < binary_len_start + 4 {
+            return Err("Data too short for binary length".to_string());
         }
 
-        // Read lengths for the remaining two data sections (binary and JSON)
+        // Read binary data length
         let binary_len = u32::from_le_bytes([
-            data[lengths_start],
-            data[lengths_start + 1],
-            data[lengths_start + 2],
-            data[lengths_start + 3],
-        ]) as usize;
-        let json_len = u32::from_le_bytes([
-            data[lengths_start + 4],
-            data[lengths_start + 5],
-            data[lengths_start + 6],
-            data[lengths_start + 7],
+            data[binary_len_start],
+            data[binary_len_start + 1],
+            data[binary_len_start + 2],
+            data[binary_len_start + 3],
         ]) as usize;
 
-        let total_expected = lengths_start + 8 + binary_len + json_len;
+        let json_len_start = binary_len_start + 4 + binary_len;
+
+        // Ensure we have enough data for the JSON length
+        if data.len() < json_len_start + 4 {
+            return Err("Data too short for JSON length".to_string());
+        }
+
+        // Read JSON data length
+        let json_len = u32::from_le_bytes([
+            data[json_len_start],
+            data[json_len_start + 1],
+            data[json_len_start + 2],
+            data[json_len_start + 3],
+        ]) as usize;
+
+        let total_expected = json_len_start + 4 + json_len;
         if data.len() < total_expected {
             return Err("Data truncated".to_string());
         }
@@ -454,8 +470,8 @@ impl Program {
         match version {
             1 => {
                 // Extract data sections (entry_points first, then sources, then binary, then combined JSON)
-                let binary_start = lengths_start + 8;
-                let json_start = binary_start + binary_len;
+                let binary_start = binary_len_start + 4;
+                let json_start = json_len_start + 4;
 
                 // ARTIFACT SECTION - Must succeed for recompilation to work
                 let entry_points: IndexMap<String, usize> =
@@ -463,7 +479,7 @@ impl Program {
                         .map_err(|e| format!("Entry points deserialization failed: {}", e))?;
 
                 let sources: Vec<SourceFile> =
-                    bincode::deserialize(&data[sources_start..lengths_start])
+                    bincode::deserialize(&data[sources_start..binary_len_start])
                         .map_err(|e| format!("Sources deserialization failed: {}", e))?;
 
                 // EXTENSIBLE SECTION - Try to deserialize, but allow graceful fallback

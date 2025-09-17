@@ -1,9 +1,11 @@
 use super::instructions::{
-    ChainedIndexParams, LiteralOrRegister, LoopMode, LoopStartParams, ObjectCreateParams,
-    VirtualDataDocumentLookupParams,
+    ArrayCreateParams, ChainedIndexParams, LiteralOrRegister, LoopMode, LoopStartParams,
+    ObjectCreateParams, SetCreateParams, VirtualDataDocumentLookupParams,
 };
 use super::program::Program;
 use super::Instruction;
+
+mod destructuring;
 use crate::ast::{Expr, ExprRef, Rule, RuleHead};
 use crate::builtins;
 use crate::interpreter::Interpreter;
@@ -20,6 +22,7 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+use destructuring::DestructuringContext;
 use indexmap::IndexMap;
 
 pub type Register = u8;
@@ -114,6 +117,9 @@ pub enum CompilerError {
 
     #[error("Not a simple reference chain")]
     NotSimpleReferenceChain,
+
+    #[error("Invalid destructuring pattern in assignment")]
+    InvalidDestructuringPattern,
 
     #[error("Unsupported expression type in chained reference")]
     UnsupportedChainedExpression,
@@ -239,8 +245,9 @@ pub struct Compiler<'a> {
     // Three-level hierarchy compilation fields
     rule_index_map: BTreeMap<String, u16>, // Maps rule paths to their assigned rule indices
     rule_worklist: Vec<WorklistEntry>,     // Rules that need to be compiled with caller tracking
-    rule_definitions: Vec<Vec<Vec<usize>>>, // rule_index -> Vec<definition> where definition is Vec<body_entry_point>
+    rule_definitions: Vec<Vec<Vec<u32>>>, // rule_index -> Vec<definition> where definition is Vec<body_entry_point>
     rule_definition_function_params: Vec<Vec<Option<Vec<String>>>>, // rule_index -> Vec<definition> -> Some(param_names) for function defs, None for others
+    rule_definition_destructuring_patterns: Vec<Vec<Option<Vec<(usize, Register)>>>>, // rule_index -> Vec<definition> -> Some(destructuring_block_entries) for defs with destructuring
     rule_types: Vec<RuleType>, // rule_index -> true if set rule, false if regular rule
     rule_function_param_count: Vec<Option<usize>>, // rule_index -> Some(param_count) for function rules, None for others
     rule_result_registers: Vec<u8>, // rule_index -> result register allocated for this rule
@@ -279,6 +286,7 @@ impl<'a> Compiler<'a> {
             rule_worklist: Vec::new(),
             rule_definitions: Vec::new(),
             rule_definition_function_params: Vec::new(),
+            rule_definition_destructuring_patterns: Vec::new(),
             rule_types: Vec::new(),
             rule_function_param_count: Vec::new(),
             rule_result_registers: Vec::new(),
@@ -1057,6 +1065,11 @@ impl<'a> Compiler<'a> {
                 self.rule_definition_function_params.push(Vec::new()); // Default to empty vec for definitions
             }
 
+            // Ensure rule_definition_destructuring_patterns has enough capacity
+            while self.rule_definition_destructuring_patterns.len() <= index as usize {
+                self.rule_definition_destructuring_patterns.push(Vec::new()); // Default to empty vec for definitions
+            }
+
             // Ensure rule_function_param_count has enough capacity
             while self.rule_function_param_count.len() <= index as usize {
                 self.rule_function_param_count.push(None); // Default to None (not a function)
@@ -1200,7 +1213,22 @@ impl<'a> Compiler<'a> {
         // Set the rule definitions from the compiler
         let mut rule_infos_map = BTreeMap::new();
 
-        // First, collect all rule info without default evaluation
+        // First, collect rule indices that need destructuring blocks
+        let function_rule_indices: Vec<u16> = self
+            .rule_index_map
+            .values()
+            .copied()
+            .filter(|&rule_index| self.rule_function_param_count[rule_index as usize].is_some())
+            .collect();
+
+        // Extract destructuring blocks for all function rules
+        let mut all_destructuring_blocks = BTreeMap::new();
+        for rule_index in function_rule_indices {
+            let destructuring_blocks = self.extract_destructuring_blocks(rule_index);
+            all_destructuring_blocks.insert(rule_index, destructuring_blocks);
+        }
+
+        // Then, collect all rule info without default evaluation
         for (rule_path, &rule_index) in &self.rule_index_map {
             let definitions = self.rule_definitions[rule_index as usize].clone();
             let rule_type = self.rule_types[rule_index as usize].clone();
@@ -1208,7 +1236,13 @@ impl<'a> Compiler<'a> {
             let result_register = self.rule_result_registers[rule_index as usize];
             let num_registers = self.rule_num_registers[rule_index as usize];
 
-            let rule_info = match function_param_count {
+            // Get destructuring blocks if available
+            let destructuring_blocks = all_destructuring_blocks
+                .get(&rule_index)
+                .cloned()
+                .unwrap_or_else(|| vec![None; definitions.len()]);
+
+            let mut rule_info = match function_param_count {
                 Some(param_count) => {
                     // This is a function rule - use first definition's param names as template
                     let definition_params =
@@ -1241,6 +1275,9 @@ impl<'a> Compiler<'a> {
                     )
                 }
             };
+
+            // Set destructuring blocks if available
+            rule_info.destructuring_blocks = destructuring_blocks;
 
             rule_infos_map.insert(rule_index as usize, rule_info);
         }
@@ -1389,46 +1426,45 @@ impl<'a> Compiler<'a> {
                 dest
             }
             Expr::Array { items, .. } => {
-                // Create empty array first
-                let dest = self.alloc_register();
-                self.emit_instruction(Instruction::ArrayNew { dest }, span);
-
-                // Add each item to the array
+                // Compile all elements first
+                let mut element_registers = Vec::new();
                 for item in items {
                     // Don't assert conditions for array items
                     let item_reg = self.compile_rego_expr_with_span(item, item.span(), false)?;
-
-                    // Push the item to the array
-                    self.emit_instruction(
-                        Instruction::ArrayPush {
-                            arr: dest,
-                            value: item_reg,
-                        },
-                        span,
-                    );
+                    element_registers.push(item_reg);
                 }
+
+                // Create array from elements using ArrayCreate (returns undefined if any element is undefined)
+                let dest = self.alloc_register();
+                let params = ArrayCreateParams {
+                    dest,
+                    elements: element_registers,
+                };
+                let params_index = self
+                    .program
+                    .instruction_data
+                    .add_array_create_params(params);
+                self.emit_instruction(Instruction::ArrayCreate { params_index }, span);
 
                 dest
             }
             Expr::Set { items, .. } => {
-                // Create empty set first
-                let dest = self.alloc_register();
-                self.emit_instruction(Instruction::SetNew { dest }, span);
-
-                // Add each item to the set
+                // Compile all elements first
+                let mut element_registers = Vec::new();
                 for item in items {
                     // Don't assert conditions for set items
                     let item_reg = self.compile_rego_expr_with_span(item, item.span(), false)?;
-
-                    // Add the item to the set
-                    self.emit_instruction(
-                        Instruction::SetAdd {
-                            set: dest,
-                            value: item_reg,
-                        },
-                        span,
-                    );
+                    element_registers.push(item_reg);
                 }
+
+                // Create set from elements using SetCreate (returns undefined if any element is undefined)
+                let dest = self.alloc_register();
+                let params = SetCreateParams {
+                    dest,
+                    elements: element_registers,
+                };
+                let params_index = self.program.instruction_data.add_set_create_params(params);
+                self.emit_instruction(Instruction::SetCreate { params_index }, span);
 
                 dest
             }
@@ -1644,42 +1680,65 @@ impl<'a> Compiler<'a> {
                 }
                 dest
             }
-            Expr::AssignExpr { lhs, rhs, .. } => {
-                // TODO: Really complex. Look at interpreter, esp make_bindings
-                // Handle variable assignment like x := 10
+            Expr::AssignExpr { op, lhs, rhs, .. } => {
+                // Handle variable assignment with destructuring support
                 // First compile the right-hand side value (don't assert - this is assignment)
                 let rhs_reg = self.compile_rego_expr_with_span(rhs, rhs.span(), false)?;
 
-                // Then bind the variable if lhs is a variable
-                if let Expr::Var {
-                    value: Value::String(var_name),
-                    ..
-                } = lhs.as_ref()
-                {
-                    // Allocate a NEW register for the LHS variable
-                    let lhs_reg = self.alloc_register();
+                // Determine the destructuring context based on the assignment operator
+                let context = match op {
+                    crate::ast::AssignOp::ColEq => DestructuringContext::ColonAssignment,
+                    crate::ast::AssignOp::Eq => DestructuringContext::Assignment,
+                };
 
-                    // Copy the value from RHS to LHS register
-                    self.emit_instruction(
-                        Instruction::Move {
-                            dest: lhs_reg,
-                            src: rhs_reg,
-                        },
-                        span,
-                    );
+                // Check if this is a simple variable or a destructuring pattern
+                match lhs.as_ref() {
+                    Expr::Var {
+                        value: Value::String(var_name),
+                        ..
+                    } => {
+                        // Simple variable assignment - use existing logic
+                        // Allocate a NEW register for the LHS variable
+                        let lhs_reg = self.alloc_register();
 
-                    // Store the variable binding to the NEW register
-                    debug!(
-                        "Assignment '{}' := value from register {} to new register {}",
-                        var_name, rhs_reg, lhs_reg
-                    );
-                    self.add_variable(var_name.as_ref(), lhs_reg);
+                        // Copy the value from RHS to LHS register
+                        self.emit_instruction(
+                            Instruction::Move {
+                                dest: lhs_reg,
+                                src: rhs_reg,
+                            },
+                            span,
+                        );
 
-                    // Return the register containing the assigned value
-                    return Ok(lhs_reg);
-                } else {
-                    // Return the register containing the assigned value
-                    return Ok(rhs_reg);
+                        // Store the variable binding to the NEW register
+                        debug!(
+                            "Assignment '{}' {:?} value from register {} to new register {}",
+                            var_name, op, rhs_reg, lhs_reg
+                        );
+                        self.add_variable(var_name.as_ref(), lhs_reg);
+
+                        // Return the register containing the assigned value
+                        return Ok(lhs_reg);
+                    }
+
+                    // Destructuring patterns - arrays, objects, sets
+                    Expr::Array { .. } | Expr::Object { .. } | Expr::Set { .. } => {
+                        // Validate the destructuring pattern first
+                        if let Err(_e) = Compiler::validate_destructuring_pattern(lhs, &context) {
+                            return Err(CompilerError::InvalidDestructuringPattern);
+                        }
+
+                        // Compile the destructuring pattern
+                        self.compile_destructuring_pattern(lhs, rhs_reg, context, span)?;
+
+                        // Return the register containing the assigned value
+                        return Ok(rhs_reg);
+                    }
+
+                    _ => {
+                        // Not a supported LHS pattern - return the RHS register
+                        return Ok(rhs_reg);
+                    }
                 }
             }
             Expr::Var { value, .. } => {
@@ -2072,6 +2131,11 @@ impl<'a> Compiler<'a> {
                 self.rule_definition_function_params.push(Vec::new());
             }
 
+            // Ensure rule_definition_destructuring_patterns vec has space for this rule
+            while self.rule_definition_destructuring_patterns.len() <= rule_index as usize {
+                self.rule_definition_destructuring_patterns.push(Vec::new());
+            }
+
             let mut num_registers_used = 0;
             let mut rule_param_count: Option<usize> = None;
 
@@ -2100,6 +2164,8 @@ impl<'a> Compiler<'a> {
                         RuleHead::Compr { refr, assign, .. } => {
                             // Store None for non-function definition
                             self.rule_definition_function_params[rule_index as usize].push(None);
+                            self.rule_definition_destructuring_patterns[rule_index as usize]
+                                .push(None);
 
                             let output_expr = assign.as_ref().map(|assign| assign.value.clone());
                             let key_expr = match refr.as_ref() {
@@ -2117,6 +2183,8 @@ impl<'a> Compiler<'a> {
                         RuleHead::Set { key, .. } => {
                             // Store None for non-function definition
                             self.rule_definition_function_params[rule_index as usize].push(None);
+                            self.rule_definition_destructuring_patterns[rule_index as usize]
+                                .push(None);
 
                             // For set rules, no separate key_expr, output_expr is the key
                             (None, key.clone())
@@ -2124,37 +2192,80 @@ impl<'a> Compiler<'a> {
                         RuleHead::Func { assign, args, .. } => {
                             // Set up function parameters for THIS definition
                             let mut param_names = Vec::new();
+                            let mut destructuring_patterns = Vec::new();
 
                             for (arg_idx, arg) in args.iter().enumerate() {
-                                let param_name = match arg.as_ref() {
+                                let param_reg = self.alloc_register(); // This will be 1, 2, 3, etc.
+
+                                match arg.as_ref() {
                                     Expr::Var {
                                         value: Value::String(param_name),
                                         ..
-                                    } => param_name.to_string(),
-                                    _ => {
-                                        // For structural pattern matching or other non-variable expressions,
-                                        // generate a parameter name
-                                        format!("__param_{}", arg_idx)
+                                    } => {
+                                        // Simple parameter: x
+                                        param_names.push(param_name.to_string());
+                                        self.scopes
+                                            .last_mut()
+                                            .unwrap()
+                                            .bound_vars
+                                            .insert(param_name.to_string(), param_reg);
+                                        debug!(
+                                            "Function parameter '{}' assigned to register {} in definition {}",
+                                            param_name, param_reg, def_idx
+                                        );
+                                        self.store_variable(param_name.to_string(), param_reg);
                                     }
-                                };
+                                    _ => {
+                                        // Destructuring parameter: [x, y], {a, b}, etc.
+                                        let generated_param_name = format!("__param_{}", arg_idx);
+                                        param_names.push(generated_param_name.clone());
 
-                                param_names.push(param_name.clone());
-                                let param_reg = self.alloc_register(); // This will be 1, 2, 3, etc.
-                                self.scopes
-                                    .last_mut()
-                                    .unwrap()
-                                    .bound_vars
-                                    .insert(param_name.clone(), param_reg);
-                                debug!(
-                                    "Function parameter '{}' assigned to register {} in definition {}",
-                                    param_name, param_reg, def_idx
-                                );
-                                self.store_variable(param_name.clone(), param_reg);
+                                        // Compile destructuring block inline
+                                        let destructuring_block_entry =
+                                            self.program.instructions.len();
+
+                                        debug!(
+                                            "Compiling destructuring block for parameter {} at offset {}",
+                                            arg_idx, destructuring_block_entry
+                                        );
+
+                                        // Compile the destructuring pattern to validate and bind variables
+                                        self.compile_destructuring_pattern(
+                                            arg,
+                                            param_reg,
+                                            destructuring::DestructuringContext::FunctionParameter,
+                                            &arg.span(),
+                                        )?;
+
+                                        // Emit DestructuringSuccess to mark successful completion
+                                        self.emit_instruction(
+                                            crate::rvm::instructions::Instruction::DestructuringSuccess,
+                                            &arg.span(),
+                                        );
+
+                                        // Store destructuring block entry point
+                                        destructuring_patterns
+                                            .push((destructuring_block_entry, param_reg));
+                                        debug!(
+                                            "Function parameter {} has destructuring pattern stored for register {} in definition {}",
+                                            arg_idx, param_reg, def_idx
+                                        );
+                                    }
+                                }
                             }
 
                             // Store the parameter names for this definition
                             self.rule_definition_function_params[rule_index as usize]
                                 .push(Some(param_names.clone()));
+
+                            // Store destructuring patterns for this definition
+                            if !destructuring_patterns.is_empty() {
+                                self.rule_definition_destructuring_patterns[rule_index as usize]
+                                    .push(Some(destructuring_patterns));
+                            } else {
+                                self.rule_definition_destructuring_patterns[rule_index as usize]
+                                    .push(None);
+                            }
 
                             // Validate and set rule-level parameter count
                             match rule_param_count {
@@ -2210,7 +2321,7 @@ impl<'a> Compiler<'a> {
                         let value_expr_opt = self.context_stack.last().unwrap().value_expr.clone();
                         if let Some(value_expr) = value_expr_opt {
                             // Create a single body entry point for the assignment
-                            let body_entry_point = self.program.instructions.len();
+                            let body_entry_point = self.program.instructions.len() as u32;
                             body_entry_points.push(body_entry_point);
 
                             self.push_scope();
@@ -2241,7 +2352,7 @@ impl<'a> Compiler<'a> {
                             // Reset input/data registers for each rule body
                             self.reset_rule_definition_registers();
 
-                            let body_entry_point = self.program.instructions.len();
+                            let body_entry_point = self.program.instructions.len() as u32;
                             body_entry_points.push(body_entry_point);
 
                             core::convert::identity(body_idx);
@@ -2971,20 +3082,37 @@ impl<'a> Compiler<'a> {
         debug!("Index iteration loop for {key_var:?} over {loop_expr:?}");
         if let Some(key_var) = key_var {
             // Store loop variable in scope (extract variable name from key_var)
-            if let crate::ast::Expr::Var { value, .. } = key_var.as_ref() {
-                let var_name = match value {
-                    Value::String(s) => {
-                        if s.as_ref() == "_" {
-                            // For underscore, we'll use the value (array element), not the index
-                            "".to_string() // Will be handled specially
-                        } else {
-                            s.to_string()
+            match key_var.as_ref() {
+                crate::ast::Expr::Var { value, .. } => {
+                    let var_name = match value {
+                        Value::String(s) => {
+                            if s.as_ref() == "_" {
+                                // For underscore, we'll use the value (array element), not the index
+                                "".to_string() // Will be handled specially
+                            } else {
+                                s.to_string()
+                            }
                         }
+                        _ => value.to_string(),
+                    };
+                    if !var_name.is_empty() && var_name != "_" {
+                        self.store_variable(var_name, key_reg);
                     }
-                    _ => value.to_string(),
-                };
-                if !var_name.is_empty() && var_name != "_" {
-                    self.store_variable(var_name, key_reg);
+                }
+                _ => {
+                    // Destructuring pattern in iteration: [a, b][_] in collection
+                    if let Err(_err) = self.compile_destructuring_pattern(
+                        key_var,
+                        key_reg,
+                        DestructuringContext::SomeInLoop,
+                        key_var.span(),
+                    ) {
+                        return Err(CompilerError::InvalidDestructuringPattern);
+                    }
+                    debug!(
+                        "Compiled destructuring pattern for iteration key at register {}",
+                        key_reg
+                    );
                 }
             }
             self.loop_expr_register_map.insert(key_var.clone(), key_reg);
@@ -3130,29 +3258,63 @@ impl<'a> Compiler<'a> {
 
         // Store loop variables in scope for body compilation
         if let Some(key_expr) = key {
-            if let crate::ast::Expr::Var {
-                value: var_name, ..
-            } = key_expr.as_ref()
-            {
-                let var_name = var_name.as_string()?.to_string();
-                debug!(
-                    "Storing loop key variable '{}' at register {}",
-                    var_name, key_reg
-                );
-                self.store_variable(var_name, key_reg);
+            match key_expr.as_ref() {
+                crate::ast::Expr::Var {
+                    value: var_name, ..
+                } => {
+                    // Simple key variable: some k, v in collection
+                    let var_name = var_name.as_string()?.to_string();
+                    debug!(
+                        "Storing loop key variable '{}' at register {}",
+                        var_name, key_reg
+                    );
+                    self.store_variable(var_name, key_reg);
+                }
+                _ => {
+                    // Destructuring key pattern: some [a, b], v in collection
+                    if let Err(_err) = self.compile_destructuring_pattern(
+                        key_expr,
+                        key_reg,
+                        DestructuringContext::SomeInLoop,
+                        key_expr.span(),
+                    ) {
+                        return Err(CompilerError::InvalidDestructuringPattern);
+                    }
+                    debug!(
+                        "Compiled destructuring pattern for loop key at register {}",
+                        key_reg
+                    );
+                }
             }
         }
 
-        if let crate::ast::Expr::Var {
-            value: var_name, ..
-        } = value.as_ref()
-        {
-            let var_name = var_name.as_string()?.to_string();
-            debug!(
-                "Storing loop key variable '{}' at register {}",
-                var_name, value_reg
-            );
-            self.store_variable(var_name, value_reg);
+        match value.as_ref() {
+            crate::ast::Expr::Var {
+                value: var_name, ..
+            } => {
+                // Simple value variable: some k, v in collection
+                let var_name = var_name.as_string()?.to_string();
+                debug!(
+                    "Storing loop value variable '{}' at register {}",
+                    var_name, value_reg
+                );
+                self.store_variable(var_name, value_reg);
+            }
+            _ => {
+                // Destructuring value pattern: some k, [x, y] in collection
+                if let Err(_err) = self.compile_destructuring_pattern(
+                    value,
+                    value_reg,
+                    DestructuringContext::SomeInLoop,
+                    value.span(),
+                ) {
+                    return Err(CompilerError::InvalidDestructuringPattern);
+                }
+                debug!(
+                    "Compiled destructuring pattern for loop value at register {}",
+                    value_reg
+                );
+            }
         }
 
         // Compile the loop body statements
@@ -3478,5 +3640,32 @@ impl<'a> Compiler<'a> {
         }
 
         None
+    }
+
+    /// Extract destructuring block entry points from the compiled patterns
+    fn extract_destructuring_blocks(&self, rule_index: u16) -> Vec<Option<u32>> {
+        let destructuring_patterns =
+            &self.rule_definition_destructuring_patterns[rule_index as usize];
+        let mut destructuring_blocks = Vec::new();
+
+        for patterns_opt in destructuring_patterns.iter() {
+            match patterns_opt {
+                Some(patterns) => {
+                    if patterns.is_empty() {
+                        destructuring_blocks.push(None);
+                    } else {
+                        // Use the first destructuring block entry point for this definition
+                        // All parameters in a definition share the same destructuring block
+                        destructuring_blocks.push(Some(patterns[0].0 as u32));
+                    }
+                }
+                None => {
+                    // No destructuring patterns for this definition
+                    destructuring_blocks.push(None);
+                }
+            }
+        }
+
+        destructuring_blocks
     }
 }

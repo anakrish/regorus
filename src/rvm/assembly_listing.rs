@@ -437,6 +437,24 @@ fn format_instruction_readable(
             let comment = format!("Append r{} to array r{}", value, arr);
             align_comment(&base, &comment, config.comment_column)
         }
+        Instruction::ArrayCreate { params_index } => {
+            if let Some(params) = instruction_data.get_array_create_params(*params_index) {
+                let elements = params
+                    .element_registers()
+                    .iter()
+                    .map(|r| format!("r{}", r))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let base = format!("{}ArrayCreate  r{} ← [{}]", indent, params.dest, elements);
+                let comment = format!(
+                    "Create array from {} elements (undefined if any element is undefined)",
+                    params.element_count()
+                );
+                align_comment(&base, &comment, config.comment_column)
+            } else {
+                format!("{}ArrayCreate  <invalid params P{}>", indent, params_index)
+            }
+        }
         Instruction::SetNew { dest } => {
             let base = format!("{}SetNew       r{} ← set()", indent, dest);
             align_comment(&base, "Create new empty set", config.comment_column)
@@ -445,6 +463,24 @@ fn format_instruction_readable(
             let base = format!("{}SetAdd       r{} ∪= r{}", indent, set, value);
             let comment = format!("Add r{} to set r{}", value, set);
             align_comment(&base, &comment, config.comment_column)
+        }
+        Instruction::SetCreate { params_index } => {
+            if let Some(params) = instruction_data.get_set_create_params(*params_index) {
+                let elements = params
+                    .element_registers()
+                    .iter()
+                    .map(|r| format!("r{}", r))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let base = format!("{}SetCreate    r{} ← {{{}}}", indent, params.dest, elements);
+                let comment = format!(
+                    "Create set from {} elements (undefined if any element is undefined)",
+                    params.element_count()
+                );
+                align_comment(&base, &comment, config.comment_column)
+            } else {
+                format!("{}SetCreate    <invalid params P{}>", indent, params_index)
+            }
         }
         Instruction::Contains {
             dest,
@@ -458,9 +494,22 @@ fn format_instruction_readable(
             let comment = format!("Membership test: r{} in r{}", value, collection);
             align_comment(&base, &comment, config.comment_column)
         }
+        Instruction::Count { dest, collection } => {
+            let base = format!("{}Count        r{} ← count(r{})", indent, dest, collection);
+            let comment = format!("Get count/length of collection r{}", collection);
+            align_comment(&base, &comment, config.comment_column)
+        }
         Instruction::AssertCondition { condition } => {
             let base = format!("{}Assert       assert r{}", indent, condition);
             let comment = format!("Assert r{} is true (exit if false/undefined)", condition);
+            align_comment(&base, &comment, config.comment_column)
+        }
+        Instruction::AssertNotUndefined { register } => {
+            let base = format!(
+                "{}AssertNotUndefined assert_not_undefined r{}",
+                indent, register
+            );
+            let comment = format!("Assert r{} is not undefined (exit if undefined)", register);
             align_comment(&base, &comment, config.comment_column)
         }
         Instruction::LoopStart { params_index } => {
@@ -600,6 +649,14 @@ fn format_instruction_readable(
                 config.comment_column,
             )
         }
+        Instruction::DestructuringSuccess => {
+            let base = format!("{}DestructuringSuccess ✓", indent);
+            align_comment(
+                &base,
+                "Parameter destructuring validated",
+                config.comment_column,
+            )
+        }
         Instruction::Halt => {
             let base = format!("{}Halt         halt", indent);
             align_comment(&base, "Stop execution", config.comment_column)
@@ -698,15 +755,20 @@ fn get_instruction_name(instruction: &Instruction) -> &'static str {
         Instruction::IndexLiteral { .. } => "INDEX_LIT",
         Instruction::ArrayNew { .. } => "ARRAY_NEW",
         Instruction::ArrayPush { .. } => "ARRAY_PUSH",
+        Instruction::ArrayCreate { .. } => "ARRAY_CREATE",
         Instruction::SetNew { .. } => "SET_NEW",
         Instruction::SetAdd { .. } => "SET_ADD",
+        Instruction::SetCreate { .. } => "SET_CREATE",
         Instruction::Contains { .. } => "CONTAINS",
+        Instruction::Count { .. } => "COUNT",
         Instruction::AssertCondition { .. } => "ASSERT",
+        Instruction::AssertNotUndefined { .. } => "ASSERT_NOT_UNDEF",
         Instruction::LoopStart { .. } => "LOOP_START",
         Instruction::LoopNext { .. } => "LOOP_NEXT",
         Instruction::CallRule { .. } => "CALL_RULE",
         Instruction::RuleInit { .. } => "RULE_INIT",
         Instruction::RuleReturn { .. } => "RULE_RET",
+        Instruction::DestructuringSuccess => "DESTRUCT_SUCCESS",
         Instruction::ChainedIndex { .. } => "CHAINED_INDEX",
         Instruction::VirtualDataDocumentLookup { .. } => "VIRTUAL_DATA_DOC_LOOKUP",
         Instruction::Halt => "HALT",
@@ -773,6 +835,9 @@ fn format_operation_compact(
         }
         Instruction::RuleReturn {} => {
             format!("{}}}", indent)
+        }
+        Instruction::DestructuringSuccess => {
+            format!("{}✓ destructuring validated", indent)
         }
         _ => {
             // For other instructions, use a simplified version

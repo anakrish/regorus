@@ -38,15 +38,20 @@ pub fn parse_instruction(text: &str) -> Result<Instruction> {
             "Return" => parse_return(params_text),
             "RuleInit" => parse_rule_init(params_text),
             "RuleReturn" => parse_rule_return(params_text),
+            "DestructuringSuccess" => parse_destructuring_success(params_text),
             "ObjectSet" => parse_object_set(params_text),
             "ObjectCreate" => parse_object_create(params_text),
             "Index" => parse_index(params_text),
             "ArrayNew" => parse_array_new(params_text),
+            "ArrayCreate" => parse_array_create(params_text),
+            "SetCreate" => parse_set_create(params_text),
             "ArrayPush" => parse_array_push(params_text),
             "SetNew" => parse_set_new(params_text),
             "SetAdd" => parse_set_add(params_text),
             "Contains" => parse_contains(params_text),
+            "Count" => parse_count(params_text),
             "AssertCondition" => parse_assert_condition(params_text),
+            "AssertNotUndefined" => parse_assert_not_undefined(params_text),
             "BuiltinCall" => parse_builtin_call(params_text),
             "FunctionCall" => parse_function_call(params_text),
             "CallRule" => parse_call_rule(params_text),
@@ -60,6 +65,7 @@ pub fn parse_instruction(text: &str) -> Result<Instruction> {
         match name {
             "Halt" => Ok(Instruction::Halt),
             "RuleReturn" => Ok(Instruction::RuleReturn {}),
+            "DestructuringSuccess" => Ok(Instruction::DestructuringSuccess),
             _ => bail!("Unknown instruction: {}", name),
         }
     }
@@ -314,6 +320,11 @@ fn parse_rule_return(params_text: &str) -> Result<Instruction> {
     Ok(Instruction::RuleReturn {})
 }
 
+fn parse_destructuring_success(params_text: &str) -> Result<Instruction> {
+    let _params = parse_params(params_text)?;
+    Ok(Instruction::DestructuringSuccess)
+}
+
 fn parse_object_set(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let obj = get_param_u16(&params, "obj")?;
@@ -362,6 +373,18 @@ fn parse_array_push(params_text: &str) -> Result<Instruction> {
     })
 }
 
+fn parse_array_create(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let params_index = get_param_u16(&params, "params_index")?;
+    Ok(Instruction::ArrayCreate { params_index })
+}
+
+fn parse_set_create(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let params_index = get_param_u16(&params, "params_index")?;
+    Ok(Instruction::SetCreate { params_index })
+}
+
 fn parse_set_new(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let dest = get_param_u16(&params, "dest")?;
@@ -392,11 +415,29 @@ fn parse_contains(params_text: &str) -> Result<Instruction> {
     })
 }
 
+fn parse_count(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let dest = get_param_u16(&params, "dest")?;
+    let collection = get_param_u16(&params, "collection")?;
+    Ok(Instruction::Count {
+        dest: dest.try_into().unwrap(),
+        collection: collection.try_into().unwrap(),
+    })
+}
+
 fn parse_assert_condition(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let condition = get_param_u16(&params, "condition")?;
     Ok(Instruction::AssertCondition {
         condition: condition.try_into().unwrap(),
+    })
+}
+
+fn parse_assert_not_undefined(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let register = get_param_u16(&params, "register")?;
+    Ok(Instruction::AssertNotUndefined {
+        register: register.try_into().unwrap(),
     })
 }
 

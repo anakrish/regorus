@@ -45,6 +45,12 @@ pub enum VmError {
     #[error("Invalid chained index params index: {index}")]
     InvalidChainedIndexParams { index: u16 },
 
+    #[error("Invalid array create params index: {index}")]
+    InvalidArrayCreateParams { index: u16 },
+
+    #[error("Invalid set create params index: {index}")]
+    InvalidSetCreateParams { index: u16 },
+
     #[error("Invalid virtual data document lookup params index: {index}")]
     InvalidVirtualDataDocumentLookupParams { index: u16 },
 
@@ -744,6 +750,12 @@ impl RegoVM {
                     self.execute_rule_init(result_reg, rule_index)?;
                 }
 
+                Instruction::DestructuringSuccess => {
+                    // Mark successful completion of parameter destructuring
+                    debug!("DestructuringSuccess - parameter validation completed");
+                    break; // Exit back to caller (execute_rule_definitions_common)
+                }
+
                 Instruction::RuleReturn {} => {
                     self.execute_rule_return()?;
                     break;
@@ -775,61 +787,89 @@ impl RegoVM {
                             index: params_index,
                         })?;
 
-                    // Start with template object (always present)
-                    let mut obj_value = program
-                        .literals
-                        .get(params.template_literal_idx as usize)
-                        .ok_or_else(|| VmError::InvalidTemplateLiteralIndex {
-                            index: params.template_literal_idx,
-                        })?
-                        .clone();
+                    // Check if any value is undefined - if so, result is undefined
+                    let mut any_undefined = false;
 
-                    // Set all field values
-                    if let Ok(obj_mut) = obj_value.as_object_mut() {
-                        // Since literal_key_field_pairs is sorted and obj_mut.iter_mut() is also sorted,
-                        // we can do efficient parallel iteration for existing keys
-                        let mut literal_updates = params.literal_key_field_pairs().iter();
-                        let mut current_literal_update = literal_updates.next();
+                    // Check literal key field values
+                    for &(_, value_reg) in params.literal_key_field_pairs() {
+                        if matches!(self.registers[value_reg as usize], Value::Undefined) {
+                            any_undefined = true;
+                            break;
+                        }
+                    }
 
-                        // Update existing keys in the object (from template)
-                        for (key, value) in obj_mut.iter_mut() {
-                            if let Some(&(literal_idx, value_reg)) = current_literal_update {
-                                if let Some(literal_key) =
-                                    program.literals.get(literal_idx as usize)
-                                {
-                                    if key == literal_key {
-                                        // Found matching key - update the value
-                                        *value = self.registers[value_reg as usize].clone();
-                                        current_literal_update = literal_updates.next();
-                                    }
-                                }
-                            } else {
-                                // No more literal updates to process
+                    // Check non-literal key field keys and values
+                    if !any_undefined {
+                        for &(key_reg, value_reg) in params.field_pairs() {
+                            if matches!(self.registers[key_reg as usize], Value::Undefined)
+                                || matches!(self.registers[value_reg as usize], Value::Undefined)
+                            {
+                                any_undefined = true;
                                 break;
                             }
                         }
-
-                        // Insert any remaining literal keys that weren't in the template
-                        while let Some(&(literal_idx, value_reg)) = current_literal_update {
-                            if let Some(key_value) = program.literals.get(literal_idx as usize) {
-                                let value_value = self.registers[value_reg as usize].clone();
-                                obj_mut.insert(key_value.clone(), value_value);
-                            }
-                            current_literal_update = literal_updates.next();
-                        }
-
-                        // Insert all non-literal key fields
-                        for &(key_reg, value_reg) in params.field_pairs() {
-                            let key_value = self.registers[key_reg as usize].clone();
-                            let value_value = self.registers[value_reg as usize].clone();
-                            obj_mut.insert(key_value, value_value);
-                        }
-                    } else {
-                        return Err(VmError::ObjectCreateInvalidTemplate);
                     }
 
-                    // Store result in destination register
-                    self.registers[params.dest as usize] = obj_value;
+                    if any_undefined {
+                        self.registers[params.dest as usize] = Value::Undefined;
+                    } else {
+                        // Start with template object (always present)
+                        let mut obj_value = program
+                            .literals
+                            .get(params.template_literal_idx as usize)
+                            .ok_or_else(|| VmError::InvalidTemplateLiteralIndex {
+                                index: params.template_literal_idx,
+                            })?
+                            .clone();
+
+                        // Set all field values
+                        if let Ok(obj_mut) = obj_value.as_object_mut() {
+                            // Since literal_key_field_pairs is sorted and obj_mut.iter_mut() is also sorted,
+                            // we can do efficient parallel iteration for existing keys
+                            let mut literal_updates = params.literal_key_field_pairs().iter();
+                            let mut current_literal_update = literal_updates.next();
+
+                            // Update existing keys in the object (from template)
+                            for (key, value) in obj_mut.iter_mut() {
+                                if let Some(&(literal_idx, value_reg)) = current_literal_update {
+                                    if let Some(literal_key) =
+                                        program.literals.get(literal_idx as usize)
+                                    {
+                                        if key == literal_key {
+                                            // Found matching key - update the value
+                                            *value = self.registers[value_reg as usize].clone();
+                                            current_literal_update = literal_updates.next();
+                                        }
+                                    }
+                                } else {
+                                    // No more literal updates to process
+                                    break;
+                                }
+                            }
+
+                            // Insert any remaining literal keys that weren't in the template
+                            while let Some(&(literal_idx, value_reg)) = current_literal_update {
+                                if let Some(key_value) = program.literals.get(literal_idx as usize)
+                                {
+                                    let value_value = self.registers[value_reg as usize].clone();
+                                    obj_mut.insert(key_value.clone(), value_value);
+                                }
+                                current_literal_update = literal_updates.next();
+                            }
+
+                            // Insert all non-literal key fields
+                            for &(key_reg, value_reg) in params.field_pairs() {
+                                let key_value = self.registers[key_reg as usize].clone();
+                                let value_value = self.registers[value_reg as usize].clone();
+                                obj_mut.insert(key_value, value_value);
+                            }
+                        } else {
+                            return Err(VmError::ObjectCreateInvalidTemplate);
+                        }
+
+                        // Store result in destination register
+                        self.registers[params.dest as usize] = obj_value;
+                    }
                 }
 
                 Instruction::Index {
@@ -886,6 +926,40 @@ impl RegoVM {
                     }
                 }
 
+                Instruction::ArrayCreate { params_index } => {
+                    if let Some(params) = program
+                        .instruction_data
+                        .get_array_create_params(params_index)
+                    {
+                        // Check if any element is undefined - if so, result is undefined
+                        let mut any_undefined = false;
+                        for &reg in params.element_registers() {
+                            if matches!(self.registers[reg as usize], Value::Undefined) {
+                                any_undefined = true;
+                                break;
+                            }
+                        }
+
+                        if any_undefined {
+                            self.registers[params.dest as usize] = Value::Undefined;
+                        } else {
+                            // All elements are defined, create the array
+                            let elements: Vec<Value> = params
+                                .element_registers()
+                                .iter()
+                                .map(|&reg| self.registers[reg as usize].clone())
+                                .collect();
+
+                            let array_value = Value::Array(crate::Rc::new(elements));
+                            self.registers[params.dest as usize] = array_value;
+                        }
+                    } else {
+                        return Err(VmError::InvalidArrayCreateParams {
+                            index: params_index,
+                        });
+                    }
+                }
+
                 Instruction::SetNew { dest } => {
                     use alloc::collections::BTreeSet;
                     let empty_set = Value::Set(crate::Rc::new(BTreeSet::new()));
@@ -906,6 +980,39 @@ impl RegoVM {
                         // Restore the original value and return error
                         self.registers[set as usize] = set_value;
                         return Err(VmError::RegisterNotSet { register: set });
+                    }
+                }
+
+                Instruction::SetCreate { params_index } => {
+                    if let Some(params) =
+                        program.instruction_data.get_set_create_params(params_index)
+                    {
+                        // Check if any element is undefined - if so, result is undefined
+                        let mut any_undefined = false;
+                        for &reg in params.element_registers() {
+                            if matches!(self.registers[reg as usize], Value::Undefined) {
+                                any_undefined = true;
+                                break;
+                            }
+                        }
+
+                        if any_undefined {
+                            self.registers[params.dest as usize] = Value::Undefined;
+                        } else {
+                            // All elements are defined, create the set
+                            use alloc::collections::BTreeSet;
+                            let mut set = BTreeSet::new();
+                            for &reg in params.element_registers() {
+                                set.insert(self.registers[reg as usize].clone());
+                            }
+
+                            let set_value = Value::Set(crate::Rc::new(set));
+                            self.registers[params.dest as usize] = set_value;
+                        }
+                    } else {
+                        return Err(VmError::InvalidSetCreateParams {
+                            index: params_index,
+                        });
                     }
                 }
 
@@ -942,6 +1049,31 @@ impl RegoVM {
                     self.registers[dest as usize] = result;
                 }
 
+                Instruction::Count { dest, collection } => {
+                    let collection_value = &self.registers[collection as usize];
+
+                    let result = match collection_value {
+                        Value::Array(array_items) => {
+                            // Return count of array elements
+                            Value::from(array_items.len())
+                        }
+                        Value::Object(object_fields) => {
+                            // Return count of object fields
+                            Value::from(object_fields.len())
+                        }
+                        Value::Set(set_elements) => {
+                            // Return count of set elements
+                            Value::from(set_elements.len())
+                        }
+                        _ => {
+                            // For other types, return undefined
+                            Value::Undefined
+                        }
+                    };
+
+                    self.registers[dest as usize] = result;
+                }
+
                 Instruction::AssertCondition { condition } => {
                     let value = &self.registers[condition as usize];
                     debug!(
@@ -957,6 +1089,20 @@ impl RegoVM {
                     };
 
                     self.handle_condition(condition_result)?;
+                }
+
+                Instruction::AssertNotUndefined { register } => {
+                    let value = &self.registers[register as usize];
+                    debug!(
+                        "AssertNotUndefined - register={} contains {:?}",
+                        register, value
+                    );
+
+                    // Check if the value is undefined
+                    let is_undefined = matches!(value, Value::Undefined);
+
+                    // If undefined, fail the assertion (return undefined immediately)
+                    self.handle_condition(!is_undefined)?;
                 }
 
                 Instruction::LoopStart { params_index } => {
@@ -1046,7 +1192,7 @@ impl RegoVM {
     /// Shared rule definition execution logic with consistency checking
     fn execute_rule_definitions_common(
         &mut self,
-        rule_definitions: &[Vec<usize>],
+        rule_definitions: &[Vec<u32>],
         rule_info: &crate::rvm::program::RuleInfo,
         function_call_params: Option<&crate::rvm::instructions::FunctionCallParams>,
     ) -> Result<(Value, bool)> {
@@ -1095,7 +1241,7 @@ impl RegoVM {
         self.register_stack.push(old_registers);
         self.registers = register_window;
 
-        for (def_idx, definition_bodies) in rule_definitions.iter().enumerate() {
+        'outer: for (def_idx, definition_bodies) in rule_definitions.iter().enumerate() {
             debug!(
                 "Executing rule definition {} with {} bodies",
                 def_idx,
@@ -1123,8 +1269,33 @@ impl RegoVM {
                     num_retained_registers, num_registers
                 );
 
+                // Check if there's a destructuring block for this definition
+                if let Some(destructuring_entry_point) =
+                    rule_info.destructuring_blocks.get(def_idx).and_then(|x| *x)
+                {
+                    debug!(
+                        "Executing destructuring block for definition {} at entry point {}",
+                        def_idx, destructuring_entry_point
+                    );
+
+                    // Execute the destructuring block first
+                    match self.jump_to(destructuring_entry_point as usize) {
+                        Ok(_result) => {
+                            debug!("Destructuring block {} completed successfully", def_idx);
+                        }
+                        Err(e) => {
+                            #[cfg(feature = "rvm-tracing")]
+                            debug!("Destructuring block {} failed: {:?}", def_idx, e);
+                            #[cfg(not(feature = "rvm-tracing"))]
+                            let _ = e; // Suppress unused warning
+                                       // Destructuring failure means this definition fails - skip to next definition
+                            continue 'outer;
+                        }
+                    }
+                }
+
                 // Execute the body
-                match self.jump_to(*body_entry_point) {
+                match self.jump_to(*body_entry_point as usize) {
                     Ok(_) => {
                         debug!("Body {} completed", body_entry_point_idx);
 

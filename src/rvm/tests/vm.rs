@@ -184,11 +184,11 @@ mod tests {
                 }
             };
 
-            // Convert Vec<Vec<u16>> to Vec<Vec<usize>>
-            let definitions: Vec<Vec<usize>> = rule_info_spec
+            // Convert Vec<Vec<u16>> to Vec<Vec<u32>>
+            let definitions: Vec<Vec<u32>> = rule_info_spec
                 .definitions
                 .iter()
-                .map(|def| def.iter().map(|&x| x as usize).collect())
+                .map(|def| def.iter().map(|&x| x as u32).collect())
                 .collect();
 
             // For function calls, use result_reg 0; for other rules, use result_reg 1
@@ -204,11 +204,12 @@ mod tests {
             let rule_info = RuleInfo {
                 name: String::from("test_rule"),
                 rule_type,
-                definitions: crate::Rc::new(definitions),
+                definitions: crate::Rc::new(definitions.clone()),
                 function_info: None,
                 default_literal_index: rule_info_spec.default_literal_index,
                 result_reg,
                 num_registers: 50, // Increased to accommodate test cases with higher register indices
+                destructuring_blocks: alloc::vec![None; definitions.len()],
             };
 
             program.rule_infos.push(rule_info);

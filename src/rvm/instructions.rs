@@ -108,6 +108,50 @@ impl ObjectCreateParams {
     }
 }
 
+/// Array creation parameters stored in program's instruction data table
+#[repr(C)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArrayCreateParams {
+    /// Destination register to store the result array
+    pub dest: u8,
+    /// Register numbers containing the element values
+    pub elements: Vec<u8>,
+}
+
+impl ArrayCreateParams {
+    /// Get the number of elements
+    pub fn element_count(&self) -> usize {
+        self.elements.len()
+    }
+
+    /// Get element register numbers as a slice
+    pub fn element_registers(&self) -> &[u8] {
+        &self.elements
+    }
+}
+
+/// Set creation parameters stored in program's instruction data table
+#[repr(C)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetCreateParams {
+    /// Destination register to store the result set
+    pub dest: u8,
+    /// Register numbers containing the element values
+    pub elements: Vec<u8>,
+}
+
+impl SetCreateParams {
+    /// Get the number of elements
+    pub fn element_count(&self) -> usize {
+        self.elements.len()
+    }
+
+    /// Get element register numbers as a slice
+    pub fn element_registers(&self) -> &[u8] {
+        &self.elements
+    }
+}
+
 /// Represents either a literal index or a register number for path components
 #[repr(C)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -225,6 +269,10 @@ pub struct InstructionData {
     pub function_call_params: Vec<FunctionCallParams>,
     /// Object creation parameter table for ObjectCreate instructions
     pub object_create_params: Vec<ObjectCreateParams>,
+    /// Array creation parameter table for ArrayCreate instructions
+    pub array_create_params: Vec<ArrayCreateParams>,
+    /// Set creation parameter table for SetCreate instructions
+    pub set_create_params: Vec<SetCreateParams>,
     /// Virtual data document lookup parameter table for VirtualDataDocumentLookup instructions
     pub virtual_data_document_lookup_params: Vec<VirtualDataDocumentLookupParams>,
     /// Chained index parameter table for ChainedIndex instructions
@@ -239,6 +287,8 @@ impl InstructionData {
             builtin_call_params: Vec::new(),
             function_call_params: Vec::new(),
             object_create_params: Vec::new(),
+            array_create_params: Vec::new(),
+            set_create_params: Vec::new(),
             virtual_data_document_lookup_params: Vec::new(),
             chained_index_params: Vec::new(),
         }
@@ -272,6 +322,20 @@ impl InstructionData {
         index as u16
     }
 
+    /// Add array create parameters and return the index
+    pub fn add_array_create_params(&mut self, params: ArrayCreateParams) -> u16 {
+        let index = self.array_create_params.len();
+        self.array_create_params.push(params);
+        index as u16
+    }
+
+    /// Add set create parameters and return the index
+    pub fn add_set_create_params(&mut self, params: SetCreateParams) -> u16 {
+        let index = self.set_create_params.len();
+        self.set_create_params.push(params);
+        index as u16
+    }
+
     /// Get loop parameters by index
     pub fn get_loop_params(&self, index: u16) -> Option<&LoopStartParams> {
         self.loop_params.get(index as usize)
@@ -290,6 +354,16 @@ impl InstructionData {
     /// Get object create parameters by index
     pub fn get_object_create_params(&self, index: u16) -> Option<&ObjectCreateParams> {
         self.object_create_params.get(index as usize)
+    }
+
+    /// Get array create parameters by index
+    pub fn get_array_create_params(&self, index: u16) -> Option<&ArrayCreateParams> {
+        self.array_create_params.get(index as usize)
+    }
+
+    /// Get set create parameters by index
+    pub fn get_set_create_params(&self, index: u16) -> Option<&SetCreateParams> {
+        self.set_create_params.get(index as usize)
     }
 
     /// Add virtual data document lookup parameters and return the index
@@ -547,6 +621,12 @@ pub enum Instruction {
         value: u8,
     },
 
+    /// Create array from registers - returns undefined if any element is undefined
+    ArrayCreate {
+        /// Index into program's instruction_data.array_create_params table
+        params_index: u16,
+    },
+
     /// Create empty set
     SetNew {
         dest: u8,
@@ -558,6 +638,12 @@ pub enum Instruction {
         value: u8,
     },
 
+    /// Create set from registers - returns undefined if any element is undefined
+    SetCreate {
+        /// Index into program's instruction_data.set_create_params table
+        params_index: u16,
+    },
+
     /// Check if collection contains value (for membership testing)
     Contains {
         dest: u8,
@@ -565,9 +651,20 @@ pub enum Instruction {
         value: u8,
     },
 
+    /// Get count/length of collection (arrays, objects, sets) - returns undefined for non-collections
+    Count {
+        dest: u8,
+        collection: u8,
+    },
+
     /// Assert condition - if register contains false or undefined, return undefined immediately
     AssertCondition {
         condition: u8,
+    },
+
+    /// Assert not undefined - if register contains undefined, return undefined immediately
+    AssertNotUndefined {
+        register: u8,
     },
 
     /// Start a loop over a collection with specified semantics - uses parameter table
@@ -607,6 +704,9 @@ pub enum Instruction {
         params_index: u16,
     },
 
+    /// Mark successful completion of parameter destructuring validation
+    DestructuringSuccess,
+
     /// Return from rule execution
     RuleReturn {},
 
@@ -633,6 +733,16 @@ impl Instruction {
     /// Create a new ObjectCreate instruction with parameter table index
     pub fn object_create(params_index: u16) -> Self {
         Self::ObjectCreate { params_index }
+    }
+
+    /// Create a new ArrayCreate instruction with parameter table index
+    pub fn array_create(params_index: u16) -> Self {
+        Self::ArrayCreate { params_index }
+    }
+
+    /// Create a new SetCreate instruction with parameter table index
+    pub fn set_create(params_index: u16) -> Self {
+        Self::SetCreate { params_index }
     }
 
     /// Get detailed display string with parameter resolution for debugging
@@ -824,15 +934,27 @@ impl core::fmt::Display for Instruction {
             }
             Instruction::ArrayNew { dest } => format!("ARRAY_NEW R({})", dest),
             Instruction::ArrayPush { arr, value } => format!("ARRAY_PUSH R({}) R({})", arr, value),
+            Instruction::ArrayCreate { params_index } => {
+                format!("ARRAY_CREATE P({})", params_index)
+            }
             Instruction::SetNew { dest } => format!("SET_NEW R({})", dest),
             Instruction::SetAdd { set, value } => format!("SET_ADD R({}) R({})", set, value),
+            Instruction::SetCreate { params_index } => {
+                format!("SET_CREATE P({})", params_index)
+            }
             Instruction::Contains {
                 dest,
                 collection,
                 value,
             } => format!("CONTAINS R({}) R({}) R({})", dest, collection, value),
+            Instruction::Count { dest, collection } => {
+                format!("COUNT R({}) R({})", dest, collection)
+            }
             Instruction::AssertCondition { condition } => {
                 format!("ASSERT_CONDITION R({})", condition)
+            }
+            Instruction::AssertNotUndefined { register } => {
+                format!("ASSERT_NOT_UNDEFINED R({})", register)
             }
             Instruction::LoopStart { params_index } => {
                 format!("LOOP_START P({})", params_index)
@@ -849,6 +971,7 @@ impl core::fmt::Display for Instruction {
             Instruction::VirtualDataDocumentLookup { params_index } => {
                 format!("VIRTUAL_DATA_DOCUMENT_LOOKUP P({})", params_index)
             }
+            Instruction::DestructuringSuccess => String::from("DESTRUCTURING_SUCCESS"),
             Instruction::RuleReturn {} => String::from("RULE_RETURN"),
 
             Instruction::RuleInit {

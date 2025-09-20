@@ -277,6 +277,8 @@ pub struct InstructionData {
     pub virtual_data_document_lookup_params: Vec<VirtualDataDocumentLookupParams>,
     /// Chained index parameter table for ChainedIndex instructions
     pub chained_index_params: Vec<ChainedIndexParams>,
+    /// Comprehension parameter table for ComprehensionBegin instructions
+    pub comprehension_begin_params: Vec<ComprehensionBeginParams>,
 }
 
 impl InstructionData {
@@ -291,6 +293,7 @@ impl InstructionData {
             set_create_params: Vec::new(),
             virtual_data_document_lookup_params: Vec::new(),
             chained_index_params: Vec::new(),
+            comprehension_begin_params: Vec::new(),
         }
     }
 
@@ -400,6 +403,26 @@ impl InstructionData {
     pub fn get_loop_params_mut(&mut self, index: u16) -> Option<&mut LoopStartParams> {
         self.loop_params.get_mut(index as usize)
     }
+
+    /// Add comprehension begin parameters and return the index
+    pub fn add_comprehension_begin_params(&mut self, params: ComprehensionBeginParams) -> u16 {
+        let index = self.comprehension_begin_params.len();
+        self.comprehension_begin_params.push(params);
+        index as u16
+    }
+
+    /// Get comprehension begin parameters by index
+    pub fn get_comprehension_begin_params(&self, index: u16) -> Option<&ComprehensionBeginParams> {
+        self.comprehension_begin_params.get(index as usize)
+    }
+
+    /// Get mutable reference to comprehension begin parameters by index
+    pub fn get_comprehension_begin_params_mut(
+        &mut self,
+        index: u16,
+    ) -> Option<&mut ComprehensionBeginParams> {
+        self.comprehension_begin_params.get_mut(index as usize)
+    }
 }
 
 impl Default for InstructionData {
@@ -424,18 +447,39 @@ pub enum LoopMode {
     /// Used for set membership rules (contains), object rules, and complete rules
     /// where all candidates must be evaluated. Determined by output constness.
     ForEach,
+}
 
-    /// Array comprehension: [expr | ...]
-    /// Collects successful iterations into an array
-    ArrayComprehension,
-
-    /// Set comprehension: {expr | ...}
+/// Comprehension execution modes for different comprehension types
+#[repr(C)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ComprehensionMode {
+    /// Set comprehension: {expr | condition}
     /// Collects unique successful iterations into a set
-    SetComprehension,
-
-    /// Object comprehension: {key: value | ...}
+    Set,
+    /// Array comprehension: [expr | condition]
+    /// Collects successful iterations into an array (preserves order)
+    Array,
+    /// Object comprehension: {key: value | condition}
     /// Collects successful key-value pairs into an object
-    ObjectComprehension,
+    Object,
+}
+
+/// Comprehension parameters stored in program's instruction data table
+#[repr(C)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComprehensionBeginParams {
+    /// Type of comprehension being created
+    pub mode: ComprehensionMode,
+    /// Register containing the result collection (both source for iteration and destination for results)
+    pub collection_reg: u8,
+    /// Register to store current iteration key
+    pub key_reg: u8,
+    /// Register to store current iteration value
+    pub value_reg: u8,
+    /// Jump target for comprehension body start
+    pub body_start: u16,
+    /// Jump target for comprehension end
+    pub comprehension_end: u16,
 }
 
 /// RVM Instructions - simplified enum-based design
@@ -705,13 +749,30 @@ pub enum Instruction {
     },
 
     /// Mark successful completion of parameter destructuring validation
-    DestructuringSuccess,
+    DestructuringSuccess {},
 
     /// Return from rule execution
     RuleReturn {},
 
     /// Stop execution
-    Halt,
+    Halt {},
+
+    /// Begin a comprehension with specified parameters
+    ComprehensionBegin {
+        /// Index into program's instruction_data.comprehension_begin_params table
+        params_index: u16,
+    },
+
+    /// Yield a value to the current comprehension result
+    ComprehensionYield {
+        /// Register containing the value to yield to the comprehension
+        value_reg: u8,
+        /// Optional register containing the key for object comprehensions
+        key_reg: Option<u8>,
+    },
+
+    /// End a comprehension block
+    ComprehensionEnd {},
 }
 
 impl Instruction {
@@ -743,6 +804,32 @@ impl Instruction {
     /// Create a new SetCreate instruction with parameter table index
     pub fn set_create(params_index: u16) -> Self {
         Self::SetCreate { params_index }
+    }
+
+    /// Create a new ComprehensionBegin instruction with parameter table index
+    pub fn comprehension_begin(params_index: u16) -> Self {
+        Self::ComprehensionBegin { params_index }
+    }
+
+    /// Create a new ComprehensionYield instruction
+    pub fn comprehension_yield(value_reg: u8) -> Self {
+        Self::ComprehensionYield {
+            value_reg,
+            key_reg: None,
+        }
+    }
+
+    /// Create a new ComprehensionYield instruction for object comprehensions
+    pub fn comprehension_yield_object(key_reg: u8, value_reg: u8) -> Self {
+        Self::ComprehensionYield {
+            value_reg,
+            key_reg: Some(key_reg),
+        }
+    }
+
+    /// Create a new ComprehensionEnd instruction
+    pub fn comprehension_end() -> Self {
+        Self::ComprehensionEnd {}
     }
 
     /// Get detailed display string with parameter resolution for debugging
@@ -841,6 +928,22 @@ impl Instruction {
                         "VIRTUAL_DATA_DOCUMENT_LOOKUP P({}) [INVALID INDEX]",
                         params_index
                     )
+                }
+            }
+            Instruction::ComprehensionBegin { params_index } => {
+                if let Some(params) = instruction_data.get_comprehension_begin_params(*params_index)
+                {
+                    format!(
+                        "COMPREHENSION_BEGIN {:?} R({}) R({}) R({}) {} {}",
+                        params.mode,
+                        params.collection_reg,
+                        params.key_reg,
+                        params.value_reg,
+                        params.body_start,
+                        params.comprehension_end
+                    )
+                } else {
+                    format!("COMPREHENSION_BEGIN P({}) [INVALID INDEX]", params_index)
                 }
             }
             _ => self.to_string(),
@@ -971,7 +1074,7 @@ impl core::fmt::Display for Instruction {
             Instruction::VirtualDataDocumentLookup { params_index } => {
                 format!("VIRTUAL_DATA_DOCUMENT_LOOKUP P({})", params_index)
             }
-            Instruction::DestructuringSuccess => String::from("DESTRUCTURING_SUCCESS"),
+            Instruction::DestructuringSuccess {} => String::from("DESTRUCTURING_SUCCESS"),
             Instruction::RuleReturn {} => String::from("RULE_RETURN"),
 
             Instruction::RuleInit {
@@ -980,7 +1083,15 @@ impl core::fmt::Display for Instruction {
             } => {
                 format!("RULE_INIT R({}) {}", result_reg, rule_index)
             }
-            Instruction::Halt => String::from("HALT"),
+            Instruction::Halt {} => String::from("HALT"),
+            Instruction::ComprehensionBegin { params_index } => {
+                format!("COMPREHENSION_BEGIN P({})", params_index)
+            }
+            Instruction::ComprehensionYield { value_reg, key_reg } => match key_reg {
+                Some(k) => format!("COMPREHENSION_YIELD R({}) R({})", k, value_reg),
+                None => format!("COMPREHENSION_YIELD R({})", value_reg),
+            },
+            Instruction::ComprehensionEnd {} => String::from("COMPREHENSION_END"),
         };
         write!(f, "{}", text)
     }

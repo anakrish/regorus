@@ -1,4 +1,6 @@
-use crate::rvm::instructions::{Instruction, LiteralOrRegister, LoopMode};
+use crate::rvm::instructions::{
+    ComprehensionBeginParams, ComprehensionMode, Instruction, LiteralOrRegister, LoopMode,
+};
 use crate::rvm::program::Program;
 use crate::rvm::tracing_utils::{debug, info, span, trace};
 use crate::value::Value;
@@ -53,6 +55,9 @@ pub enum VmError {
 
     #[error("Invalid virtual data document lookup params index: {index}")]
     InvalidVirtualDataDocumentLookupParams { index: u16 },
+
+    #[error("Invalid comprehension start params index: {index}")]
+    InvalidComprehensionBeginParams { index: u16 },
 
     #[error("Invalid rule index: {rule_index:?}")]
     InvalidRuleIndex { rule_index: Value },
@@ -192,6 +197,17 @@ struct LoopParams {
     loop_end: u16,
 }
 
+/// Context for tracking active comprehensions
+#[derive(Debug, Clone)]
+struct ComprehensionContext {
+    /// Type of comprehension (Array, Set, Object)
+    mode: ComprehensionMode,
+    /// Register storing the comprehension result collection
+    collection_reg: u8,
+    /// Jump target for comprehension end
+    comprehension_end: u16,
+}
+
 /// The RVM Virtual Machine
 pub struct RegoVM {
     /// Registers for storing values during execution
@@ -216,6 +232,8 @@ pub struct RegoVM {
     input: Value,
 
     /// Loop execution stack
+    /// Note: Loops are either at the outermost level (rule body) or within the topmost comprehension.
+    /// Loops never contain comprehensions - it's always the other way around.
     loop_stack: Vec<LoopContext>,
 
     /// Call rule execution stack for managing nested rule calls
@@ -223,6 +241,11 @@ pub struct RegoVM {
 
     /// Register stack for isolated register spaces during rule calls
     register_stack: Vec<Vec<Value>>,
+
+    /// Comprehension execution stack for tracking active comprehensions
+    /// Note: Comprehensions can be nested within each other, forming a proper nesting hierarchy.
+    /// Any loops within a comprehension belong to the topmost (current) comprehension context.
+    comprehension_stack: Vec<ComprehensionContext>,
 
     /// Base register window size for the main execution context
     base_register_count: usize,
@@ -272,6 +295,7 @@ impl RegoVM {
             loop_stack: Vec::new(),
             call_rule_stack: Vec::new(),
             register_stack: Vec::new(),
+            comprehension_stack: Vec::new(),
             base_register_count: 2, // Default to 2 registers for basic operations
             max_instructions: 25000, // Default maximum instruction limit
             executed_instructions: 0,
@@ -750,7 +774,7 @@ impl RegoVM {
                     self.execute_rule_init(result_reg, rule_index)?;
                 }
 
-                Instruction::DestructuringSuccess => {
+                Instruction::DestructuringSuccess {} => {
                     // Mark successful completion of parameter destructuring
                     debug!("DestructuringSuccess - parameter validation completed");
                     break; // Exit back to caller (execute_rule_definitions_common)
@@ -1127,7 +1151,7 @@ impl RegoVM {
                     self.execute_loop_next(body_start, loop_end)?;
                 }
 
-                Instruction::Halt => {
+                Instruction::Halt {} => {
                     #[cfg(feature = "rvm-tracing")]
                     self.clear_spans();
                     return Ok(self.registers[0].clone());
@@ -1176,6 +1200,37 @@ impl RegoVM {
 
                 Instruction::VirtualDataDocumentLookup { params_index } => {
                     self.execute_virtual_data_document_lookup(params_index)?;
+                }
+
+                Instruction::ComprehensionBegin { params_index } => {
+                    let params = self
+                        .program
+                        .instruction_data
+                        .get_comprehension_begin_params(params_index)
+                        .ok_or_else(|| VmError::InvalidComprehensionBeginParams {
+                            index: params_index,
+                        })?
+                        .clone(); // Clone to avoid borrowing issues
+
+                    debug!(
+                        "ComprehensionBegin: mode={:?}, collection_reg={}",
+                        params.mode, params.collection_reg
+                    );
+
+                    self.execute_comprehension_begin(&params)?;
+                }
+
+                Instruction::ComprehensionYield { value_reg, key_reg } => {
+                    debug!(
+                        "ComprehensionYield with value_reg={}, key_reg={:?}",
+                        value_reg, key_reg
+                    );
+                    self.execute_comprehension_yield(value_reg, key_reg)?;
+                }
+
+                Instruction::ComprehensionEnd {} => {
+                    debug!("ComprehensionEnd");
+                    self.execute_comprehension_end()?;
                 }
             }
 
@@ -1234,9 +1289,16 @@ impl RegoVM {
         let mut old_registers = Vec::default();
         core::mem::swap(&mut old_registers, &mut self.registers);
 
-        // Backup loop stack during function calls to prevent register index conflicts
+        // Backup execution stacks during function calls to prevent register index conflicts
+        // Architecture note: loops and comprehensions have a specific nesting relationship:
+        // - Loops are either at rule body level OR within the topmost comprehension
+        // - Comprehensions can nest within each other
+        // - Loops never contain comprehensions
         let mut old_loop_stack = Vec::default();
         core::mem::swap(&mut old_loop_stack, &mut self.loop_stack);
+
+        let mut old_comprehension_stack = Vec::default();
+        core::mem::swap(&mut old_comprehension_stack, &mut self.comprehension_stack);
 
         self.register_stack.push(old_registers);
         self.registers = register_window;
@@ -1367,8 +1429,10 @@ impl RegoVM {
             self.registers = old_registers;
         }
 
-        // Restore loop stack after function call
+        // Restore execution stacks after function call
+        // This maintains the proper nesting relationship between loops and comprehensions
         self.loop_stack = old_loop_stack;
+        self.comprehension_stack = old_comprehension_stack;
 
         Ok((final_result, rule_failed_due_to_inconsistency))
     }
@@ -2162,9 +2226,6 @@ impl RegoVM {
         // Initialize result container based on mode
         let initial_result = match mode {
             LoopMode::Any | LoopMode::Every | LoopMode::ForEach => Value::Bool(false),
-            LoopMode::ArrayComprehension => Value::new_array(),
-            LoopMode::SetComprehension => Value::new_set(),
-            LoopMode::ObjectComprehension => Value::Object(crate::Rc::new(BTreeMap::new())),
         };
         self.registers[params.result_reg as usize] = initial_result.clone();
         debug!(
@@ -2393,12 +2454,6 @@ impl RegoVM {
                         );
                         result
                     }
-                    LoopMode::ArrayComprehension
-                    | LoopMode::SetComprehension
-                    | LoopMode::ObjectComprehension => {
-                        // Result is already accumulated in result_reg
-                        self.registers[loop_ctx.result_reg as usize].clone()
-                    }
                 };
 
                 self.registers[loop_ctx.result_reg as usize] = final_result;
@@ -2434,9 +2489,6 @@ impl RegoVM {
             LoopMode::Any => Value::Bool(false),
             LoopMode::Every => Value::Bool(true), // Every element of empty set satisfies condition
             LoopMode::ForEach => Value::Bool(false),
-            LoopMode::ArrayComprehension => Value::new_array(),
-            LoopMode::SetComprehension => Value::new_set(),
-            LoopMode::ObjectComprehension => Value::Object(crate::Rc::new(BTreeMap::new())),
         };
 
         self.registers[result_reg as usize] = result;
@@ -2580,9 +2632,7 @@ impl RegoVM {
             (LoopMode::Every, false) => LoopAction::ExitWithFailure,
             // For ForEach mode and comprehensions, let explicit accumulation instructions handle the results
             (LoopMode::ForEach, _) => LoopAction::Continue,
-            (LoopMode::ArrayComprehension, _) => LoopAction::Continue,
-            (LoopMode::SetComprehension, _) => LoopAction::Continue,
-            (LoopMode::ObjectComprehension, _) => LoopAction::Continue,
+
             _ => LoopAction::Continue,
         }
     }
@@ -2660,5 +2710,141 @@ impl RegoVM {
         }
 
         Ok(())
+    }
+
+    /// Execute ComprehensionBegin instruction
+    /// Initializes an empty comprehension collection and sets up iteration context
+    fn execute_comprehension_begin(&mut self, params: &ComprehensionBeginParams) -> Result<()> {
+        debug!(
+            "Starting comprehension: mode={:?}, collection_reg={}",
+            params.mode, params.collection_reg
+        );
+
+        // Initialize empty result container based on comprehension mode
+        // The collection_reg serves as both the result storage and iteration source
+        let initial_result = match params.mode {
+            ComprehensionMode::Set => Value::new_set(),
+            ComprehensionMode::Array => Value::new_array(),
+            ComprehensionMode::Object => Value::Object(crate::Rc::new(BTreeMap::new())),
+        };
+        self.registers[params.collection_reg as usize] = initial_result.clone();
+        debug!(
+            "Initialized comprehension result register {} with: {:?}",
+            params.collection_reg, initial_result
+        );
+
+        // For comprehensions, we don't need to jump anywhere
+        // The comprehension builds its collection through ComprehensionYield instructions
+        // Just continue to the next instruction normally
+        debug!("ComprehensionBegin: continuing to next instruction");
+
+        // Store comprehension metadata for ComprehensionYield instructions
+        // We push a minimal comprehension context to track the result register and mode
+        let comprehension_context = ComprehensionContext {
+            mode: params.mode.clone(),
+            collection_reg: params.collection_reg,
+            comprehension_end: params.comprehension_end,
+        };
+
+        // Store in a comprehension stack (we'll need to add this to VM state)
+        self.comprehension_stack.push(comprehension_context);
+        debug!(
+            "Pushed comprehension context, stack depth: {}",
+            self.comprehension_stack.len()
+        );
+
+        Ok(())
+    }
+
+    /// Execute ComprehensionYield instruction
+    /// Yields a value (and optionally key) to the active comprehension collection
+    fn execute_comprehension_yield(&mut self, value_reg: u8, key_reg: Option<u8>) -> Result<()> {
+        if let Some(comprehension_context) = self.comprehension_stack.last() {
+            let value_to_add = self.registers[value_reg as usize].clone();
+            debug!("Adding value to comprehension: {:?}", value_to_add);
+
+            let key = if let Some(key_reg) = key_reg {
+                let key = self.registers[key_reg as usize].clone();
+                debug!("Adding with key: {:?}", key);
+                Some(key)
+            } else {
+                None
+            };
+
+            let collection_reg = comprehension_context.collection_reg;
+            let current_result = &mut self.registers[collection_reg as usize];
+
+            // Add to the appropriate collection type based on comprehension mode
+            match comprehension_context.mode {
+                ComprehensionMode::Set => {
+                    if let Value::Set(set) = current_result {
+                        let mut new_set = set.as_ref().clone();
+                        new_set.insert(value_to_add);
+                        *current_result = Value::Set(crate::Rc::new(new_set));
+                        debug!("Added to set comprehension, new size: {}", new_set.len());
+                    } else {
+                        return Err(VmError::InvalidIteration {
+                            value: current_result.clone(),
+                        });
+                    }
+                }
+                ComprehensionMode::Array => {
+                    if let Value::Array(arr) = current_result {
+                        let mut new_arr = arr.as_ref().to_vec();
+                        new_arr.push(value_to_add);
+                        *current_result = Value::Array(crate::Rc::new(new_arr));
+                        debug!(
+                            "Added to array comprehension, new length: {}",
+                            new_arr.len()
+                        );
+                    } else {
+                        return Err(VmError::InvalidIteration {
+                            value: current_result.clone(),
+                        });
+                    }
+                }
+                ComprehensionMode::Object => {
+                    if let Value::Object(obj) = current_result {
+                        if let Some(key) = key {
+                            let mut new_obj = obj.as_ref().clone();
+                            new_obj.insert(key, value_to_add);
+                            *current_result = Value::Object(crate::Rc::new(new_obj));
+                            debug!("Added to object comprehension, new size: {}", new_obj.len());
+                        } else {
+                            return Err(VmError::InvalidIteration {
+                                value: Value::String(Arc::from(
+                                    "Object comprehension requires key",
+                                )),
+                            });
+                        }
+                    } else {
+                        return Err(VmError::InvalidIteration {
+                            value: current_result.clone(),
+                        });
+                    }
+                }
+            }
+        } else {
+            debug!("ComprehensionYield called without active comprehension context");
+            return Err(VmError::InvalidIteration {
+                value: Value::String(Arc::from("No active comprehension")),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Execute ComprehensionEnd instruction
+    /// Finalize the current comprehension and pop its context.
+    fn execute_comprehension_end(&mut self) -> Result<()> {
+        if let Some(_context) = self.comprehension_stack.pop() {
+            debug!("ComprehensionEnd: Popped comprehension context");
+            Ok(())
+        } else {
+            debug!("ComprehensionEnd called without active comprehension context");
+            return Err(VmError::InvalidIteration {
+                value: Value::String(Arc::from("No active comprehension context")),
+            });
+        }
     }
 }

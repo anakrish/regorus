@@ -23,14 +23,14 @@ cases:
           template_literal_idx: 0
           literal_key_fields: []
           fields: []
-      loop_params:
-        - mode: "ObjectComprehension"
-          collection: 0
+      comprehension_start_params:
+        - mode: "Object"
+          collection_reg: 0
           key_reg: 4
           value_reg: 5
           result_reg: 9
           body_start: 9
-          loop_end: 13
+          comprehension_end: 13
     instructions:
       - "ArrayNew { dest: 0 }"              # Create input array [1, 2, 3] in register 0
       - "Load { dest: 1, literal_idx: 1 }"  # Load 1 into register 1
@@ -40,11 +40,11 @@ cases:
       - "Load { dest: 3, literal_idx: 3 }"  # Load 3 into register 3
       - "ArrayPush { arr: 0, value: 3 }"    # Push 3 to array
       - "ObjectCreate { params_index: 0 }"             
-      - "LoopStart { params_index: 0 }"     # Start object comprehension loop
+      - "ComprehensionStart { params_index: 0 }"     # Start object comprehension
       - "Load { dest: 10, literal_idx: 4 }" # Load multiplier 2 into register 10
       - "Mul { dest: 11, left: 5, right: 10 }" # Multiply current value by 2 for object value
-      - "ObjectSet { obj: 9, key: 5, value: 11 }" # Set key-value pair in result object (using current value as key)
-      - "LoopNext { body_start: 9, loop_end: 13 }"  # Continue to next iteration or exit
+      - "ComprehensionAdd { key_reg: 5, value_reg: 11 }" # Set key-value pair in result object (using current value as key)
+      - "Halt"                               # End comprehension
       - "Return { value: 9 }"               # Return result object
     want_result: {1: 2, 2: 4, 3: 6}
 

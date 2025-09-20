@@ -19,6 +19,18 @@ enum EvalEngine {
     Vm,
 }
 
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum SerializationFormat {
+    /// MessagePack binary format (compact, cross-language compatible).
+    Msgpack,
+    /// MessagePack hybrid format (binary structure, JSON literals).
+    MsgpackHybrid,
+    /// Bincode binary format (Rust-specific, efficient).
+    Bincode,
+    /// JSON format (human-readable, with proper field names).
+    Json,
+}
+
 #[allow(dead_code)]
 fn read_file(path: &String) -> Result<String> {
     std::fs::read_to_string(path).map_err(|_| anyhow!("could not read {path}"))
@@ -55,6 +67,8 @@ fn rego_compile(
     rule_name: String,
     tabular: bool,
     v0: bool,
+    serialize: Option<SerializationFormat>,
+    output: Option<String>,
 ) -> Result<()> {
     // Create engine.
     let mut engine = regorus::Engine::new();
@@ -115,6 +129,42 @@ fn rego_compile(
     };
 
     println!("{}", listing);
+
+    // Handle serialization if requested
+    if let Some(format) = serialize {
+        let serialized = match format {
+            SerializationFormat::Msgpack => program
+                .serialize_messagepack()
+                .map_err(|e| anyhow!("messagepack serialization failed: {}", e))?
+                .into(),
+            SerializationFormat::MsgpackHybrid => program
+                .serialize_messagepack_hybrid()
+                .map_err(|e| anyhow!("messagepack hybrid serialization failed: {}", e))?
+                .into(),
+            SerializationFormat::Bincode => bincode::serialize(&program)
+                .map_err(|e| anyhow!("bincode serialization failed: {}", e))?,
+            SerializationFormat::Json => program
+                .serialize_json()
+                .map_err(|e| anyhow!("json serialization failed: {}", e))?
+                .into_bytes(),
+        };
+
+        // Write to output file or stdout
+        match output {
+            Some(output_file) => {
+                std::fs::write(&output_file, &serialized)
+                    .map_err(|e| anyhow!("failed to write to {}: {}", output_file, e))?;
+                println!("Serialized program written to: {}", output_file);
+            }
+            None => {
+                // Write binary data to stdout (not great for terminal display)
+                use std::io::Write;
+                std::io::stdout()
+                    .write_all(&serialized)
+                    .map_err(|e| anyhow!("failed to write to stdout: {}", e))?;
+            }
+        }
+    }
 
     Ok(())
 }
@@ -356,6 +406,14 @@ enum RegorusCommand {
         /// Use tabular format for assembly listing.
         #[arg(long, short)]
         tabular: bool,
+
+        /// Serialize compiled program to file instead of showing assembly.
+        #[arg(long, short, value_name = "format", value_enum)]
+        serialize: Option<SerializationFormat>,
+
+        /// Output file for serialized program. If not specified, uses stdout for assembly or generates filename for serialization.
+        #[arg(long, short, value_name = "file")]
+        output: Option<String>,
 
         /// Turn on Rego language v0.
         #[arg(long)]
@@ -621,7 +679,9 @@ fn main() -> Result<()> {
             rule_name,
             tabular,
             v0,
-        } => rego_compile(&bundles, &data, rule_name, tabular, v0),
+            serialize,
+            output,
+        } => rego_compile(&bundles, &data, rule_name, tabular, v0, serialize, output),
         RegorusCommand::Debug {
             bundles,
             data,

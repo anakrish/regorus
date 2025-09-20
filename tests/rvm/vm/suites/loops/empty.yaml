@@ -22,9 +22,9 @@ cases:
           collection: 0
           key_reg: 4
           value_reg: 5
-          result_reg: 6
           body_start: 2
           loop_end: 6
+          result_reg: 6
     instructions:
       - "ArrayNew { dest: 0 }"              # Create empty array in register 0
       - "LoopStart { params_index: 0 }"
@@ -71,24 +71,31 @@ cases:
       - {}
       - 1  # value to add
     instruction_params:
+      comprehension_begin_params:
+        - mode: "Array"
+          collection_reg: 1
+          key_reg: 4
+          value_reg: 5
+          body_start: 3
+          comprehension_end: 9
       loop_params:
-        - mode: "ArrayComprehension"
+        - mode: "ForEach"
           collection: 0
           key_reg: 4
           value_reg: 5
-          result_reg: 1
-          body_start: 3
-          loop_end: 8
+          result_reg: 8
+          body_start: 4
+          loop_end: 9
     instructions:
       - "ArrayNew { dest: 0 }"              # Create empty input array in register 0
-      - "ArrayNew { dest: 1 }"              # Create empty result array in register 1  
-      - "LoopStart { params_index: 0 }"
+      - "ComprehensionBegin { params_index: 0 }"  # Start array comprehension
+      - "LoopStart { params_index: 0 }"     # Start loop over array elements
       - "Load { dest: 6, literal_idx: 1 }"  # Load 1 into register 6
       - "Add { dest: 7, left: 5, right: 6 }" # Add 1 to current value
-      - "ArrayPush { arr: 1, value: 7 }"    # Push result to output array
+      - "ComprehensionYield { value_reg: 7 }"  # Add result to comprehension
       - "LoadBool { dest: 8, value: true }" # Load true (condition always passes)
       - "AssertCondition { condition: 8 }"  # Assert true condition
-      - "LoopNext { body_start: 3, loop_end: 8 }"
+      - "LoopNext { body_start: 4, loop_end: 9 }"  # Continue to next iteration or exit
       - "Return { value: 1 }"               # Return the result array (should be empty)
     want_result: []
 
@@ -101,24 +108,31 @@ cases:
       - {}
       - 1  # value to add
     instruction_params:
+      comprehension_begin_params:
+        - mode: "Set"
+          collection_reg: 1
+          key_reg: 4
+          value_reg: 5
+          body_start: 3
+          comprehension_end: 9
       loop_params:
-        - mode: "SetComprehension"
+        - mode: "ForEach"
           collection: 0
           key_reg: 4
           value_reg: 5
-          result_reg: 1
-          body_start: 3
-          loop_end: 8
+          result_reg: 8
+          body_start: 4
+          loop_end: 9
     instructions:
       - "ArrayNew { dest: 0 }"              # Create empty input array in register 0
-      - "SetNew { dest: 1 }"                # Create empty result set in register 1
-      - "LoopStart { params_index: 0 }"
+      - "ComprehensionBegin { params_index: 0 }"  # Start set comprehension
+      - "LoopStart { params_index: 0 }"     # Start loop over array elements
       - "Load { dest: 6, literal_idx: 1 }"  # Load 1 into register 6
       - "Add { dest: 7, left: 5, right: 6 }" # Add 1 to current value
-      - "SetAdd { set: 1, value: 7 }"       # Add result to output set
+      - "ComprehensionYield { value_reg: 7 }"  # Add result to comprehension
       - "LoadBool { dest: 8, value: true }" # Load true (condition always passes)
       - "AssertCondition { condition: 8 }"  # Assert true condition
-      - "LoopNext { body_start: 3, loop_end: 8 }"
+      - "LoopNext { body_start: 4, loop_end: 9 }"  # Continue to next iteration or exit
       - "Return { value: 1 }"               # Return the result set (should be empty)
     want_result: 
       set!: []  # Set serializes as empty array
@@ -137,28 +151,31 @@ cases:
           template_literal_idx: 0
           literal_key_fields: []
           fields: []
-        - dest: 1
-          template_literal_idx: 0
-          literal_key_fields: []
-          fields: []
+      comprehension_begin_params:
+        - mode: "Object"
+          collection_reg: 1
+          key_reg: 4
+          value_reg: 5
+          body_start: 3
+          comprehension_end: 9
       loop_params:
-        - mode: "ObjectComprehension"
+        - mode: "ForEach"
           collection: 0
           key_reg: 4
           value_reg: 5
-          result_reg: 1
-          body_start: 3
-          loop_end: 8
+          result_reg: 8
+          body_start: 4
+          loop_end: 9
     instructions:
       - "ObjectCreate { params_index: 0 }"             
-      - "ObjectCreate { params_index: 1 }"             
-      - "LoopStart { params_index: 0 }"
+      - "ComprehensionBegin { params_index: 0 }"  # Start object comprehension
+      - "LoopStart { params_index: 0 }"     # Start loop over object elements
       - "Load { dest: 6, literal_idx: 1 }"  # Load 1 into register 6  
       - "Add { dest: 7, left: 5, right: 6 }" # Add 1 to current value
-      - "ObjectSet { obj: 1, key: 4, value: 7 }" # Set key: (value + 1) in result object
+      - "ComprehensionYield { value_reg: 7 }"  # Add result to comprehension (object comprehension needs special handling)
       - "LoadBool { dest: 8, value: true }" # Load true (condition always passes)
       - "AssertCondition { condition: 8 }"  # Assert true condition
-      - "LoopNext { body_start: 3, loop_end: 8 }"
+      - "LoopNext { body_start: 4, loop_end: 9 }"  # Continue to next iteration or exit
       - "Return { value: 1 }"               # Return the result object (should be empty)
     want_result: {}
 
@@ -228,36 +245,51 @@ cases:
       # Nested array comprehension where both inner and outer collections are empty
     literals: []
     instruction_params:
+      comprehension_begin_params:
+        - mode: "Array"
+          collection_reg: 0
+          key_reg: 2
+          value_reg: 3
+          body_start: 3
+          comprehension_end: 16
+        - mode: "Array"
+          collection_reg: 6
+          key_reg: 8
+          value_reg: 9
+          body_start: 7
+          comprehension_end: 12
       loop_params:
-        - mode: "ArrayComprehension"
+        - mode: "ForEach"
           collection: 0
           key_reg: 2
           value_reg: 3
-          result_reg: 1
-          body_start: 3
-          loop_end: 14
-        - mode: "ArrayComprehension"
+          result_reg: 10
+          body_start: 4
+          loop_end: 16
+        - mode: "ForEach"
           collection: 6
           key_reg: 8
           value_reg: 9
-          result_reg: 7
-          body_start: 6
-          loop_end: 10
+          result_reg: 11
+          body_start: 8
+          loop_end: 12
     instructions:
       - "ArrayNew { dest: 0 }"              # Create empty outer array in register 0
       - "ArrayNew { dest: 1 }"              # Create empty result array in register 1
-      - "LoopStart { params_index: 0 }"
+      - "ComprehensionBegin { params_index: 0 }"
+      - "LoopStart { params_index: 0 }"     # Start outer loop
       # Inner array comprehension (for each x in outer empty array)
       - "ArrayNew { dest: 6 }"              # Create empty inner array in register 6
       - "ArrayNew { dest: 7 }"              # Create result for inner comprehension in register 7
-      - "LoopStart { params_index: 0 }"
-      - "ArrayPush { arr: 7, value: 9 }"    # Push inner value to inner result (never executes)
+      - "ComprehensionBegin { params_index: 1 }"
+      - "LoopStart { params_index: 1 }"     # Start inner loop
+      - "ComprehensionYield { value_reg: 9 }"    # Push inner value to inner result (never executes)
       - "LoadBool { dest: 10, value: true }" # Load true
       - "AssertCondition { condition: 10 }" # Assert true condition for inner loop
-      - "LoopNext { body_start: 6, loop_end: 10 }"
-      - "ArrayPush { arr: 1, value: 7 }"    # Push inner result to outer result
+      - "LoopNext { body_start: 8, loop_end: 12 }"  # Continue inner loop
+      - "ComprehensionYield { value_reg: 7 }"    # Push inner result to outer result
       - "LoadBool { dest: 11, value: true }" # Load true
       - "AssertCondition { condition: 11 }" # Assert true condition for outer loop  
-      - "LoopNext { body_start: 3, loop_end: 14 }"
+      - "LoopNext { body_start: 4, loop_end: 16 }"  # Continue outer loop
       - "Return { value: 1 }"               # Return the nested result (should be empty)
     want_result: []

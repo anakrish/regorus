@@ -57,15 +57,20 @@ pub fn parse_instruction(text: &str) -> Result<Instruction> {
             "CallRule" => parse_call_rule(params_text),
             "LoopStart" => parse_loop_start(params_text),
             "LoopNext" => parse_loop_next(params_text),
+            "ComprehensionStart" => parse_comprehension_start(params_text),
+            "ComprehensionAdd" => parse_comprehension_add(params_text),
+            "ComprehensionBegin" => parse_comprehension_start(params_text),
+            "ComprehensionYield" => parse_comprehension_add(params_text),
             _ => bail!("Unknown instruction: {}", name),
         }
     } else {
         // Handle instructions without parameters (no braces)
         let name = text.trim();
         match name {
-            "Halt" => Ok(Instruction::Halt),
+            "Halt" => Ok(Instruction::Halt {}),
             "RuleReturn" => Ok(Instruction::RuleReturn {}),
-            "DestructuringSuccess" => Ok(Instruction::DestructuringSuccess),
+            "DestructuringSuccess" => Ok(Instruction::DestructuringSuccess {}),
+            "ComprehensionEnd" => Ok(Instruction::ComprehensionEnd {}),
             _ => bail!("Unknown instruction: {}", name),
         }
     }
@@ -145,13 +150,14 @@ pub fn parse_loop_mode(text: &str) -> Result<LoopMode> {
         "Any" => Ok(LoopMode::Any),
         "Every" => Ok(LoopMode::Every),
         "ForEach" => Ok(LoopMode::ForEach),
-        "ArrayComprehension" => Ok(LoopMode::ArrayComprehension),
-        "SetComprehension" => Ok(LoopMode::SetComprehension),
-        "ObjectComprehension" => Ok(LoopMode::ObjectComprehension),
         // Keep backwards compatibility for now
         "Existential" => Ok(LoopMode::Any),
         "Universal" => Ok(LoopMode::Every),
         "Collect" => Ok(LoopMode::ForEach),
+        // Legacy comprehension modes now map to ForEach since we use dedicated comprehension instructions
+        "ArrayComprehension" => Ok(LoopMode::ForEach),
+        "SetComprehension" => Ok(LoopMode::ForEach),
+        "ObjectComprehension" => Ok(LoopMode::ForEach),
         _ => bail!("Invalid loop mode: {}", text),
     }
 }
@@ -322,7 +328,7 @@ fn parse_rule_return(params_text: &str) -> Result<Instruction> {
 
 fn parse_destructuring_success(params_text: &str) -> Result<Instruction> {
     let _params = parse_params(params_text)?;
-    Ok(Instruction::DestructuringSuccess)
+    Ok(Instruction::DestructuringSuccess {})
 }
 
 fn parse_object_set(params_text: &str) -> Result<Instruction> {
@@ -576,4 +582,29 @@ fn parse_call_rule(params_text: &str) -> Result<Instruction> {
         dest: dest.try_into().unwrap(),
         rule_index,
     })
+}
+
+fn parse_comprehension_start(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let params_index = get_param_u16(&params, "params_index")?;
+    Ok(Instruction::ComprehensionBegin { params_index })
+}
+
+fn parse_comprehension_add(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let value_reg = get_param_u16(&params, "value_reg")?;
+    let key_reg = if let Ok(key) = get_param_u16(&params, "key_reg") {
+        Some(key.try_into().unwrap())
+    } else {
+        None
+    };
+    Ok(Instruction::ComprehensionYield {
+        value_reg: value_reg.try_into().unwrap(),
+        key_reg,
+    })
+}
+
+fn parse_comprehension_end(params_text: &str) -> Result<Instruction> {
+    let _params = parse_params(params_text)?;
+    Ok(Instruction::ComprehensionEnd {})
 }

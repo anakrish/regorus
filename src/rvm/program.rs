@@ -554,6 +554,363 @@ impl Program {
         }
     }
 
+    /// Serialize program to MessagePack format (cross-language compatible)
+    pub fn serialize_messagepack(&self) -> Result<Vec<u8>, String> {
+        rmp_serde::to_vec(self).map_err(|e| format!("MessagePack serialization failed: {}", e))
+    }
+
+    /// Deserialize program from MessagePack format
+    pub fn deserialize_messagepack(data: &[u8]) -> Result<Program, String> {
+        rmp_serde::from_slice(data)
+            .map_err(|e| format!("MessagePack deserialization failed: {}", e))
+    }
+
+    /// Serialize to MessagePack with hybrid format (similar to binary format)
+    /// This uses MessagePack for structure but JSON for literals for maximum compatibility
+    pub fn serialize_messagepack_hybrid(&self) -> Result<Vec<u8>, String> {
+        let mut buffer = Vec::new();
+
+        // Write magic number for MessagePack format
+        buffer.extend_from_slice(b"RVM_MSGPACK_V1");
+
+        // Serialize entry_points and sources to MessagePack for better cross-language support
+        let entry_points_data = rmp_serde::to_vec(&self.entry_points)
+            .map_err(|e| format!("Entry points MessagePack serialization failed: {}", e))?;
+
+        let sources_data = rmp_serde::to_vec(&self.sources)
+            .map_err(|e| format!("Sources MessagePack serialization failed: {}", e))?;
+
+        // Serialize the main program structure to MessagePack (without Value, entry_points, and sources fields)
+        let program_data = rmp_serde::to_vec(self)
+            .map_err(|e| format!("Program structure MessagePack serialization failed: {}", e))?;
+
+        // Serialize literals and rule_tree to JSON for maximum compatibility
+        let combined_json_data = serde_json::json!({
+            "literals": self.literals,
+            "rule_tree": self.rule_tree
+        });
+        let json_data = serde_json::to_vec(&combined_json_data)
+            .map_err(|e| format!("Combined JSON serialization failed: {}", e))?;
+
+        // Write section lengths
+        buffer.extend_from_slice(&(entry_points_data.len() as u32).to_le_bytes());
+        buffer.extend_from_slice(&(sources_data.len() as u32).to_le_bytes());
+        buffer.push(if self.rego_v0 { 1 } else { 0 }); // rego_v0 flag
+        buffer.extend_from_slice(&(program_data.len() as u32).to_le_bytes());
+        buffer.extend_from_slice(&(json_data.len() as u32).to_le_bytes());
+
+        // Write data sections
+        buffer.extend_from_slice(&entry_points_data);
+        buffer.extend_from_slice(&sources_data);
+        buffer.extend_from_slice(&program_data);
+        buffer.extend_from_slice(&json_data);
+
+        Ok(buffer)
+    }
+
+    /// Deserialize program from MessagePack hybrid format
+    pub fn deserialize_messagepack_hybrid(data: &[u8]) -> Result<DeserializationResult, String> {
+        if data.len() < 30 {
+            // Minimum size for new format (14 bytes magic + 4*4 bytes lengths + 1 byte flag + 1 byte data minimum)
+            return Err("Data too short for MessagePack hybrid format".to_string());
+        }
+
+        // Check magic number
+        if &data[0..14] != b"RVM_MSGPACK_V1" {
+            return Err("Invalid MessagePack format - magic number mismatch".to_string());
+        }
+
+        let mut offset = 14;
+
+        // Read lengths
+        let entry_points_len = u32::from_le_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]) as usize;
+        offset += 4;
+        let sources_len = u32::from_le_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]) as usize;
+        offset += 4;
+        let rego_v0 = data[offset] != 0;
+        offset += 1;
+        let program_len = u32::from_le_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]) as usize;
+        offset += 4;
+        let json_len = u32::from_le_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]) as usize;
+        offset += 4;
+
+        // Calculate section boundaries
+        let entry_points_start = offset;
+        let sources_start = entry_points_start + entry_points_len;
+        let program_start = sources_start + sources_len;
+        let json_start = program_start + program_len;
+        let json_end = json_start + json_len;
+
+        if data.len() < json_end {
+            return Err("Data too short for all sections".to_string());
+        }
+
+        // Deserialize artifacts using MessagePack
+        let entry_points: IndexMap<String, usize> =
+            rmp_serde::from_slice(&data[entry_points_start..sources_start])
+                .map_err(|e| format!("Entry points MessagePack deserialization failed: {}", e))?;
+
+        let sources: Vec<SourceFile> =
+            rmp_serde::from_slice(&data[sources_start..program_start])
+                .map_err(|e| format!("Sources MessagePack deserialization failed: {}", e))?;
+
+        let mut needs_recompilation = false;
+
+        // Try to deserialize program structure using MessagePack
+        let mut program = match rmp_serde::from_slice::<Program>(&data[program_start..json_start]) {
+            Ok(prog) => prog,
+            Err(_e) => {
+                needs_recompilation = true;
+                Program::new()
+            }
+        };
+
+        // Try to deserialize JSON data
+        let (literals, rule_tree) =
+            match serde_json::from_slice::<serde_json::Value>(&data[json_start..json_end]) {
+                Ok(combined_data) => {
+                    let literals = combined_data
+                        .get("literals")
+                        .and_then(|l| serde_json::from_value(l.clone()).ok())
+                        .unwrap_or_else(Vec::new);
+                    let rule_tree = combined_data
+                        .get("rule_tree")
+                        .and_then(|rt| serde_json::from_value::<Value>(rt.clone()).ok())
+                        .unwrap_or_else(|| Value::new_object());
+                    (literals, rule_tree)
+                }
+                Err(_e) => {
+                    needs_recompilation = true;
+                    (Vec::new(), Value::new_object())
+                }
+            };
+
+        // Set all fields
+        program.entry_points = entry_points;
+        program.sources = sources;
+        program.literals = literals;
+        program.rule_tree = rule_tree;
+        program.rego_v0 = rego_v0;
+        program.needs_recompilation = needs_recompilation;
+
+        // Try to initialize resolved builtins if we have builtin info
+        if !program.builtin_info_table.is_empty() {
+            if let Err(_e) = program.initialize_resolved_builtins() {
+                program.needs_recompilation = true;
+            }
+        }
+
+        // Return appropriate enum variant
+        if program.needs_recompilation {
+            Ok(DeserializationResult::Partial(program))
+        } else {
+            Ok(DeserializationResult::Complete(program))
+        }
+    }
+
+    /// Serialize to JSON format with complete program information and proper field names
+    /// This provides the most readable and robust format for analysis tools
+    pub fn serialize_json(&self) -> Result<String, String> {
+        // Create a comprehensive JSON structure with all program information
+        let json_data = serde_json::json!({
+            "metadata": {
+                "compiler_version": self.metadata.compiler_version,
+                "compiled_at": self.metadata.compiled_at,
+                "source_info": self.metadata.source_info,
+                "optimization_level": self.metadata.optimization_level,
+                "rego_v0": self.rego_v0,
+                "needs_runtime_recursion_check": self.needs_runtime_recursion_check,
+                "needs_recompilation": self.needs_recompilation
+            },
+            "program_structure": {
+                "main_entry_point": self.main_entry_point,
+                "num_registers": self.num_registers
+            },
+            "instructions": self.instructions,
+            "instruction_data": {
+                "loop_params": self.instruction_data.loop_params,
+                "builtin_call_params": self.instruction_data.builtin_call_params,
+                "function_call_params": self.instruction_data.function_call_params,
+                "object_create_params": self.instruction_data.object_create_params,
+                "array_create_params": self.instruction_data.array_create_params,
+                "set_create_params": self.instruction_data.set_create_params,
+                "virtual_data_document_lookup_params": self.instruction_data.virtual_data_document_lookup_params,
+                "chained_index_params": self.instruction_data.chained_index_params,
+                "comprehension_begin_params": self.instruction_data.comprehension_begin_params
+            },
+            "literals": self.literals,
+            "builtin_info_table": self.builtin_info_table,
+            "entry_points": self.entry_points,
+            "sources": self.sources,
+            "rule_infos": self.rule_infos,
+            "instruction_spans": self.instruction_spans,
+            "rule_tree": self.rule_tree
+        });
+
+        serde_json::to_string_pretty(&json_data)
+            .map_err(|e| format!("JSON serialization failed: {}", e))
+    }
+
+    /// Deserialize program from JSON format
+    pub fn deserialize_json(data: &str) -> Result<Program, String> {
+        let json_data: serde_json::Value =
+            serde_json::from_str(data).map_err(|e| format!("JSON parsing failed: {}", e))?;
+
+        // Extract metadata
+        let metadata = json_data
+            .get("metadata")
+            .ok_or("Missing metadata section")?;
+        let compiler_version = metadata
+            .get("compiler_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let compiled_at = metadata
+            .get("compiled_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let source_info = metadata
+            .get("source_info")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let optimization_level = metadata
+            .get("optimization_level")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u8;
+        let rego_v0 = metadata
+            .get("rego_v0")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let needs_runtime_recursion_check = metadata
+            .get("needs_runtime_recursion_check")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let needs_recompilation = metadata
+            .get("needs_recompilation")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        // Extract program structure
+        let program_structure = json_data
+            .get("program_structure")
+            .ok_or("Missing program_structure section")?;
+        let main_entry_point = program_structure
+            .get("main_entry_point")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+        let num_registers = program_structure
+            .get("num_registers")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+
+        // Extract instructions
+        let instructions: Vec<Instruction> = serde_json::from_value(
+            json_data
+                .get("instructions")
+                .ok_or("Missing instructions section")?
+                .clone(),
+        )
+        .map_err(|e| format!("Failed to deserialize instructions: {}", e))?;
+
+        // Extract instruction_data
+        let instruction_data_json = json_data
+            .get("instruction_data")
+            .ok_or("Missing instruction_data section")?;
+        let instruction_data: InstructionData =
+            serde_json::from_value(instruction_data_json.clone())
+                .map_err(|e| format!("Failed to deserialize instruction_data: {}", e))?;
+
+        // Extract other fields
+        let literals: Vec<Value> = json_data
+            .get("literals")
+            .map(|v| serde_json::from_value(v.clone()).unwrap_or_default())
+            .unwrap_or_default();
+
+        let builtin_info_table: Vec<BuiltinInfo> = json_data
+            .get("builtin_info_table")
+            .map(|v| serde_json::from_value(v.clone()).unwrap_or_default())
+            .unwrap_or_default();
+
+        let entry_points: IndexMap<String, usize> = json_data
+            .get("entry_points")
+            .map(|v| serde_json::from_value(v.clone()).unwrap_or_default())
+            .unwrap_or_default();
+
+        let sources: Vec<SourceFile> = json_data
+            .get("sources")
+            .map(|v| serde_json::from_value(v.clone()).unwrap_or_default())
+            .unwrap_or_default();
+
+        let rule_infos: Vec<RuleInfo> = json_data
+            .get("rule_infos")
+            .map(|v| serde_json::from_value(v.clone()).unwrap_or_default())
+            .unwrap_or_default();
+
+        let instruction_spans: Vec<Option<SpanInfo>> = json_data
+            .get("instruction_spans")
+            .map(|v| serde_json::from_value(v.clone()).unwrap_or_default())
+            .unwrap_or_default();
+
+        let rule_tree: Value = json_data
+            .get("rule_tree")
+            .map(|v| serde_json::from_value(v.clone()).unwrap_or_else(|_| Value::new_object()))
+            .unwrap_or_else(|| Value::new_object());
+
+        // Create program
+        let mut program = Program {
+            instructions,
+            literals,
+            instruction_data,
+            builtin_info_table,
+            entry_points,
+            sources,
+            rule_infos,
+            instruction_spans,
+            main_entry_point,
+            num_registers,
+            metadata: ProgramMetadata {
+                compiler_version,
+                compiled_at,
+                source_info,
+                optimization_level,
+            },
+            rule_tree,
+            resolved_builtins: Vec::new(), // Will be initialized later
+            needs_runtime_recursion_check,
+            needs_recompilation,
+            rego_v0,
+        };
+
+        // Initialize resolved builtins if we have builtin info
+        if !program.builtin_info_table.is_empty() {
+            let _ = program.initialize_resolved_builtins();
+        }
+
+        Ok(program)
+    }
+
     /// Check if data can be deserialized without actually deserializing
     pub fn can_deserialize(data: &[u8]) -> Result<bool, String> {
         if data.len() < 8 {
@@ -630,6 +987,14 @@ impl Program {
         self.instruction_data.add_loop_params(params)
     }
 
+    /// Add comprehension begin parameters and return the index
+    pub fn add_comprehension_begin_params(
+        &mut self,
+        params: crate::rvm::instructions::ComprehensionBeginParams,
+    ) -> u16 {
+        self.instruction_data.add_comprehension_begin_params(params)
+    }
+
     /// Add builtin call parameters and return the index
     pub fn add_builtin_call_params(
         &mut self,
@@ -664,6 +1029,19 @@ impl Program {
         F: FnOnce(&mut crate::rvm::instructions::LoopStartParams),
     {
         if let Some(params) = self.instruction_data.get_loop_params_mut(params_index) {
+            updater(params);
+        }
+    }
+
+    /// Update comprehension begin parameters by index
+    pub fn update_comprehension_begin_params<F>(&mut self, params_index: u16, updater: F)
+    where
+        F: FnOnce(&mut crate::rvm::instructions::ComprehensionBeginParams),
+    {
+        if let Some(params) = self
+            .instruction_data
+            .get_comprehension_begin_params_mut(params_index)
+        {
             updater(params);
         }
     }

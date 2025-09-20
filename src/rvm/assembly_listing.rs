@@ -44,6 +44,9 @@ pub fn generate_assembly_listing(program: &Program, config: &AssemblyListingConf
     let mut indent_level: usize = 0;
     let mut current_rule_index: Option<u16> = None;
 
+    // Track active loops and comprehensions by their end addresses
+    let mut active_ends: Vec<u16> = Vec::new();
+
     // Add header
     writeln!(
         output,
@@ -102,10 +105,21 @@ pub fn generate_assembly_listing(program: &Program, config: &AssemblyListingConf
             }
         }
 
-        // Handle loop indentation - check for loop end instructions
+        // Check if current PC matches any active end addresses (loops, comprehensions, rules)
+        let current_pc = pc as u16;
+        while let Some(&end_addr) = active_ends.last() {
+            if current_pc >= end_addr {
+                active_ends.pop();
+                indent_level = indent_level.saturating_sub(1);
+            } else {
+                break;
+            }
+        }
+
+        // Handle explicit end instructions
         match instruction {
             Instruction::LoopNext { .. } => {
-                indent_level = indent_level.saturating_sub(1);
+                // LoopNext already handled by end address tracking above
             }
             Instruction::RuleReturn { .. } => {
                 indent_level = indent_level.saturating_sub(1);
@@ -113,7 +127,14 @@ pub fn generate_assembly_listing(program: &Program, config: &AssemblyListingConf
             _ => {}
         }
 
-        let indent = " ".repeat(indent_level * config.indent_size);
+        // Special case: Block end instructions should be indented at their block level (one level out)
+        let effective_indent_level = match instruction {
+            Instruction::ComprehensionEnd {} => indent_level.saturating_sub(1),
+            Instruction::LoopNext { .. } => indent_level.saturating_sub(1),
+            _ => indent_level,
+        };
+
+        let indent = " ".repeat(effective_indent_level * config.indent_size);
 
         // Format address
         let addr_str = if config.show_addresses {
@@ -133,13 +154,26 @@ pub fn generate_assembly_listing(program: &Program, config: &AssemblyListingConf
 
         writeln!(output, "{}{}", addr_str, inst_str).unwrap();
 
-        // Increase indentation for loop/rule starts
+        // Increase indentation for loop/rule/comprehension starts and track their end addresses
         match instruction {
-            Instruction::LoopStart { .. } => {
-                indent_level += 1;
+            Instruction::LoopStart { params_index } => {
+                if let Some(params) = program.instruction_data.get_loop_params(*params_index) {
+                    active_ends.push(params.loop_end);
+                    indent_level += 1;
+                }
+            }
+            Instruction::ComprehensionBegin { params_index } => {
+                if let Some(params) = program
+                    .instruction_data
+                    .get_comprehension_begin_params(*params_index)
+                {
+                    active_ends.push(params.comprehension_end);
+                    indent_level += 1;
+                }
             }
             Instruction::RuleInit { .. } => {
                 indent_level += 1;
+                // Note: Rules end with RuleReturn, not an address, so we don't track them here
             }
             _ => {}
         }
@@ -518,9 +552,6 @@ fn format_instruction_readable(
                     LoopMode::Any => "any",
                     LoopMode::Every => "every",
                     LoopMode::ForEach => "foreach",
-                    LoopMode::ArrayComprehension => "array_comp",
-                    LoopMode::SetComprehension => "set_comp",
-                    LoopMode::ObjectComprehension => "obj_comp",
                 };
                 let base = format!(
                     "{}LoopStart    {} r{},r{} in r{} → r{} {{",
@@ -532,8 +563,8 @@ fn format_instruction_readable(
                     params.result_reg
                 );
                 let comment = format!(
-                    "{} loop over r{}, body: {}-{}",
-                    mode_str, params.collection, params.body_start, params.loop_end
+                    "{} loop over r{}, body: {}-{} (P{})",
+                    mode_str, params.collection, params.body_start, params.loop_end, params_index
                 );
                 align_comment(&base, &comment, config.comment_column)
             } else {
@@ -553,7 +584,10 @@ fn format_instruction_readable(
                 "{}}} continue → {} or exit → {}",
                 indent, body_start, loop_end
             );
-            let comment = "Next iteration or exit loop".to_string();
+            let comment = format!(
+                "Next iteration or exit loop (body:{}-{})",
+                body_start, loop_end
+            );
             align_comment(&base, &comment, config.comment_column)
         }
         Instruction::CallRule { dest, rule_index } => {
@@ -649,7 +683,7 @@ fn format_instruction_readable(
                 config.comment_column,
             )
         }
-        Instruction::DestructuringSuccess => {
+        Instruction::DestructuringSuccess {} => {
             let base = format!("{}DestructuringSuccess ✓", indent);
             align_comment(
                 &base,
@@ -657,9 +691,49 @@ fn format_instruction_readable(
                 config.comment_column,
             )
         }
-        Instruction::Halt => {
+        Instruction::Halt {} => {
             let base = format!("{}Halt         halt", indent);
             align_comment(&base, "Stop execution", config.comment_column)
+        }
+        Instruction::ComprehensionBegin { params_index } => {
+            if let Some(params) = instruction_data.get_comprehension_begin_params(*params_index) {
+                let mode_str = match params.mode {
+                    crate::rvm::instructions::ComprehensionMode::Array => "array",
+                    crate::rvm::instructions::ComprehensionMode::Set => "set",
+                    crate::rvm::instructions::ComprehensionMode::Object => "object",
+                };
+                let base = format!(
+                    "{}CompBegin   {} r{} k:{} v:{} {{",
+                    indent, mode_str, params.collection_reg, params.key_reg, params.value_reg
+                );
+                let comment = format!(
+                    "{} comprehension in r{}, body: {}-{} (P{})",
+                    mode_str,
+                    params.collection_reg,
+                    params.body_start,
+                    params.comprehension_end,
+                    params_index
+                );
+                align_comment(&base, &comment, config.comment_column)
+            } else {
+                let base = format!("{}CompBegin   [INVALID P({})] {{", indent, params_index);
+                align_comment(
+                    &base,
+                    "ERROR: Invalid comprehension parameters",
+                    config.comment_column,
+                )
+            }
+        }
+        Instruction::ComprehensionYield { value_reg, key_reg } => {
+            let base = match key_reg {
+                Some(k) => format!("{}CompYield    r{} r{}", indent, k, value_reg),
+                None => format!("{}CompYield    r{}", indent, value_reg),
+            };
+            align_comment(&base, "Yield value to comprehension", config.comment_column)
+        }
+        Instruction::ComprehensionEnd {} => {
+            let base = format!("{}}} CompEnd", indent);
+            align_comment(&base, "End comprehension block", config.comment_column)
         }
     }
 }
@@ -768,10 +842,13 @@ fn get_instruction_name(instruction: &Instruction) -> &'static str {
         Instruction::CallRule { .. } => "CALL_RULE",
         Instruction::RuleInit { .. } => "RULE_INIT",
         Instruction::RuleReturn { .. } => "RULE_RET",
-        Instruction::DestructuringSuccess => "DESTRUCT_SUCCESS",
+        Instruction::DestructuringSuccess {} => "DESTRUCT_SUCCESS",
         Instruction::ChainedIndex { .. } => "CHAINED_INDEX",
         Instruction::VirtualDataDocumentLookup { .. } => "VIRTUAL_DATA_DOC_LOOKUP",
-        Instruction::Halt => "HALT",
+        Instruction::Halt {} => "HALT",
+        Instruction::ComprehensionBegin { .. } => "COMP_BEGIN",
+        Instruction::ComprehensionYield { .. } => "COMP_YIELD",
+        Instruction::ComprehensionEnd {} => "COMP_END",
     }
 }
 
@@ -836,7 +913,7 @@ fn format_operation_compact(
         Instruction::RuleReturn {} => {
             format!("{}}}", indent)
         }
-        Instruction::DestructuringSuccess => {
+        Instruction::DestructuringSuccess {} => {
             format!("{}✓ destructuring validated", indent)
         }
         _ => {

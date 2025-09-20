@@ -17,14 +17,14 @@ cases:
       - 3
       - 2  # multiplier
     instruction_params:
-      loop_params:
-        - mode: "SetComprehension"
-          collection: 0
+      comprehension_start_params:
+        - mode: "Set"
+          collection_reg: 0
           key_reg: 4
           value_reg: 5
           result_reg: 7
           body_start: 10
-          loop_end: 14
+          comprehension_end: 14
     instructions:
       - "ArrayNew { dest: 0 }"              # Create input array [1, 2, 2, 3] in register 0
       - "Load { dest: 1, literal_idx: 0 }"  # Load 1 into register 1
@@ -35,11 +35,11 @@ cases:
       - "Load { dest: 3, literal_idx: 2 }"  # Load 3 into register 3
       - "ArrayPush { arr: 0, value: 3 }"    # Push 3 to array
       - "SetNew { dest: 7 }"                # Initialize result set in register 7
-      - "LoopStart { params_index: 0 }"     # Start set comprehension loop
+      - "ComprehensionStart { params_index: 0 }"     # Start set comprehension
       - "Load { dest: 6, literal_idx: 3 }"  # Load multiplier 2 into register 6
       - "Mul { dest: 10, left: 5, right: 6 }" # Multiply current value by 2, store result in register 10
-      - "SetAdd { set: 7, value: 10 }"       # Add transformed value to result set (auto-deduplicates)
-      - "LoopNext { body_start: 10, loop_end: 14 }"  # Continue to next iteration or exit
+      - "ComprehensionAdd { value_reg: 10 }"       # Add transformed value to result set (auto-deduplicates)
+      - "Halt"                               # End comprehension
       - "Return { value: 7 }"               # Return result set
     want_result:
       set!: [2, 4, 6]
@@ -52,22 +52,22 @@ cases:
     literals:
       - 5  # addend
     instruction_params:
-      loop_params:
-        - mode: "SetComprehension"
-          collection: 0
+      comprehension_start_params:
+        - mode: "Set"
+          collection_reg: 0
           key_reg: 4
           value_reg: 5
           result_reg: 7
           body_start: 3
-          loop_end: 7
+          comprehension_end: 7
     instructions:
       - "ArrayNew { dest: 0 }"              # Create empty input array in register 0
       - "SetNew { dest: 7 }"                # Initialize result set in register 7
-      - "LoopStart { params_index: 0 }"     # Start set comprehension loop
+      - "ComprehensionStart { params_index: 0 }"     # Start set comprehension
       - "Load { dest: 6, literal_idx: 0 }"  # Load addend 5 into register 6
       - "Add { dest: 10, left: 5, right: 6 }" # Add 5 to current value, store result in register 10
-      - "SetAdd { set: 7, value: 10 }"       # Add transformed value to result set
-      - "LoopNext { body_start: 3, loop_end: 7 }"  # Continue to next iteration or exit
+      - "ComprehensionAdd { value_reg: 10 }"       # Add transformed value to result set
+      - "Halt"                               # End comprehension
       - "Return { value: 7 }"               # Return result set
     want_result:
       set!: []
@@ -81,24 +81,24 @@ cases:
       - 10
       - 1  # subtrahend
     instruction_params:
-      loop_params:
-        - mode: "SetComprehension"
-          collection: 0
+      comprehension_start_params:
+        - mode: "Set"
+          collection_reg: 0
           key_reg: 4
           value_reg: 5
           result_reg: 7
           body_start: 5
-          loop_end: 9
+          comprehension_end: 9
     instructions:
       - "ArrayNew { dest: 0 }"              # Create input array [10] in register 0
       - "Load { dest: 1, literal_idx: 0 }"  # Load 10 into register 1
       - "ArrayPush { arr: 0, value: 1 }"    # Push 10 to array
       - "SetNew { dest: 7 }"                # Initialize result set in register 7
-      - "LoopStart { params_index: 0 }"     # Start set comprehension loop
+      - "ComprehensionStart { params_index: 0 }"     # Start set comprehension
       - "Load { dest: 6, literal_idx: 1 }"  # Load subtrahend 1 into register 6
       - "Sub { dest: 10, left: 5, right: 6 }" # Subtract 1 from current value, store result in register 10
-      - "SetAdd { set: 7, value: 10 }"       # Add transformed value to result set
-      - "LoopNext { body_start: 5, loop_end: 9 }"  # Continue to next iteration or exit
+      - "ComprehensionAdd { value_reg: 10 }"       # Add transformed value to result set
+      - "Halt"                               # End comprehension
       - "Return { value: 7 }"               # Return result set
     want_result:
       set!: [9]
@@ -112,14 +112,14 @@ cases:
       - 1
       - 2
     instruction_params:
-      loop_params:
-        - mode: "SetComprehension"
-          collection: 0
+      comprehension_start_params:
+        - mode: "Set"
+          collection_reg: 0
           key_reg: 4
           value_reg: 5
           result_reg: 7
           body_start: 11
-          loop_end: 13
+          comprehension_end: 13
     instructions:
       - "ArrayNew { dest: 0 }"              # Create input array in register 0
       - "Load { dest: 1, literal_idx: 0 }"  # Load 1
@@ -131,9 +131,9 @@ cases:
       - "Load { dest: 3, literal_idx: 1 }"  # Load 2
       - "ArrayPush { arr: 0, value: 3 }"    # Push 2 to array
       - "SetNew { dest: 7 }"                # Initialize result set in register 7
-      - "LoopStart { params_index: 0 }"     # Start set comprehension loop
-      - "SetAdd { set: 7, value: 5 }"       # Add current value to result set (auto-deduplicates)
-      - "LoopNext { body_start: 11, loop_end: 13 }"  # Continue to next iteration or exit
+      - "ComprehensionStart { params_index: 0 }"     # Start set comprehension
+      - "ComprehensionAdd { value_reg: 5 }"       # Add current value to result set (auto-deduplicates)
+      - "Halt"                               # End comprehension
       - "Return { value: 7 }"               # Return result set
     want_result:
       set!: [1, null, 2]

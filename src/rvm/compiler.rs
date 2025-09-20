@@ -1,6 +1,7 @@
 use super::instructions::{
-    ArrayCreateParams, ChainedIndexParams, LiteralOrRegister, LoopMode, LoopStartParams,
-    ObjectCreateParams, SetCreateParams, VirtualDataDocumentLookupParams,
+    ArrayCreateParams, ChainedIndexParams, ComprehensionBeginParams, ComprehensionMode,
+    LiteralOrRegister, LoopMode, LoopStartParams, ObjectCreateParams, SetCreateParams,
+    VirtualDataDocumentLookupParams,
 };
 use super::program::Program;
 use super::Instruction;
@@ -455,15 +456,23 @@ impl<'a> Compiler<'a> {
             match context.context_type {
                 ContextType::Comprehension(ComprehensionType::Array) => {
                     self.emit_instruction(
-                        Instruction::ArrayPush {
-                            arr: dest_register,
-                            value: value_register,
+                        Instruction::ComprehensionYield {
+                            value_reg: value_register,
+                            key_reg: None,
                         },
                         span,
                     );
                 }
-                ContextType::Comprehension(ComprehensionType::Set)
-                | ContextType::Rule(RuleType::PartialSet) => {
+                ContextType::Comprehension(ComprehensionType::Set) => {
+                    self.emit_instruction(
+                        Instruction::ComprehensionYield {
+                            value_reg: value_register,
+                            key_reg: None,
+                        },
+                        span,
+                    );
+                }
+                ContextType::Rule(RuleType::PartialSet) => {
                     self.emit_instruction(
                         Instruction::SetAdd {
                             set: dest_register,
@@ -472,8 +481,16 @@ impl<'a> Compiler<'a> {
                         span,
                     );
                 }
-                ContextType::Comprehension(ComprehensionType::Object)
-                | ContextType::Rule(RuleType::PartialObject) => {
+                ContextType::Comprehension(ComprehensionType::Object) => {
+                    self.emit_instruction(
+                        Instruction::ComprehensionYield {
+                            value_reg: value_register,
+                            key_reg: Some(key_register),
+                        },
+                        span,
+                    );
+                }
+                ContextType::Rule(RuleType::PartialObject) => {
                     self.emit_instruction(
                         Instruction::ObjectSet {
                             obj: dest_register,
@@ -2239,7 +2256,7 @@ impl<'a> Compiler<'a> {
 
                                         // Emit DestructuringSuccess to mark successful completion
                                         self.emit_instruction(
-                                            crate::rvm::instructions::Instruction::DestructuringSuccess,
+                                            crate::rvm::instructions::Instruction::DestructuringSuccess {},
                                             &arg.span(),
                                         );
 
@@ -3229,11 +3246,6 @@ impl<'a> Compiler<'a> {
         let value_reg = self.alloc_register();
         let result_reg = self.alloc_register();
 
-        // Initialize result register as empty set
-        self.program
-            .instructions
-            .push(Instruction::SetNew { dest: result_reg });
-
         // Start the existential loop - we'll calculate the correct loop_end after compiling the body
 
         // Add LoopStart instruction with parameters
@@ -3375,25 +3387,54 @@ impl<'a> Compiler<'a> {
         Ok(result_reg)
     }
 
-    /// Compile array comprehension [term | query]
-    fn compile_array_comprehension(
+    /// Shared implementation for compiling comprehensions
+    fn compile_comprehension(
         &mut self,
-        term: &ExprRef,
+        mode: ComprehensionMode,
+        context_type: ComprehensionType,
+        key_expr: Option<&ExprRef>,
+        value_expr: Option<&ExprRef>,
         query: &crate::ast::Query,
         span: &Span,
     ) -> Result<Register> {
-        debug!("Compiling array comprehension");
+        debug!("Compiling {:?} comprehension", mode);
 
-        // Allocate result register and initialize as empty array
+        // Allocate result register and initialize comprehension
         let result_reg = self.alloc_register();
-        self.emit_instruction(Instruction::ArrayNew { dest: result_reg }, span);
 
-        // Push comprehension context with the term as output expression
+        // For now, we still need to determine key_reg, value_reg dynamically
+        // This is a simplified implementation - a full implementation would need to analyze the query
+        // to determine these registers properly based on the iteration patterns
+        let key_reg = self.alloc_register();
+        let value_reg = self.alloc_register();
+
+        let comprehension_params_index =
+            self.program
+                .add_comprehension_begin_params(ComprehensionBeginParams {
+                    mode,
+                    collection_reg: result_reg, // The result register is the collection being built
+                    key_reg,
+                    value_reg,
+                    body_start: 0, // Will be filled in after emitting ComprehensionBegin
+                    comprehension_end: 0, // Will be filled in after compiling query
+                });
+
+        self.emit_instruction(
+            Instruction::ComprehensionBegin {
+                params_index: comprehension_params_index,
+            },
+            span,
+        );
+
+        // Set body_start to the next instruction after ComprehensionBegin
+        let body_start = self.program.instructions.len() as u16;
+
+        // Push comprehension context with the appropriate expressions
         let comprehension_context = CompilationContext {
-            context_type: ContextType::Comprehension(ComprehensionType::Array),
+            context_type: ContextType::Comprehension(context_type),
             dest_register: result_reg,
-            key_expr: None,
-            value_expr: Some(term.clone()),
+            key_expr: key_expr.cloned(),
+            value_expr: value_expr.cloned(),
             span: span.clone(),
             key_value_loops_hoisted: false,
         };
@@ -3405,7 +3446,37 @@ impl<'a> Compiler<'a> {
         // Pop context
         self.pop_context();
 
+        // Emit ComprehensionEnd instruction
+        self.emit_instruction(Instruction::ComprehensionEnd {}, span);
+
+        // Set comprehension_end to the current instruction position
+        let comprehension_end = self.program.instructions.len() as u16;
+
+        // Update the comprehension parameters with actual addresses
+        self.program
+            .update_comprehension_begin_params(comprehension_params_index, |params| {
+                params.body_start = body_start;
+                params.comprehension_end = comprehension_end;
+            });
+
         Ok(result_reg)
+    }
+
+    /// Compile array comprehension [term | query]
+    fn compile_array_comprehension(
+        &mut self,
+        term: &ExprRef,
+        query: &crate::ast::Query,
+        span: &Span,
+    ) -> Result<Register> {
+        self.compile_comprehension(
+            ComprehensionMode::Array,
+            ComprehensionType::Array,
+            None,
+            Some(term),
+            query,
+            span,
+        )
     }
 
     /// Compile set comprehension {term | query}
@@ -3415,30 +3486,14 @@ impl<'a> Compiler<'a> {
         query: &crate::ast::Query,
         span: &Span,
     ) -> Result<Register> {
-        debug!("Compiling set comprehension");
-
-        // Allocate result register and initialize as empty set
-        let result_reg = self.alloc_register();
-        self.emit_instruction(Instruction::SetNew { dest: result_reg }, span);
-
-        // Push comprehension context with the term as output expression
-        let comprehension_context = CompilationContext {
-            context_type: ContextType::Comprehension(ComprehensionType::Set),
-            dest_register: result_reg,
-            key_expr: None,
-            value_expr: Some(term.clone()),
-            span: span.clone(),
-            key_value_loops_hoisted: false,
-        };
-        self.push_context(comprehension_context);
-
-        // Compile the query - this will push/pop its own scope
-        self.compile_query(query)?;
-
-        // Pop context
-        self.pop_context();
-
-        Ok(result_reg)
+        self.compile_comprehension(
+            ComprehensionMode::Set,
+            ComprehensionType::Set,
+            None,
+            Some(term),
+            query,
+            span,
+        )
     }
 
     /// Compile object comprehension {key: value | query}
@@ -3449,45 +3504,14 @@ impl<'a> Compiler<'a> {
         query: &crate::ast::Query,
         span: &Span,
     ) -> Result<Register> {
-        debug!("Compiling object comprehension");
-
-        // Allocate result register and initialize as empty object
-        let result_reg = self.alloc_register();
-
-        // Create empty template object
-        let template_literal_idx = self.add_literal(Value::Object(crate::Rc::new(BTreeMap::new())));
-
-        // Create ObjectCreate parameters for empty object
-        let params = ObjectCreateParams {
-            dest: result_reg,
-            template_literal_idx,
-            literal_key_fields: Vec::new(),
-            fields: Vec::new(),
-        };
-        let params_index = self
-            .program
-            .instruction_data
-            .add_object_create_params(params);
-        self.emit_instruction(Instruction::ObjectCreate { params_index }, span);
-
-        // Push comprehension context with both key and value expressions
-        let comprehension_context = CompilationContext {
-            context_type: ContextType::Comprehension(ComprehensionType::Object),
-            dest_register: result_reg,
-            key_expr: Some(key.clone()),
-            value_expr: Some(value.clone()),
-            span: span.clone(),
-            key_value_loops_hoisted: false,
-        };
-        self.push_context(comprehension_context);
-
-        // Compile the query - this will push/pop its own scope
-        self.compile_query(query)?;
-
-        // Pop context
-        self.pop_context();
-
-        Ok(result_reg)
+        self.compile_comprehension(
+            ComprehensionMode::Object,
+            ComprehensionType::Object,
+            Some(key),
+            Some(value),
+            query,
+            span,
+        )
     }
 
     /// Compile a function call expression

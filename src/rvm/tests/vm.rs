@@ -78,6 +78,8 @@ mod tests {
         builtin_infos: Vec<BuiltinInfoSpec>,
         #[serde(default)]
         object_create_params: Vec<ObjectCreateParamsSpec>,
+        #[serde(default)]
+        comprehension_begin_params: Vec<ComprehensionBeginParamsSpec>,
     }
 
     #[derive(Debug, Deserialize, Serialize)]
@@ -125,6 +127,16 @@ mod tests {
         template_literal_idx: u16,
         literal_key_fields: Vec<(u16, u16)>,
         fields: Vec<(u16, u16)>,
+    }
+
+    #[derive(Debug, Deserialize, Serialize)]
+    struct ComprehensionBeginParamsSpec {
+        mode: String,
+        collection_reg: u16,
+        key_reg: u16,
+        value_reg: u16,
+        body_start: u16,
+        comprehension_end: u16,
     }
 
     #[derive(Debug, Deserialize, Serialize)]
@@ -312,6 +324,30 @@ mod tests {
                 program
                     .instruction_data
                     .add_object_create_params(object_create_params);
+            }
+
+            // Convert comprehension start params
+            for comprehension_spec in params_spec.comprehension_begin_params {
+                use crate::rvm::instructions::{ComprehensionBeginParams, ComprehensionMode};
+
+                let mode = match comprehension_spec.mode.as_str() {
+                    "Array" => ComprehensionMode::Array,
+                    "Set" => ComprehensionMode::Set,
+                    "Object" => ComprehensionMode::Object,
+                    _ => panic!("Invalid comprehension mode: {}", comprehension_spec.mode),
+                };
+
+                let comprehension_params = ComprehensionBeginParams {
+                    mode,
+                    collection_reg: comprehension_spec.collection_reg.try_into().unwrap(),
+                    key_reg: comprehension_spec.key_reg.try_into().unwrap(),
+                    value_reg: comprehension_spec.value_reg.try_into().unwrap(),
+                    body_start: comprehension_spec.body_start,
+                    comprehension_end: comprehension_spec.comprehension_end,
+                };
+                program
+                    .instruction_data
+                    .add_comprehension_begin_params(comprehension_params);
             }
         }
 

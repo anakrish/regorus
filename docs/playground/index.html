@@ -1,0 +1,159 @@
+<!--
+Copyright (c) Microsoft Corporation.
+Licensed under the MIT License.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Regorus Playground</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/editor/editor.main.min.css">
+    <link rel="stylesheet" href="playground.css">
+</head>
+<body>
+    <div class="playground-container">
+        <div class="header">
+            <div class="header-left">
+                <h1>🦀 Regorus Playground</h1>
+                <p class="subtitle">Interactive Rego policy evaluation powered by Rust + WASM</p>
+            </div>
+            <div class="header-right">
+                <select id="examples-select" class="examples-dropdown">
+                    <option value="">Select an example...</option>
+                    <optgroup label="Security & Authorization">
+                        <option value="server-policy">Server Security Policy</option>
+                        <option value="simple-rbac">Simple RBAC</option>
+                        <option value="api-authorization">API Authorization</option>
+                        <option value="kubernetes-admission">Kubernetes Admission Control</option>
+                        <option value="jwt-validation">JWT Token Validation</option>
+                    </optgroup>
+                    <optgroup label="Data Processing">
+                        <option value="data-filtering">Data Filtering</option>
+                        <option value="data-validation">Data Validation</option>
+                        <option value="schema-validation">Schema Validation</option>
+                        <option value="data-transformation">Data Transformation</option>
+                    </optgroup>
+                    <optgroup label="Network & Infrastructure">
+                        <option value="network-policy">Network Policy</option>
+                        <option value="firewall-rules">Firewall Rules</option>
+                        <option value="load-balancer">Load Balancer Config</option>
+                        <option value="service-mesh">Service Mesh Policy</option>
+                    </optgroup>
+                    <optgroup label="Compliance & Governance">
+                        <option value="gdpr-compliance">GDPR Compliance</option>
+                        <option value="audit-policy">Audit Policy</option>
+                        <option value="cost-optimization">Cost Optimization</option>
+                        <option value="resource-quotas">Resource Quotas</option>
+                    </optgroup>
+                    <optgroup label="Application Logic">
+                        <option value="feature-flags">Feature Flags</option>
+                        <option value="rate-limiting">Rate Limiting</option>
+                        <option value="content-moderation">Content Moderation</option>
+                        <option value="recommendation-engine">Recommendation Engine</option>
+                    </optgroup>
+                </select>
+                <div class="controls-row">
+                    <div class="coverage-container">
+                        <label class="coverage-checkbox">
+                            <input type="checkbox" id="coverage-enabled" checked>
+                            <span class="checkmark"></span>
+                            Show Coverage
+                        </label>
+                    </div>
+                    <div class="layout-container">
+                        <label for="layout-select" class="layout-label">Layout:</label>
+                        <select id="layout-select" class="layout-dropdown">
+                            <option value="split-horizontal">Split Horizontal</option>
+                            <option value="split-vertical" selected>Split Vertical</option>
+                            <option value="tabs">Tabs</option>
+                            <option value="policy-only">Policy Only</option>
+                            <option value="full-screen">Full Screen Editor</option>
+                        </select>
+                    </div>
+                </div>
+                <button id="evaluate-btn" class="evaluate-button">
+                    <span class="button-text">Evaluate</span>
+                    <span class="button-icon">▶</span>
+                </button>
+                <button id="clear-btn" class="clear-button">Clear</button>
+            </div>
+        </div>
+
+        <div class="editor-container">
+            <div class="left-panel">
+                <div class="editor-section">
+                    <div class="section-header">
+                        <h3>Policy (.rego)</h3>
+                        <div class="section-actions">
+                            <button class="format-btn" data-editor="policy">Format</button>
+                        </div>
+                    </div>
+                    <div id="policy-editor" class="editor"></div>
+                </div>
+                
+                <div class="editor-section">
+                    <div class="section-header">
+                        <h3>Input (JSON)</h3>
+                        <div class="section-actions">
+                            <button class="format-btn" data-editor="input">Format</button>
+                        </div>
+                    </div>
+                    <div id="input-editor" class="editor"></div>
+                </div>
+            </div>
+
+            <div class="right-panel">
+                <div class="editor-section">
+                    <div class="section-header">
+                        <h3>Data (JSON)</h3>
+                        <div class="section-actions">
+                            <button class="format-btn" data-editor="data">Format</button>
+                        </div>
+                    </div>
+                    <div id="data-editor" class="editor"></div>
+                </div>
+                
+                <div class="output-section">
+                    <div class="section-header">
+                        <h3>Output</h3>
+                        <div class="section-actions">
+                            <div class="query-input-container">
+                                <label for="query-input">Query:</label>
+                                <input type="text" id="query-input" placeholder="data.example.allow" value="data.example.allow">
+                            </div>
+                        </div>
+                    </div>
+                    <div id="output-panel" class="output-panel">
+                        <div class="output-placeholder">
+                            <p>👈 Enter a policy and click "Evaluate" to see results</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="status-bar">
+            <div class="status-left">
+                <span id="status-text">Ready</span>
+            </div>
+            <div class="status-right">
+                <span id="evaluation-time"></span>
+                <a href="https://github.com/microsoft/regorus" target="_blank" class="github-link">
+                    View on GitHub
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading indicator -->
+    <div id="loading-overlay" class="loading-overlay">
+        <div class="loading-spinner"></div>
+        <p>Loading Regorus...</p>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
+    <script type="module" src="playground-v2.js"></script>
+</body>
+</html>

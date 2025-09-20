@@ -1,0 +1,108 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+name: Deploy Regorus Playground
+
+on:
+  push:
+    branches: [ playground ]
+    paths:
+      - 'docs/playground/**'
+      - 'bindings/wasm/**'
+      - 'scripts/build-playground.sh'
+      - '.github/workflows/deploy-playground.yml'
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout Source Repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+      
+    - name: Setup Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        target: wasm32-unknown-unknown
+        override: true
+        
+    - name: Install wasm-pack
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      
+    - name: Cache Rust dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+      
+    - name: Build Playground
+      run: |
+        chmod +x scripts/build-playground.sh
+        ./scripts/build-playground.sh
+        
+    - name: Prepare deployment files
+      run: |
+        # Copy built playground to deployment directory  
+        mkdir -p deploy
+        cp -r build-playground/* deploy/
+        
+        # CRITICAL: Create .nojekyll at root to completely bypass Jekyll
+        touch deploy/.nojekyll
+        
+        # Debug: List key files
+        echo "Key deployment files:"
+        ls -la deploy/ | grep -E "(index.html|.nojekyll|pkg)" || echo "Files listed above"
+        
+        # Also protect WASM directories from any processing
+        find deploy -name "pkg" -type d -exec touch {}/.nojekyll \; || echo "No pkg directories found"
+        
+        # Create README for deployment repository
+        cat > deploy/README.md << 'EOF'
+# Regorus Playground
+
+Interactive Regorus Playground - A web-based environment for experimenting with Rego policies.
+
+**🚀 [Launch Playground](https://anakrish.github.io/regorus-playground/)**
+
+## Features
+
+- 20+ example policies across multiple domains
+- Real-time policy evaluation with coverage visualization
+- Multiple layout options (split, tabs, full-screen)
+- Syntax highlighting and Monaco Editor integration
+- WASM-powered Regorus engine
+
+## About
+
+This playground is automatically deployed from the [Regorus](https://github.com/anakrish/regorus) repository.
+
+- **Source**: [regorus/docs/playground](https://github.com/anakrish/regorus/tree/playground/docs/playground)
+- **Engine**: [Regorus Rust Library](https://github.com/anakrish/regorus)
+- **Deployment**: Automated via GitHub Actions
+EOF
+        
+    - name: Deploy to regorus-playground repository
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        # Use a personal token to push to different repository
+        personal_token: ${{ secrets.PLAYGROUND_DEPLOY_TOKEN }}
+        external_repository: anakrish/regorus-playground
+        publish_dir: ./deploy
+        publish_branch: main
+        force_orphan: true
+        commit_message: 'Deploy playground from regorus@${{ github.sha }}'
+        
+    - name: Output deployment info
+      run: |
+        echo "🚀 Playground deployed successfully!"
+        echo "📍 URL: https://anakrish.github.io/regorus-playground/"
+        echo "📝 Commit: ${{ github.sha }}"

@@ -7,5 +7,4 @@ mod coverage;
 mod engine;
 mod lexer;
 mod parser;
-mod rvm;
 mod value;

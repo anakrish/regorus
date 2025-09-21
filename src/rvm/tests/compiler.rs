@@ -15,6 +15,7 @@ mod tests {
     use alloc::format;
     use alloc::string::ToString;
     use alloc::vec;
+    use alloc::vec::Vec;
     use test_generator::test_resources;
 
     extern crate alloc;
@@ -37,13 +38,73 @@ mod tests {
         data: &Value,
         input: &Value,
     ) -> anyhow::Result<Value> {
-        // Compile the policy to RVM instructions
-        let program = Compiler::compile_from_policy(compiled_policy, &[entrypoint])?;
+        compile_and_run_rvm_with_entry_points(
+            compiled_policy,
+            &[entrypoint],
+            entrypoint,
+            data,
+            input,
+        )
+    }
+
+    /// Compile a CompiledPolicy to RVM bytecode with multiple entry points and execute a specific one
+    fn compile_and_run_rvm_with_entry_points(
+        compiled_policy: &crate::CompiledPolicy,
+        entry_points: &[&str],
+        execute_entry_point: &str,
+        data: &Value,
+        input: &Value,
+    ) -> anyhow::Result<Value> {
+        let results =
+            compile_and_run_rvm_with_all_entry_points(compiled_policy, entry_points, data, input)?;
+
+        // Find the result for the specific entry point being queried
+        if let Some(entry_point_index) = entry_points
+            .iter()
+            .position(|&ep| ep == execute_entry_point)
+        {
+            if let Some(result) = results.get(entry_point_index) {
+                Ok(result.clone())
+            } else {
+                Err(anyhow::anyhow!(
+                    "No result found for entry point: {}",
+                    execute_entry_point
+                ))
+            }
+        } else {
+            Err(anyhow::anyhow!(
+                "Entry point '{}' not found in entry points list",
+                execute_entry_point
+            ))
+        }
+    }
+
+    fn compile_and_run_rvm_with_all_entry_points(
+        compiled_policy: &crate::CompiledPolicy,
+        entry_points: &[&str],
+        data: &Value,
+        input: &Value,
+    ) -> anyhow::Result<Vec<Value>> {
+        // Compile the policy to RVM instructions with multiple entry points
+        let program = Compiler::compile_from_policy(compiled_policy, entry_points)?;
 
         std::println!(
-            "Debug: Generated {} instructions, {} literals",
+            "Debug: Generated {} instructions, {} literals, {} entry points",
             program.instructions.len(),
-            program.literals.len()
+            program.literals.len(),
+            program.entry_points.len()
+        );
+
+        // Print entry points info
+        for (i, (name, pc)) in program.entry_points.iter().enumerate() {
+            std::println!("Debug: Entry point {}: '{}' at PC {}", i, name, pc);
+        }
+
+        // Print window sizes
+        std::println!(
+            "Debug: Window sizes - dispatch: {}, max rule: {}",
+            program.dispatch_window_size,
+            program.max_rule_window_size
         );
 
         // Test round-trip serialization
@@ -70,11 +131,26 @@ mod tests {
         vm.set_data(data.clone())?;
         vm.set_input(input.clone());
 
-        // Run the VM
-        let result = vm.execute()?;
+        // Execute all entry points and collect results
+        let mut results = Vec::new();
+        for (i, entry_point) in entry_points.iter().enumerate() {
+            let result = if entry_points.len() == 1 {
+                // Single entry point - use regular execute
+                vm.execute()?
+            } else {
+                // Multiple entry points - execute by index (this handles state reset internally)
+                vm.execute_entry_point_by_index(i)?
+            };
 
-        std::println!("Debug: VM result: {:?}", result);
-        Ok(result)
+            std::println!(
+                "Debug: VM result for entry point '{}': {:?}",
+                entry_point,
+                result
+            );
+            results.push(result);
+        }
+
+        Ok(results)
     }
 
     #[cfg(feature = "rvm-debug")]
@@ -84,9 +160,27 @@ mod tests {
         data: &Value,
         input: &Value,
     ) -> anyhow::Result<Value> {
+        compile_and_run_rvm_with_debug_multi(
+            compiled_policy,
+            &[entrypoint],
+            entrypoint,
+            data,
+            input,
+        )
+    }
+
+    #[cfg(feature = "rvm-debug")]
+    fn compile_and_run_rvm_with_debug_multi(
+        compiled_policy: &crate::CompiledPolicy,
+        entry_points: &[&str],
+        execute_entry_point: &str,
+        data: &Value,
+        input: &Value,
+    ) -> anyhow::Result<Value> {
         std::println!(
-            "🔍 Debug: Compiling entrypoint with debugger: {}",
-            entrypoint
+            "🔍 Debug: Compiling entry points with debugger: {:?}, executing: {}",
+            entry_points,
+            execute_entry_point
         );
 
         // Enable debugger environment variables BEFORE creating the VM
@@ -99,8 +193,8 @@ mod tests {
         std::env::set_var("RVM_BREAK_ON_LOOPS", "0"); // Disable auto-break on loops
         std::env::set_var("RVM_BREAK_ON_RULES", "0"); // Disable auto-break on rules
 
-        // Compile the policy to RVM instructions
-        let program = Compiler::compile_from_policy(compiled_policy, &[entrypoint])?;
+        // Compile the policy to RVM instructions with multiple entry points
+        let program = Compiler::compile_from_policy(compiled_policy, entry_points)?;
 
         // Create a VM and load the program (debugger will read env vars during VM creation)
         let mut vm = RegoVM::new();
@@ -110,8 +204,14 @@ mod tests {
         vm.set_data(data.clone())?;
         vm.set_input(input.clone());
 
-        // Run the VM with debugger enabled
-        let result = vm.execute()?;
+        // Execute the specific entry point with debugger enabled
+        let result = if entry_points.len() == 1 {
+            // Single entry point - use regular execute
+            vm.execute()?
+        } else {
+            // Multiple entry points - execute by name
+            vm.execute_entry_point_by_name(execute_entry_point)?
+        };
 
         std::println!("🔍 Debug: VM result with debugger: {:?}", result);
         Ok(result)
@@ -212,10 +312,120 @@ mod tests {
 
             let compiled_policy = compilation_result.unwrap();
 
+            // Handle multiple entry points results first
+            if let Some(expected_results) = &case.want_results {
+                if case.want_result.is_some() {
+                    return Err(anyhow::anyhow!(
+                        "Cannot specify both want_result and want_results for case '{}'",
+                        case.note
+                    ));
+                }
+                if case.want_error.is_some() {
+                    return Err(anyhow::anyhow!(
+                        "Cannot specify both want_results and want_error for case '{}'",
+                        case.note
+                    ));
+                }
+
+                // Test expects multiple successful results
+                if let Some(ref entry_points) = case.entry_points {
+                    let entry_point_refs: Vec<&str> =
+                        entry_points.iter().map(|s| s.as_str()).collect();
+                    let results = compile_and_run_rvm_with_all_entry_points(
+                        &compiled_policy,
+                        &entry_point_refs,
+                        &data,
+                        &input_value,
+                    );
+
+                    match results {
+                        Ok(actual_results) => {
+                            // Validate that we have the expected number of results
+                            if actual_results.len() != expected_results.len() {
+                                return Err(anyhow::anyhow!(
+                                    "Expected {} results, but got {} for case '{}'",
+                                    expected_results.len(),
+                                    actual_results.len(),
+                                    case.note
+                                ));
+                            }
+
+                            // Compare each result with expected
+                            for (i, (actual, expected)) in actual_results
+                                .iter()
+                                .zip(expected_results.iter())
+                                .enumerate()
+                            {
+                                let expected_value = match expected {
+                                    crate::tests::common::ValueOrVec::Single(v) => v.clone(),
+                                    crate::tests::common::ValueOrVec::Many(vec) => {
+                                        if vec.len() == 1 {
+                                            vec[0].clone()
+                                        } else {
+                                            return Err(anyhow::anyhow!(
+                                                "Unexpected multiple values in expected result {}",
+                                                i
+                                            ));
+                                        }
+                                    }
+                                };
+
+                                let processed_expected =
+                                    crate::tests::common::process_value(&expected_value)?;
+                                if *actual != processed_expected {
+                                    return Err(anyhow::anyhow!(
+                                        "Result {} mismatch for case '{}': expected {:?}, got {:?}",
+                                        i,
+                                        case.note,
+                                        processed_expected,
+                                        actual
+                                    ));
+                                }
+                            }
+
+                            std::println!(
+                                "✓ All {} entry point results match expected values for case '{}'",
+                                actual_results.len(),
+                                case.note
+                            );
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(anyhow::anyhow!(
+                                "Multiple entry points execution failed for case '{}': {}",
+                                case.note,
+                                e
+                            ));
+                        }
+                    }
+                } else {
+                    return Err(anyhow::anyhow!(
+                        "want_results specified but no entry_points provided for case '{}'",
+                        case.note
+                    ));
+                }
+            }
+
             match (&case.want_result, &case.want_error) {
                 (Some(expected_result), None) => {
                     // Test expects a successful result
-                    match compile_and_run_rvm(&compiled_policy, &case.query, &data, &input_value) {
+                    let result = if let Some(ref entry_points) = case.entry_points {
+                        // Multiple entry points specified
+                        let entry_point_refs: Vec<&str> =
+                            entry_points.iter().map(|s| s.as_str()).collect();
+                        compile_and_run_rvm_with_entry_points(
+                            &compiled_policy,
+                            &entry_point_refs,
+                            &case.query,
+                            &data,
+                            &input_value,
+                        )
+                    } else {
+                        // Single entry point (legacy behavior)
+                        compile_and_run_rvm(&compiled_policy, &case.query, &data, &input_value)
+                    };
+
+                    match result {
                         Ok(actual_result) => {
                             // First, assert that RVM result matches interpreter result
                             match &interpreter_result {
@@ -316,7 +526,23 @@ mod tests {
                 }
                 (None, Some(expected_error)) => {
                     // Test expects an error
-                    match compile_and_run_rvm(&compiled_policy, &case.query, &data, &input_value) {
+                    let result = if let Some(ref entry_points) = case.entry_points {
+                        // Multiple entry points specified
+                        let entry_point_refs: Vec<&str> =
+                            entry_points.iter().map(|s| s.as_str()).collect();
+                        compile_and_run_rvm_with_entry_points(
+                            &compiled_policy,
+                            &entry_point_refs,
+                            &case.query,
+                            &data,
+                            &input_value,
+                        )
+                    } else {
+                        // Single entry point (legacy behavior)
+                        compile_and_run_rvm(&compiled_policy, &case.query, &data, &input_value)
+                    };
+
+                    match result {
                         Ok(result) => {
                             // RVM succeeded - check if interpreter also succeeded
                             match &interpreter_result {

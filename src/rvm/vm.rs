@@ -100,6 +100,18 @@ pub enum VmError {
 
     #[error("Arithmetic error: {0}")]
     ArithmeticError(String),
+
+    #[error("Entry point index {index} out of bounds (max: {max_index})")]
+    InvalidEntryPointIndex { index: usize, max_index: usize },
+
+    #[error("Entry point '{name}' not found. Available entry points: {available:?}")]
+    EntryPointNotFound {
+        name: String,
+        available: Vec<String>,
+    },
+
+    #[error("Internal VM error: {0}")]
+    Internal(String),
 }
 
 impl From<anyhow::Error> for VmError {
@@ -250,6 +262,10 @@ pub struct RegoVM {
     /// Base register window size for the main execution context
     base_register_count: usize,
 
+    /// Object pools for performance optimization
+    /// Pool of register windows for reuse during rule calls
+    register_window_pool: Vec<Vec<Value>>,
+
     /// Maximum number of instructions to execute (default: 25000)
     max_instructions: usize,
 
@@ -297,6 +313,7 @@ impl RegoVM {
             register_stack: Vec::new(),
             comprehension_stack: Vec::new(),
             base_register_count: 2, // Default to 2 registers for basic operations
+            register_window_pool: Vec::new(), // Initialize register window pool
             max_instructions: 25000, // Default maximum instruction limit
             executed_instructions: 0,
             evaluated: Value::new_object(), // Initialize evaluation cache
@@ -319,10 +336,13 @@ impl RegoVM {
     pub fn load_program(&mut self, program: Arc<Program>) {
         self.program = program.clone();
 
+        // Use the dispatch window size from the program for initial register allocation
+        let dispatch_size = program.dispatch_window_size.max(2); // Ensure at least 2 registers
+        self.base_register_count = dispatch_size;
+
         // Resize registers to match program requirements
-        // Use the base register count instead of hardcoded value
         self.registers.clear();
-        self.registers.resize(self.base_register_count, Value::Null);
+        self.registers.resize(dispatch_size, Value::Null);
 
         // Initialize rule cache
         self.rule_cache = vec![(false, Value::Undefined); program.rule_infos.len()];
@@ -412,12 +432,208 @@ impl RegoVM {
         );
 
         // Reset execution state for each execution
-        self.executed_instructions = 0;
-        self.pc = 0;
-        self.evaluated = Value::new_object(); // Reset evaluation cache
-        self.cache_hits = 0; // Reset cache hit counter
+        self.reset_execution_state();
 
         self.jump_to(0)
+    }
+
+    /// Execute a specific entry point by index
+    pub fn execute_entry_point_by_index(&mut self, index: usize) -> Result<Value> {
+        let _span = span!(
+            tracing::Level::INFO,
+            "vm_execute_entry_point_by_index",
+            index = index
+        );
+
+        // Get entry points as a vector for indexing
+        let entry_points: Vec<(String, usize)> = self
+            .program
+            .entry_points
+            .iter()
+            .map(|(name, pc)| (name.clone(), *pc))
+            .collect();
+
+        if index >= entry_points.len() {
+            return Err(VmError::InvalidEntryPointIndex {
+                index,
+                max_index: entry_points.len().saturating_sub(1),
+            });
+        }
+
+        let (_entry_point_name, entry_point_pc) = &entry_points[index];
+        info!(
+            "Executing entry point at index {}: PC {}",
+            index, entry_point_pc
+        );
+
+        // Validate entry point PC before proceeding
+        if *entry_point_pc >= self.program.instructions.len() {
+            return Err(VmError::Internal(alloc::format!(
+                "Entry point PC {} >= instruction count {} for index {} | {}",
+                entry_point_pc,
+                self.program.instructions.len(),
+                index,
+                self.get_debug_state()
+            )));
+        }
+
+        // Reset execution state completely
+        self.reset_execution_state();
+
+        // Validate state before execution
+        if let Err(e) = self.validate_vm_state() {
+            return Err(VmError::Internal(alloc::format!(
+                "VM state validation failed before entry point execution: {} | {}",
+                e,
+                self.get_debug_state()
+            )));
+        }
+
+        self.jump_to(*entry_point_pc)
+    }
+
+    /// Execute a specific entry point by name
+    pub fn execute_entry_point_by_name(&mut self, name: &str) -> Result<Value> {
+        let _span = span!(
+            tracing::Level::INFO,
+            "vm_execute_entry_point_by_name",
+            name = name
+        );
+
+        let entry_point_pc =
+            self.program
+                .get_entry_point(name)
+                .ok_or_else(|| VmError::EntryPointNotFound {
+                    name: String::from(name),
+                    available: self.program.entry_points.keys().cloned().collect(),
+                })?;
+
+        info!("Executing entry point '{}' at PC {}", name, entry_point_pc);
+
+        // Validate entry point PC before proceeding
+        if entry_point_pc >= self.program.instructions.len() {
+            return Err(VmError::Internal(alloc::format!(
+                "Entry point PC {} >= instruction count {} for '{}' | {}",
+                entry_point_pc,
+                self.program.instructions.len(),
+                name,
+                self.get_debug_state()
+            )));
+        }
+
+        // Reset execution state completely
+        self.reset_execution_state();
+
+        // Validate state before execution
+        if let Err(e) = self.validate_vm_state() {
+            return Err(VmError::Internal(alloc::format!(
+                "VM state validation failed before entry point execution: {} | {}",
+                e,
+                self.get_debug_state()
+            )));
+        }
+
+        self.jump_to(entry_point_pc)
+    }
+
+    /// Get the number of entry points available
+    pub fn get_entry_point_count(&self) -> usize {
+        self.program.entry_points.len()
+    }
+
+    /// Get all entry point names
+    pub fn get_entry_point_names(&self) -> Vec<String> {
+        self.program.entry_points.keys().cloned().collect()
+    }
+
+    /// Reset all execution state and return objects to pools for reuse
+    fn reset_execution_state(&mut self) {
+        // Reset basic execution state
+        self.executed_instructions = 0;
+        self.pc = 0;
+        self.evaluated = Value::new_object();
+        self.cache_hits = 0;
+
+        // Return objects to pools and clear stacks
+        self.return_to_pools();
+
+        // Reset rule cache
+        self.rule_cache = vec![(false, Value::Undefined); self.program.rule_infos.len()];
+
+        // Reset registers to clean state
+        self.registers.clear();
+        self.registers.resize(self.base_register_count, Value::Null);
+    }
+
+    /// Return all active objects to their respective pools for reuse
+    fn return_to_pools(&mut self) {
+        // Clear stacks - these are small structs that don't need pooling
+        self.loop_stack.clear();
+        self.call_rule_stack.clear();
+        self.comprehension_stack.clear();
+
+        // Return register windows to pool for reuse
+        while let Some(registers) = self.register_stack.pop() {
+            self.return_register_window(registers);
+        }
+    }
+
+    /// Get a register window from the pool or create a new one
+    fn new_register_window(&mut self) -> Vec<Value> {
+        self.register_window_pool.pop().unwrap_or_else(Vec::new)
+    }
+
+    /// Return a register window to the pool for reuse
+    fn return_register_window(&mut self, mut window: Vec<Value>) {
+        window.clear(); // Clear contents for reuse
+        self.register_window_pool.push(window);
+    }
+
+    /// Validate VM state consistency for debugging
+    fn validate_vm_state(&self) -> Result<()> {
+        // Check register bounds
+        if self.registers.len() < self.base_register_count {
+            return Err(VmError::Internal(alloc::format!(
+                "Register count {} < base count {}",
+                self.registers.len(),
+                self.base_register_count
+            )));
+        }
+
+        // Check PC bounds
+        if self.pc >= self.program.instructions.len() {
+            return Err(VmError::Internal(alloc::format!(
+                "PC {} >= instruction count {}",
+                self.pc,
+                self.program.instructions.len()
+            )));
+        }
+
+        // Check rule cache bounds
+        if self.rule_cache.len() != self.program.rule_infos.len() {
+            return Err(VmError::Internal(alloc::format!(
+                "Rule cache size {} != rule info count {}",
+                self.rule_cache.len(),
+                self.program.rule_infos.len()
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Get current VM state for debugging
+    fn get_debug_state(&self) -> String {
+        alloc::format!(
+            "VM State: PC={}, registers={}, executed={}/{}, stacks: loop={}, call={}, register={}, comprehension={}",
+            self.pc,
+            self.registers.len(),
+            self.executed_instructions,
+            self.max_instructions,
+            self.loop_stack.len(),
+            self.call_rule_stack.len(),
+            self.register_stack.len(),
+            self.comprehension_stack.len()
+        )
     }
 
     // Public getters for visualization
@@ -1257,7 +1473,9 @@ impl RegoVM {
         let result_reg = rule_info.result_reg as usize;
 
         let num_registers = rule_info.num_registers as usize;
-        let mut register_window = Vec::with_capacity(num_registers);
+        let mut register_window = self.new_register_window();
+        register_window.clear(); // Ensure it's empty
+        register_window.reserve(num_registers); // Reserve capacity if needed
 
         // Return register.
         register_window.push(Value::Undefined);
@@ -1426,6 +1644,11 @@ impl RegoVM {
         };
 
         if let Some(old_registers) = self.register_stack.pop() {
+            // Return current register window to pool before restoring old one
+            let mut current_register_window = Vec::default();
+            core::mem::swap(&mut current_register_window, &mut self.registers);
+            self.return_register_window(current_register_window);
+
             self.registers = old_registers;
         }
 

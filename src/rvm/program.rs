@@ -220,8 +220,11 @@ pub struct Program {
     /// Main program entry point
     pub main_entry_point: usize,
 
-    /// Number of registers required by this program
-    pub num_registers: usize,
+    /// Maximum register window size observed across all rule definitions
+    pub max_rule_window_size: usize,
+
+    /// Register window size needed for entry point dispatch
+    pub dispatch_window_size: usize,
 
     /// Program metadata
     pub metadata: ProgramMetadata,
@@ -744,7 +747,8 @@ impl Program {
             },
             "program_structure": {
                 "main_entry_point": self.main_entry_point,
-                "num_registers": self.num_registers
+                "max_rule_window_size": self.max_rule_window_size,
+                "dispatch_window_size": self.dispatch_window_size,
             },
             "instructions": self.instructions,
             "instruction_data": {
@@ -820,8 +824,12 @@ impl Program {
             .get("main_entry_point")
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as usize;
-        let num_registers = program_structure
-            .get("num_registers")
+        let max_rule_window_size = program_structure
+            .get("max_rule_window_size")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+        let dispatch_window_size = program_structure
+            .get("dispatch_window_size")
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as usize;
 
@@ -889,7 +897,8 @@ impl Program {
             rule_infos,
             instruction_spans,
             main_entry_point,
-            num_registers,
+            max_rule_window_size,
+            dispatch_window_size,
             metadata: ProgramMetadata {
                 compiler_version,
                 compiled_at,
@@ -959,7 +968,8 @@ impl Program {
             rule_infos: Vec::new(),
             instruction_spans: Vec::new(),
             main_entry_point: 0,
-            num_registers: 0,
+            max_rule_window_size: 0,
+            dispatch_window_size: 0,
             metadata: ProgramMetadata {
                 compiler_version: env!("CARGO_PKG_VERSION").to_string(),
                 compiled_at: "unknown".to_string(),

@@ -1225,7 +1225,11 @@ impl<'a> Compiler<'a> {
     pub fn finish(mut self) -> Result<crate::rvm::program::Program> {
         // Update the program with final values
         self.program.main_entry_point = 0;
-        self.program.num_registers = self.register_counter as usize;
+
+        // Calculate register window requirements
+        self.program.max_rule_window_size =
+            self.rule_num_registers.iter().cloned().max().unwrap_or(0) as usize;
+        self.program.dispatch_window_size = self.register_counter as usize;
 
         // Set the rule definitions from the compiler
         let mut rule_infos_map = BTreeMap::new();

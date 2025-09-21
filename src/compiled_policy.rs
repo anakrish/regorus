@@ -48,6 +48,11 @@ impl CompiledPolicy {
     pub fn is_rego_v0(&self) -> bool {
         self.inner.rego_v0
     }
+
+    /// Get the entry point rule for this compiled policy
+    pub fn entrypoint(&self) -> &str {
+        &self.inner.rule_to_evaluate
+    }
 }
 
 impl CompiledPolicy {

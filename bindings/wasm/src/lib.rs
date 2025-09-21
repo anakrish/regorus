@@ -6,6 +6,34 @@
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
+/// WASM wrapper for [`regorus::PolicyModule`]
+pub struct PolicyModule {
+    id: String,
+    content: String,
+}
+
+#[wasm_bindgen]
+impl PolicyModule {
+    #[wasm_bindgen(constructor)]
+    /// Create a new PolicyModule
+    /// * `id`: Identifier for the policy module (e.g., filename)
+    /// * `content`: Rego policy content
+    pub fn new(id: String, content: String) -> PolicyModule {
+        PolicyModule { id, content }
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> String {
+        self.id.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn content(&self) -> String {
+        self.content.clone()
+    }
+}
+
+#[wasm_bindgen]
 /// WASM wrapper for [`regorus::Engine`]
 pub struct Engine {
     engine: regorus::Engine,
@@ -191,11 +219,234 @@ impl Engine {
     pub fn getAstAsJson(&self) -> Result<String, JsValue> {
         self.engine.get_ast_as_json().map_err(error_to_jsvalue)
     }
+
+    /// Compile a policy with a specific entry point rule.
+    ///
+    /// This method creates a compiled policy that can be used to generate RVM programs.
+    ///
+    /// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.compile_with_entrypoint
+    /// * `rule`: The specific rule path to evaluate (e.g., "data.policy.allow")
+    pub fn compileWithEntrypoint(&mut self, rule: String) -> Result<CompiledPolicy, JsValue> {
+        let rule_rc: regorus::Rc<str> = rule.into();
+        let compiled_policy = self.engine.compile_with_entrypoint(&rule_rc).map_err(error_to_jsvalue)?;
+        Ok(CompiledPolicy::new(compiled_policy))
+    }
+}
+
+#[wasm_bindgen]
+/// WASM wrapper for [`regorus::CompiledPolicy`]
+pub struct CompiledPolicy {
+    policy: regorus::CompiledPolicy,
+}
+
+impl CompiledPolicy {
+    fn new(policy: regorus::CompiledPolicy) -> Self {
+        Self { policy }
+    }
+}
+
+#[wasm_bindgen]
+impl CompiledPolicy {
+    /// Evaluate the compiled policy with the given input using the interpreter.
+    ///
+    /// See https://docs.rs/regorus/latest/regorus/struct.CompiledPolicy.html#method.eval_with_input
+    /// * `input`: JSON encoded input value for policy evaluation
+    pub fn evalWithInput(&self, input: String) -> Result<String, JsValue> {
+        let input_value = regorus::Value::from_json_str(&input).map_err(error_to_jsvalue)?;
+        let result = self.policy.eval_with_input(input_value).map_err(error_to_jsvalue)?;
+        result.to_json_str().map_err(error_to_jsvalue)
+    }
+
+    /// Get the entry point rule for this compiled policy.
+    ///
+    /// See https://docs.rs/regorus/latest/regorus/struct.CompiledPolicy.html#method.entrypoint
+    pub fn getEntrypoint(&self) -> String {
+        self.policy.entrypoint().to_string()
+    }
+
+    /// Compile this policy to an RVM program.
+    ///
+    /// * `entry_points`: Array of entry point rules to include in the program
+    pub fn compileToRvmProgram(&self, entry_points: Vec<String>) -> Result<RvmProgram, JsValue> {
+        let entry_points_strs: Vec<&str> = entry_points.iter().map(|s| s.as_str()).collect();
+        let program = regorus::rvm::compiler::Compiler::compile_from_policy(&self.policy, &entry_points_strs)
+            .map_err(error_to_jsvalue)?;
+        Ok(RvmProgram::new(program))
+    }
+}
+
+#[wasm_bindgen]
+/// WASM wrapper for RVM Program
+pub struct RvmProgram {
+    program: std::sync::Arc<regorus::rvm::program::Program>,
+}
+
+impl RvmProgram {
+    fn new(program: std::sync::Arc<regorus::rvm::program::Program>) -> Self {
+        Self { program }
+    }
+}
+
+#[wasm_bindgen]
+impl RvmProgram {
+    /// Get the number of instructions in this program.
+    pub fn getInstructionCount(&self) -> usize {
+        self.program.instructions.len()
+    }
+
+    /// Get the number of entry points in this program.
+    pub fn getEntryPointCount(&self) -> usize {
+        self.program.entry_points.len()
+    }
+
+    /// Get the list of entry point names.
+    pub fn getEntryPointNames(&self) -> Vec<String> {
+        self.program.entry_points.keys().map(|k| k.to_string()).collect()
+    }
+
+    /// Serialize the program to binary format.
+    pub fn serializeBinary(&self) -> Result<Vec<u8>, JsValue> {
+        self.program.serialize_binary().map_err(error_to_jsvalue)
+    }
+}
+
+#[wasm_bindgen]
+/// WASM wrapper for RVM Virtual Machine
+pub struct RegoVM {
+    vm: regorus::rvm::vm::RegoVM,
+}
+
+#[wasm_bindgen]
+impl RegoVM {
+    #[wasm_bindgen(constructor)]
+    /// Create a new RVM instance.
+    pub fn new() -> Self {
+        Self {
+            vm: regorus::rvm::vm::RegoVM::new(),
+        }
+    }
+
+    /// Create a new RVM instance with a compiled policy.
+    pub fn newWithPolicy(policy: &CompiledPolicy) -> Self {
+        Self {
+            vm: regorus::rvm::vm::RegoVM::new_with_policy(policy.policy.clone()),
+        }
+    }
+
+    /// Load a program into the VM.
+    pub fn loadProgram(&mut self, program: &RvmProgram) -> Result<(), JsValue> {
+        self.vm.load_program(program.program.clone());
+        Ok(())
+    }
+
+    /// Set the input data for evaluation.
+    /// * `input`: JSON encoded input value
+    pub fn setInput(&mut self, input: String) -> Result<(), JsValue> {
+        let input_value = regorus::Value::from_json_str(&input).map_err(error_to_jsvalue)?;
+        self.vm.set_input(input_value);
+        Ok(())
+    }
+
+    /// Set the data for evaluation.
+    /// * `data`: JSON encoded data value
+    pub fn setData(&mut self, data: String) -> Result<(), JsValue> {
+        let data_value = regorus::Value::from_json_str(&data).map_err(error_to_jsvalue)?;
+        self.vm.set_data(data_value).map_err(error_to_jsvalue)?;
+        Ok(())
+    }
+
+    /// Execute the loaded program.
+    pub fn execute(&mut self) -> Result<String, JsValue> {
+        let result = self.vm.execute().map_err(error_to_jsvalue)?;
+        result.to_json_str().map_err(error_to_jsvalue)
+    }
+
+    /// Execute a specific entry point by index.
+    /// * `index`: The index of the entry point to execute (0-based)
+    pub fn executeEntryPointByIndex(&mut self, index: usize) -> Result<String, JsValue> {
+        let result = self.vm.execute_entry_point_by_index(index).map_err(error_to_jsvalue)?;
+        result.to_json_str().map_err(error_to_jsvalue)
+    }
+
+    /// Execute a specific entry point by name.
+    /// * `name`: The name of the entry point to execute (e.g., "data.policy.allow")
+    pub fn executeEntryPointByName(&mut self, name: String) -> Result<String, JsValue> {
+        let result = self.vm.execute_entry_point_by_name(&name).map_err(error_to_jsvalue)?;
+        result.to_json_str().map_err(error_to_jsvalue)
+    }
+
+    /// Get the number of entry points available in the loaded program.
+    pub fn getEntryPointCount(&self) -> usize {
+        self.vm.get_entry_point_count()
+    }
+
+    /// Get all entry point names available in the loaded program.
+    pub fn getEntryPointNames(&self) -> Vec<String> {
+        self.vm.get_entry_point_names()
+    }
+}
+
+/// Compile a policy from data and modules with a specific entry point rule.
+///
+/// This is a convenience function that sets up an Engine internally and calls
+/// the appropriate compilation method.
+///
+/// See https://docs.rs/regorus/latest/regorus/fn.compile_policy_with_entrypoint.html
+/// * `data_json`: JSON string containing static data for policy evaluation
+/// * `modules`: Array of PolicyModule objects to compile
+/// * `entry_point_rule`: The specific rule path to evaluate (e.g., "data.policy.allow")
+#[wasm_bindgen]
+pub fn compilePolicyWithEntrypoint(
+    data_json: String,
+    modules: Vec<PolicyModule>,
+    entry_point_rule: String,
+) -> Result<CompiledPolicy, JsValue> {
+    let data = regorus::Value::from_json_str(&data_json).map_err(error_to_jsvalue)?;
+    
+    let policy_modules: Vec<regorus::PolicyModule> = modules
+        .into_iter()
+        .map(|m| regorus::PolicyModule {
+            id: m.id.into(),
+            content: m.content.into(),
+        })
+        .collect();
+
+    let entry_point_rc: regorus::Rc<str> = entry_point_rule.into();
+    let compiled_policy = regorus::compile_policy_with_entrypoint(data, &policy_modules, entry_point_rc)
+        .map_err(error_to_jsvalue)?;
+    
+    Ok(CompiledPolicy::new(compiled_policy))
+}
+
+/// Compile a policy directly to an RVM program.
+///
+/// This is a convenience function that compiles a policy and immediately
+/// creates an RVM program from it.
+///
+/// * `data_json`: JSON string containing static data for policy evaluation
+/// * `modules`: Array of PolicyModule objects to compile
+/// * `entry_points`: Array of entry point rules to include in the program
+#[wasm_bindgen]
+pub fn compileToRvmProgram(
+    data_json: String,
+    modules: Vec<PolicyModule>,
+    entry_points: Vec<String>,
+) -> Result<RvmProgram, JsValue> {
+    if entry_points.is_empty() {
+        return Err(JsValue::from_str("At least one entry point is required"));
+    }
+    
+    // Use the first entry point for compilation
+    let first_entry_point = entry_points[0].clone();
+    let compiled_policy = compilePolicyWithEntrypoint(data_json, modules, first_entry_point)?;
+    
+    // Convert all entry points to RVM program
+    compiled_policy.compileToRvmProgram(entry_points)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::error_to_jsvalue;
+    use crate::{error_to_jsvalue, PolicyModule, RegoVM};
     use wasm_bindgen::prelude::*;
     use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -283,6 +534,133 @@ mod tests {
             v[0]["path"].as_string().map_err(error_to_jsvalue)?.as_ref(),
             "hello.rego"
         );
+
+        // Test compilation
+        let compiled_policy = engine1.compileWithEntrypoint("data.test.message".to_string())?;
+        assert_eq!(compiled_policy.getEntrypoint(), "data.test.message");
+        
+        // Test interpreter evaluation
+        let interp_result = compiled_policy.evalWithInput(r#"{"message": "Hello Compiled"}"#.to_string())?;
+        let interp_value = regorus::Value::from_json_str(&interp_result).map_err(error_to_jsvalue)?;
+        assert_eq!(interp_value, regorus::Value::from("Hello Compiled"));
+
+        // Test RVM compilation and execution
+        let rvm_program = compiled_policy.compileToRvmProgram(vec!["data.test.message".to_string()])?;
+        assert_eq!(rvm_program.getInstructionCount() > 0, true);
+        assert_eq!(rvm_program.getEntryPointCount(), 1);
+        
+        let mut vm = RegoVM::newWithPolicy(&compiled_policy);
+        vm.loadProgram(&rvm_program)?;
+        vm.setInput(r#"{"message": "Hello RVM"}"#.to_string())?;
+        let rvm_result = vm.execute()?;
+        let rvm_value = regorus::Value::from_json_str(&rvm_result).map_err(error_to_jsvalue)?;
+        assert_eq!(rvm_value, regorus::Value::from("Hello RVM"));
+
+        // Test standalone compilation function
+        let module = PolicyModule::new(
+            "standalone.rego".to_string(),
+            r#"package standalone
+            result := input.value * 2"#.to_string(),
+        );
+        let standalone_program = crate::compileToRvmProgram(
+            r#"{"base": 10}"#.to_string(),
+            vec![module],
+            vec!["data.standalone.result".to_string()],
+        )?;
+        
+        let mut standalone_vm = RegoVM::new();
+        standalone_vm.loadProgram(&standalone_program)?;
+        standalone_vm.setData(r#"{"base": 10}"#.to_string())?;
+        standalone_vm.setInput(r#"{"value": 21}"#.to_string())?;
+        let standalone_result = standalone_vm.execute()?;
+        let standalone_value = regorus::Value::from_json_str(&standalone_result).map_err(error_to_jsvalue)?;
+        assert_eq!(standalone_value, regorus::Value::from(42));
+
+        Ok(())
+    }
+
+    #[wasm_bindgen_test]
+    pub fn rvm_program_api_test() -> Result<(), JsValue> {
+        // Test RVM Program serialization and metadata APIs
+        let module = PolicyModule::new(
+            "test.rego".to_string(),
+            r#"package test
+            allow := true if input.user == "admin"
+            deny := true if input.user == "guest"
+            message := sprintf("Hello %s", [input.user])"#.to_string(),
+        );
+
+        // Compile with multiple entry points
+        let program = crate::compileToRvmProgram(
+            r#"{"allowed_users": ["admin", "user"]}"#.to_string(),
+            vec![module],
+            vec![
+                "data.test.allow".to_string(),
+                "data.test.deny".to_string(),
+                "data.test.message".to_string()
+            ],
+        )?;
+
+        // Test program metadata
+        assert_eq!(program.getEntryPointCount(), 3);
+        assert!(program.getInstructionCount() > 0);
+        
+        let entry_points = program.getEntryPointNames();
+        assert_eq!(entry_points.len(), 3);
+        assert!(entry_points.contains(&"data.test.allow".to_string()));
+        assert!(entry_points.contains(&"data.test.deny".to_string()));
+        assert!(entry_points.contains(&"data.test.message".to_string()));
+
+        // Test binary serialization
+        let serialized = program.serializeBinary()?;
+        assert!(serialized.len() > 0);
+
+        // Test RVM execution with different inputs
+        let mut vm = RegoVM::new();
+        vm.loadProgram(&program)?;
+        vm.setData(r#"{"allowed_users": ["admin", "user"]}"#.to_string())?;
+
+        // Test admin user
+        vm.setInput(r#"{"user": "admin"}"#.to_string())?;
+        let result = vm.execute()?;
+        let result_value = regorus::Value::from_json_str(&result).map_err(error_to_jsvalue)?;
+        // The main program should return the result of the first entry point (allow)
+        assert_eq!(result_value, regorus::Value::from(true));
+
+        // Test guest user
+        vm.setInput(r#"{"user": "guest"}"#.to_string())?;
+        let result = vm.execute()?;
+        let result_value = regorus::Value::from_json_str(&result).map_err(error_to_jsvalue)?;
+        // Should return false for allow rule
+        assert_eq!(result_value, regorus::Value::from(false));
+
+        Ok(())
+    }
+
+    #[wasm_bindgen_test]
+    pub fn rvm_error_handling_test() -> Result<(), JsValue> {
+        // Test error handling in RVM
+        let module = PolicyModule::new(
+            "error_test.rego".to_string(),
+            r#"package error_test
+            result := input.nonexistent.field"#.to_string(),
+        );
+
+        let program = crate::compileToRvmProgram(
+            r#"{}"#.to_string(),
+            vec![module],
+            vec!["data.error_test.result".to_string()],
+        )?;
+
+        let mut vm = RegoVM::new();
+        vm.loadProgram(&program)?;
+        vm.setInput(r#"{"valid": "field"}"#.to_string())?;
+        
+        // This should not crash, should return undefined
+        let result = vm.execute()?;
+        let result_value = regorus::Value::from_json_str(&result).map_err(error_to_jsvalue)?;
+        assert_eq!(result_value, regorus::Value::Undefined);
+
         Ok(())
     }
 }

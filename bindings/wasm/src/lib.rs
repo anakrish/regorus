@@ -231,7 +231,11 @@ impl Engine {
         let compiled_policy = self.engine.compile_with_entrypoint(&rule_rc).map_err(error_to_jsvalue)?;
         Ok(CompiledPolicy::new(compiled_policy))
     }
+
+
 }
+
+
 
 #[wasm_bindgen]
 /// WASM wrapper for [`regorus::CompiledPolicy`]
@@ -276,6 +280,117 @@ impl CompiledPolicy {
 }
 
 #[wasm_bindgen]
+/// Configuration for assembly listing generation
+pub struct AssemblyConfig {
+    show_addresses: bool,
+    show_bytes: bool,
+    indent_size: u32,
+    instruction_width: u32,
+    show_literal_values: bool,
+    comment_column: u32,
+}
+
+#[wasm_bindgen]
+impl AssemblyConfig {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create assembly config with custom settings
+    pub fn withSettings(
+        show_addresses: bool,
+        show_bytes: bool,
+        indent_size: u32,
+        instruction_width: u32,
+        show_literal_values: bool,
+        comment_column: u32,
+    ) -> Self {
+        Self {
+            show_addresses,
+            show_bytes,
+            indent_size,
+            instruction_width,
+            show_literal_values,
+            comment_column,
+        }
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn show_addresses(&self) -> bool {
+        self.show_addresses
+    }
+
+    #[wasm_bindgen(setter)]
+    pub fn set_show_addresses(&mut self, value: bool) {
+        self.show_addresses = value;
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn show_bytes(&self) -> bool {
+        self.show_bytes
+    }
+
+    #[wasm_bindgen(setter)]
+    pub fn set_show_bytes(&mut self, value: bool) {
+        self.show_bytes = value;
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn indent_size(&self) -> u32 {
+        self.indent_size
+    }
+
+    #[wasm_bindgen(setter)]
+    pub fn set_indent_size(&mut self, value: u32) {
+        self.indent_size = value;
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn instruction_width(&self) -> u32 {
+        self.instruction_width
+    }
+
+    #[wasm_bindgen(setter)]
+    pub fn set_instruction_width(&mut self, value: u32) {
+        self.instruction_width = value;
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn show_literal_values(&self) -> bool {
+        self.show_literal_values
+    }
+
+    #[wasm_bindgen(setter)]
+    pub fn set_show_literal_values(&mut self, value: bool) {
+        self.show_literal_values = value;
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn comment_column(&self) -> u32 {
+        self.comment_column
+    }
+
+    #[wasm_bindgen(setter)]
+    pub fn set_comment_column(&mut self, value: u32) {
+        self.comment_column = value;
+    }
+}
+
+impl Default for AssemblyConfig {
+    fn default() -> Self {
+        Self {
+            show_addresses: true,
+            show_bytes: false,
+            indent_size: 4,
+            instruction_width: 40,
+            show_literal_values: true,
+            comment_column: 50,
+        }
+    }
+}
+
+#[wasm_bindgen]
 /// WASM wrapper for RVM Program
 pub struct RvmProgram {
     program: std::sync::Arc<regorus::rvm::program::Program>,
@@ -307,6 +422,61 @@ impl RvmProgram {
     /// Serialize the program to binary format.
     pub fn serializeBinary(&self) -> Result<Vec<u8>, JsValue> {
         self.program.serialize_binary().map_err(error_to_jsvalue)
+    }
+
+    /// Generate assembly listing for this program with default configuration.
+    /// * `format`: Assembly format - "readable" or "tabular"
+    pub fn getAssemblyListing(&self, format: String) -> String {
+        let config = regorus::rvm::assembly_listing::AssemblyListingConfig::default();
+        
+        match format.as_str() {
+            "tabular" => regorus::rvm::assembly_listing::generate_tabular_assembly_listing(&self.program, &config),
+            _ => regorus::rvm::assembly_listing::generate_assembly_listing(&self.program, &config),
+        }
+    }
+
+    /// Generate assembly listing with custom configuration.
+    /// * `format`: Assembly format - "readable" or "tabular"
+    /// * `config`: AssemblyConfig object with display options
+    pub fn getAssemblyListingWithConfig(&self, format: String, config: &AssemblyConfig) -> String {
+        let listing_config = regorus::rvm::assembly_listing::AssemblyListingConfig {
+            show_addresses: config.show_addresses,
+            show_bytes: config.show_bytes,
+            indent_size: config.indent_size as usize,
+            instruction_width: config.instruction_width as usize,
+            show_literal_values: config.show_literal_values,
+            comment_column: config.comment_column as usize,
+        };
+        
+        match format.as_str() {
+            "tabular" => regorus::rvm::assembly_listing::generate_tabular_assembly_listing(&self.program, &listing_config),
+            _ => regorus::rvm::assembly_listing::generate_assembly_listing(&self.program, &listing_config),
+        }
+    }
+
+    /// Get detailed program information for debugging.
+    pub fn getProgramInfo(&self) -> String {
+        let mut info = String::new();
+        info.push_str(&format!("Instructions: {}\\n", self.program.instructions.len()));
+        info.push_str(&format!("Literals: {}\\n", self.program.literals.len()));
+        info.push_str(&format!("Builtins: {}\\n", self.program.builtin_info_table.len()));
+        info.push_str(&format!("Rules: {}\\n", self.program.rule_infos.len()));
+        info.push_str(&format!("Entry Points: {}\\n", self.program.entry_points.len()));
+        
+        info.push_str("\\nEntry Points:\\n");
+        for (name, &addr) in &self.program.entry_points {
+            info.push_str(&format!("  {} → address {}\\n", name, addr));
+        }
+        
+        if !self.program.literals.is_empty() {
+            info.push_str("\\nLiterals:\\n");
+            for (idx, literal) in self.program.literals.iter().enumerate() {
+                let literal_json = serde_json::to_string(literal).unwrap_or_else(|_| "<invalid>".to_string());
+                info.push_str(&format!("  L{}: {}\\n", idx, literal_json));
+            }
+        }
+        
+        info
     }
 }
 
@@ -442,6 +612,38 @@ pub fn compileToRvmProgram(
     
     // Convert all entry points to RVM program
     compiled_policy.compileToRvmProgram(entry_points)
+}
+
+/// Generate assembly listing from an RVM program.
+///
+/// This is a standalone function for generating assembly listings from compiled programs.
+///
+/// * `program`: The RVM program to generate assembly for
+/// * `format`: Assembly format - "readable" or "tabular"  
+/// * `config`: Optional assembly configuration (uses defaults if not provided)
+#[wasm_bindgen]
+pub fn generateAssemblyListing(
+    program: &RvmProgram,
+    format: String,
+    config: Option<AssemblyConfig>,
+) -> String {
+    let listing_config = if let Some(cfg) = config {
+        regorus::rvm::assembly_listing::AssemblyListingConfig {
+            show_addresses: cfg.show_addresses,
+            show_bytes: cfg.show_bytes,
+            indent_size: cfg.indent_size as usize,
+            instruction_width: cfg.instruction_width as usize,
+            show_literal_values: cfg.show_literal_values,
+            comment_column: cfg.comment_column as usize,
+        }
+    } else {
+        regorus::rvm::assembly_listing::AssemblyListingConfig::default()
+    };
+    
+    match format.as_str() {
+        "tabular" => regorus::rvm::assembly_listing::generate_tabular_assembly_listing(&program.program, &listing_config),
+        _ => regorus::rvm::assembly_listing::generate_assembly_listing(&program.program, &listing_config),
+    }
 }
 
 #[cfg(test)]

@@ -93,6 +93,7 @@ pub struct Interpreter {
     active_rules: Vec<Ref<Rule>>,
     builtins_cache: BTreeMap<(&'static str, Vec<Value>), Value>,
     no_rules_lookup: bool,
+    lazy_mode: crate::engine::LazyMode,
 }
 
 impl Default for Interpreter {
@@ -140,6 +141,7 @@ impl Clone for Interpreter {
             query_module: None,
             module: None,
             no_rules_lookup: false,
+            lazy_mode: self.lazy_mode,
         }
     }
 }
@@ -220,6 +222,7 @@ impl Interpreter {
 
             gather_prints: false,
             prints: Vec::default(),
+            lazy_mode: crate::engine::LazyMode::Disabled,
         }
     }
 
@@ -259,6 +262,7 @@ impl Interpreter {
 
             extensions: compiled_policy.extensions.clone(),
             compiled_policy: compiled_policy.clone(),
+            lazy_mode: crate::engine::LazyMode::Disabled,
             init_data: compiled_policy
                 .data
                 .clone()
@@ -321,6 +325,10 @@ impl Interpreter {
         if let Ok(with_input) = Self::make_or_get_value_mut(&mut self.with_document, &["input"]) {
             *with_input = input;
         }
+    }
+
+    pub fn set_lazy_mode(&mut self, mode: crate::engine::LazyMode) {
+        self.lazy_mode = mode;
     }
 
     pub fn init_with_document(&mut self) -> Result<()> {
@@ -968,7 +976,17 @@ impl Interpreter {
         let mut type_match = BTreeSet::new();
         let mut cache = BTreeMap::new();
         let mut count = 0;
-        match self.eval_expr(collection)? {
+        
+        let collection_val = self.eval_expr(collection)?;
+        
+        // Materialize deferred values before iteration
+        let collection_val = if matches!(collection_val, Value::Deferred(_)) {
+            collection_val.materialize()?
+        } else {
+            collection_val
+        };
+        
+        match collection_val {
             Value::Array(a) => {
                 for (idx, value) in a.iter().enumerate() {
                     if !self.make_key_value_bindings(
@@ -1039,6 +1057,111 @@ impl Interpreter {
                     *self.current_scope_mut()? = scope_saved.clone();
                 }
             }
+            
+            Value::LazyObject(lazy_obj) => {
+                // Lazy iteration: get keys first, then fetch values on-demand
+                let keys = lazy_obj.keys()
+                    .map_err(|e| anyhow!("Failed to get keys from lazy object: {}", e))?;
+                let num_keys = keys.len();
+                
+                for (idx, key_str) in keys.into_iter().enumerate() {
+                    // Fetch value lazily - only when we need it for this iteration
+                    let value = lazy_obj.get_field(&key_str)?
+                        .unwrap_or(Value::Undefined);
+                    
+                    let key = Value::String(key_str.into());
+                    
+                    if !self.make_key_value_bindings(
+                        idx == num_keys - 1,
+                        &mut type_match,
+                        &mut cache,
+                        (key_expr, value_expr),
+                        (&key, &value),
+                    )? {
+                        continue;
+                    }
+
+                    if self.eval_stmts(stmts)? {
+                        count += 1;
+                        if let Some(ctx) = self.contexts.last() {
+                            if ctx.early_return {
+                                // Early exit: no need to fetch remaining values!
+                                break;
+                            }
+                        }
+                    }
+                    *self.current_scope_mut()? = scope_saved.clone();
+                }
+            }
+            
+            Value::LazyArray(lazy_arr) => {
+                // Lazy array iteration: fetch elements on-demand
+                let len = lazy_arr.len()
+                    .map_err(|e| anyhow!("Failed to get lazy array length: {}", e))?;
+                
+                for idx in 0..len {
+                    // Fetch element lazily - only when needed
+                    let value = lazy_arr.get(idx)?
+                        .unwrap_or(Value::Undefined);
+                    
+                    let key = Value::from(idx);
+                    
+                    if !self.make_key_value_bindings(
+                        idx == len - 1,
+                        &mut type_match,
+                        &mut cache,
+                        (key_expr, value_expr),
+                        (&key, &value),
+                    )? {
+                        continue;
+                    }
+
+                    if self.eval_stmts(stmts)? {
+                        count += 1;
+                        if let Some(ctx) = self.contexts.last() {
+                            if ctx.early_return {
+                                // Early exit: no need to fetch remaining elements!
+                                break;
+                            }
+                        }
+                    }
+                    *self.current_scope_mut()? = scope_saved.clone();
+                }
+            }
+            
+            Value::LazySet(lazy_set) => {
+                // Lazy set iteration: fetch elements on-demand
+                let len = lazy_set.len()
+                    .map_err(|e| anyhow!("Failed to get lazy set length: {}", e))?;
+                
+                for idx in 0..len {
+                    // Fetch element lazily - only when needed
+                    let value = lazy_set.get(idx)?
+                        .unwrap_or(Value::Undefined);
+                    
+                    if !self.make_key_value_bindings(
+                        idx == len - 1,
+                        &mut type_match,
+                        &mut cache,
+                        (key_expr, value_expr),
+                        (&value, &value),
+                    )? {
+                        continue;
+                    }
+
+                    if self.eval_stmts(stmts)? {
+                        count += 1;
+                        if let Some(ctx) = self.contexts.last() {
+                            if ctx.early_return {
+                                // Early exit: no need to fetch remaining elements!
+                                break;
+                            }
+                        }
+                    }
+                    *self.current_scope_mut()? = scope_saved.clone();
+                }
+            }
+            
             Value::Undefined => (),
             v => {
                 let span = collection.span();
@@ -2050,7 +2173,14 @@ impl Interpreter {
         collection: &ExprRef,
     ) -> Result<Value> {
         let value = self.eval_expr(value)?;
-        let collection = self.eval_expr(collection)?;
+        let collection_val = self.eval_expr(collection)?;
+
+        // Materialize deferred values before checking membership
+        let collection = if matches!(collection_val, Value::Deferred(_)) {
+            collection_val.materialize()?
+        } else {
+            collection_val
+        };
 
         let result = match &collection {
             Value::Array(array) => {
@@ -3031,7 +3161,8 @@ impl Interpreter {
 
     fn get_value_chained(mut obj: Value, path: &[&str]) -> Value {
         for p in path {
-            obj = obj[&Value::String(p.to_string().into())].clone();
+            // Use get_field() instead of Index trait to support lazy objects
+            obj = obj.get_field(&Value::String(p.to_string().into()));
         }
         obj
     }

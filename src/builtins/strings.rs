@@ -194,6 +194,22 @@ fn to_string(v: &Value, unescape: bool) -> String {
                 + "}"
         }
         Value::Undefined => "#undefined".to_string(),
+        Value::LazyObject(lazy) => {
+            // Format lazy object - show type
+            alloc::format!("<lazy:{}>", lazy.type_id().as_str())
+        }
+        Value::Deferred(deferred) => {
+            // Format deferred value - show path
+            alloc::format!("<deferred:{}>", deferred.root_type_id().as_str())
+        }
+        Value::LazyArray(arr) => {
+            // Format lazy array
+            alloc::format!("<lazy_array:{}>", arr.type_id().as_str())
+        }
+        Value::LazySet(set) => {
+            // Format lazy set
+            alloc::format!("<lazy_set:{}>", set.type_id().as_str())
+        }
     }
 }
 

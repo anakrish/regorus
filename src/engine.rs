@@ -14,6 +14,33 @@ use crate::{Extension, QueryResults};
 
 use anyhow::{bail, Result};
 
+/// Controls lazy evaluation behavior for LazyObjects and Deferred values
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LazyMode {
+    /// Traditional eager evaluation - no lazy objects
+    Disabled,
+    
+    /// Use lazy objects with on-demand field loading, but always materialize to concrete Values.
+    /// Fields configured with Deferred strategy will be materialized immediately instead.
+    LazyOnly,
+    
+    /// Use lazy objects and respect Deferred field strategies.
+    /// Allows ultra-lazy evaluation where Deferred values track paths without materialization.
+    LazyWithDeferred,
+}
+
+impl LazyMode {
+    /// Returns true if lazy objects are enabled (LazyOnly or LazyWithDeferred)
+    pub fn is_lazy_enabled(self) -> bool {
+        matches!(self, LazyMode::LazyOnly | LazyMode::LazyWithDeferred)
+    }
+
+    /// Returns true if deferred evaluation is enabled (LazyWithDeferred)
+    pub fn is_deferred_enabled(self) -> bool {
+        matches!(self, LazyMode::LazyWithDeferred)
+    }
+}
+
 /// The Rego evaluation engine.
 ///
 #[derive(Debug, Clone)]
@@ -22,6 +49,7 @@ pub struct Engine {
     interpreter: Interpreter,
     prepared: bool,
     rego_v1: bool,
+    lazy_mode: LazyMode,
 }
 
 #[cfg(feature = "azure_policy")]
@@ -68,6 +96,7 @@ impl Engine {
             interpreter: Interpreter::new(),
             prepared: false,
             rego_v1: true,
+            lazy_mode: LazyMode::Disabled,
         }
     }
 
@@ -98,6 +127,35 @@ impl Engine {
     ///
     pub fn set_rego_v0(&mut self, rego_v0: bool) {
         self.rego_v1 = !rego_v0;
+    }
+
+    /// Set lazy evaluation mode.
+    ///
+    /// Controls whether LazyObjects are used and how they behave:
+    /// - `LazyMode::Disabled`: Traditional eager evaluation
+    /// - `LazyMode::LazyOnly`: Lazy field loading, always materialize to Values
+    /// - `LazyMode::LazyWithDeferred`: Lazy loading + deferred evaluation (respects field strategies)
+    ///
+    /// ```
+    /// # use regorus::*;
+    /// # fn main() -> anyhow::Result<()> {
+    /// let mut engine = Engine::new();
+    ///
+    /// // Enable lazy loading with deferred evaluation
+    /// engine.set_lazy_mode(LazyMode::LazyWithDeferred);
+    ///
+    /// // Now lazy objects will load fields on-demand and can return Deferred values
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn set_lazy_mode(&mut self, mode: LazyMode) {
+        self.lazy_mode = mode;
+        self.interpreter.set_lazy_mode(mode);
+    }
+
+    /// Get the current lazy evaluation mode
+    pub fn lazy_mode(&self) -> LazyMode {
+        self.lazy_mode
     }
 
     /// Add a policy.
@@ -1346,6 +1404,7 @@ impl Engine {
             interpreter: Interpreter::new_from_compiled_policy(compiled_policy),
             rego_v1: true, // Value doesn't matter since this is used only for policy parsing
             prepared: true,
+            lazy_mode: LazyMode::Disabled,
         }
     }
 }

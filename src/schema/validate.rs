@@ -726,6 +726,8 @@ impl SchemaValidator {
             Value::Set(_) => "set".into(),
             Value::Object(_) => "object".into(),
             Value::Undefined => "undefined".into(),
+            Value::LazyObject(_) => "lazy_object".into(),
+            Value::Deferred(_) => "deferred".into(),
         }
     }
 }

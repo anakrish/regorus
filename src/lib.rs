@@ -29,6 +29,7 @@ mod compiled_policy;
 mod engine;
 mod indexchecker;
 mod interpreter;
+pub mod lazy;
 mod lexer;
 mod lookup;
 mod number;

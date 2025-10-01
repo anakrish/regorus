@@ -79,7 +79,25 @@ install(FILES
   DESTINATION ${regorus_ffi_CONFIGDIR}
 )
 
-# test binary
+# test binaries
 
 add_executable(regorus_test main.cpp)
 target_link_libraries(regorus_test regorus_ffi::regorus_ffi)
+
+# Value API tests
+add_executable(test_value_c ../c/test_value.c)
+target_link_libraries(test_value_c regorus_ffi::regorus_ffi)
+
+add_executable(test_value_cpp test_value.cpp)
+target_include_directories(test_value_cpp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(test_value_cpp regorus_ffi::regorus_ffi)
+
+add_executable(test_raii test_raii.cpp)
+target_include_directories(test_raii PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(test_raii regorus_ffi::regorus_ffi)
+
+# Add tests to CTest
+enable_testing()
+add_test(NAME c_value_test COMMAND test_value_c)
+add_test(NAME cpp_value_test COMMAND test_value_cpp)
+add_test(NAME cpp_raii_test COMMAND test_raii)

@@ -128,4 +128,77 @@ int main() {
     std::cout<<result.output()<<std::endl;
 
     example();
+    
+    // Value API demonstration using the existing engine
+    std::cout << "\n=== Value API Demo ===" << std::endl;
+    
+    // Evaluate mount_overlay rule and get result as Value (not JSON)
+    std::cout << "Evaluating data.framework.mount_overlay using eval_rule_as_value:" << std::endl;
+    auto value_result = engine.eval_rule_as_value("data.framework.mount_overlay");
+    
+    if (!value_result) {
+        std::cerr << "Value eval failed: " << value_result.error() << std::endl;
+        return -1;
+    }
+    
+    // Get the Value - this is the policy result structure
+    auto policy_value = value_result.value();
+    
+    std::cout << "\n=== Navigating Value in a Typed Manner (No JSON Conversion) ===" << std::endl;
+    
+    // The result is an object with "allowed" and "metadata" fields
+    if (policy_value.is_object()) {
+        std::cout << "✓ Policy result is an object" << std::endl;
+        
+        // Get the "allowed" field directly as a Value and extract as bool
+        auto allowed_value = policy_value.object_get("allowed");
+        std::cout << "\n1. Navigate to 'allowed' field (using typed API):" << std::endl;
+        bool allowed = allowed_value.as_bool();
+        std::cout << "   Type: bool" << std::endl;
+        std::cout << "   Value: " << (allowed ? "true" : "false") << std::endl;
+        
+        // Get the "metadata" array
+        auto metadata_value = policy_value.object_get("metadata");
+        std::cout << "\n2. Navigate to 'metadata' array:" << std::endl;
+        
+        auto metadata_len = metadata_value.array_len();
+        std::cout << "   Array length: " << metadata_len << std::endl;
+        
+        // Navigate through array elements using typed API
+        for (int64_t i = 0; i < metadata_len && i < 2; i++) {  // Show first 2 items
+            std::cout << "\n   Metadata[" << i << "] (navigated with typed API):" << std::endl;
+            auto item = metadata_value.array_get(i);
+            
+            if (item.is_object()) {
+                std::cout << "     Type: object" << std::endl;
+                
+                // Get the "action" field as string
+                auto action = item.object_get("action");
+                std::cout << "     action (string): \"" << action.as_string() << "\"" << std::endl;
+                
+                // Get the "key" field as string
+                auto key = item.object_get("key");
+                std::cout << "     key (string): \"" << key.as_string() << "\"" << std::endl;
+                
+                // Get the "name" field as string
+                auto name = item.object_get("name");
+                std::cout << "     name (string): \"" << name.as_string() << "\"" << std::endl;
+                
+                // Navigate deeper into "value" field
+                auto value_field = item.object_get("value");
+                
+                // Check the type and extract accordingly
+                if (i == 1) {  // Second item has a boolean value
+                    std::cout << "     value (bool): " << (value_field.as_bool() ? "true" : "false") << std::endl;
+                } else {
+                    // First item has an array - just report the type
+                    std::cout << "     value: <array with " << value_field.array_len() << " elements>" << std::endl;
+                }
+            }
+        }
+        
+        std::cout << "\n✓ Successfully navigated nested array/object structure using Value API" << std::endl;
+    }
+    
+    std::cout << "\n✓ Value API demo completed successfully!" << std::endl;
 }

@@ -971,6 +971,7 @@ dependencies = [
  "lazy_static",
  "mimalloc",
  "msvc_spectre_libs",
+ "once_cell",
  "rand",
  "regex",
  "scientific",

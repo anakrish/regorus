@@ -11,7 +11,7 @@ use std::os::raw::c_char;
 /// Wrapper for `regorus::Engine`.
 #[derive(Clone)]
 pub struct RegorusEngine {
-    engine: ::regorus::Engine,
+    pub(crate) engine: ::regorus::Engine,
 }
 
 #[no_mangle]

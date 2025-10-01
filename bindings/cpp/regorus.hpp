@@ -5,6 +5,7 @@
 #include <variant>
 
 #include "regorus.ffi.hpp"
+#include "regorus_value.hpp"
 
 namespace regorus {
 
@@ -28,6 +29,28 @@ namespace regorus {
 	    } else {
 		return "";
 	    }
+	}
+	
+	int64_t integer() const {
+	    if (*this) {
+		return result.int_value;
+	    } else {
+		return 0;
+	    }
+	}
+	
+	Value value() const {
+	    if (*this && result.pointer_value) {
+		// Clone the value since Result owns it
+		auto json_result = regorus_value_to_json(result.pointer_value);
+		if (json_result.status == RegorusStatus::Ok) {
+		    auto val = Value::FromJson(json_result.output);
+		    regorus_result_drop(json_result);
+		    return val;
+		}
+		regorus_result_drop(json_result);
+	    }
+	    return Value::Null();
 	}
 
 	~Result() {
@@ -88,6 +111,31 @@ namespace regorus {
 	
 	Result eval_rule(const char* rule) {
 	    return Result(regorus_engine_eval_rule(engine, rule));
+	}
+	
+	// Value API methods - work with Value objects directly instead of JSON
+	Result set_input_value(const Value& value) {
+	    // Clone the value to transfer ownership to the engine
+	    auto cloned = value.clone();
+	    void* raw_ptr = cloned.release();
+	    auto result = regorus_engine_set_input_value(engine, raw_ptr);
+	    return Result(result);
+	}
+	
+	Result add_data_value(const Value& value) {
+	    // Clone the value to transfer ownership to the engine
+	    auto cloned = value.clone();
+	    void* raw_ptr = cloned.release();
+	    auto result = regorus_engine_add_data_value(engine, raw_ptr);
+	    return Result(result);
+	}
+	
+	Result eval_query_as_value(const char* query) {
+	    return Result(regorus_engine_eval_query_as_value(engine, query));
+	}
+	
+	Result eval_rule_as_value(const char* rule) {
+	    return Result(regorus_engine_eval_rule_as_value(engine, rule));
 	}
 	
 	Result set_enable_coverage(bool enable) {

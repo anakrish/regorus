@@ -108,6 +108,19 @@ impl RegorusResult {
         }
     }
 
+    /// Create a successful result with raw c_char string (takes ownership).
+    pub(crate) fn ok_string_raw(output: *mut c_char) -> Self {
+        Self {
+            status: RegorusStatus::Ok,
+            data_type: RegorusDataType::String,
+            output,
+            bool_value: false,
+            int_value: 0,
+            pointer_value: std::ptr::null_mut(),
+            error_message: std::ptr::null_mut(),
+        }
+    }
+
     /// Create a successful result with boolean value.
     #[allow(unused)]
     pub(crate) fn ok_bool(value: bool) -> Self {

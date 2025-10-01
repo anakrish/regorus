@@ -4,7 +4,7 @@
 //! Lazy evaluation and deferred value resolution
 //!
 //! This module provides lazy loading and deferred evaluation capabilities for Values.
-//! 
+//!
 //! # Key Concepts
 //!
 //! - **LazyObject**: An object whose fields are loaded on-demand from external sources
@@ -81,7 +81,7 @@ impl TypeId {
     pub fn new(name: &str) -> Self {
         TypeId(name.into())
     }
-    
+
     /// Get the type name
     pub fn as_str(&self) -> &str {
         self.0.as_ref()
@@ -118,12 +118,12 @@ impl PathSegment {
     pub fn field(name: impl Into<Arc<str>>) -> Self {
         PathSegment::Field(name.into())
     }
-    
+
     /// Create an index segment
     pub fn index(idx: usize) -> Self {
         PathSegment::Index(idx)
     }
-    
+
     /// Get as field name if this is a field segment
     pub fn as_field(&self) -> Option<&str> {
         match self {
@@ -131,7 +131,7 @@ impl PathSegment {
             _ => None,
         }
     }
-    
+
     /// Get as index if this is an index segment
     pub fn as_index(&self) -> Option<usize> {
         match self {
@@ -181,22 +181,22 @@ impl LazyContext {
             data: BTreeMap::new(),
         }
     }
-    
+
     /// Create context with initial data
     pub fn with_data(data: BTreeMap<Arc<str>, ContextValue>) -> Self {
         Self { data }
     }
-    
+
     /// Insert a value into the context
     pub fn insert(&mut self, key: impl Into<Arc<str>>, value: impl Into<ContextValue>) {
         self.data.insert(key.into(), value.into());
     }
-    
+
     /// Get a value from the context
     pub fn get(&self, key: &str) -> Option<&ContextValue> {
         self.data.get(key)
     }
-    
+
     /// Get a u64 value
     pub fn get_u64(&self, key: &str) -> Result<u64> {
         match self.get(key) {
@@ -205,7 +205,7 @@ impl LazyContext {
             _ => bail!("missing or invalid u64 context value: {}", key),
         }
     }
-    
+
     /// Get an i64 value
     pub fn get_i64(&self, key: &str) -> Result<i64> {
         match self.get(key) {
@@ -214,7 +214,7 @@ impl LazyContext {
             _ => bail!("missing or invalid i64 context value: {}", key),
         }
     }
-    
+
     /// Get a string value
     pub fn get_string(&self, key: &str) -> Result<&str> {
         match self.get(key) {
@@ -222,7 +222,7 @@ impl LazyContext {
             _ => bail!("missing or invalid string context value: {}", key),
         }
     }
-    
+
     /// Get bytes value
     pub fn get_bytes(&self, key: &str) -> Result<&[u8]> {
         match self.get(key) {
@@ -230,7 +230,7 @@ impl LazyContext {
             _ => bail!("missing or invalid bytes context value: {}", key),
         }
     }
-    
+
     /// Get bool value
     pub fn get_bool(&self, key: &str) -> Result<bool> {
         match self.get(key) {
@@ -316,10 +316,10 @@ pub trait KeysGetter: Send + Sync {
 pub enum FieldStrategy {
     /// Fetch immediately when field is accessed
     Immediate,
-    
+
     /// Return a deferred value that fetches on materialization
     Deferred,
-    
+
     /// Decide at runtime based on context
     Dynamic,
 }
@@ -328,7 +328,7 @@ pub enum FieldStrategy {
 pub trait DynamicDeferrable: FieldGetter {
     /// Should this field be deferred for the given context?
     fn should_defer(&self, ctx: &LazyContext, field_name: &str) -> bool;
-    
+
     /// Downcast to Any for type checking
     fn as_any(&self) -> &dyn Any;
 }
@@ -338,7 +338,7 @@ pub trait DynamicDeferrable: FieldGetter {
 pub struct FieldDescriptor {
     /// The getter function
     getter: Arc<dyn FieldGetter>,
-    
+
     /// Strategy for this field
     strategy: FieldStrategy,
 }
@@ -351,33 +351,33 @@ impl FieldDescriptor {
             strategy: FieldStrategy::Immediate,
         }
     }
-    
+
     /// Set the strategy
     pub fn with_strategy(mut self, strategy: FieldStrategy) -> Self {
         self.strategy = strategy;
         self
     }
-    
+
     /// Create an immediate field
     pub fn immediate(getter: impl FieldGetter + 'static) -> Self {
         Self::new(getter).with_strategy(FieldStrategy::Immediate)
     }
-    
+
     /// Create a deferred field
     pub fn deferred(getter: impl FieldGetter + 'static) -> Self {
         Self::new(getter).with_strategy(FieldStrategy::Deferred)
     }
-    
+
     /// Create a dynamic field
     pub fn dynamic(getter: impl FieldGetter + 'static) -> Self {
         Self::new(getter).with_strategy(FieldStrategy::Dynamic)
     }
-    
+
     /// Get the strategy
     pub fn strategy(&self) -> FieldStrategy {
         self.strategy
     }
-    
+
     /// Get the getter
     pub fn getter(&self) -> &Arc<dyn FieldGetter> {
         &self.getter
@@ -392,10 +392,10 @@ impl FieldDescriptor {
 pub struct LazySchema {
     /// Type identifier
     type_id: TypeId,
-    
+
     /// Field getters
     field_getters: DashMap<Arc<str>, Arc<FieldDescriptor>>,
-    
+
     /// Keys getter (optional - if None, uses field names)
     key_getter: Option<Arc<dyn KeysGetter>>,
 }
@@ -409,27 +409,27 @@ impl LazySchema {
             key_getter: None,
         }
     }
-    
+
     /// Get the type ID
     pub fn type_id(&self) -> &TypeId {
         &self.type_id
     }
-    
+
     /// Add a field descriptor
     pub fn add_field(&self, name: impl Into<Arc<str>>, descriptor: FieldDescriptor) {
         self.field_getters.insert(name.into(), Arc::new(descriptor));
     }
-    
+
     /// Get a field descriptor
     pub fn get_field(&self, name: &str) -> Option<Arc<FieldDescriptor>> {
         self.field_getters.get(name).map(|r| r.value().clone())
     }
-    
+
     /// Set the keys getter
     pub fn set_key_getter(&mut self, getter: impl KeysGetter + 'static) {
         self.key_getter = Some(Arc::new(getter));
     }
-    
+
     /// Get all field names
     pub fn field_names(&self) -> Vec<String> {
         self.field_getters
@@ -437,7 +437,7 @@ impl LazySchema {
             .map(|entry| entry.key().to_string())
             .collect()
     }
-    
+
     /// Get keys using the key getter or field names
     pub fn get_keys(&self, ctx: &LazyContext) -> Result<Vec<String>> {
         if let Some(getter) = &self.key_getter {
@@ -464,24 +464,24 @@ impl LazyRegistry {
             schemas: DashMap::new(),
         }
     }
-    
+
     /// Get the global registry instance
     pub fn global() -> &'static LazyRegistry {
         static INSTANCE: Lazy<LazyRegistry> = Lazy::new(LazyRegistry::new);
         &INSTANCE
     }
-    
+
     /// Register a schema
     pub fn register_schema(&self, schema: LazySchema) {
         let type_id = schema.type_id.clone();
         self.schemas.insert(type_id, Arc::new(schema));
     }
-    
+
     /// Get a schema by type ID
     pub fn get_schema(&self, type_id: &TypeId) -> Option<Arc<LazySchema>> {
         self.schemas.get(type_id).map(|r| r.value().clone())
     }
-    
+
     /// Check if a type is registered
     pub fn has_schema(&self, type_id: &TypeId) -> bool {
         self.schemas.contains_key(type_id)
@@ -514,46 +514,32 @@ impl SchemaBuilder {
             key_getter: None,
         }
     }
-    
+
     /// Add an immediate field with a custom getter
-    pub fn field_immediate<G: FieldGetter + 'static>(
-        self,
-        name: &str,
-        getter: G,
-    ) -> Self {
-        self.field_getters.insert(
-            name.into(),
-            Arc::new(FieldDescriptor::immediate(getter)),
-        );
+    pub fn field_immediate<G: FieldGetter + 'static>(self, name: &str, getter: G) -> Self {
+        self.field_getters
+            .insert(name.into(), Arc::new(FieldDescriptor::immediate(getter)));
         self
     }
-    
+
     /// Add a deferred field with a custom getter
-    pub fn field_deferred<G: FieldGetter + 'static>(
-        self,
-        name: &str,
-        getter: G,
-    ) -> Self {
-        self.field_getters.insert(
-            name.into(),
-            Arc::new(FieldDescriptor::deferred(getter)),
-        );
+    pub fn field_deferred<G: FieldGetter + 'static>(self, name: &str, getter: G) -> Self {
+        self.field_getters
+            .insert(name.into(), Arc::new(FieldDescriptor::deferred(getter)));
         self
     }
-    
+
     /// Add a dynamic field with a custom getter
     pub fn field_dynamic<G: FieldGetter + DynamicDeferrable + 'static>(
         self,
         name: &str,
         getter: G,
     ) -> Self {
-        self.field_getters.insert(
-            name.into(),
-            Arc::new(FieldDescriptor::dynamic(getter)),
-        );
+        self.field_getters
+            .insert(name.into(), Arc::new(FieldDescriptor::dynamic(getter)));
         self
     }
-    
+
     /// Add a field with explicit strategy
     pub fn field_with_strategy<G: FieldGetter + 'static>(
         self,
@@ -567,13 +553,13 @@ impl SchemaBuilder {
         );
         self
     }
-    
+
     /// Set a custom keys getter
     pub fn keys<K: KeysGetter + 'static>(mut self, getter: K) -> Self {
         self.key_getter = Some(Arc::new(getter));
         self
     }
-    
+
     /// Set keys from a static list
     pub fn keys_static(mut self, keys: &'static [&'static str]) -> Self {
         struct StaticKeysGetter(&'static [&'static str]);
@@ -582,26 +568,26 @@ impl SchemaBuilder {
                 Ok(self.0.iter().map(|&k| k.to_string()).collect())
             }
         }
-        
+
         self.key_getter = Some(Arc::new(StaticKeysGetter(keys)));
         self
     }
-    
+
     /// Build and register the schema
     pub fn register(self) {
         let mut schema = LazySchema::new(self.type_id);
-        
+
         for entry in self.field_getters.iter() {
             schema.add_field(entry.key().clone(), (**entry.value()).clone());
         }
-        
+
         if let Some(getter) = self.key_getter {
             // We can't move out of Arc, so we need to clone the inner value
             // For now, we'll skip setting it - this would need refactoring
             // to make KeysGetter cloneable or use a different approach
             schema.key_getter = Some(getter);
         }
-        
+
         LazyRegistry::global().register_schema(schema);
     }
 }
@@ -645,7 +631,7 @@ impl SchemaBuilder {
     {
         self.field_immediate(name, ClosureFieldGetter::new(f))
     }
-    
+
     /// Add a deferred field with a closure
     pub fn field_deferred_fn<F>(self, name: &str, f: F) -> Self
     where
@@ -665,13 +651,13 @@ impl SchemaBuilder {
 pub struct DeferredValue {
     /// Path from root to this field
     path: Vec<PathSegment>,
-    
+
     /// Root context for fetching
     root_context: Arc<LazyContext>,
-    
+
     /// Root type ID
     root_type_id: TypeId,
-    
+
     /// Cached materialized value
     materialized: OnceCell<Value>,
 }
@@ -690,61 +676,61 @@ impl DeferredValue {
             materialized: OnceCell::new(),
         }
     }
-    
+
     /// Get the path
     pub fn path(&self) -> &[PathSegment] {
         &self.path
     }
-    
+
     /// Get the root type ID
     pub fn root_type_id(&self) -> &TypeId {
         &self.root_type_id
     }
-    
+
     /// Check if already materialized
     pub fn is_materialized(&self) -> bool {
         self.materialized.get().is_some()
     }
-    
+
     /// Materialize the value by resolving the path
     pub fn materialize(&self) -> Result<&Value> {
         self.materialized
             .get_or_try_init(|| self.resolve_path())
             .map(|v| v as &Value)
     }
-    
+
     /// Resolve the path to get the actual value
     fn resolve_path(&self) -> Result<Value> {
         let registry = LazyRegistry::global();
-        
+
         // This is a placeholder - in real integration, this would walk the path
         // through Value types to fetch the actual field
         // For now, we just demonstrate the structure
-        
+
         if self.path.is_empty() {
             return Ok(Value::Undefined);
         }
-        
+
         // Get the schema for the root type
         let schema = registry
             .get_schema(&self.root_type_id)
             .ok_or_else(|| anyhow!("schema not found for type: {}", self.root_type_id.as_str()))?;
-        
+
         // Get the first field
         if let Some(PathSegment::Field(field_name)) = self.path.first() {
             if let Some(descriptor) = schema.get_field(field_name.as_ref()) {
                 return descriptor.getter().get(&self.root_context);
             }
         }
-        
+
         bail!("cannot resolve path")
     }
-    
+
     /// Extend the path with an additional segment
     pub fn extend(&self, segment: PathSegment) -> Self {
         let mut new_path = self.path.clone();
         new_path.push(segment);
-        
+
         Self {
             path: new_path,
             root_context: self.root_context.clone(),
@@ -800,22 +786,22 @@ impl Ord for DeferredValue {
 pub struct LazyObject {
     /// Type identifier
     type_id: TypeId,
-    
+
     /// Instance context
     context: Arc<LazyContext>,
-    
+
     /// Cache for fetched fields
     cache: Arc<DashMap<String, Value>>,
-    
+
     /// Eager fields (always available without fetching)
     eager_fields: Option<Arc<BTreeMap<String, Value>>>,
-    
+
     /// Path from root (for nested lazy objects)
     path_from_root: Vec<PathSegment>,
-    
+
     /// Root context (for creating deferred values)
     root_context: Option<Arc<LazyContext>>,
-    
+
     /// Root type ID (for creating deferred values)
     root_type_id: Option<TypeId>,
 }
@@ -834,7 +820,7 @@ impl LazyObject {
             root_type_id: Some(type_id),
         }
     }
-    
+
     /// Create a nested lazy object that knows its path from root
     pub fn new_nested(
         type_id: TypeId,
@@ -853,23 +839,23 @@ impl LazyObject {
             root_type_id: Some(root_type_id),
         }
     }
-    
+
     /// Set eager fields
     pub fn with_eager_fields(mut self, fields: BTreeMap<String, Value>) -> Self {
         self.eager_fields = Some(Arc::new(fields));
         self
     }
-    
+
     /// Get the type ID
     pub fn type_id(&self) -> &TypeId {
         &self.type_id
     }
-    
+
     /// Get the context
     pub fn context(&self) -> &LazyContext {
         &self.context
     }
-    
+
     /// Get a field value
     ///
     /// Returns None if field doesn't exist.
@@ -881,30 +867,30 @@ impl LazyObject {
                 return Ok(Some(value.clone()));
             }
         }
-        
+
         // 2. Check cache
         if let Some(cached) = self.cache.get(field_name) {
             return Ok(Some(cached.value().clone()));
         }
-        
+
         // 3. Get from schema
         let registry = LazyRegistry::global();
         let schema = registry
             .get_schema(&self.type_id)
             .ok_or_else(|| anyhow!("schema not found for type: {}", self.type_id.as_str()))?;
-        
+
         let descriptor = match schema.get_field(field_name) {
             Some(d) => d,
             None => return Ok(None),
         };
-        
+
         // 4. Decide based on strategy
         let should_defer = match descriptor.strategy() {
             FieldStrategy::Immediate => false,
             FieldStrategy::Deferred => true,
             FieldStrategy::Dynamic => self.should_defer_field(field_name, descriptor.getter()),
         };
-        
+
         if should_defer {
             // Return deferred value
             Ok(Some(self.create_deferred_for_field(field_name)))
@@ -915,46 +901,46 @@ impl LazyObject {
             Ok(Some(value))
         }
     }
-    
+
     /// Check if a field should be deferred (for Dynamic strategy)
     fn should_defer_field(&self, _field_name: &str, _getter: &Arc<dyn FieldGetter>) -> bool {
         // Try to downcast to DynamicDeferrable
         // This is tricky with Arc<dyn FieldGetter> - would need better type structure
-        
+
         // Check context for hints
         if let Ok(true) = self.context.get_bool("__defer_all") {
             return true;
         }
-        
+
         // Default: don't defer
         false
     }
-    
+
     /// Create a deferred value for a field
     fn create_deferred_for_field(&self, field_name: &str) -> Value {
         use crate::Rc;
-        let root_context = self.root_context.as_ref()
-            .unwrap_or(&self.context)
-            .clone();
-        let root_type_id = self.root_type_id.as_ref()
-            .unwrap_or(&self.type_id)
-            .clone();
-        
+        let root_context = self.root_context.as_ref().unwrap_or(&self.context).clone();
+        let root_type_id = self.root_type_id.as_ref().unwrap_or(&self.type_id).clone();
+
         let mut full_path = self.path_from_root.clone();
         full_path.push(PathSegment::field(field_name));
-        
-        Value::Deferred(Rc::new(DeferredValue::new(full_path, root_context, root_type_id)))
+
+        Value::Deferred(Rc::new(DeferredValue::new(
+            full_path,
+            root_context,
+            root_type_id,
+        )))
     }
-    
+
     /// Get all keys
     pub fn keys(&self) -> Result<Vec<String>> {
         let mut keys = Vec::new();
-        
+
         // Add eager keys
         if let Some(eager) = &self.eager_fields {
             keys.extend(eager.keys().cloned());
         }
-        
+
         // Add lazy keys from schema
         let registry = LazyRegistry::global();
         if let Some(schema) = registry.get_schema(&self.type_id) {
@@ -965,7 +951,7 @@ impl LazyObject {
                 }
             }
         }
-        
+
         Ok(keys)
     }
 }
@@ -984,8 +970,7 @@ impl PartialEq for LazyObject {
     fn eq(&self, other: &Self) -> bool {
         // Two lazy objects are equal if they have the same type and context
         // This is a shallow comparison - doesn't materialize fields
-        self.type_id == other.type_id && 
-        Arc::ptr_eq(&self.context, &other.context)
+        self.type_id == other.type_id && Arc::ptr_eq(&self.context, &other.context)
     }
 }
 
@@ -1021,65 +1006,65 @@ impl Ord for LazyObject {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_type_id() {
         let id1 = TypeId::new("User");
         let id2 = TypeId::new("User");
         let id3 = TypeId::new("Post");
-        
+
         assert_eq!(id1, id2);
         assert_ne!(id1, id3);
         assert_eq!(id1.as_str(), "User");
     }
-    
+
     #[test]
     fn test_path_segment() {
         use alloc::format;
-        
+
         let field = PathSegment::field("name");
         let index = PathSegment::index(42);
-        
+
         assert_eq!(field.as_field(), Some("name"));
         assert_eq!(index.as_index(), Some(42));
-        
+
         assert_eq!(format!("{}", field), ".name");
         assert_eq!(format!("{}", index), "[42]");
     }
-    
+
     #[test]
     fn test_lazy_context() {
         let mut ctx = LazyContext::new();
         ctx.insert("user_id", 123u64);
         ctx.insert("name", "Alice");
         ctx.insert("active", true);
-        
+
         assert_eq!(ctx.get_u64("user_id").unwrap(), 123);
         assert_eq!(ctx.get_string("name").unwrap(), "Alice");
         assert_eq!(ctx.get_bool("active").unwrap(), true);
     }
-    
+
     #[test]
     fn test_deferred_value() {
         let mut ctx = LazyContext::new();
         ctx.insert("user_id", 123u64);
-        
+
         let deferred = DeferredValue::new(
             vec![PathSegment::field("profile"), PathSegment::field("name")],
             Arc::new(ctx),
             TypeId::new("User"),
         );
-        
+
         assert_eq!(deferred.path().len(), 2);
         assert_eq!(deferred.root_type_id().as_str(), "User");
         assert!(!deferred.is_materialized());
     }
-    
+
     #[test]
     fn test_lazy_registry() {
         let registry = LazyRegistry::new();
         let schema = LazySchema::new(TypeId::new("TestType"));
-        
+
         registry.register_schema(schema);
         assert!(registry.has_schema(&TypeId::new("TestType")));
         assert!(!registry.has_schema(&TypeId::new("OtherType")));
@@ -1104,16 +1089,16 @@ pub trait IndexGetter: Send + Sync {
 pub struct LazyArray {
     /// Context for this array
     context: Arc<LazyContext>,
-    
+
     /// Length getter
     length_getter: Arc<dyn LengthGetter>,
-    
+
     /// Index getter for fetching elements
     index_getter: Arc<dyn IndexGetter>,
-    
+
     /// Cache for fetched elements
     cache: Arc<DashMap<usize, Value>>,
-    
+
     /// Type identifier
     type_id: TypeId,
 }
@@ -1134,40 +1119,40 @@ impl LazyArray {
             type_id,
         }
     }
-    
+
     /// Get the type ID
     pub fn type_id(&self) -> &TypeId {
         &self.type_id
     }
-    
+
     /// Get the length of the array
     pub fn len(&self) -> Result<usize> {
         self.length_getter.len(&self.context)
     }
-    
+
     /// Check if array is empty
     pub fn is_empty(&self) -> Result<bool> {
         Ok(self.len()? == 0)
     }
-    
+
     /// Get element at index (0-based)
     pub fn get(&self, index: usize) -> Result<Option<Value>> {
         // Check cache first
         if let Some(cached) = self.cache.get(&index) {
             return Ok(Some(cached.value().clone()));
         }
-        
+
         // Fetch from getter
         let value = self.index_getter.get_at(&self.context, index)?;
-        
+
         // Cache if found
         if let Some(ref v) = value {
             self.cache.insert(index, v.clone());
         }
-        
+
         Ok(value)
     }
-    
+
     /// Iterate over elements lazily
     /// This returns an iterator that fetches elements on-demand
     pub fn iter_lazy(&self) -> Result<LazyArrayIter> {
@@ -1189,22 +1174,22 @@ pub struct LazyArrayIter {
 
 impl Iterator for LazyArrayIter {
     type Item = Result<Value>;
-    
+
     fn next(&mut self) -> Option<Self::Item> {
         if self.current >= self.len {
             return None;
         }
-        
+
         let idx = self.current;
         self.current += 1;
-        
+
         match self.array.get(idx) {
             Ok(Some(v)) => Some(Ok(v)),
             Ok(None) => None, // Index out of bounds
             Err(e) => Some(Err(e)),
         }
     }
-    
+
     fn size_hint(&self) -> (usize, Option<usize>) {
         let remaining = self.len.saturating_sub(self.current);
         (remaining, Some(remaining))
@@ -1246,16 +1231,16 @@ impl Ord for LazyArray {
 pub struct LazySet {
     /// Context for this set
     context: Arc<LazyContext>,
-    
+
     /// Length getter
     length_getter: Arc<dyn LengthGetter>,
-    
+
     /// Index getter (sets are iterated by index internally)
     index_getter: Arc<dyn IndexGetter>,
-    
+
     /// Cache for fetched elements
     cache: Arc<DashMap<usize, Value>>,
-    
+
     /// Type identifier
     type_id: TypeId,
 }
@@ -1276,40 +1261,40 @@ impl LazySet {
             type_id,
         }
     }
-    
+
     /// Get the type ID
     pub fn type_id(&self) -> &TypeId {
         &self.type_id
     }
-    
+
     /// Get the length of the set
     pub fn len(&self) -> Result<usize> {
         self.length_getter.len(&self.context)
     }
-    
+
     /// Check if set is empty
     pub fn is_empty(&self) -> Result<bool> {
         Ok(self.len()? == 0)
     }
-    
+
     /// Get element at index (for iteration)
     pub fn get(&self, index: usize) -> Result<Option<Value>> {
         // Check cache first
         if let Some(cached) = self.cache.get(&index) {
             return Ok(Some(cached.value().clone()));
         }
-        
+
         // Fetch from getter
         let value = self.index_getter.get_at(&self.context, index)?;
-        
+
         // Cache if found
         if let Some(ref v) = value {
             self.cache.insert(index, v.clone());
         }
-        
+
         Ok(value)
     }
-    
+
     /// Iterate over elements lazily
     pub fn iter_lazy(&self) -> Result<LazySetIter> {
         let len = self.len()?;
@@ -1330,22 +1315,22 @@ pub struct LazySetIter {
 
 impl Iterator for LazySetIter {
     type Item = Result<Value>;
-    
+
     fn next(&mut self) -> Option<Self::Item> {
         if self.current >= self.len {
             return None;
         }
-        
+
         let idx = self.current;
         self.current += 1;
-        
+
         match self.set.get(idx) {
             Ok(Some(v)) => Some(Ok(v)),
             Ok(None) => None,
             Err(e) => Some(Err(e)),
         }
     }
-    
+
     fn size_hint(&self) -> (usize, Option<usize>) {
         let remaining = self.len.saturating_sub(self.current);
         (remaining, Some(remaining))

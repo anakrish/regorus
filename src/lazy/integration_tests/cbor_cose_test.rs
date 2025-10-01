@@ -17,7 +17,7 @@ fn create_lazy_cbor_from_bytes(
 ) -> Result<LazyObject, anyhow::Error> {
     let mut ctx = LazyContext::new();
     ctx.insert("cbor_bytes", cbor_bytes);
-    
+
     Ok(LazyObject::new(TypeId::new(type_name), ctx))
 }
 
@@ -28,7 +28,7 @@ fn register_simple_cbor_schema() {
             let bytes = ctx.get_bytes("cbor_bytes")?;
             let cbor: CborValue = ciborium::from_reader(&bytes[..])
                 .map_err(|e| anyhow::anyhow!("CBOR decode error: {}", e))?;
-            
+
             // Extract "name" field from CBOR map
             if let CborValue::Map(map) = cbor {
                 for (k, v) in map {
@@ -47,7 +47,7 @@ fn register_simple_cbor_schema() {
             let bytes = ctx.get_bytes("cbor_bytes")?;
             let cbor: CborValue = ciborium::from_reader(&bytes[..])
                 .map_err(|e| anyhow::anyhow!("CBOR decode error: {}", e))?;
-            
+
             if let CborValue::Map(map) = cbor {
                 for (k, v) in map {
                     if let CborValue::Text(key) = k {
@@ -67,7 +67,7 @@ fn register_simple_cbor_schema() {
             let bytes = ctx.get_bytes("cbor_bytes")?;
             let cbor: CborValue = ciborium::from_reader(&bytes[..])
                 .map_err(|e| anyhow::anyhow!("CBOR decode error: {}", e))?;
-            
+
             if let CborValue::Map(map) = cbor {
                 for (k, v) in map {
                     if let CborValue::Text(key) = k {
@@ -88,28 +88,34 @@ fn register_simple_cbor_schema() {
 #[test]
 fn test_cbor_as_input_subobject() -> anyhow::Result<()> {
     use crate::Rc;
-    
+
     // Register schema
     register_simple_cbor_schema();
-    
+
     // Create actual CBOR data
     let cbor_data = CborValue::Map(vec![
-        (CborValue::Text("name".into()), CborValue::Text("azure_vm_42".into())),
-        (CborValue::Text("count".into()), CborValue::Integer(100.into())),
+        (
+            CborValue::Text("name".into()),
+            CborValue::Text("azure_vm_42".into()),
+        ),
+        (
+            CborValue::Text("count".into()),
+            CborValue::Integer(100.into()),
+        ),
         (CborValue::Text("enabled".into()), CborValue::Bool(true)),
     ]);
-    
+
     // Encode to CBOR bytes
     let mut cbor_bytes = Vec::new();
     ciborium::into_writer(&cbor_data, &mut cbor_bytes)?;
-    
+
     // Create lazy CBOR object
     let lazy_cbor = create_lazy_cbor_from_bytes("SimpleCbor", cbor_bytes)?;
-    
+
     // Create input with regular fields AND a CBOR subobject
     let mut input = crate::Value::new_object();
     let input_map = input.as_object_mut()?;
-    
+
     // Regular input fields (parsed from JSON/YAML)
     input_map.insert(
         crate::Value::from("request_id"),
@@ -119,17 +125,17 @@ fn test_cbor_as_input_subobject() -> anyhow::Result<()> {
         crate::Value::from("user"),
         crate::Value::from("alice@example.com"),
     );
-    
+
     // CBOR subobject (this is the key part - CBOR binary data nested in input)
     input_map.insert(
         crate::Value::from("resource_metadata"),
         crate::Value::LazyObject(Rc::new(lazy_cbor)),
     );
-    
+
     // Create engine and policy
     let mut engine = Engine::new();
     engine.set_lazy_mode(engine::LazyMode::LazyWithDeferred);
-    
+
     let policy = r#"
         package test.cbor_subobject
         
@@ -155,10 +161,10 @@ fn test_cbor_as_input_subobject() -> anyhow::Result<()> {
             "count": input.resource_metadata.count
         }
     "#;
-    
+
     engine.add_policy("test.rego".to_string(), policy.to_string())?;
     engine.set_input(input);
-    
+
     // Test regular field access
     let results = engine.eval_query("data.test.cbor_subobject.request_id".to_string(), false)?;
     assert_eq!(results.result.len(), 1);
@@ -166,7 +172,7 @@ fn test_cbor_as_input_subobject() -> anyhow::Result<()> {
         crate::Value::String(s) => assert_eq!(s.as_ref(), "req-98765"),
         _ => panic!("Expected string result"),
     }
-    
+
     // Test CBOR field access
     let results = engine.eval_query("data.test.cbor_subobject.resource_name".to_string(), false)?;
     assert_eq!(results.result.len(), 1);
@@ -174,7 +180,7 @@ fn test_cbor_as_input_subobject() -> anyhow::Result<()> {
         crate::Value::String(s) => assert_eq!(s.as_ref(), "azure_vm_42"),
         _ => panic!("Expected string result for CBOR field"),
     }
-    
+
     // Test policy decision combining regular and CBOR fields
     let results = engine.eval_query("data.test.cbor_subobject.allow".to_string(), false)?;
     assert_eq!(results.result.len(), 1);
@@ -182,7 +188,7 @@ fn test_cbor_as_input_subobject() -> anyhow::Result<()> {
         crate::Value::Bool(b) => assert_eq!(*b, true),
         _ => panic!("Expected boolean result"),
     }
-    
+
     Ok(())
 }
 
@@ -190,14 +196,14 @@ fn test_cbor_as_input_subobject() -> anyhow::Result<()> {
 #[test]
 fn test_nested_cbor_with_deferred() -> anyhow::Result<()> {
     use crate::Rc;
-    
+
     // Register schema for nested CBOR
     SchemaBuilder::new("CborMetadata")
         .field_immediate_fn("version", |ctx| {
             let bytes = ctx.get_bytes("cbor_bytes")?;
             let cbor: CborValue = ciborium::from_reader(&bytes[..])
                 .map_err(|e| anyhow::anyhow!("CBOR decode error: {}", e))?;
-            
+
             if let CborValue::Map(map) = cbor {
                 for (k, v) in map {
                     if let CborValue::Text(key) = k {
@@ -216,7 +222,7 @@ fn test_nested_cbor_with_deferred() -> anyhow::Result<()> {
             let bytes = ctx.get_bytes("cbor_bytes")?;
             let cbor: CborValue = ciborium::from_reader(&bytes[..])
                 .map_err(|e| anyhow::anyhow!("CBOR decode error: {}", e))?;
-            
+
             if let CborValue::Map(map) = cbor {
                 for (k, v) in map {
                     if let CborValue::Text(key) = k {
@@ -237,51 +243,53 @@ fn test_nested_cbor_with_deferred() -> anyhow::Result<()> {
             Ok(crate::Value::Undefined)
         })
         .register();
-    
+
     // Create CBOR metadata
     let cbor_metadata = CborValue::Map(vec![
-        (CborValue::Text("version".into()), CborValue::Text("2.1.0".into())),
-        (CborValue::Text("tags".into()), CborValue::Array(vec![
-            CborValue::Text("production".into()),
-            CborValue::Text("critical".into()),
-        ])),
+        (
+            CborValue::Text("version".into()),
+            CborValue::Text("2.1.0".into()),
+        ),
+        (
+            CborValue::Text("tags".into()),
+            CborValue::Array(vec![
+                CborValue::Text("production".into()),
+                CborValue::Text("critical".into()),
+            ]),
+        ),
     ]);
-    
+
     let mut cbor_bytes = Vec::new();
     ciborium::into_writer(&cbor_metadata, &mut cbor_bytes)?;
-    
+
     let lazy_metadata = create_lazy_cbor_from_bytes("CborMetadata", cbor_bytes)?;
-    
+
     // Create input with nested structure
     let mut input = crate::Value::new_object();
     let input_map = input.as_object_mut()?;
-    
+
     // Regular fields
     input_map.insert(
         crate::Value::from("environment"),
         crate::Value::from("prod"),
     );
-    
+
     // Nested object containing CBOR
     let mut resource = crate::Value::new_object();
-    resource.as_object_mut()?.insert(
-        crate::Value::from("id"),
-        crate::Value::from("resource-999"),
-    );
+    resource
+        .as_object_mut()?
+        .insert(crate::Value::from("id"), crate::Value::from("resource-999"));
     resource.as_object_mut()?.insert(
         crate::Value::from("metadata"),
         crate::Value::LazyObject(Rc::new(lazy_metadata)),
     );
-    
-    input_map.insert(
-        crate::Value::from("resource"),
-        resource,
-    );
-    
+
+    input_map.insert(crate::Value::from("resource"), resource);
+
     // Test with policy
     let mut engine = Engine::new();
     engine.set_lazy_mode(engine::LazyMode::LazyWithDeferred);
-    
+
     let policy = r#"
         package test.nested
         
@@ -297,10 +305,10 @@ fn test_nested_cbor_with_deferred() -> anyhow::Result<()> {
             "production" in input.resource.metadata.tags
         }
     "#;
-    
+
     engine.add_policy("test.rego".to_string(), policy.to_string())?;
     engine.set_input(input);
-    
+
     // Test immediate field
     let results = engine.eval_query("data.test.nested.metadata_version".to_string(), false)?;
     assert_eq!(results.result.len(), 1);
@@ -308,12 +316,12 @@ fn test_nested_cbor_with_deferred() -> anyhow::Result<()> {
         crate::Value::String(s) => assert_eq!(s.as_ref(), "2.1.0"),
         _ => panic!("Expected string result"),
     }
-    
+
     // Test policy with deferred field (tags should be lazily loaded)
     let results = engine.eval_query("data.test.nested.metadata_tags".to_string(), false)?;
     assert_eq!(results.result.len(), 1);
     // The tags field is deferred, so it returns a Deferred value until materialized
-    
+
     // Test policy with deferred field - the 'in' operator materializes the deferred value
     let results = engine.eval_query("data.test.nested.is_production".to_string(), false)?;
     assert_eq!(results.result.len(), 1);
@@ -325,7 +333,7 @@ fn test_nested_cbor_with_deferred() -> anyhow::Result<()> {
         crate::Value::Bool(b) => assert_eq!(*b, true),
         _ => panic!("Expected boolean result"),
     }
-    
+
     Ok(())
 }
 
@@ -333,36 +341,48 @@ fn test_nested_cbor_with_deferred() -> anyhow::Result<()> {
 #[test]
 fn test_multiple_cbor_subobjects() -> anyhow::Result<()> {
     use crate::Rc;
-    
+
     // Register schemas
     register_simple_cbor_schema();
-    
+
     // Create first CBOR object
     let cbor1 = CborValue::Map(vec![
-        (CborValue::Text("name".into()), CborValue::Text("resource_a".into())),
-        (CborValue::Text("count".into()), CborValue::Integer(75.into())),
+        (
+            CborValue::Text("name".into()),
+            CborValue::Text("resource_a".into()),
+        ),
+        (
+            CborValue::Text("count".into()),
+            CborValue::Integer(75.into()),
+        ),
         (CborValue::Text("enabled".into()), CborValue::Bool(true)),
     ]);
-    
+
     let mut cbor1_bytes = Vec::new();
     ciborium::into_writer(&cbor1, &mut cbor1_bytes)?;
     let lazy_cbor1 = create_lazy_cbor_from_bytes("SimpleCbor", cbor1_bytes)?;
-    
+
     // Create second CBOR object
     let cbor2 = CborValue::Map(vec![
-        (CborValue::Text("name".into()), CborValue::Text("resource_b".into())),
-        (CborValue::Text("count".into()), CborValue::Integer(25.into())),
+        (
+            CborValue::Text("name".into()),
+            CborValue::Text("resource_b".into()),
+        ),
+        (
+            CborValue::Text("count".into()),
+            CborValue::Integer(25.into()),
+        ),
         (CborValue::Text("enabled".into()), CborValue::Bool(false)),
     ]);
-    
+
     let mut cbor2_bytes = Vec::new();
     ciborium::into_writer(&cbor2, &mut cbor2_bytes)?;
     let lazy_cbor2 = create_lazy_cbor_from_bytes("SimpleCbor", cbor2_bytes)?;
-    
+
     // Create input with multiple CBOR subobjects
     let mut input = crate::Value::new_object();
     let input_map = input.as_object_mut()?;
-    
+
     input_map.insert(
         crate::Value::from("resource_a"),
         crate::Value::LazyObject(Rc::new(lazy_cbor1)),
@@ -371,11 +391,11 @@ fn test_multiple_cbor_subobjects() -> anyhow::Result<()> {
         crate::Value::from("resource_b"),
         crate::Value::LazyObject(Rc::new(lazy_cbor2)),
     );
-    
+
     // Policy accessing multiple CBOR objects
     let mut engine = Engine::new();
     engine.set_lazy_mode(engine::LazyMode::LazyWithDeferred);
-    
+
     let policy = r#"
         package test.multi
         
@@ -392,10 +412,10 @@ fn test_multiple_cbor_subobjects() -> anyhow::Result<()> {
             input.resource_b.enabled == false
         }
     "#;
-    
+
     engine.add_policy("test.rego".to_string(), policy.to_string())?;
     engine.set_input(input);
-    
+
     // Test total count
     let results = engine.eval_query("data.test.multi.total_count".to_string(), false)?;
     assert_eq!(results.result.len(), 1);
@@ -404,10 +424,10 @@ fn test_multiple_cbor_subobjects() -> anyhow::Result<()> {
         crate::Value::Number(_) => {
             // Number comparison - just verify it's a number
             // In real tests you'd convert and compare properly
-        },
+        }
         _ => panic!("Expected number result"),
     }
-    
+
     // Test allow
     let results = engine.eval_query("data.test.multi.allow".to_string(), false)?;
     assert_eq!(results.result.len(), 1);
@@ -415,7 +435,7 @@ fn test_multiple_cbor_subobjects() -> anyhow::Result<()> {
         crate::Value::Bool(b) => assert_eq!(*b, true),
         _ => panic!("Expected boolean result"),
     }
-    
+
     // Test deny
     let results = engine.eval_query("data.test.multi.deny".to_string(), false)?;
     assert_eq!(results.result.len(), 1);
@@ -423,7 +443,6 @@ fn test_multiple_cbor_subobjects() -> anyhow::Result<()> {
         crate::Value::Bool(b) => assert_eq!(*b, true),
         _ => panic!("Expected boolean result"),
     }
-    
+
     Ok(())
 }
-

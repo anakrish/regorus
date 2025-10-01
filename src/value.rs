@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use crate::number::Number;
 use crate::lazy::{DeferredValue, LazyArray, LazyObject, LazySet};
+use crate::number::Number;
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use core::fmt;
@@ -108,7 +108,7 @@ impl Serialize for Value {
 
             // display undefined as a special string
             Value::Undefined => serializer.serialize_str("<undefined>"),
-            
+
             // Lazy objects and deferred values need to be materialized for serialization
             // For now, serialize as a placeholder
             Value::LazyObject(lazy) => {
@@ -116,7 +116,7 @@ impl Serialize for Value {
                 // In a full implementation, this would materialize all fields
                 serializer.serialize_str(&alloc::format!("<lazy:{}>", lazy.type_id().as_str()))
             }
-            
+
             Value::Deferred(deferred) => {
                 // Serialize deferred as a path description
                 serializer.serialize_str(&alloc::format!(
@@ -124,12 +124,12 @@ impl Serialize for Value {
                     deferred.root_type_id().as_str()
                 ))
             }
-            
+
             Value::LazyArray(arr) => {
                 // Serialize lazy array as placeholder
                 serializer.serialize_str(&alloc::format!("<lazy_array:{}>", arr.type_id().as_str()))
             }
-            
+
             Value::LazySet(set) => {
                 // Serialize lazy set as placeholder
                 serializer.serialize_str(&alloc::format!("<lazy_set:{}>", set.type_id().as_str()))
@@ -1484,12 +1484,12 @@ impl Value {
     pub fn is_lazy_object(&self) -> bool {
         matches!(self, Value::LazyObject(_))
     }
-    
+
     /// Check if this value is deferred
     pub fn is_deferred(&self) -> bool {
         matches!(self, Value::Deferred(_))
     }
-    
+
     /// Get a field from this value, handling lazy objects and deferred values
     ///
     /// This is the method that should be used by the interpreter for field access
@@ -1497,7 +1497,7 @@ impl Value {
     pub fn get_field(&self, key: &Value) -> Value {
         match self {
             Value::Object(o) => o.get(key).cloned().unwrap_or(Value::Undefined),
-            
+
             Value::LazyObject(lazy) => {
                 // For lazy objects, call the field getter from the schema
                 if let Ok(key_str) = key.as_string() {
@@ -1505,29 +1505,30 @@ impl Value {
                     match lazy.get_field(&key_str) {
                         Ok(Some(value)) => value,
                         Ok(None) => Value::Undefined,
-                        Err(_) => Value::Undefined,  // Could log error here
+                        Err(_) => Value::Undefined, // Could log error here
                     }
                 } else {
                     Value::Undefined
                 }
             }
-            
+
             Value::Deferred(deferred) => {
                 // For deferred values, extend the path without materializing
                 if let Ok(key_str) = key.as_string() {
-                    let extended = deferred.extend(crate::lazy::PathSegment::field(key_str.as_ref()));
+                    let extended =
+                        deferred.extend(crate::lazy::PathSegment::field(key_str.as_ref()));
                     Value::Deferred(Rc::new(extended))
                 } else {
                     // Non-string key on deferred value - undefined
                     Value::Undefined
                 }
             }
-            
+
             // For all other types, use the Index trait
-            _ => self[key].clone()
+            _ => self[key].clone(),
         }
     }
-    
+
     /// Materialize a deferred value if needed
     pub fn materialize(&self) -> Result<Value> {
         match self {
@@ -1536,7 +1537,7 @@ impl Value {
                 let materialized = deferred.materialize()?;
                 Ok(materialized.clone())
             }
-            other => Ok(other.clone())
+            other => Ok(other.clone()),
         }
     }
 }

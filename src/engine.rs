@@ -19,11 +19,11 @@ use anyhow::{bail, Result};
 pub enum LazyMode {
     /// Traditional eager evaluation - no lazy objects
     Disabled,
-    
+
     /// Use lazy objects with on-demand field loading, but always materialize to concrete Values.
     /// Fields configured with Deferred strategy will be materialized immediately instead.
     LazyOnly,
-    
+
     /// Use lazy objects and respect Deferred field strategies.
     /// Allows ultra-lazy evaluation where Deferred values track paths without materialization.
     LazyWithDeferred,

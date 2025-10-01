@@ -976,16 +976,16 @@ impl Interpreter {
         let mut type_match = BTreeSet::new();
         let mut cache = BTreeMap::new();
         let mut count = 0;
-        
+
         let collection_val = self.eval_expr(collection)?;
-        
+
         // Materialize deferred values before iteration
         let collection_val = if matches!(collection_val, Value::Deferred(_)) {
             collection_val.materialize()?
         } else {
             collection_val
         };
-        
+
         match collection_val {
             Value::Array(a) => {
                 for (idx, value) in a.iter().enumerate() {
@@ -1057,20 +1057,20 @@ impl Interpreter {
                     *self.current_scope_mut()? = scope_saved.clone();
                 }
             }
-            
+
             Value::LazyObject(lazy_obj) => {
                 // Lazy iteration: get keys first, then fetch values on-demand
-                let keys = lazy_obj.keys()
+                let keys = lazy_obj
+                    .keys()
                     .map_err(|e| anyhow!("Failed to get keys from lazy object: {}", e))?;
                 let num_keys = keys.len();
-                
+
                 for (idx, key_str) in keys.into_iter().enumerate() {
                     // Fetch value lazily - only when we need it for this iteration
-                    let value = lazy_obj.get_field(&key_str)?
-                        .unwrap_or(Value::Undefined);
-                    
+                    let value = lazy_obj.get_field(&key_str)?.unwrap_or(Value::Undefined);
+
                     let key = Value::String(key_str.into());
-                    
+
                     if !self.make_key_value_bindings(
                         idx == num_keys - 1,
                         &mut type_match,
@@ -1093,19 +1093,19 @@ impl Interpreter {
                     *self.current_scope_mut()? = scope_saved.clone();
                 }
             }
-            
+
             Value::LazyArray(lazy_arr) => {
                 // Lazy array iteration: fetch elements on-demand
-                let len = lazy_arr.len()
+                let len = lazy_arr
+                    .len()
                     .map_err(|e| anyhow!("Failed to get lazy array length: {}", e))?;
-                
+
                 for idx in 0..len {
                     // Fetch element lazily - only when needed
-                    let value = lazy_arr.get(idx)?
-                        .unwrap_or(Value::Undefined);
-                    
+                    let value = lazy_arr.get(idx)?.unwrap_or(Value::Undefined);
+
                     let key = Value::from(idx);
-                    
+
                     if !self.make_key_value_bindings(
                         idx == len - 1,
                         &mut type_match,
@@ -1128,17 +1128,17 @@ impl Interpreter {
                     *self.current_scope_mut()? = scope_saved.clone();
                 }
             }
-            
+
             Value::LazySet(lazy_set) => {
                 // Lazy set iteration: fetch elements on-demand
-                let len = lazy_set.len()
+                let len = lazy_set
+                    .len()
                     .map_err(|e| anyhow!("Failed to get lazy set length: {}", e))?;
-                
+
                 for idx in 0..len {
                     // Fetch element lazily - only when needed
-                    let value = lazy_set.get(idx)?
-                        .unwrap_or(Value::Undefined);
-                    
+                    let value = lazy_set.get(idx)?.unwrap_or(Value::Undefined);
+
                     if !self.make_key_value_bindings(
                         idx == len - 1,
                         &mut type_match,
@@ -1161,7 +1161,7 @@ impl Interpreter {
                     *self.current_scope_mut()? = scope_saved.clone();
                 }
             }
-            
+
             Value::Undefined => (),
             v => {
                 let span = collection.span();

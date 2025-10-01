@@ -67,8 +67,8 @@ pub fn get_type(value: &Value) -> &str {
         Value::Undefined => "undefined",
         Value::LazyObject(_) => "object", // Treat lazy object as object
         Value::Deferred(_) => "deferred", // New type for deferred values
-        Value::LazyArray(_) => "array", // Treat lazy array as array
-        Value::LazySet(_) => "set", // Treat lazy set as set
+        Value::LazyArray(_) => "array",   // Treat lazy array as array
+        Value::LazySet(_) => "set",       // Treat lazy set as set
     }
 }
 

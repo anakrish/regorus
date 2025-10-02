@@ -1,0 +1,475 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Azure RBAC Compiler Test Suite
+# Tests the RBAC-to-RVM compilation process and verifies generated RVM instructions
+# These tests validate that the compiler generates correct and efficient bytecode
+
+cases:
+  - note: simple_rbac_compilation
+    description: Test compilation of simple RBAC policy to RVM instructions
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-123",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub1"
+          }
+        ]
+      }
+    expected_rvm_pattern:
+      instruction_count_range: [10, 25]
+      required_instructions:
+        - "LoadData"
+        - "LoadInput"
+        - "BuiltinCall"  # azure.find_role_assignments
+        - "BuiltinCall"  # azure.scope_covers  
+        - "BuiltinCall"  # azure.action_allowed
+        - "ObjectCreate" # result object
+        - "Return"
+      builtin_calls:
+        - "azure.get_effective_principals"
+        - "azure.find_role_assignments"
+        - "azure.scope_covers"
+        - "azure.action_allowed"
+
+  - note: group_membership_compilation
+    description: Test compilation with group membership resolution
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/contributor",
+            "name": "Contributor", 
+            "permissions": [
+              {
+                "actions": ["*"],
+                "notActions": ["Microsoft.Authorization/*/Delete"],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "group-456",
+            "principalType": "Group",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/contributor",
+            "scope": "/subscriptions/sub1/resourceGroups/rg1"
+          }
+        ],
+        "principalMemberships": [
+          {
+            "principalId": "user-789",
+            "groupId": "group-456", 
+            "membershipType": "Direct"
+          }
+        ]
+      }
+    expected_rvm_pattern:
+      instruction_count_range: [15, 35]
+      required_instructions:
+        - "LoadData"
+        - "LoadInput"
+        - "BuiltinCall"  # azure.get_effective_principals
+        - "LoopStart"    # iterate over effective principals
+        - "BuiltinCall"  # azure.find_role_assignments
+        - "LoopNext"
+        - "ObjectCreate"
+        - "Return"
+      loop_constructs: 1
+      builtin_calls:
+        - "azure.get_effective_principals"
+        - "azure.find_role_assignments" 
+        - "azure.scope_covers"
+        - "azure.action_allowed"
+
+  - note: abac_condition_compilation
+    description: Test compilation with ABAC condition evaluation
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/data-reader",
+            "name": "Conditional Data Reader",
+            "permissions": [
+              {
+                "actions": [],
+                "notActions": [],
+                "dataActions": ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-analytics",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/data-reader",
+            "scope": "/subscriptions/sub1/resourceGroups/data-rg",
+            "condition": "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'analytics-data'",
+            "conditionVersion": "2.0"
+          }
+        ]
+      }
+    expected_rvm_pattern:
+      instruction_count_range: [20, 40]
+      required_instructions:
+        - "LoadData"
+        - "LoadInput"
+        - "BuiltinCall"  # azure.evaluate_condition
+        - "And"         # combine basic check + condition
+        - "ObjectCreate"
+        - "Return"
+      builtin_calls:
+        - "azure.get_effective_principals"
+        - "azure.find_role_assignments"
+        - "azure.scope_covers"
+        - "azure.action_allowed"
+        - "azure.evaluate_condition"
+
+  - note: multiple_assignments_compilation
+    description: Test compilation with multiple role assignments requiring OR logic
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["*/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          },
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/storage-admin",
+            "name": "Storage Admin",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/*"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-multi",
+            "principalType": "User", 
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub1"
+          },
+          {
+            "principalId": "user-multi",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/storage-admin", 
+            "scope": "/subscriptions/sub1/resourceGroups/storage-rg"
+          }
+        ]
+      }
+    expected_rvm_pattern:
+      instruction_count_range: [25, 50]
+      required_instructions:
+        - "LoadData"
+        - "LoadInput"
+        - "LoopStart"    # iterate over assignments
+        - "BuiltinCall"  # azure.scope_covers
+        - "BuiltinCall"  # azure.action_allowed
+        - "ComprehensionYield" # collect successful assignments
+        - "LoopNext"
+        - "Count"        # check if any assignments succeeded
+        - "Gt"           # count > 0
+        - "ObjectCreate"
+        - "Return"
+      loop_constructs: 1
+      comprehensions: 1
+
+  - note: wildcard_action_compilation
+    description: Test compilation with wildcard action matching optimization
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/owner",
+            "name": "Owner",
+            "permissions": [
+              {
+                "actions": ["*"],
+                "notActions": [],
+                "dataActions": ["*"],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-admin",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/owner",
+            "scope": "/subscriptions/sub1"
+          }
+        ]
+      }
+    expected_rvm_pattern:
+      instruction_count_range: [10, 25]
+      optimizations:
+        - "wildcard_shortcut"  # Should optimize "*" checks
+      builtin_calls:
+        - "azure.get_effective_principals"
+        - "azure.find_role_assignments"
+        - "azure.scope_covers"
+        - "azure.action_allowed"  # Should handle "*" efficiently
+
+  - note: not_actions_compilation
+    description: Test compilation with notActions requiring explicit denial checks
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/limited-contributor",
+            "name": "Limited Contributor",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/*"],
+                "notActions": ["Microsoft.Storage/storageAccounts/delete"],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-limited",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/limited-contributor",
+            "scope": "/subscriptions/sub1/resourceGroups/rg1"
+          }
+        ]
+      }
+    expected_rvm_pattern:
+      instruction_count_range: [15, 30] 
+      required_instructions:
+        - "BuiltinCall"  # azure.action_allowed (must handle notActions)
+      special_handling:
+        - "notActions_evaluation"
+
+  - note: data_actions_compilation
+    description: Test compilation distinguishing management vs data plane actions
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/blob-contributor",
+            "name": "Storage Blob Data Contributor",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/blobServices/containers/read"],
+                "notActions": [],
+                "dataActions": [
+                  "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+                  "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+                ],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-blob",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/blob-contributor",
+            "scope": "/subscriptions/sub1/resourceGroups/storage-rg"
+          }
+        ]
+      }
+    expected_rvm_pattern:
+      instruction_count_range: [15, 30]
+      required_instructions:
+        - "IndexLiteral"  # extract actionType from input
+        - "Eq"           # check if actionType == "dataAction"
+        - "BuiltinCall"  # azure.action_allowed with action type context
+      action_type_handling: true
+
+  - note: complex_condition_compilation
+    description: Test compilation of complex ABAC condition with AND/OR operators
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/complex-conditional",
+            "name": "Complex Conditional Role",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-complex",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/complex-conditional",
+            "scope": "/subscriptions/sub1",
+            "condition": "(@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'public-data' OR @Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringStartsWith 'temp-') AND @Principal[microsoft.directory/user:department] StringEquals 'Analytics' AND @Environment[localTime] TimeOfDayGreaterThan '09:00'",
+            "conditionVersion": "2.0"
+          }
+        ]
+      }
+    expected_rvm_pattern:
+      instruction_count_range: [30, 60]
+      required_instructions:
+        - "BuiltinCall"  # azure.evaluate_condition with complex expression
+      condition_complexity: "high"
+      builtin_calls:
+        - "azure.evaluate_condition"
+
+  - note: optimization_scope_prefiltering
+    description: Test compilation optimization for scope pre-filtering
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["*/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-123",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub2"
+          },
+          {
+            "principalId": "user-123", 
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub1/resourceGroups/other-rg"
+          },
+          {
+            "principalId": "user-123",
+            "principalType": "User", 
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub1/resourceGroups/target-rg"
+          }
+        ]
+      }
+    target_resource: "/subscriptions/sub1/resourceGroups/target-rg/providers/Microsoft.Storage/storageAccounts/account1"
+    expected_rvm_pattern:
+      instruction_count_range: [20, 40]
+      optimizations:
+        - "scope_prefiltering"  # Should filter assignments by scope early
+      expected_filtered_assignments: 1  # Only the target-rg assignment should match
+
+  - note: error_handling_compilation
+    description: Test compilation includes proper error handling for malformed policies
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/test-role",
+            "name": "Test Role",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-123",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/nonexistent-role",
+            "scope": "/subscriptions/sub1"
+          }
+        ]
+      }
+    expected_rvm_pattern:
+      instruction_count_range: [15, 30]
+      error_handling:
+        - "missing_role_definition"
+      required_instructions:
+        - "LoadData"
+        - "BuiltinCall"  # Should handle missing role gracefully
+        - "ObjectCreate" # Error result object
+        - "Return"
+
+  - note: literal_table_optimization
+    description: Test that compilation optimizes literal table usage
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader", 
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-123",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub1"
+          }
+        ]
+      }
+    expected_rvm_pattern:
+      literal_table_entries:
+        - "principalId"
+        - "action"
+        - "resource"
+        - "Microsoft.Storage/storageAccounts/read"
+        - "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader"
+        - "/subscriptions/sub1"
+      literal_deduplication: true

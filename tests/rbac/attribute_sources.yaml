@@ -1,0 +1,670 @@
+# Azure RBAC Attribute Sources Test Suite
+# Tests for @Environment, @Principal, @Request, @Resource attribute sources
+
+name: "Azure RBAC Attribute Sources"
+description: "Test suite for Azure RBAC attribute source prefixes and their specific attributes"
+
+tests:
+  # @Environment Attribute Tests
+  - name: "environment_is_private_link_true"
+    description: "Test @Environment[isPrivateLink] attribute when access is over private link"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-1"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Environment[isPrivateLink] BoolEquals true
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      environment:
+        isPrivateLink: true
+    expected:
+      result: "allow"
+      reason: "Access is over private link"
+
+  - name: "environment_is_private_link_false"
+    description: "Test @Environment[isPrivateLink] attribute when access is not over private link"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-2"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Environment[isPrivateLink] BoolEquals true
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      environment:
+        isPrivateLink: false
+    expected:
+      result: "deny"
+      reason: "Access is not over private link"
+
+  - name: "environment_private_endpoint"
+    description: "Test @Environment[Microsoft.Network/privateEndpoints] attribute"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-3"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Environment[Microsoft.Network/privateEndpoints] StringEqualsIgnoreCase '/subscriptions/aaaa0a0a-bb1b-cc2c-dd3d-eeeeee4e4e4e/resourceGroups/example-group/providers/Microsoft.Network/privateEndpoints/privateendpoint1'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      environment:
+        privateEndpoint: "/subscriptions/aaaa0a0a-bb1b-cc2c-dd3d-eeeeee4e4e4e/resourceGroups/example-group/providers/Microsoft.Network/privateEndpoints/privateendpoint1"
+    expected:
+      result: "allow"
+      reason: "Access is from allowed private endpoint"
+
+  - name: "environment_subnet"
+    description: "Test @Environment[Microsoft.Network/virtualNetworks/subnets] attribute"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-4"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Environment[Microsoft.Network/virtualNetworks/subnets] StringEqualsIgnoreCase '/subscriptions/aaaa0a0a-bb1b-cc2c-dd3d-eeeeee4e4e4e/resourceGroups/example-group/providers/Microsoft.Network/virtualNetworks/virtualnetwork1/subnets/default'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      environment:
+        subnet: "/subscriptions/aaaa0a0a-bb1b-cc2c-dd3d-eeeeee4e4e4e/resourceGroups/example-group/providers/Microsoft.Network/virtualNetworks/virtualnetwork1/subnets/default"
+    expected:
+      result: "allow"
+      reason: "Access is from allowed subnet"
+
+  - name: "environment_utc_now_greater_than"
+    description: "Test @Environment[UtcNow] with DateTimeGreaterThan"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-5"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Environment[UtcNow] DateTimeGreaterThan '2023-01-01T00:00:00.0Z'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      environment:
+        utcNow: "2023-06-01T12:00:00.0Z"
+    expected:
+      result: "allow"
+      reason: "Current time is after 2023-01-01"
+
+  - name: "environment_utc_now_less_than"
+    description: "Test @Environment[UtcNow] with DateTimeLessThan for time-based access control"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-6"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Environment[UtcNow] DateTimeLessThan '2025-01-01T00:00:00.0Z'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      environment:
+        utcNow: "2023-06-01T12:00:00.0Z"
+    expected:
+      result: "allow"
+      reason: "Current time is before 2025-01-01"
+
+  # @Principal Attribute Tests
+  - name: "principal_id_guid_equals"
+    description: "Test @Principal[principalId] with specific principal ID"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-7"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Principal[principalId] GuidEquals '12345678-1234-1234-1234-123456789abc'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      principal:
+        principalId: "12345678-1234-1234-1234-123456789abc"
+    expected:
+      result: "allow"
+      reason: "Principal ID matches expected GUID"
+
+  - name: "principal_custom_security_attribute"
+    description: "Test @Principal custom security attribute"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-8"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Principal[customSecurityAttribute:Department] StringEquals 'Engineering'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      principal:
+        customSecurityAttributes:
+          Department: "Engineering"
+    expected:
+      result: "allow"
+      reason: "Principal has Department attribute set to Engineering"
+
+  - name: "principal_multiple_attributes"
+    description: "Test multiple @Principal attributes in combination"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-9"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              (
+                @Principal[customSecurityAttribute:Department] StringEquals 'Engineering'
+                AND
+                @Principal[customSecurityAttribute:Level] ForAnyOfAnyValues:StringEquals {'Senior', 'Lead', 'Principal'}
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      principal:
+        customSecurityAttributes:
+          Department: "Engineering"
+          Level: "Senior"
+    expected:
+      result: "allow"
+      reason: "Principal is in Engineering department with Senior level"
+
+  # @Request Attribute Tests
+  - name: "request_blob_prefix"
+    description: "Test @Request blob prefix attribute"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-10"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:prefix] StringStartsWith 'readonly/'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes:
+          prefix: "readonly/documents"
+    expected:
+      result: "allow"
+      reason: "Request prefix starts with readonly/"
+
+  - name: "request_blob_index_tags_keys"
+    description: "Test @Request blob index tags keys"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-11"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags&$keys$&] ForAllOfAnyValues:StringEquals {'Project', 'Environment', 'Owner'}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write"
+      request:
+        attributes:
+          tagKeys: ["Project", "Environment"]
+    expected:
+      result: "allow"
+      reason: "All requested tag keys are in allowed list"
+
+  - name: "request_blob_index_tags_values"
+    description: "Test @Request blob index tags values in key"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-12"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags:Project<$key_case_sensitive$>] StringEquals 'AllowedProject'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write"
+      request:
+        attributes:
+          tags:
+            Project: "AllowedProject"
+    expected:
+      result: "allow"
+      reason: "Project tag value matches allowed project"
+
+  - name: "request_version_id"
+    description: "Test @Request version ID attribute"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-13"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:versionId] DateTimeGreaterThan '2022-01-01T00:00:00.0Z'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes:
+          versionId: "2022-06-01T12:00:00.0Z"
+    expected:
+      result: "allow"
+      reason: "Version ID is after 2022-01-01"
+
+  - name: "request_snapshot"
+    description: "Test @Request snapshot attribute"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-14"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              Exists @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:snapshot]
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes:
+          snapshot: "2023-05-01T12:00:00.000Z"
+    expected:
+      result: "allow"
+      reason: "Snapshot attribute exists in request"
+
+  - name: "request_list_blob_include"
+    description: "Test @Request list blob include attribute"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-15"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:include] ForAllOfAnyValues:StringEqualsIgnoreCase {'metadata', 'snapshots', 'versions'}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes:
+          include: ["metadata", "versions"]
+    expected:
+      result: "allow"
+      reason: "All include parameters are allowed"
+
+  # @Resource Attribute Tests
+  - name: "resource_account_name"
+    description: "Test @Resource account name attribute"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-16"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts:name] StringEquals 'allowedstorageaccount'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts"
+        attributes:
+          name: "allowedstorageaccount"
+    expected:
+      result: "allow"
+      reason: "Storage account name matches allowed account"
+
+  - name: "resource_container_name"
+    description: "Test @Resource container name attribute"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-17"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] ForAnyOfAnyValues:StringEquals {'container1', 'container2', 'container3'}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers"
+        attributes:
+          name: "container2"
+    expected:
+      result: "allow"
+      reason: "Container name is in allowed list"
+
+  - name: "resource_blob_path"
+    description: "Test @Resource blob path attribute"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-18"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringLike 'readonly/*'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          path: "readonly/documents/file.txt"
+    expected:
+      result: "allow"
+      reason: "Blob path matches readonly/* pattern"
+
+  - name: "resource_is_hns_enabled"
+    description: "Test @Resource hierarchical namespace enabled attribute"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-19"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts:isHnsEnabled] BoolEquals true
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts"
+        attributes:
+          isHnsEnabled: true
+    expected:
+      result: "allow"
+      reason: "Storage account has hierarchical namespace enabled"
+
+  - name: "resource_is_current_version"
+    description: "Test @Resource is current version attribute"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-20"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:isCurrentVersion] BoolEquals true
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          isCurrentVersion: true
+    expected:
+      result: "allow"
+      reason: "Blob is the current version"
+
+  - name: "resource_encryption_scope_name"
+    description: "Test @Resource encryption scope name attribute"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-21"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/encryptionScopes:name] ForAnyOfAnyValues:StringEquals {'validScope1', 'validScope2'}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/encryptionScopes"
+        attributes:
+          name: "validScope1"
+    expected:
+      result: "allow"
+      reason: "Encryption scope is in allowed list"
+
+  - name: "resource_blob_index_tags"
+    description: "Test @Resource blob index tags attribute"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-22"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags:Project<$key_case_sensitive$>] StringEquals 'PublicProject'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          tags:
+            Project: "PublicProject"
+    expected:
+      result: "allow"
+      reason: "Blob has Project tag set to PublicProject"
+
+  - name: "resource_container_metadata"
+    description: "Test @Resource container metadata attribute"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-23"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/metadata:AccessLevel] StringEquals 'Public'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers"
+        attributes:
+          metadata:
+            AccessLevel: "Public"
+    expected:
+      result: "allow"
+      reason: "Container metadata AccessLevel is Public"
+
+# Mixed Attribute Source Tests
+  - name: "mixed_attribute_sources_complex"
+    description: "Test complex condition using all attribute sources"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-24"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              (
+                @Environment[isPrivateLink] BoolEquals true
+                AND
+                @Principal[customSecurityAttribute:Department] StringEquals 'Engineering'
+                AND
+                @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:prefix] StringStartsWith 'public/'
+                AND
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] ForAnyOfAnyValues:StringEquals {'production', 'staging'}
+                AND
+                @Environment[UtcNow] DateTimeGreaterThan '2023-01-01T00:00:00.0Z'
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      environment:
+        isPrivateLink: true
+        utcNow: "2023-06-01T12:00:00.0Z"
+      principal:
+        customSecurityAttributes:
+          Department: "Engineering"
+      request:
+        attributes:
+          prefix: "public/documents"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers"
+        attributes:
+          name: "production"
+    expected:
+      result: "allow"
+      reason: "All conditions met: private link, engineering department, public prefix, production container, after 2023"
+
+# Compilation Target Tests for RVM
+compilation_tests:
+  - name: "environment_attribute_compilation"
+    description: "Test RVM compilation of @Environment attribute access"
+    policy:
+      expression: "@Environment[isPrivateLink] BoolEquals true"
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["environment", "isPrivateLink"]
+      - type: "LoadConstant"
+        value: true
+      - type: "BuiltinCall"
+        name: "bool_equals"
+        args: 2
+
+  - name: "principal_attribute_compilation"
+    description: "Test RVM compilation of @Principal attribute access"
+    policy:
+      expression: "@Principal[principalId] GuidEquals '12345678-1234-1234-1234-123456789abc'"
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["principal", "principalId"]
+      - type: "LoadConstant"
+        value: "12345678-1234-1234-1234-123456789abc"
+      - type: "BuiltinCall"
+        name: "guid_equals"
+        args: 2
+
+  - name: "request_attribute_compilation"
+    description: "Test RVM compilation of @Request attribute access"
+    policy:
+      expression: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:prefix] StringStartsWith 'public/'"
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["request", "attributes", "Microsoft.Storage/storageAccounts/blobServices/containers/blobs:prefix"]
+      - type: "LoadConstant"
+        value: "public/"
+      - type: "BuiltinCall"
+        name: "string_starts_with"
+        args: 2
+
+  - name: "resource_attribute_compilation"
+    description: "Test RVM compilation of @Resource attribute access"
+    policy:
+      expression: "@Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'container1'"
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["resource", "attributes", "Microsoft.Storage/storageAccounts/blobServices/containers:name"]
+      - type: "LoadConstant"
+        value: "container1"
+      - type: "BuiltinCall"
+        name: "string_equals"
+        args: 2

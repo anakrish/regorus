@@ -86,6 +86,7 @@ impl<'source> Parser<'source> {
                 self.tok.1.text()
             }
             TokenKind::String | TokenKind::RawString => "",
+            TokenKind::At | TokenKind::LogicalAnd | TokenKind::LogicalOr => self.tok.1.text(),
         }
     }
 

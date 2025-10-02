@@ -3003,8 +3003,10 @@ impl RegoVM {
                     if let Value::Set(set) = current_result {
                         let mut new_set = set.as_ref().clone();
                         new_set.insert(value_to_add);
+                        let _new_len = new_set.len();
                         *current_result = Value::Set(crate::Rc::new(new_set));
-                        debug!("Added to set comprehension, new size: {}", new_set.len());
+                        #[cfg(feature = "rvm-tracing")]
+                        debug!("Added to set comprehension, new size: {}", _new_len);
                     } else {
                         return Err(VmError::InvalidIteration {
                             value: current_result.clone(),
@@ -3015,11 +3017,10 @@ impl RegoVM {
                     if let Value::Array(arr) = current_result {
                         let mut new_arr = arr.as_ref().to_vec();
                         new_arr.push(value_to_add);
+                        let _new_len = new_arr.len();
                         *current_result = Value::Array(crate::Rc::new(new_arr));
-                        debug!(
-                            "Added to array comprehension, new length: {}",
-                            new_arr.len()
-                        );
+                        #[cfg(feature = "rvm-tracing")]
+                        debug!("Added to array comprehension, new length: {}", _new_len);
                     } else {
                         return Err(VmError::InvalidIteration {
                             value: current_result.clone(),
@@ -3031,8 +3032,10 @@ impl RegoVM {
                         if let Some(key) = key {
                             let mut new_obj = obj.as_ref().clone();
                             new_obj.insert(key, value_to_add);
+                            let _new_len = new_obj.len();
                             *current_result = Value::Object(crate::Rc::new(new_obj));
-                            debug!("Added to object comprehension, new size: {}", new_obj.len());
+                            #[cfg(feature = "rvm-tracing")]
+                            debug!("Added to object comprehension, new size: {}", _new_len);
                         } else {
                             return Err(VmError::InvalidIteration {
                                 value: Value::String(Arc::from(

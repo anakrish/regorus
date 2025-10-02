@@ -1,0 +1,658 @@
+# Azure Storage Specific Attributes and Actions Test Suite
+# Tests for Azure Blob Storage and Queue Storage specific attributes and actions
+
+name: "Azure Storage Specific Tests"
+description: "Test suite for Azure Blob Storage and Queue Storage specific attributes, actions, and suboperations"
+
+tests:
+  # Azure Blob Storage Actions and Suboperations
+  - name: "blob_list_action"
+    description: "Test Microsoft.Storage blob read action with Blob.List suboperation"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-1"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'}
+                AND SubOperationMatches{'Blob.List'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:prefix] StringStartsWith 'public/'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      subOperation: "Blob.List"
+      request:
+        attributes:
+          prefix: "public/documents"
+    expected:
+      result: "allow"
+      reason: "List operation allowed for public/ prefix"
+
+  - name: "blob_read_not_list"
+    description: "Test Microsoft.Storage blob read action excluding list operations"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-2"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'}
+                AND NOT SubOperationMatches{'Blob.List'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags:Project<$key_case_sensitive$>] StringEquals 'PublicAccess'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      subOperation: "NOT Blob.List"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          tags:
+            Project: "PublicAccess"
+    expected:
+      result: "allow"
+      reason: "Non-list read operation allowed for blobs with PublicAccess project tag"
+
+  - name: "blob_write_with_tag_headers"
+    description: "Test blob write action with tag headers suboperation"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-3"
+        dataActions: 
+          - "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+          - "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/add/action"
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write'}
+                AND SubOperationMatches{'Blob.Write.WithTagHeaders'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags:Environment<$key_case_sensitive$>] ForAnyOfAnyValues:StringEquals {'Development', 'Staging', 'Production'}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+      subOperation: "Blob.Write.WithTagHeaders"
+      request:
+        attributes:
+          tags:
+            Environment: "Production"
+    expected:
+      result: "allow"
+      reason: "Write with tags allowed for Production environment"
+
+  - name: "blob_write_tier_operation"
+    description: "Test blob write action with tier suboperation"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-4"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write'}
+                AND SubOperationMatches{'Blob.Write.Tier'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:isCurrentVersion] BoolEquals true
+                AND
+                @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:versionId] DateTimeGreaterThan '2023-01-01T00:00:00.0Z'
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+      subOperation: "Blob.Write.Tier"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          isCurrentVersion: true
+      request:
+        attributes:
+          versionId: "2023-06-01T12:00:00.0Z"
+    expected:
+      result: "allow"
+      reason: "Tier operation allowed for current version blobs created after 2023-01-01"
+
+  - name: "blob_tags_read_action"
+    description: "Test blob index tags read action"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-5"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/read'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags&$keys$&] ForAllOfAnyValues:StringEquals {'Project', 'Environment', 'Owner'}
+                AND
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] ForAnyOfAnyValues:StringEquals {'public-data', 'shared-data'}
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          tagKeys: ["Project", "Environment"]
+          containerName: "public-data"
+    expected:
+      result: "allow"
+      reason: "Tag read allowed for blobs with allowed tag keys in public containers"
+
+  - name: "blob_tags_write_action"
+    description: "Test blob index tags write action"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-6"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write'})
+              OR
+              (
+                @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags&$keys$&] ForAllOfAnyValues:StringEquals {'Project', 'Environment'}
+                AND
+                @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags:Project<$key_case_sensitive$>] ForAnyOfAnyValues:StringEquals {'WebApp', 'DataPipeline', 'Analytics'}
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write"
+      request:
+        attributes:
+          tagKeys: ["Project", "Environment"]
+          tags:
+            Project: "WebApp"
+            Environment: "Production"
+    expected:
+      result: "allow"
+      reason: "Tag write allowed for WebApp project with allowed tag keys"
+
+  - name: "blob_filter_action"
+    description: "Test find blobs by tags action"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-7"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/filter/action"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/filter/action"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/filter/action'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts:isHnsEnabled] BoolEquals false
+                AND
+                @Environment[isPrivateLink] BoolEquals true
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/filter/action"
+      resource:
+        type: "Microsoft.Storage/storageAccounts"
+        attributes:
+          isHnsEnabled: false
+      environment:
+        isPrivateLink: true
+    expected:
+      result: "allow"
+      reason: "Filter action allowed for non-HNS accounts over private link"
+
+  - name: "blob_delete_action"
+    description: "Test blob delete action"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-8"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] ForAnyOfAnyValues:StringEquals {'temp-data', 'cache-data'}
+                AND
+                @Environment[UtcNow] DateTimeGreaterThan '2023-01-01T00:00:00.0Z'
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers"
+        attributes:
+          name: "temp-data"
+      environment:
+        utcNow: "2023-06-01T12:00:00.0Z"
+    expected:
+      result: "allow"
+      reason: "Delete allowed in temp containers after 2023-01-01"
+
+  - name: "blob_delete_version_action"
+    description: "Test delete blob version action"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-9"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/deleteBlobVersion/action"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/deleteBlobVersion/action"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/deleteBlobVersion/action'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:versionId] DateTimeLessThan '2023-01-01T00:00:00.0Z'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/deleteBlobVersion/action"
+      request:
+        attributes:
+          versionId: "2022-06-01T12:00:00.0Z"
+    expected:
+      result: "allow"
+      reason: "Delete version allowed for versions older than 2023-01-01"
+
+  - name: "blob_permanent_delete_action"
+    description: "Test permanent delete blob action"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-10"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/permanentDelete/action"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/permanentDelete/action"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/permanentDelete/action'})
+              OR
+              (
+                @Principal[customSecurityAttribute:Role] StringEquals 'Administrator'
+                AND
+                @Environment[isPrivateLink] BoolEquals true
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/permanentDelete/action"
+      principal:
+        customSecurityAttributes:
+          Role: "Administrator"
+      environment:
+        isPrivateLink: true
+    expected:
+      result: "allow"
+      reason: "Permanent delete allowed for administrators over private link"
+
+  - name: "blob_hns_operations"
+    description: "Test hierarchical namespace operations"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-11"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/runAsSuperUser/action"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/runAsSuperUser/action"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/runAsSuperUser/action'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts:isHnsEnabled] BoolEquals true
+                AND
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringStartsWith 'datalake/'
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/runAsSuperUser/action"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          isHnsEnabled: true
+          path: "datalake/processed/data.parquet"
+    expected:
+      result: "allow"
+      reason: "HNS operations allowed for datalake paths on HNS-enabled accounts"
+
+  # Azure Queue Storage Actions
+  - name: "queue_peek_messages"
+    description: "Test queue peek messages action"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-12"
+        dataActions: ["Microsoft.Storage/storageAccounts/queueServices/queues/messages/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/queueServices/queues/messages/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/queueServices/queues/messages/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/queueServices/queues:name] ForAnyOfAnyValues:StringEquals {'notifications', 'alerts', 'monitoring'}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/queueServices/queues/messages/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/queueServices/queues"
+        attributes:
+          name: "notifications"
+    expected:
+      result: "allow"
+      reason: "Peek messages allowed for notifications queue"
+
+  - name: "queue_put_message"
+    description: "Test queue put message action"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-13"
+        dataActions: ["Microsoft.Storage/storageAccounts/queueServices/queues/messages/add/action"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/queueServices/queues/messages/add/action"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/queueServices/queues/messages/add/action'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts:name] StringEquals 'productionqueue'
+                AND
+                @Environment[UtcNow] DateTimeGreaterThan '2023-01-01T00:00:00.0Z'
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/queueServices/queues/messages/add/action"
+      resource:
+        type: "Microsoft.Storage/storageAccounts"
+        attributes:
+          name: "productionqueue"
+      environment:
+        utcNow: "2023-06-01T12:00:00.0Z"
+    expected:
+      result: "allow"
+      reason: "Put message allowed in production queue after 2023-01-01"
+
+  - name: "queue_put_or_update_message"
+    description: "Test queue put or update message action"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-14"
+        dataActions: ["Microsoft.Storage/storageAccounts/queueServices/queues/messages/write"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/queueServices/queues/messages/write"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/queueServices/queues/messages/write'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts/queueServices/queues:name] StringStartsWith 'app-'
+                AND
+                @Environment[isPrivateLink] BoolEquals true
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/queueServices/queues/messages/write"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/queueServices/queues"
+        attributes:
+          name: "app-notifications"
+      environment:
+        isPrivateLink: true
+    expected:
+      result: "allow"
+      reason: "Write message allowed for app- queues over private link"
+
+  - name: "queue_clear_messages"
+    description: "Test queue clear messages action"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-15"
+        dataActions: ["Microsoft.Storage/storageAccounts/queueServices/queues/messages/delete"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/queueServices/queues/messages/delete"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/queueServices/queues/messages/delete'})
+              OR
+              (
+                @Principal[customSecurityAttribute:Role] ForAnyOfAnyValues:StringEquals {'QueueAdmin', 'Administrator'}
+                AND
+                @Resource[Microsoft.Storage/storageAccounts/queueServices/queues:name] StringNotEquals 'critical-queue'
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/queueServices/queues/messages/delete"
+      principal:
+        customSecurityAttributes:
+          Role: "QueueAdmin"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/queueServices/queues"
+        attributes:
+          name: "temp-queue"
+    expected:
+      result: "allow"
+      reason: "Clear messages allowed for QueueAdmin on non-critical queues"
+
+  - name: "queue_get_or_delete_messages"
+    description: "Test queue get or delete messages action"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-16"
+        dataActions: ["Microsoft.Storage/storageAccounts/queueServices/queues/messages/process/action"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/queueServices/queues/messages/process/action"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/queueServices/queues/messages/process/action'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts:name] ForAnyOfAnyValues:StringEquals {'worker-queue-1', 'worker-queue-2'}
+                AND
+                @Environment[Microsoft.Network/virtualNetworks/subnets] StringLike '*/subnets/workers'
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/queueServices/queues/messages/process/action"
+      resource:
+        type: "Microsoft.Storage/storageAccounts"
+        attributes:
+          name: "worker-queue-1"
+      environment:
+        subnet: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Network/virtualNetworks/vnet1/subnets/workers"
+    expected:
+      result: "allow"
+      reason: "Process messages allowed from worker subnet for worker queues"
+
+  # Advanced Storage Attribute Combinations
+  - name: "blob_encryption_scope_validation"
+    description: "Test blob encryption scope validation"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-17"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write'})
+              OR
+              (
+                Exists @Resource[Microsoft.Storage/storageAccounts/encryptionScopes:name]
+                AND
+                @Resource[Microsoft.Storage/storageAccounts/encryptionScopes:name] ForAnyOfAnyValues:StringEquals {'customerManagedScope', 'microsoftManagedScope'}
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/encryptionScopes"
+        attributes:
+          name: "customerManagedScope"
+    expected:
+      result: "allow"
+      reason: "Write allowed with valid encryption scope"
+
+  - name: "blob_snapshot_version_conditions"
+    description: "Test blob snapshot and version conditions"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-18"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:isCurrentVersion] BoolEquals true
+                OR
+                (
+                  Exists @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:snapshot]
+                  AND
+                  @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:snapshot] DateTimeGreaterThan '2023-01-01T00:00:00.0Z'
+                )
+                OR
+                (
+                  Exists @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:versionId]
+                  AND
+                  @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:versionId] DateTimeGreaterThan '2023-01-01T00:00:00.0Z'
+                )
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          isCurrentVersion: false
+      request:
+        attributes:
+          snapshot: "2023-06-01T12:00:00.0Z"
+    expected:
+      result: "allow"
+      reason: "Read allowed for snapshots created after 2023-01-01"
+
+  - name: "container_metadata_conditions"
+    description: "Test container metadata-based access control"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-19"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/metadata:AccessLevel] StringEquals 'Writable'
+                AND
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/metadata:Environment] ForAnyOfAnyValues:StringEquals {'Development', 'Testing'}
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers"
+        attributes:
+          metadata:
+            AccessLevel: "Writable"
+            Environment: "Development"
+    expected:
+      result: "allow"
+      reason: "Write allowed in writable development container"
+
+  - name: "list_blob_include_restrictions"
+    description: "Test list blob include parameter restrictions"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-20"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'}
+                AND SubOperationMatches{'Blob.List'})
+              OR
+              (
+                @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:include] ForAllOfAnyValues:StringEqualsIgnoreCase {'metadata', 'snapshots', 'versions'}
+                AND
+                NOT @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:include] ForAnyOfAnyValues:StringEquals {'uncommittedblobs'}
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      subOperation: "Blob.List"
+      request:
+        attributes:
+          include: ["metadata", "versions"]
+    expected:
+      result: "allow"
+      reason: "List operation with allowed include parameters"
+
+# Compilation Target Tests for RVM
+compilation_tests:
+  - name: "blob_action_suboperation_compilation"
+    description: "Test RVM compilation of blob action with suboperation"
+    policy:
+      expression: |
+        !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'}
+          AND SubOperationMatches{'Blob.List'})
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["action"]
+      - type: "LoadConstant"
+        value: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      - type: "BuiltinCall"
+        name: "actionmatches"
+        args: 2
+      - type: "LoadInput"
+        path: ["subOperation"]
+      - type: "LoadConstant"
+        value: "Blob.List"
+      - type: "BuiltinCall"
+        name: "suboperationmatches"
+        args: 2
+      - type: "BuiltinCall"
+        name: "and"
+        args: 2
+      - type: "BuiltinCall"
+        name: "not"
+        args: 1
+
+  - name: "storage_attribute_compilation"
+    description: "Test RVM compilation of storage-specific attributes"
+    policy:
+      expression: "@Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags:Project<$key_case_sensitive$>] StringEquals 'WebApp'"
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["resource", "attributes", "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags:Project<$key_case_sensitive$>"]
+      - type: "LoadConstant"
+        value: "WebApp"
+      - type: "BuiltinCall"
+        name: "string_equals"
+        args: 2

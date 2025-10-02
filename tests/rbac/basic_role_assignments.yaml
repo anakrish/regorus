@@ -1,0 +1,451 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Basic Azure RBAC Test Suite
+# Tests fundamental RBAC language constructs compiled directly to RVM
+# No Rego involved - pure RBAC language to RVM compilation
+
+cases:
+  - note: simple_user_role_assignment
+    description: Test basic user role assignment with allowed action
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-123",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub1"
+          }
+        ]
+      }
+    input:
+      principalId: "user-123"
+      action: "Microsoft.Storage/storageAccounts/read"
+      resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    want_result: 
+      allow: true
+      assignments: [
+        {
+          "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+          "scope": "/subscriptions/sub1",
+          "principalId": "user-123"
+        }
+      ]
+
+  - note: simple_user_role_denied
+    description: Test basic user role assignment with denied action
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-123",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub1"
+          }
+        ]
+      }
+    input:
+      principalId: "user-123"
+      action: "Microsoft.Storage/storageAccounts/delete"
+      resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    want_result:
+      allow: false
+      reason: "Action not permitted by role"
+
+  - note: group_role_assignment
+    description: Test group-based role assignment
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/contributor",
+            "name": "Contributor",
+            "permissions": [
+              {
+                "actions": [
+                  "Microsoft.Storage/storageAccounts/read",
+                  "Microsoft.Storage/storageAccounts/write"
+                ],
+                "notActions": ["Microsoft.Storage/storageAccounts/delete"],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "group-456",
+            "principalType": "Group",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/contributor",
+            "scope": "/subscriptions/sub1/resourceGroups/rg1"
+          }
+        ],
+        "principalMemberships": [
+          {
+            "principalId": "user-789",
+            "groupId": "group-456",
+            "membershipType": "Direct"
+          }
+        ]
+      }
+    input:
+      principalId: "user-789"
+      action: "Microsoft.Storage/storageAccounts/write"
+      resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    want_result:
+      allow: true
+      assignments: [
+        {
+          "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/contributor",
+          "scope": "/subscriptions/sub1/resourceGroups/rg1",
+          "principalId": "group-456",
+          "effectivePrincipalId": "user-789",
+          "inheritedFrom": "group-456"
+        }
+      ]
+
+  - note: scope_hierarchy_test
+    description: Test scope hierarchy - subscription assignment covers resource group
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/owner",
+            "name": "Owner",
+            "permissions": [
+              {
+                "actions": ["*"],
+                "notActions": [],
+                "dataActions": ["*"],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-admin",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/owner",
+            "scope": "/subscriptions/sub1"
+          }
+        ]
+      }
+    input:
+      principalId: "user-admin"
+      action: "Microsoft.Compute/virtualMachines/start/action"
+      resource: "/subscriptions/sub1/resourceGroups/rg2/providers/Microsoft.Compute/virtualMachines/vm1"
+    want_result:
+      allow: true
+      assignments: [
+        {
+          "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/owner",
+          "scope": "/subscriptions/sub1",
+          "principalId": "user-admin",
+          "scopeCoverage": "inherited"
+        }
+      ]
+
+  - note: wildcard_action_matching
+    description: Test wildcard action matching patterns
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/storage-admin",
+            "name": "Storage Admin",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/*"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-storage",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/storage-admin",
+            "scope": "/subscriptions/sub1/resourceGroups/storage-rg"
+          }
+        ]
+      }
+    input:
+      principalId: "user-storage"
+      action: "Microsoft.Storage/storageAccounts/regenerateKey/action"
+      resource: "/subscriptions/sub1/resourceGroups/storage-rg/providers/Microsoft.Storage/storageAccounts/account1"
+    want_result:
+      allow: true
+      matchedPattern: "Microsoft.Storage/storageAccounts/*"
+
+  - note: not_actions_override
+    description: Test notActions override - deny delete even with wildcard permissions
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/custom-role",
+            "name": "Custom Role",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/*"],
+                "notActions": ["Microsoft.Storage/storageAccounts/delete"],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-custom",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/custom-role",
+            "scope": "/subscriptions/sub1/resourceGroups/rg1"
+          }
+        ]
+      }
+    input:
+      principalId: "user-custom"
+      action: "Microsoft.Storage/storageAccounts/delete"
+      resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    want_result:
+      allow: false
+      reason: "Action explicitly denied by notActions"
+      deniedBy: "Microsoft.Storage/storageAccounts/delete"
+
+  - note: no_role_assignment
+    description: Test principal with no role assignments
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": []
+      }
+    input:
+      principalId: "user-unauthorized"
+      action: "Microsoft.Storage/storageAccounts/read"
+      resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    want_result:
+      allow: false
+      reason: "No role assignments found for principal"
+
+  - note: multiple_permissions_blocks
+    description: Test role with multiple permissions blocks
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/multi-perm",
+            "name": "Multi-Permission Role",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              },
+              {
+                "actions": ["Microsoft.Compute/virtualMachines/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-multi-perm",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/multi-perm",
+            "scope": "/subscriptions/sub1"
+          }
+        ]
+      }
+    input:
+      principalId: "user-multi-perm"
+      action: "Microsoft.Compute/virtualMachines/read"
+      resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/virtualMachines/vm1"
+    want_result:
+      allow: true
+      matchedPermissionBlock: 1
+
+  - note: data_actions_test
+    description: Test data plane actions (dataActions vs actions)
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/blob-reader",
+            "name": "Storage Blob Data Reader",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/blobServices/containers/read"],
+                "notActions": [],
+                "dataActions": ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-blob-reader",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/blob-reader",
+            "scope": "/subscriptions/sub1/resourceGroups/storage-rg"
+          }
+        ]
+      }
+    input:
+      principalId: "user-blob-reader"
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource: "/subscriptions/sub1/resourceGroups/storage-rg/providers/Microsoft.Storage/storageAccounts/account1"
+      actionType: "dataAction"
+    want_result:
+      allow: true
+      matchedDataAction: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+
+  - note: multiple_role_assignments
+    description: Test user with multiple role assignments at different scopes
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["*/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          },
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/storage-contributor",
+            "name": "Storage Account Contributor",
+            "permissions": [
+              {
+                "actions": [
+                  "Microsoft.Storage/storageAccounts/*"
+                ],
+                "notActions": ["Microsoft.Storage/storageAccounts/delete"],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-multi",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub1"
+          },
+          {
+            "principalId": "user-multi",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/storage-contributor",
+            "scope": "/subscriptions/sub1/resourceGroups/storage-rg"
+          }
+        ]
+      }
+    input:
+      principalId: "user-multi"
+      action: "Microsoft.Storage/storageAccounts/listKeys/action"
+      resource: "/subscriptions/sub1/resourceGroups/storage-rg/providers/Microsoft.Storage/storageAccounts/account1"
+    want_result:
+      allow: true
+      assignments: [
+        {
+          "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/storage-contributor",
+          "scope": "/subscriptions/sub1/resourceGroups/storage-rg",
+          "principalId": "user-multi",
+          "priority": "most_specific"
+        }
+      ]
+
+  - note: service_principal_assignment
+    description: Test service principal role assignment
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/app-reader",
+            "name": "Application Reader",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Resources/deployments/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "sp-12345-67890",
+            "principalType": "ServicePrincipal",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/app-reader",
+            "scope": "/subscriptions/sub1/resourceGroups/app-rg"
+          }
+        ]
+      }
+    input:
+      principalId: "sp-12345-67890"
+      action: "Microsoft.Resources/deployments/read"
+      resource: "/subscriptions/sub1/resourceGroups/app-rg/providers/Microsoft.Resources/deployments/deployment1"
+    want_result:
+      allow: true
+      principalType: "ServicePrincipal"

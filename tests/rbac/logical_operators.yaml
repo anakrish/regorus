@@ -1,0 +1,519 @@
+# Azure RBAC Logical Operators Test Suite
+# Tests for AND, OR, NOT logical operators in condition expressions
+
+name: "Azure RBAC Logical Operators"
+description: "Test suite for Azure RBAC logical operators: AND (&&), OR (||), NOT (!)"
+
+tests:
+  # AND Operator Tests
+  - name: "and_operator_both_true"
+    description: "Test AND operator when both conditions are true"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-1"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'allowed-container'
+                AND
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringStartsWith 'public/'
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          containerName: "allowed-container"
+          path: "public/document.txt"
+    expected:
+      result: "allow"
+      reason: "Both container name and path prefix match"
+
+  - name: "and_operator_first_false"
+    description: "Test AND operator when first condition is false"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-2"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'allowed-container'
+                AND
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringStartsWith 'public/'
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          containerName: "denied-container"
+          path: "public/document.txt"
+    expected:
+      result: "deny"
+      reason: "Container name does not match, AND fails"
+
+  - name: "and_operator_second_false"
+    description: "Test AND operator when second condition is false"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-3"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'allowed-container'
+                AND
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringStartsWith 'public/'
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          containerName: "allowed-container"
+          path: "private/document.txt"
+    expected:
+      result: "deny"
+      reason: "Path does not start with public/, AND fails"
+
+  # OR Operator Tests
+  - name: "or_operator_both_true"
+    description: "Test OR operator when both conditions are true"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-4"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'allowed-container'
+                OR
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringStartsWith 'public/'
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          containerName: "allowed-container"
+          path: "public/document.txt"
+    expected:
+      result: "allow"
+      reason: "Both conditions true, OR succeeds"
+
+  - name: "or_operator_first_true"
+    description: "Test OR operator when only first condition is true"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-5"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'allowed-container'
+                OR
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringStartsWith 'public/'
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          containerName: "allowed-container"
+          path: "private/document.txt"
+    expected:
+      result: "allow"
+      reason: "Container name matches, OR succeeds"
+
+  - name: "or_operator_second_true"
+    description: "Test OR operator when only second condition is true"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-6"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'allowed-container'
+                OR
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringStartsWith 'public/'
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          containerName: "other-container"
+          path: "public/document.txt"
+    expected:
+      result: "allow"
+      reason: "Path matches public/ prefix, OR succeeds"
+
+  - name: "or_operator_both_false"
+    description: "Test OR operator when both conditions are false"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-7"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'allowed-container'
+                OR
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringStartsWith 'public/'
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          containerName: "other-container"
+          path: "private/document.txt"
+    expected:
+      result: "deny"
+      reason: "Neither condition matches, OR fails"
+
+  # NOT Operator Tests
+  - name: "not_operator_true_condition"
+    description: "Test NOT operator with true condition (should become false)"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-8"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              NOT @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'blocked-container'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers"
+        attributes:
+          name: "allowed-container"
+    expected:
+      result: "allow"
+      reason: "Container is not blocked-container, NOT condition succeeds"
+
+  - name: "not_operator_false_condition"
+    description: "Test NOT operator with false condition (should become true)"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-9"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              NOT @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'blocked-container'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers"
+        attributes:
+          name: "blocked-container"
+    expected:
+      result: "deny"
+      reason: "Container is blocked-container, NOT condition fails"
+
+  - name: "not_exists_operator"
+    description: "Test NOT operator with Exists function"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-10"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              NOT Exists @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:versionId]
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes: {}
+    expected:
+      result: "allow"
+      reason: "Version ID does not exist, NOT Exists succeeds"
+
+  # Complex Logical Combinations
+  - name: "complex_and_or_combination"
+    description: "Test complex combination of AND and OR operators"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-11"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              (
+                (
+                  @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'public-container'
+                  AND
+                  @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringStartsWith 'public/'
+                )
+                OR
+                (
+                  @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'user-container'
+                  AND
+                  @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringStartsWith 'user123/'
+                )
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          containerName: "user-container"
+          path: "user123/documents/file.txt"
+    expected:
+      result: "allow"
+      reason: "User container with correct user path matches second OR condition"
+
+  - name: "precedence_test_with_parentheses"
+    description: "Test operator precedence with explicit parentheses"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-12"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'test-container'
+                AND
+                (
+                  @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringStartsWith 'public/'
+                  OR
+                  @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringStartsWith 'shared/'
+                )
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          containerName: "test-container"
+          path: "shared/documents/file.txt"
+    expected:
+      result: "allow"
+      reason: "Container matches and path starts with shared/"
+
+  # Alternative Syntax Tests (&&, ||, !)
+  - name: "alternative_and_syntax"
+    description: "Test alternative AND syntax with &&"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-13"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'allowed-container'
+                &&
+                @Environment[UtcNow] DateTimeGreaterThan '2023-01-01T00:00:00.0Z'
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers"
+        attributes:
+          name: "allowed-container"
+      environment:
+        utcNow: "2023-06-01T12:00:00.0Z"
+    expected:
+      result: "allow"
+      reason: "Container matches and current time is after 2023-01-01"
+
+  - name: "alternative_or_syntax"
+    description: "Test alternative OR syntax with ||"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-14"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'container1'
+                ||
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'container2'
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers"
+        attributes:
+          name: "container2"
+    expected:
+      result: "allow"
+      reason: "Container name matches container2 in OR condition"
+
+  - name: "alternative_not_syntax"
+    description: "Test alternative NOT syntax with !"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-15"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              ! @Environment[isPrivateLink] BoolEquals false
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      environment:
+        isPrivateLink: true
+    expected:
+      result: "allow"
+      reason: "Access is over private link, NOT false condition succeeds"
+
+# Compilation Target Tests for RVM
+compilation_tests:
+  - name: "and_operator_compilation"
+    description: "Test RVM compilation of AND operator"
+    policy:
+      expression: |
+        @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'test'
+        AND
+        @Environment[UtcNow] DateTimeGreaterThan '2023-01-01T00:00:00.0Z'
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["resource", "attributes", "Microsoft.Storage/storageAccounts/blobServices/containers:name"]
+      - type: "LoadConstant"
+        value: "test"
+      - type: "BuiltinCall"
+        name: "string_equals"
+        args: 2
+      - type: "LoadInput"
+        path: ["environment", "utcNow"]
+      - type: "LoadConstant"
+        value: "2023-01-01T00:00:00.0Z"
+      - type: "BuiltinCall"
+        name: "datetime_greater_than"
+        args: 2
+      - type: "BuiltinCall"
+        name: "and"
+        args: 2
+
+  - name: "or_operator_compilation"
+    description: "Test RVM compilation of OR operator"
+    policy:
+      expression: |
+        @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'test1'
+        OR
+        @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'test2'
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["resource", "attributes", "Microsoft.Storage/storageAccounts/blobServices/containers:name"]
+      - type: "LoadConstant"
+        value: "test1"
+      - type: "BuiltinCall"
+        name: "string_equals"
+        args: 2
+      - type: "LoadInput"
+        path: ["resource", "attributes", "Microsoft.Storage/storageAccounts/blobServices/containers:name"]
+      - type: "LoadConstant"
+        value: "test2"
+      - type: "BuiltinCall"
+        name: "string_equals"
+        args: 2
+      - type: "BuiltinCall"
+        name: "or"
+        args: 2
+
+  - name: "not_operator_compilation"
+    description: "Test RVM compilation of NOT operator"
+    policy:
+      expression: "NOT @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'blocked'"
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["resource", "attributes", "Microsoft.Storage/storageAccounts/blobServices/containers:name"]
+      - type: "LoadConstant"
+        value: "blocked"
+      - type: "BuiltinCall"
+        name: "string_equals"
+        args: 2
+      - type: "BuiltinCall"
+        name: "not"
+        args: 1

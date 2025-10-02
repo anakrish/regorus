@@ -1,0 +1,516 @@
+# Azure RBAC Cross-Product Operators Test Suite
+# Tests for ForAnyOfAnyValues, ForAllOfAnyValues, ForAnyOfAllValues, ForAllOfAllValues operators
+
+name: "Azure RBAC Cross-Product Operators"
+description: "Test suite for Azure RBAC cross-product operators for multi-value comparisons"
+
+tests:
+  # ForAnyOfAnyValues Tests
+  - name: "foranyofanyvalues_string_equals_match"
+    description: "Test ForAnyOfAnyValues:StringEquals with matching values"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-1"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/encryptionScopes:name] ForAnyOfAnyValues:StringEquals {'validScope1', 'validScope2', 'validScope3'}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/encryptionScopes"
+        attributes:
+          name: "validScope2"
+    expected:
+      result: "allow"
+      reason: "Encryption scope validScope2 is in allowed list"
+
+  - name: "foranyofanyvalues_string_equals_no_match"
+    description: "Test ForAnyOfAnyValues:StringEquals with no matching values"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-2"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/encryptionScopes:name] ForAnyOfAnyValues:StringEquals {'validScope1', 'validScope2', 'validScope3'}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/encryptionScopes"
+        attributes:
+          name: "invalidScope"
+    expected:
+      result: "deny"
+      reason: "Encryption scope invalidScope is not in allowed list"
+
+  - name: "foranyofanyvalues_multiple_left_values"
+    description: "Test ForAnyOfAnyValues with multiple values on left side"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-3"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/read'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags:Project<$key_case_sensitive$>] ForAnyOfAnyValues:StringEquals {'Cascade', 'Baker', 'Skagit'}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/read"
+      request:
+        attributes:
+          tags:
+            Project: "Baker"
+    expected:
+      result: "allow"
+      reason: "Project tag Baker is in allowed list"
+
+  - name: "foranyofanyvalues_numeric_equals"
+    description: "Test ForAnyOfAnyValues:NumericEquals operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-4"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:maxResults] ForAnyOfAnyValues:NumericEquals {50, 100, 200}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes:
+          maxResults: 100
+    expected:
+      result: "allow"
+      reason: "Max results 100 is in allowed values"
+
+  - name: "foranyofanyvalues_string_like"
+    description: "Test ForAnyOfAnyValues:StringLike operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-5"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] ForAnyOfAnyValues:StringLike {'public/*', 'shared/*', 'temp/*'}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          path: "shared/documents/file.txt"
+    expected:
+      result: "allow"
+      reason: "Blob path matches shared/* pattern"
+
+  # ForAllOfAnyValues Tests
+  - name: "forallofanyvalues_string_equals_all_match"
+    description: "Test ForAllOfAnyValues:StringEquals where all left values match at least one right value"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-6"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags&$keys$&] ForAllOfAnyValues:StringEquals {'Project', 'Environment', 'Owner'}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write"
+      request:
+        attributes:
+          tagKeys: ["Project", "Environment"]
+    expected:
+      result: "allow"
+      reason: "All requested tag keys are in allowed list"
+
+  - name: "forallofanyvalues_string_equals_partial_match"
+    description: "Test ForAllOfAnyValues:StringEquals where some left values don't match"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-7"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags&$keys$&] ForAllOfAnyValues:StringEquals {'Project', 'Environment'}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write"
+      request:
+        attributes:
+          tagKeys: ["Project", "Environment", "Secret"]
+    expected:
+      result: "deny"
+      reason: "Tag key Secret is not in allowed list"
+
+  - name: "forallofanyvalues_numeric_less_than"
+    description: "Test ForAllOfAnyValues:NumericLessThan operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-8"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:fileSizes] ForAllOfAnyValues:NumericLessThan {1048576, 10485760}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes:
+          fileSizes: [512000, 256000]
+    expected:
+      result: "allow"
+      reason: "All file sizes are less than at least one limit"
+
+  # ForAnyOfAllValues Tests  
+  - name: "foranyofallvalues_numeric_less_than_match"
+    description: "Test ForAnyOfAllValues:NumericLessThan operator with matching condition"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-9"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:requestSizes] ForAnyOfAllValues:NumericLessThan {15, 18}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes:
+          requestSizes: [10, 12]
+    expected:
+      result: "allow"
+      reason: "At least one request size (10 or 12) is less than all thresholds (15 and 18)"
+
+  - name: "foranyofallvalues_string_equals_match"
+    description: "Test ForAnyOfAllValues:StringEquals operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-10"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:allowedExtensions] ForAnyOfAllValues:StringEquals {'.txt', '.pdf'}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes:
+          allowedExtensions: [".txt"]
+    expected:
+      result: "allow"
+      reason: "Extension .txt matches all required extensions"
+
+  # ForAllOfAllValues Tests
+  - name: "forallofallvalues_numeric_less_than_success"
+    description: "Test ForAllOfAllValues:NumericLessThan where all left values are less than all right values"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-11"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:fileSizes] ForAllOfAllValues:NumericLessThan {25, 30}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes:
+          fileSizes: [10, 20]
+    expected:
+      result: "allow"
+      reason: "All file sizes (10, 20) are less than all limits (25, 30)"
+
+  - name: "forallofallvalues_numeric_less_than_failure"
+    description: "Test ForAllOfAllValues:NumericLessThan where not all conditions are met"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-12"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:fileSizes] ForAllOfAllValues:NumericLessThan {15, 25, 30}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes:
+          fileSizes: [10, 20]
+    expected:
+      result: "deny"
+      reason: "File size 20 is not less than all limits (specifically not < 15)"
+
+  - name: "forallofallvalues_string_equals"
+    description: "Test ForAllOfAllValues:StringEquals operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-13"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:requiredTags] ForAllOfAllValues:StringEquals {'public', 'readonly'}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes:
+          requiredTags: ["public", "readonly"]
+    expected:
+      result: "allow"
+      reason: "All required tags match all allowed values"
+
+  # Cross-Product with Different Data Types
+  - name: "foranyofanyvalues_guid_equals"
+    description: "Test ForAnyOfAnyValues:GuidEquals operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-14"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Principal[principalId] ForAnyOfAnyValues:GuidEquals {'12345678-1234-1234-1234-123456789abc', '87654321-4321-4321-4321-cba987654321'}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      principal:
+        principalId: "12345678-1234-1234-1234-123456789abc"
+    expected:
+      result: "allow"
+      reason: "Principal ID matches one of allowed GUIDs"
+
+  - name: "foranyofanyvalues_string_not_equals"
+    description: "Test ForAnyOfAnyValues:StringNotEquals operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-15"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] ForAnyOfAnyValues:StringNotEquals {'blocked1', 'blocked2', 'blocked3'}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers"
+        attributes:
+          name: "allowed-container"
+    expected:
+      result: "allow"
+      reason: "Container name is not equal to any blocked containers"
+
+  # Case Insensitive Variants
+  - name: "foranyofanyvalues_string_equals_ignore_case"
+    description: "Test ForAnyOfAnyValues:StringEqualsIgnoreCase operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-16"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] ForAnyOfAnyValues:StringEqualsIgnoreCase {'production', 'staging', 'development'}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers"
+        attributes:
+          name: "PRODUCTION"
+    expected:
+      result: "allow"
+      reason: "Container name matches production (case insensitive)"
+
+  - name: "forallofanyvalues_string_like_ignore_case"
+    description: "Test ForAllOfAnyValues:StringLikeIgnoreCase operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-17"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] ForAllOfAnyValues:StringLikeIgnoreCase {'PUBLIC/*', 'SHARED/*'}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          path: "public/documents/file.txt"
+    expected:
+      result: "allow"
+      reason: "Blob path matches PUBLIC/* pattern (case insensitive)"
+
+  # Complex Multi-Value Scenarios
+  - name: "complex_multivalue_scenario"
+    description: "Test complex scenario with multiple cross-product operators"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-18"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write'})
+              OR
+              (
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] ForAnyOfAnyValues:StringEquals {'container1', 'container2', 'container3'}
+                AND
+                @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags&$keys$&] ForAllOfAnyValues:StringEquals {'Project', 'Environment', 'Team'}
+                AND
+                @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:contentLength] ForAnyOfAnyValues:NumericLessThan {1048576, 5242880, 10485760}
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers"
+        attributes:
+          name: "container2"
+      request:
+        attributes:
+          tagKeys: ["Project", "Environment"]
+          contentLength: 2097152
+    expected:
+      result: "allow"
+      reason: "Container is allowed, all tag keys are valid, and content length is under a limit"
+
+# Compilation Target Tests for RVM
+compilation_tests:
+  - name: "foranyofanyvalues_compilation"
+    description: "Test RVM compilation of ForAnyOfAnyValues operator"
+    policy:
+      expression: "@Resource[Microsoft.Storage/storageAccounts/encryptionScopes:name] ForAnyOfAnyValues:StringEquals {'scope1', 'scope2'}"
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["resource", "attributes", "Microsoft.Storage/storageAccounts/encryptionScopes:name"]
+      - type: "LoadConstant"
+        value: ["scope1", "scope2"]
+      - type: "BuiltinCall"
+        name: "for_any_of_any_values_string_equals"
+        args: 2
+
+  - name: "forallofanyvalues_compilation"
+    description: "Test RVM compilation of ForAllOfAnyValues operator"
+    policy:
+      expression: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags&$keys$&] ForAllOfAnyValues:StringEquals {'Project', 'Environment'}"
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["request", "attributes", "tagKeys"]
+      - type: "LoadConstant"
+        value: ["Project", "Environment"]
+      - type: "BuiltinCall"
+        name: "for_all_of_any_values_string_equals"
+        args: 2
+
+  - name: "foranyofallvalues_compilation"
+    description: "Test RVM compilation of ForAnyOfAllValues operator"
+    policy:
+      expression: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:requestSizes] ForAnyOfAllValues:NumericLessThan {15, 18}"
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["request", "attributes", "requestSizes"]
+      - type: "LoadConstant"
+        value: [15, 18]
+      - type: "BuiltinCall"
+        name: "for_any_of_all_values_numeric_less_than"
+        args: 2
+
+  - name: "forallofallvalues_compilation"
+    description: "Test RVM compilation of ForAllOfAllValues operator"
+    policy:
+      expression: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:fileSizes] ForAllOfAllValues:NumericLessThan {25, 30}"
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["request", "attributes", "fileSizes"]
+      - type: "LoadConstant"
+        value: [25, 30]
+      - type: "BuiltinCall"
+        name: "for_all_of_all_values_numeric_less_than"
+        args: 2

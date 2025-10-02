@@ -282,6 +282,10 @@ pub enum TokenKind {
     Number,
     Ident,
     Eof,
+    // RBAC-specific tokens
+    At,         // @ symbol for attribute sources (@Request, @Resource, etc.)
+    LogicalAnd, // && operator
+    LogicalOr,  // || operator
 }
 
 #[derive(Debug, Clone)]
@@ -297,6 +301,8 @@ pub struct Lexer<'source> {
     allow_slash_star_escape: bool,
     comment_starts_with_double_slash: bool,
     double_colon_token: bool,
+    enable_rbac_tokens: bool,
+    allow_single_quoted_strings: bool,
 }
 
 impl<'source> Lexer<'source> {
@@ -310,6 +316,8 @@ impl<'source> Lexer<'source> {
             allow_slash_star_escape: false,
             comment_starts_with_double_slash: false,
             double_colon_token: false,
+            enable_rbac_tokens: false,
+            allow_single_quoted_strings: false,
         }
     }
 
@@ -327,6 +335,14 @@ impl<'source> Lexer<'source> {
 
     pub fn set_double_colon_token(&mut self, b: bool) {
         self.double_colon_token = b;
+    }
+
+    pub fn set_enable_rbac_tokens(&mut self, b: bool) {
+        self.enable_rbac_tokens = b;
+    }
+
+    pub fn set_allow_single_quoted_strings(&mut self, b: bool) {
+        self.allow_single_quoted_strings = b;
     }
 
     fn peek(&mut self) -> (usize, char) {
@@ -489,6 +505,73 @@ impl<'source> Lexer<'source> {
         ))
     }
 
+    fn read_single_quoted_string(&mut self) -> Result<Token> {
+        let (line, col) = (self.line, self.col);
+        self.iter.next();
+        self.col += 1;
+        let (start, _) = self.peek();
+        loop {
+            let (offset, ch) = self.peek();
+            let col = self.col + (offset - start) as u32;
+            match ch {
+                '\'' | '\x00' => {
+                    break;
+                }
+                '\\' => {
+                    self.iter.next();
+                    let (_, ch) = self.peek();
+                    self.iter.next();
+                    match ch {
+                        // Common escape sequences
+                        '\'' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' => (),
+                        'u' => {
+                            for _i in 0..4 {
+                                let (offset, ch) = self.peek();
+                                let col = self.col + (offset - start) as u32;
+                                if !ch.is_ascii_hexdigit() {
+                                    return Err(self.source.error(
+                                        line,
+                                        col,
+                                        "invalid hex escape sequence",
+                                    ));
+                                }
+                                self.iter.next();
+                            }
+                        }
+                        _ => return Err(self.source.error(line, col, "invalid escape sequence")),
+                    }
+                }
+                _ => {
+                    // check for valid chars
+                    let col = self.col + (offset - start) as u32;
+                    if !('\u{0020}'..='\u{10FFFF}').contains(&ch) {
+                        return Err(self.source.error(line, col, "invalid character in string"));
+                    }
+                    self.iter.next();
+                }
+            }
+        }
+
+        if self.peek().1 != '\'' {
+            return Err(self.source.error(line, col, "unmatched '"));
+        }
+
+        self.iter.next();
+        let end = self.peek().0;
+        self.col += (end - start) as u32;
+
+        Ok(Token(
+            TokenKind::String,
+            Span {
+                source: self.source.clone(),
+                line,
+                col: col + 1,
+                start: start as u32,
+                end: end as u32 - 1,
+            },
+        ))
+    }
+
     fn read_string(&mut self) -> Result<Token> {
         let (line, col) = (self.line, self.col);
         self.iter.next();
@@ -638,7 +721,31 @@ impl<'source> Lexer<'source> {
 	    '{' | '}' | '[' | ']' | '(' | ')' |
 	    // arith operator
 	    '+' | '-' | '*' | '/' | '%' |
-	    // bin operator
+	    // bin operator - check for && and || first (RBAC mode only)
+	    '&' if self.enable_rbac_tokens && self.peekahead(1).1 == '&' => {
+		self.col += 2;
+		self.iter.next();
+		self.iter.next();
+		Ok(Token(TokenKind::LogicalAnd, Span {
+		    source: self.source.clone(),
+		    line: self.line,
+		    col,
+		    start: start as u32,
+		    end: start as u32 + 2,
+		}))
+	    }
+	    '|' if self.enable_rbac_tokens && self.peekahead(1).1 == '|' => {
+		self.col += 2;
+		self.iter.next();
+		self.iter.next();
+		Ok(Token(TokenKind::LogicalOr, Span {
+		    source: self.source.clone(),
+		    line: self.line,
+		    col,
+		    start: start as u32,
+		    end: start as u32 + 2,
+		}))
+	    }
 	    '&' | '|' |
 	    // separators
 	    ',' | ';' | '.' => {
@@ -697,7 +804,20 @@ impl<'source> Lexer<'source> {
 		    end: self.peek().0 as u32,
 		}))
 	    }
+	    // @ symbol for RBAC attribute sources (RBAC mode only)
+	    '@' if self.enable_rbac_tokens => {
+		self.col += 1;
+		self.iter.next();
+		Ok(Token(TokenKind::At, Span {
+		    source: self.source.clone(),
+		    line: self.line,
+		    col,
+		    start: start as u32,
+		    end: start as u32 + 1,
+		}))
+	    }
 	    '"' => self.read_string(),
+	    '\'' if self.allow_single_quoted_strings => self.read_single_quoted_string(),
 	    '`' => self.read_raw_string(),
 	    '\x00' => Ok(Token(TokenKind::Eof, Span {
 		source: self.source.clone(),
@@ -743,5 +863,21 @@ impl<'source> Lexer<'source> {
 	    }
 	    _ => Err(self.source.error(self.line, self.col, "invalid character"))
 	}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_single_quoted_string() {
+        let source = Source::from_contents("test".to_string(), "'hello world'".to_string()).unwrap();
+        let mut lexer = Lexer::new(&source);
+        lexer.set_allow_single_quoted_strings(true);
+        
+        let tok = lexer.next_token().unwrap();
+        assert_eq!(tok.0, TokenKind::String);
+        assert_eq!(tok.1.text(), "hello world");
     }
 }

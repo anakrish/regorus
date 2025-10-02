@@ -1375,7 +1375,10 @@ impl<'a> Compiler<'a> {
             self.program.instructions.len(),
             self.program.rule_infos.len()
         );
-        debug!("Program requires {} registers", self.program.num_registers);
+        debug!(
+            "Program requires {} registers",
+            self.program.dispatch_window_size
+        );
         debug!(
             "Program has {} entry points",
             self.program.entry_points.len()

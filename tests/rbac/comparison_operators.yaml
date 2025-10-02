@@ -1,0 +1,729 @@
+# Azure RBAC Comparison Operators Test Suite
+# Tests for Boolean, String, Numeric, DateTime, and GUID comparison operators
+
+name: "Azure RBAC Comparison Operators"
+description: "Test suite for Azure RBAC comparison operators: Boolean, String, Numeric, DateTime, GUID"
+
+tests:
+  # Boolean Comparison Operators
+  - name: "bool_equals_true"
+    description: "Test BoolEquals operator with true value"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-1"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts:isHnsEnabled] BoolEquals true
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts"
+        attributes:
+          isHnsEnabled: true
+    expected:
+      result: "allow"
+      reason: "Hierarchical namespace is enabled"
+
+  - name: "bool_equals_false"
+    description: "Test BoolEquals operator with false value"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-2"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Environment[isPrivateLink] BoolEquals false
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      environment:
+        isPrivateLink: false
+    expected:
+      result: "allow"
+      reason: "Access is not over private link"
+
+  - name: "bool_not_equals"
+    description: "Test BoolNotEquals operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-3"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:isCurrentVersion] BoolNotEquals false
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          isCurrentVersion: true
+    expected:
+      result: "allow"
+      reason: "Blob is current version (not false)"
+
+  # String Comparison Operators
+  - name: "string_equals_case_sensitive"
+    description: "Test StringEquals operator with case sensitivity"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-4"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'ProductionData'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers"
+        attributes:
+          name: "ProductionData"
+    expected:
+      result: "allow"
+      reason: "Container name exactly matches ProductionData"
+
+  - name: "string_equals_ignore_case"
+    description: "Test StringEqualsIgnoreCase operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-5"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEqualsIgnoreCase 'productiondata'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers"
+        attributes:
+          name: "ProductionData"
+    expected:
+      result: "allow"
+      reason: "Container name matches ignoring case"
+
+  - name: "string_not_equals"
+    description: "Test StringNotEquals operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-6"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringNotEquals 'blocked-container'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers"
+        attributes:
+          name: "allowed-container"
+    expected:
+      result: "allow"
+      reason: "Container name is not blocked-container"
+
+  - name: "string_starts_with"
+    description: "Test StringStartsWith operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-7"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringStartsWith 'public/'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          path: "public/documents/file.txt"
+    expected:
+      result: "allow"
+      reason: "Blob path starts with public/"
+
+  - name: "string_starts_with_ignore_case"
+    description: "Test StringStartsWithIgnoreCase operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-8"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringStartsWithIgnoreCase 'public/'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          path: "PUBLIC/documents/file.txt"
+    expected:
+      result: "allow"
+      reason: "Blob path starts with PUBLIC/ (case insensitive)"
+
+  - name: "string_not_starts_with"
+    description: "Test StringNotStartsWith operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-9"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringNotStartsWith 'private/'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          path: "public/documents/file.txt"
+    expected:
+      result: "allow"
+      reason: "Blob path does not start with private/"
+
+  - name: "string_like_wildcard"
+    description: "Test StringLike operator with wildcards"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-10"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringLike 'readonly/*'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          path: "readonly/documents/file.txt"
+    expected:
+      result: "allow"
+      reason: "Blob path matches readonly/* pattern"
+
+  - name: "string_like_question_mark"
+    description: "Test StringLike operator with single character wildcard"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-11"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringLike 'user?/data'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          path: "user1/data"
+    expected:
+      result: "allow"
+      reason: "Blob path matches user?/data pattern"
+
+  - name: "string_not_like"
+    description: "Test StringNotLike operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-12"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringNotLike 'temp/*'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          path: "permanent/documents/file.txt"
+    expected:
+      result: "allow"
+      reason: "Blob path does not match temp/* pattern"
+
+  # Numeric Comparison Operators
+  - name: "numeric_equals"
+    description: "Test NumericEquals operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-13"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:maxResults] NumericEquals 100
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes:
+          maxResults: 100
+    expected:
+      result: "allow"
+      reason: "Max results equals 100"
+
+  - name: "numeric_not_equals"
+    description: "Test NumericNotEquals operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-14"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:timeout] NumericNotEquals 0
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes:
+          timeout: 30
+    expected:
+      result: "allow"
+      reason: "Timeout is not zero"
+
+  - name: "numeric_greater_than"
+    description: "Test NumericGreaterThan operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-15"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:contentLength] NumericGreaterThan 1024
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes:
+          contentLength: 2048
+    expected:
+      result: "allow"
+      reason: "Content length is greater than 1024"
+
+  - name: "numeric_greater_than_equals"
+    description: "Test NumericGreaterThanEquals operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-16"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:contentLength] NumericGreaterThanEquals 1024
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes:
+          contentLength: 1024
+    expected:
+      result: "allow"
+      reason: "Content length is greater than or equal to 1024"
+
+  - name: "numeric_less_than"
+    description: "Test NumericLessThan operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-17"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:contentLength] NumericLessThan 10485760
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes:
+          contentLength: 1048576
+    expected:
+      result: "allow"
+      reason: "Content length is less than 10MB"
+
+  - name: "numeric_less_than_equals"
+    description: "Test NumericLessThanEquals operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-18"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:maxResults] NumericLessThanEquals 1000
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes:
+          maxResults: 1000
+    expected:
+      result: "allow"
+      reason: "Max results is less than or equal to 1000"
+
+  # DateTime Comparison Operators
+  - name: "datetime_equals"
+    description: "Test DateTimeEquals operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-19"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:versionId] DateTimeEquals '2022-06-01T00:00:00.0Z'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes:
+          versionId: "2022-06-01T00:00:00.0Z"
+    expected:
+      result: "allow"
+      reason: "Version ID matches exact datetime"
+
+  - name: "datetime_not_equals"
+    description: "Test DateTimeNotEquals operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-20"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:snapshot] DateTimeNotEquals '2022-01-01T00:00:00.0Z'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes:
+          snapshot: "2022-06-01T12:00:00.0Z"
+    expected:
+      result: "allow"
+      reason: "Snapshot datetime is not 2022-01-01"
+
+  - name: "datetime_greater_than"
+    description: "Test DateTimeGreaterThan operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-21"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Environment[UtcNow] DateTimeGreaterThan '2023-01-01T00:00:00.0Z'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      environment:
+        utcNow: "2023-06-01T12:00:00.0Z"
+    expected:
+      result: "allow"
+      reason: "Current time is after 2023-01-01"
+
+  - name: "datetime_greater_than_equals"
+    description: "Test DateTimeGreaterThanEquals operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-22"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Environment[UtcNow] DateTimeGreaterThanEquals '2023-06-01T12:00:00.0Z'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      environment:
+        utcNow: "2023-06-01T12:00:00.0Z"
+    expected:
+      result: "allow"
+      reason: "Current time is greater than or equal to specified time"
+
+  - name: "datetime_less_than"
+    description: "Test DateTimeLessThan operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-23"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Environment[UtcNow] DateTimeLessThan '2025-01-01T00:00:00.0Z'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      environment:
+        utcNow: "2023-06-01T12:00:00.0Z"
+    expected:
+      result: "allow"
+      reason: "Current time is before 2025-01-01"
+
+  - name: "datetime_less_than_equals"
+    description: "Test DateTimeLessThanEquals operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-24"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Environment[UtcNow] DateTimeLessThanEquals '2023-12-31T23:59:59.999Z'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      environment:
+        utcNow: "2023-06-01T12:00:00.0Z"
+    expected:
+      result: "allow"
+      reason: "Current time is less than or equal to end of 2023"
+
+  # GUID Comparison Operators
+  - name: "guid_equals"
+    description: "Test GuidEquals operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-25"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Principal[principalId] GuidEquals '12345678-1234-1234-1234-123456789abc'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      principal:
+        principalId: "12345678-1234-1234-1234-123456789abc"
+    expected:
+      result: "allow"
+      reason: "Principal ID matches expected GUID"
+
+  - name: "guid_not_equals"
+    description: "Test GuidNotEquals operator"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-26"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Principal[principalId] GuidNotEquals '00000000-0000-0000-0000-000000000000'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      principal:
+        principalId: "12345678-1234-1234-1234-123456789abc"
+    expected:
+      result: "allow"
+      reason: "Principal ID is not null GUID"
+
+  - name: "guid_case_insensitive"
+    description: "Test GUID comparison is case insensitive"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-27"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Principal[principalId] GuidEquals '12345678-1234-1234-1234-123456789ABC'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      principal:
+        principalId: "12345678-1234-1234-1234-123456789abc"
+    expected:
+      result: "allow"
+      reason: "GUID comparison is case insensitive"
+
+# Compilation Target Tests for RVM
+compilation_tests:
+  - name: "bool_equals_compilation"
+    description: "Test RVM compilation of BoolEquals operator"
+    policy:
+      expression: "@Resource[Microsoft.Storage/storageAccounts:isHnsEnabled] BoolEquals true"
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["resource", "attributes", "Microsoft.Storage/storageAccounts:isHnsEnabled"]
+      - type: "LoadConstant"
+        value: true
+      - type: "BuiltinCall"
+        name: "bool_equals"
+        args: 2
+
+  - name: "string_equals_compilation"
+    description: "Test RVM compilation of StringEquals operator"
+    policy:
+      expression: "@Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'test'"
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["resource", "attributes", "Microsoft.Storage/storageAccounts/blobServices/containers:name"]
+      - type: "LoadConstant"
+        value: "test"
+      - type: "BuiltinCall"
+        name: "string_equals"
+        args: 2
+
+  - name: "numeric_greater_than_compilation"
+    description: "Test RVM compilation of NumericGreaterThan operator"
+    policy:
+      expression: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:contentLength] NumericGreaterThan 1024"
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["request", "attributes", "Microsoft.Storage/storageAccounts/blobServices/containers/blobs:contentLength"]
+      - type: "LoadConstant"
+        value: 1024
+      - type: "BuiltinCall"
+        name: "numeric_greater_than"
+        args: 2
+
+  - name: "datetime_less_than_compilation"
+    description: "Test RVM compilation of DateTimeLessThan operator"
+    policy:
+      expression: "@Environment[UtcNow] DateTimeLessThan '2025-01-01T00:00:00.0Z'"
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["environment", "utcNow"]
+      - type: "LoadConstant"
+        value: "2025-01-01T00:00:00.0Z"
+      - type: "BuiltinCall"
+        name: "datetime_less_than"
+        args: 2
+
+  - name: "guid_equals_compilation"
+    description: "Test RVM compilation of GuidEquals operator"
+    policy:
+      expression: "@Principal[principalId] GuidEquals '12345678-1234-1234-1234-123456789abc'"
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["principal", "principalId"]
+      - type: "LoadConstant"
+        value: "12345678-1234-1234-1234-123456789abc"
+      - type: "BuiltinCall"
+        name: "guid_equals"
+        args: 2

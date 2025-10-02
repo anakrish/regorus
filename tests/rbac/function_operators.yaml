@@ -1,0 +1,301 @@
+# Azure RBAC Function Operators Test Suite
+# Tests for ActionMatches, SubOperationMatches, and Exists functions
+
+name: "Azure RBAC Function Operators"
+description: "Test suite for Azure RBAC function operators: ActionMatches, SubOperationMatches, Exists"
+
+tests:
+  # ActionMatches Function Tests
+  - name: "actionmatches_exact_match"
+    description: "Test ActionMatches with exact action match"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-1"
+        actions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'test-container'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers"
+        attributes:
+          name: "test-container"
+    expected:
+      result: "allow"
+      reason: "Container name matches condition"
+
+  - name: "actionmatches_wildcard_match"
+    description: "Test ActionMatches with wildcard pattern"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-2"
+        actions: ["Microsoft.Authorization/roleAssignments/*"]
+      conditions:
+        - action: "Microsoft.Authorization/roleAssignments/write"
+          expression: "ActionMatches{'Microsoft.Authorization/roleAssignments/*'}"
+    input:
+      action: "Microsoft.Authorization/roleAssignments/write"
+      resource:
+        type: "Microsoft.Authorization/roleAssignments"
+    expected:
+      result: "allow"
+      reason: "Action matches wildcard pattern"
+
+  - name: "actionmatches_no_match"
+    description: "Test ActionMatches with non-matching action"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-3"
+        actions: ["Microsoft.Authorization/roleDefinitions/*"]
+      conditions:
+        - action: "Microsoft.Authorization/roleAssignments/write"
+          expression: "ActionMatches{'Microsoft.Authorization/roleDefinitions/*'}"
+    input:
+      action: "Microsoft.Authorization/roleAssignments/write"
+      resource:
+        type: "Microsoft.Authorization/roleAssignments"
+    expected:
+      result: "deny"
+      reason: "Action does not match pattern"
+
+  # SubOperationMatches Function Tests
+  - name: "suboperationmatches_blob_list"
+    description: "Test SubOperationMatches with Blob.List suboperation"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-4"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'} 
+                AND SubOperationMatches{'Blob.List'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:prefix] StringStartsWith 'allowed/'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      subOperation: "Blob.List"
+      request:
+        attributes:
+          prefix: "allowed/documents"
+    expected:
+      result: "allow"
+      reason: "Prefix matches allowed path"
+
+  - name: "suboperationmatches_write_with_tags"
+    description: "Test SubOperationMatches with Blob.Write.WithTagHeaders"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-5"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write'} 
+                AND SubOperationMatches{'Blob.Write.WithTagHeaders'})
+              OR
+              @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags:Project<$key_case_sensitive$>] StringEquals 'AllowedProject'
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+      subOperation: "Blob.Write.WithTagHeaders"
+      request:
+        attributes:
+          tags:
+            Project: "AllowedProject"
+    expected:
+      result: "allow"
+      reason: "Blob tag matches required project"
+
+  - name: "suboperationmatches_tier_operation"
+    description: "Test SubOperationMatches with Blob.Write.Tier"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-6"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write'} 
+                AND SubOperationMatches{'Blob.Write.Tier'})
+              OR
+              @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] ForAnyOfAnyValues:StringEquals {'tier-allowed-container1', 'tier-allowed-container2'}
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+      subOperation: "Blob.Write.Tier"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers"
+        attributes:
+          name: "tier-allowed-container1"
+    expected:
+      result: "allow"
+      reason: "Container is in allowed list for tier operations"
+
+  # Exists Function Tests
+  - name: "exists_attribute_present"
+    description: "Test Exists function when attribute is present"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-7"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              Exists @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:snapshot]
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes:
+          snapshot: "2023-05-01T12:00:00.000Z"
+    expected:
+      result: "allow"
+      reason: "Snapshot attribute exists in request"
+
+  - name: "exists_attribute_missing"
+    description: "Test Exists function when attribute is missing"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-8"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+              OR
+              Exists @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:versionId]
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      request:
+        attributes: {}
+    expected:
+      result: "deny"
+      reason: "Version ID attribute does not exist in request"
+
+  - name: "exists_encryption_scope"
+    description: "Test Exists function with encryption scope attribute"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-9"
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"]
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write'})
+              OR
+              (
+                Exists @Resource[Microsoft.Storage/storageAccounts/encryptionScopes:name]
+                AND
+                @Resource[Microsoft.Storage/storageAccounts/encryptionScopes:name] ForAnyOfAnyValues:StringEquals {'validScope1', 'validScope2'}
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/encryptionScopes"
+        attributes:
+          name: "validScope1"
+    expected:
+      result: "allow"
+      reason: "Encryption scope exists and is in allowed list"
+
+  # Complex Function Combinations
+  - name: "complex_function_combination"
+    description: "Test complex combination of ActionMatches, SubOperationMatches, and Exists"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "test-role-def-10"
+        dataActions: 
+          - "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          - "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/read"
+      conditions:
+        - action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          expression: |
+            (
+              !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'} 
+                AND NOT SubOperationMatches{'Blob.List'})
+              OR
+              (
+                Exists @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags:Project<$key_case_sensitive$>]
+                AND
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags:Project<$key_case_sensitive$>] StringEquals 'SecureProject'
+              )
+            )
+    input:
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      subOperation: "NOT Blob.List"
+      resource:
+        type: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attributes:
+          tags:
+            Project: "SecureProject"
+    expected:
+      result: "allow"
+      reason: "Blob has required project tag for non-list read operations"
+
+# Compilation Target Tests for RVM
+compilation_tests:
+  - name: "actionmatches_compilation"
+    description: "Test RVM compilation of ActionMatches function"
+    policy:
+      expression: "ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'}"
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["action"]
+      - type: "LoadConstant"
+        value: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      - type: "BuiltinCall"
+        name: "actionmatches"
+        args: 2
+
+  - name: "suboperationmatches_compilation"
+    description: "Test RVM compilation of SubOperationMatches function"
+    policy:
+      expression: "SubOperationMatches{'Blob.List'}"
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["subOperation"]
+      - type: "LoadConstant"
+        value: "Blob.List"
+      - type: "BuiltinCall"
+        name: "suboperationmatches"
+        args: 2
+
+  - name: "exists_compilation"
+    description: "Test RVM compilation of Exists function"
+    policy:
+      expression: "Exists @Resource[Microsoft.Storage/storageAccounts:name]"
+    expected_rvm_instructions:
+      - type: "LoadInput"
+        path: ["resource", "attributes", "Microsoft.Storage/storageAccounts:name"]
+      - type: "BuiltinCall"
+        name: "exists"
+        args: 1

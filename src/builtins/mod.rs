@@ -21,6 +21,7 @@ pub mod numbers;
 mod objects;
 #[cfg(feature = "opa-runtime")]
 mod opa;
+mod rbac;
 #[cfg(feature = "regex")]
 mod regex;
 #[cfg(feature = "semver")]
@@ -95,6 +96,9 @@ lazy_static! {
 	opa::register(&mut m);
 	tracing::register(&mut m);
 	units::register(&mut m);
+
+	// RBAC-specific builtins
+	rbac::register(&mut m);
 
 	#[cfg(feature = "opa-testutil")]
 	test::register(&mut m);

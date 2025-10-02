@@ -34,6 +34,7 @@ mod lookup;
 mod number;
 mod parser;
 mod policy_info;
+pub mod rbac;
 #[cfg(feature = "azure_policy")]
 pub mod registry;
 pub mod rvm;

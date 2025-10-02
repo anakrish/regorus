@@ -1,0 +1,484 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Complex Azure RBAC Test Suite
+# Tests advanced ABAC conditions, time-based access control, network restrictions,
+# and multi-dimensional attribute-based policies
+
+cases:
+  - note: container_name_condition
+    description: Test ABAC condition with container name matching
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/data-reader",
+            "name": "Conditional Data Reader",
+            "permissions": [
+              {
+                "actions": [],
+                "notActions": [],
+                "dataActions": ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-analytics",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/data-reader",
+            "scope": "/subscriptions/sub1/resourceGroups/data-rg",
+            "condition": "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'analytics-data'",
+            "conditionVersion": "2.0"
+          }
+        ]
+      }
+    input:
+      principalId: "user-analytics"
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource: "/subscriptions/sub1/resourceGroups/data-rg/providers/Microsoft.Storage/storageAccounts/account1"
+      resourceAttributes:
+        containerName: "analytics-data"
+      actionType: "dataAction"
+    want_result:
+      allow: true
+      conditionEvaluated: true
+      matchedCondition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'analytics-data'"
+
+  - note: container_name_condition_fail
+    description: Test ABAC condition with container name mismatch
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/data-reader",
+            "name": "Conditional Data Reader",
+            "permissions": [
+              {
+                "actions": [],
+                "notActions": [],
+                "dataActions": ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-analytics",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/data-reader",
+            "scope": "/subscriptions/sub1/resourceGroups/data-rg",
+            "condition": "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'analytics-data'",
+            "conditionVersion": "2.0"
+          }
+        ]
+      }
+    input:
+      principalId: "user-analytics"
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource: "/subscriptions/sub1/resourceGroups/data-rg/providers/Microsoft.Storage/storageAccounts/account1"
+      resourceAttributes:
+        containerName: "restricted-data"
+      actionType: "dataAction"
+    want_result:
+      allow: false
+      reason: "ABAC condition failed"
+      failedCondition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'analytics-data'"
+
+  - note: time_based_access_control
+    description: Test time-based access control with business hours restriction
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/business-hours-admin",
+            "name": "Business Hours Admin",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Compute/virtualMachines/*"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-admin",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/business-hours-admin",
+            "scope": "/subscriptions/sub1",
+            "condition": "@Environment[localTime] TimeOfDayGreaterThan '08:00' AND @Environment[localTime] TimeOfDayLessThan '18:00'",
+            "conditionVersion": "2.0"
+          }
+        ]
+      }
+    input:
+      principalId: "user-admin"
+      action: "Microsoft.Compute/virtualMachines/start/action"
+      resource: "/subscriptions/sub1/resourceGroups/compute-rg/providers/Microsoft.Compute/virtualMachines/vm1"
+      environment:
+        localTime: "14:30"
+        utcNow: "2024-10-01T14:30:00Z"
+    want_result:
+      allow: true
+      conditionEvaluated: true
+      timeBasedAccess: true
+
+  - note: time_based_access_denied
+    description: Test time-based access control outside business hours
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/business-hours-admin",
+            "name": "Business Hours Admin",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Compute/virtualMachines/*"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-admin",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/business-hours-admin",
+            "scope": "/subscriptions/sub1",
+            "condition": "@Environment[localTime] TimeOfDayGreaterThan '08:00' AND @Environment[localTime] TimeOfDayLessThan '18:00'",
+            "conditionVersion": "2.0"
+          }
+        ]
+      }
+    input:
+      principalId: "user-admin"
+      action: "Microsoft.Compute/virtualMachines/start/action"
+      resource: "/subscriptions/sub1/resourceGroups/compute-rg/providers/Microsoft.Compute/virtualMachines/vm1"
+      environment:
+        localTime: "22:30"
+        utcNow: "2024-10-01T22:30:00Z"
+    want_result:
+      allow: false
+      reason: "Access denied outside business hours"
+      timeBasedAccess: false
+
+  - note: network_ip_restriction
+    description: Test network-based access control with IP address restriction
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/internal-admin",
+            "name": "Internal Network Admin",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/listKeys/action"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-internal",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/internal-admin",
+            "scope": "/subscriptions/sub1",
+            "condition": "@Request[Microsoft.Network/virtualNetworks:sourceIpAddress] IpMatch '10.0.0.0/16'",
+            "conditionVersion": "2.0"
+          }
+        ]
+      }
+    input:
+      principalId: "user-internal"
+      action: "Microsoft.Storage/storageAccounts/listKeys/action"
+      resource: "/subscriptions/sub1/resourceGroups/storage-rg/providers/Microsoft.Storage/storageAccounts/account1"
+      requestContext:
+        sourceIpAddress: "10.0.5.100"
+    want_result:
+      allow: true
+      networkAccess: true
+      sourceIpMatched: "10.0.0.0/16"
+
+  - note: network_ip_restriction_denied
+    description: Test network-based access control with external IP
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/internal-admin",
+            "name": "Internal Network Admin",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/listKeys/action"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-internal",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/internal-admin",
+            "scope": "/subscriptions/sub1",
+            "condition": "@Request[Microsoft.Network/virtualNetworks:sourceIpAddress] IpMatch '10.0.0.0/16'",
+            "conditionVersion": "2.0"
+          }
+        ]
+      }
+    input:
+      principalId: "user-internal"
+      action: "Microsoft.Storage/storageAccounts/listKeys/action"
+      resource: "/subscriptions/sub1/resourceGroups/storage-rg/providers/Microsoft.Storage/storageAccounts/account1"
+      requestContext:
+        sourceIpAddress: "203.0.113.100"
+    want_result:
+      allow: false
+      reason: "IP address not in allowed range"
+      networkAccess: false
+
+  - note: complex_multi_condition_policy
+    description: Test complex policy with multiple ABAC conditions combined with logical operators
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/conditional-analyst",
+            "name": "Conditional Data Analyst",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [
+                  "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+                  "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+                ],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-analyst",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/conditional-analyst",
+            "scope": "/subscriptions/sub1/resourceGroups/analytics-rg",
+            "condition": "(@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'public-data' OR @Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringStartsWith 'temp-') AND @Principal[microsoft.directory/user:department] StringEquals 'Analytics' AND @Environment[utcNow] DateTimeGreaterThan '2024-01-01T00:00:00Z' AND @Environment[localTime] TimeOfDayGreaterThan '09:00' AND @Environment[localTime] TimeOfDayLessThan '17:00'",
+            "conditionVersion": "2.0"
+          }
+        ],
+        "principalAttributes": [
+          {
+            "principalId": "user-analyst",
+            "attributes": {
+              "department": "Analytics",
+              "employeeType": "Regular"
+            }
+          }
+        ]
+      }
+    input:
+      principalId: "user-analyst"
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource: "/subscriptions/sub1/resourceGroups/analytics-rg/providers/Microsoft.Storage/storageAccounts/account1"
+      resourceAttributes:
+        containerName: "temp-analysis-2024"
+      environment:
+        utcNow: "2024-10-01T13:30:00Z"
+        localTime: "13:30"
+      actionType: "dataAction"
+    want_result:
+      allow: true
+      conditionEvaluated: true
+      multiConditionPolicy: true
+
+  - note: principal_department_condition
+    description: Test condition based on principal department attribute
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/department-reader",
+            "name": "Department Reader",
+            "permissions": [
+              {
+                "actions": ["*/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-hr",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/department-reader",
+            "scope": "/subscriptions/sub1",
+            "condition": "@Principal[microsoft.directory/user:department] StringEquals 'HR'",
+            "conditionVersion": "2.0"
+          }
+        ],
+        "principalAttributes": [
+          {
+            "principalId": "user-hr",
+            "attributes": {
+              "department": "HR",
+              "employeeType": "Regular"
+            }
+          }
+        ]
+      }
+    input:
+      principalId: "user-hr"
+      action: "Microsoft.Resources/subscriptions/read"
+      resource: "/subscriptions/sub1"
+    want_result:
+      allow: true
+      principalAttributeMatched: "department=HR"
+
+  - note: group_membership_condition
+    description: Test condition based on group membership type
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/direct-member-reader",
+            "name": "Direct Member Reader",
+            "permissions": [
+              {
+                "actions": ["*/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "group-direct",
+            "principalType": "Group",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/direct-member-reader",
+            "scope": "/subscriptions/sub1",
+            "condition": "@Principal[microsoft.directory/group:membershipType] StringEquals 'Direct'",
+            "conditionVersion": "2.0"
+          }
+        ],
+        "principalMemberships": [
+          {
+            "principalId": "user-direct",
+            "groupId": "group-direct",
+            "membershipType": "Direct"
+          },
+          {
+            "principalId": "user-nested",
+            "groupId": "group-direct",
+            "membershipType": "Nested"
+          }
+        ]
+      }
+    input:
+      principalId: "user-direct"
+      action: "Microsoft.Storage/storageAccounts/read"
+      resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    want_result:
+      allow: true
+      membershipType: "Direct"
+      inheritedFrom: "group-direct"
+
+  - note: blob_path_condition
+    description: Test data plane action with blob path restriction
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/limited-blob-reader",
+            "name": "Limited Blob Reader",
+            "permissions": [
+              {
+                "actions": [],
+                "notActions": [],
+                "dataActions": ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-limited",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/limited-blob-reader",
+            "scope": "/subscriptions/sub1/resourceGroups/data-rg",
+            "condition": "@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringStartsWith 'public/' OR @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringStartsWith 'shared/'",
+            "conditionVersion": "2.0"
+          }
+        ]
+      }
+    input:
+      principalId: "user-limited"
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource: "/subscriptions/sub1/resourceGroups/data-rg/providers/Microsoft.Storage/storageAccounts/account1"
+      resourceAttributes:
+        containerName: "documents"
+        blobPath: "public/reports/monthly.pdf"
+      actionType: "dataAction"
+    want_result:
+      allow: true
+      pathMatched: "public/"
+
+  - note: date_range_condition
+    description: Test access control with date range restrictions
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/temporary-access",
+            "name": "Temporary Access Role",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Resources/deployments/*"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-contractor",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/temporary-access",
+            "scope": "/subscriptions/sub1/resourceGroups/project-rg",
+            "condition": "@Environment[utcNow] DateTimeGreaterThan '2024-10-01T00:00:00Z' AND @Environment[utcNow] DateTimeLessThan '2024-12-31T23:59:59Z'",
+            "conditionVersion": "2.0"
+          }
+        ]
+      }
+    input:
+      principalId: "user-contractor"
+      action: "Microsoft.Resources/deployments/write"
+      resource: "/subscriptions/sub1/resourceGroups/project-rg/providers/Microsoft.Resources/deployments/deployment1"
+      environment:
+        utcNow: "2024-11-15T10:30:00Z"
+    want_result:
+      allow: true
+      temporaryAccess: true
+      dateRangeValid: true

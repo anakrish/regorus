@@ -1,0 +1,125 @@
+name: "Basic RBAC Test Suite"
+description: "Simple test cases for RBAC-to-RVM integration validation"
+tests:
+  - name: "simple_allow_test"
+    description: "Test basic allow scenario"
+    policy: {
+      "permissions": [
+        {
+          "action": "read",
+          "effect": "Allow", 
+          "resource_types": ["Microsoft.Storage/storageAccounts"]
+        }
+      ],
+      "role_assignments": [
+        {
+          "principal_id": "user123",
+          "role_definition_id": "reader",
+          "scope": "/subscriptions/sub1"
+        }
+      ]
+    }
+    input: {
+      "principal": {
+        "id": "user123",
+        "principal_type": "User",
+        "attributes": {}
+      },
+      "resource": {
+        "id": "storage1", 
+        "resource_type": "Microsoft.Storage/storageAccounts",
+        "scope": "/subscriptions/sub1",
+        "attributes": {}
+      },
+      "action": "read",
+      "evaluation_context": {}
+    }
+    expected: {
+      "decision": "Allow",
+      "reasons": ["User has read permission via reader role"]
+    }
+
+  - name: "simple_deny_test"
+    description: "Test basic deny scenario - user lacks required permissions"
+    policy: {
+      "permissions": [
+        {
+          "action": "read",
+          "effect": "Allow",
+          "resource_types": ["Microsoft.Storage/storageAccounts"]
+        }
+      ],
+      "role_assignments": [
+        {
+          "principal_id": "user456",
+          "role_definition_id": "reader", 
+          "scope": "/subscriptions/sub1"
+        }
+      ]
+    }
+    input: {
+      "principal": {
+        "id": "user456",
+        "principal_type": "User",
+        "attributes": {}
+      },
+      "resource": {
+        "id": "storage2",
+        "resource_type": "Microsoft.Storage/storageAccounts", 
+        "scope": "/subscriptions/sub1",
+        "attributes": {}
+      },
+      "action": "delete",
+      "evaluation_context": {}
+    }
+    expected: {
+      "decision": "Deny",
+      "reasons": ["User lacks delete permission - only has read access"]
+    }
+
+  - name: "conditional_access_test"
+    description: "Test with conditional access based on attributes"
+    policy: {
+      "permissions": [
+        {
+          "action": "write",
+          "effect": "Allow",
+          "resource_types": ["Microsoft.Storage/storageAccounts"]
+        }
+      ],
+      "role_assignments": [
+        {
+          "principal_id": "user789",
+          "role_definition_id": "contributor",
+          "scope": "/subscriptions/sub1",
+          "conditions": ["@request.attributes.department == 'Engineering'"]
+        }
+      ]
+    }
+    input: {
+      "principal": {
+        "id": "user789",
+        "principal_type": "User",
+        "attributes": {
+          "department": "Engineering",
+          "location": "Seattle"
+        }
+      },
+      "resource": {
+        "id": "storage3",
+        "resource_type": "Microsoft.Storage/storageAccounts",
+        "scope": "/subscriptions/sub1", 
+        "attributes": {
+          "environment": "production"
+        }
+      },
+      "action": "write",
+      "evaluation_context": {
+        "time_of_day": "business_hours",
+        "source_ip": "10.0.0.100"
+      }
+    }
+    expected: {
+      "decision": "Allow", 
+      "reasons": ["User has write permission and meets department condition"]
+    }

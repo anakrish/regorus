@@ -1,0 +1,471 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Azure RBAC Condition Expression Language Test Suite
+# Tests the ABAC condition sublanguage used in Azure RBAC policies
+# Covers operators, attribute sources, data types, and logical combinations
+
+cases:
+  - note: string_equals_operator
+    description: Test StringEquals operator with literal string value
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'analytics-data'"
+    evaluation_context:
+      resourceAttributes:
+        containerName: "analytics-data"
+    want_result: true
+
+  - note: string_equals_case_sensitive
+    description: Test StringEquals operator is case sensitive
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'Analytics-Data'"
+    evaluation_context:
+      resourceAttributes:
+        containerName: "analytics-data"
+    want_result: false
+
+  - note: string_not_equals_operator
+    description: Test StringNotEquals operator
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringNotEquals 'restricted-data'"
+    evaluation_context:
+      resourceAttributes:
+        containerName: "public-data"
+    want_result: true
+
+  - note: string_starts_with_operator
+    description: Test StringStartsWith operator
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringStartsWith 'public/'"
+    evaluation_context:
+      resourceAttributes:
+        blobPath: "public/documents/report.pdf"
+    want_result: true
+
+  - note: string_ends_with_operator
+    description: Test StringEndsWith operator
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringEndsWith '.pdf'"
+    evaluation_context:
+      resourceAttributes:
+        blobPath: "documents/report.pdf"
+    want_result: true
+
+  - note: string_contains_operator
+    description: Test StringContains operator
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringContains 'temp'"
+    evaluation_context:
+      resourceAttributes:
+        blobPath: "data/temp-files/analysis.csv"
+    want_result: true
+
+  - note: string_like_wildcard_operator
+    description: Test StringLike operator with wildcards
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringLike 'temp-*-2024'"
+    evaluation_context:
+      resourceAttributes:
+        containerName: "temp-analysis-2024"
+    want_result: true
+
+  - note: string_matches_regex_operator
+    description: Test StringMatches operator with regular expression
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringMatches '^[a-z]+-data$'"
+    evaluation_context:
+      resourceAttributes:
+        containerName: "analytics-data"
+    want_result: true
+
+  - note: numeric_greater_than_operator
+    description: Test NumericGreaterThan operator
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:sizeBytes] NumericGreaterThan 1048576"
+    evaluation_context:
+      resourceAttributes:
+        blobSizeBytes: 5242880
+    want_result: true
+
+  - note: numeric_less_than_operator
+    description: Test NumericLessThan operator
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:sizeBytes] NumericLessThan 10485760"
+    evaluation_context:
+      resourceAttributes:
+        blobSizeBytes: 5242880
+    want_result: true
+
+  - note: numeric_equals_operator
+    description: Test NumericEquals operator
+    condition: "@Request[Microsoft.Compute/virtualMachines:instanceCount] NumericEquals 3"
+    evaluation_context:
+      resourceAttributes:
+        instanceCount: 3
+    want_result: true
+
+  - note: numeric_in_range_operator
+    description: Test NumericInRange operator
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:sizeBytes] NumericInRange [1048576, 104857600]"
+    evaluation_context:
+      resourceAttributes:
+        blobSizeBytes: 5242880
+    want_result: true
+
+  - note: datetime_greater_than_operator
+    description: Test DateTimeGreaterThan operator
+    condition: "@Environment[utcNow] DateTimeGreaterThan '2024-01-01T00:00:00Z'"
+    evaluation_context:
+      environment:
+        utcNow: "2024-06-15T14:30:00Z"
+    want_result: true
+
+  - note: datetime_less_than_operator
+    description: Test DateTimeLessThan operator
+    condition: "@Environment[utcNow] DateTimeLessThan '2025-01-01T00:00:00Z'"
+    evaluation_context:
+      environment:
+        utcNow: "2024-06-15T14:30:00Z"
+    want_result: true
+
+  - note: datetime_equals_operator
+    description: Test DateTimeEquals operator
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:lastModified] DateTimeEquals '2024-06-15T14:30:00Z'"
+    evaluation_context:
+      resourceAttributes:
+        blobLastModified: "2024-06-15T14:30:00Z"
+    want_result: true
+
+  - note: time_of_day_greater_than_operator
+    description: Test TimeOfDayGreaterThan operator
+    condition: "@Environment[localTime] TimeOfDayGreaterThan '09:00'"
+    evaluation_context:
+      environment:
+        localTime: "14:30"
+    want_result: true
+
+  - note: time_of_day_less_than_operator
+    description: Test TimeOfDayLessThan operator
+    condition: "@Environment[localTime] TimeOfDayLessThan '18:00'"
+    evaluation_context:
+      environment:
+        localTime: "14:30"
+    want_result: true
+
+  - note: time_of_day_in_range_operator
+    description: Test TimeOfDayInRange operator
+    condition: "@Environment[localTime] TimeOfDayInRange ['09:00', '17:00']"
+    evaluation_context:
+      environment:
+        localTime: "14:30"
+    want_result: true
+
+  - note: ip_match_cidr_operator
+    description: Test IpMatch operator with CIDR notation
+    condition: "@Request[Microsoft.Network/virtualNetworks:sourceIpAddress] IpMatch '10.0.0.0/16'"
+    evaluation_context:
+      requestContext:
+        sourceIpAddress: "10.0.5.100"
+    want_result: true
+
+  - note: ip_not_match_operator
+    description: Test IpNotMatch operator
+    condition: "@Request[Microsoft.Network/virtualNetworks:sourceIpAddress] IpNotMatch '192.168.0.0/16'"
+    evaluation_context:
+      requestContext:
+        sourceIpAddress: "10.0.5.100"
+    want_result: true
+
+  - note: ip_in_range_operator
+    description: Test IpInRange operator with IP range
+    condition: "@Request[Microsoft.Network/virtualNetworks:sourceIpAddress] IpInRange ['10.0.0.1', '10.0.255.254']"
+    evaluation_context:
+      requestContext:
+        sourceIpAddress: "10.0.5.100"
+    want_result: true
+
+  - note: boolean_equals_true_operator
+    description: Test BooleanEquals operator with true value
+    condition: "@Request[Microsoft.Storage/storageAccounts:isSecureTransferRequired] BooleanEquals true"
+    evaluation_context:
+      resourceAttributes:
+        isSecureTransferRequired: true
+    want_result: true
+
+  - note: boolean_equals_false_operator
+    description: Test BooleanEquals operator with false value
+    condition: "@Request[Microsoft.Storage/storageAccounts:allowBlobPublicAccess] BooleanEquals false"
+    evaluation_context:
+      resourceAttributes:
+        allowBlobPublicAccess: false
+    want_result: true
+
+  - note: list_contains_operator
+    description: Test ListContains operator for array membership
+    condition: "@Request[Microsoft.Storage/storageAccounts:allowedProtocols] ListContains 'https'"
+    evaluation_context:
+      resourceAttributes:
+        allowedProtocols: ["https", "ssh"]
+    want_result: true
+
+  - note: list_not_contains_operator
+    description: Test ListNotContains operator
+    condition: "@Request[Microsoft.Storage/storageAccounts:allowedProtocols] ListNotContains 'telnet'"
+    evaluation_context:
+      resourceAttributes:
+        allowedProtocols: ["https", "ssh"]
+    want_result: true
+
+  - note: exists_operator
+    description: Test Exists operator to check attribute presence
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:encryptionSettings] Exists"
+    evaluation_context:
+      resourceAttributes:
+        encryptionSettings:
+          enabled: true
+    want_result: true
+
+  - note: not_exists_operator
+    description: Test NotExists operator to check attribute absence
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:publicAccessLevel] NotExists"
+    evaluation_context:
+      resourceAttributes:
+        encryptionEnabled: true
+    want_result: true
+
+  - note: and_logical_operator
+    description: Test AND logical operator combining conditions
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringStartsWith 'public-' AND @Environment[localTime] TimeOfDayGreaterThan '09:00'"
+    evaluation_context:
+      resourceAttributes:
+        containerName: "public-data"
+      environment:
+        localTime: "14:30"
+    want_result: true
+
+  - note: or_logical_operator
+    description: Test OR logical operator combining conditions
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'public-data' OR @Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringStartsWith 'temp-'"
+    evaluation_context:
+      resourceAttributes:
+        containerName: "temp-analysis"
+    want_result: true
+
+  - note: not_logical_operator
+    description: Test NOT logical operator negating condition
+    condition: "NOT @Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'restricted-data'"
+    evaluation_context:
+      resourceAttributes:
+        containerName: "public-data"
+    want_result: true
+
+  - note: complex_parentheses_grouping
+    description: Test complex parentheses grouping with precedence
+    condition: "(@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'public-data' OR @Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringStartsWith 'temp-') AND (@Environment[localTime] TimeOfDayGreaterThan '09:00' AND @Environment[localTime] TimeOfDayLessThan '17:00')"
+    evaluation_context:
+      resourceAttributes:
+        containerName: "temp-analysis"
+      environment:
+        localTime: "14:30"
+    want_result: true
+
+  - note: nested_logical_operators
+    description: Test deeply nested logical operators
+    condition: "((@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringStartsWith 'public-' OR @Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringStartsWith 'shared-') AND NOT @Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringContains 'restricted') OR (@Principal[microsoft.directory/user:department] StringEquals 'Admin' AND @Environment[localTime] TimeOfDayInRange ['00:00', '23:59'])"
+    evaluation_context:
+      resourceAttributes:
+        containerName: "public-reports"
+      principalAttributes:
+        department: "Analytics"
+      environment:
+        localTime: "14:30"
+    want_result: true
+
+  - note: request_attribute_source
+    description: Test @Request attribute source for resource attributes
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:contentType] StringEquals 'application/pdf'"
+    evaluation_context:
+      resourceAttributes:
+        blobContentType: "application/pdf"
+    want_result: true
+
+  - note: principal_attribute_source
+    description: Test @Principal attribute source for user attributes
+    condition: "@Principal[microsoft.directory/user:department] StringEquals 'Analytics'"
+    evaluation_context:
+      principalAttributes:
+        department: "Analytics"
+        employeeType: "Regular"
+    want_result: true
+
+  - note: environment_attribute_source
+    description: Test @Environment attribute source for runtime context
+    condition: "@Environment[requestDateTime] DateTimeGreaterThan '2024-01-01T00:00:00Z'"
+    evaluation_context:
+      environment:
+        requestDateTime: "2024-06-15T14:30:00Z"
+        userAgent: "Azure-CLI/2.0"
+    want_result: true
+
+  - note: resource_attribute_source
+    description: Test @Resource attribute source for resource properties
+    condition: "@Resource[Microsoft.Storage/storageAccounts:tier] StringEquals 'Standard'"
+    evaluation_context:
+      resourceAttributes:
+        storageAccountTier: "Standard"
+        location: "East US"
+    want_result: true
+
+  - note: context_attribute_source
+    description: Test @Context attribute source for request metadata
+    condition: "@Context[requestId] Exists"
+    evaluation_context:
+      requestContext:
+        requestId: "12345-67890-abcdef"
+        correlationId: "98765-43210-fedcba"
+    want_result: true
+
+  - note: attribute_path_with_dots
+    description: Test attribute path with dot notation for nested objects
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:metadata.category] StringEquals 'financial'"
+    evaluation_context:
+      resourceAttributes:
+        blobMetadata:
+          category: "financial"
+          classification: "confidential"
+    want_result: true
+
+  - note: attribute_path_with_array_index
+    description: Test attribute path with array index notation
+    condition: "@Request[Microsoft.Compute/virtualMachines:networkInterfaces[0].ipAddress] IpMatch '10.0.0.0/16'"
+    evaluation_context:
+      resourceAttributes:
+        networkInterfaces:
+          - ipAddress: "10.0.1.100"
+            subnetId: "subnet-1"
+          - ipAddress: "192.168.1.100"
+            subnetId: "subnet-2"
+    want_result: true
+
+  - note: function_call_in_condition
+    description: Test function call within condition expression
+    condition: "ToLower(@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name]) StringEquals 'analytics-data'"
+    evaluation_context:
+      resourceAttributes:
+        containerName: "Analytics-Data"
+    want_result: true
+
+  - note: multiple_function_calls
+    description: Test chained function calls in condition
+    condition: "Length(Trim(@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:name])) NumericGreaterThan 5"
+    evaluation_context:
+      resourceAttributes:
+        blobName: "  report.pdf  "
+    want_result: true
+
+  - note: conditional_expression_ternary
+    description: Test conditional (ternary) expression operator
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:isPublic] ? (@Environment[localTime] TimeOfDayGreaterThan '09:00') : true"
+    evaluation_context:
+      resourceAttributes:
+        containerIsPublic: true
+      environment:
+        localTime: "14:30"
+    want_result: true
+
+  - note: array_all_operator
+    description: Test ALL operator for array conditions
+    condition: "@Request[Microsoft.Storage/storageAccounts:allowedIpRanges] ALL x : IpMatch(x, '10.0.0.0/8')"
+    evaluation_context:
+      resourceAttributes:
+        allowedIpRanges: ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+    want_result: true
+
+  - note: array_any_operator
+    description: Test ANY operator for array conditions
+    condition: "@Request[Microsoft.Storage/storageAccounts:tags] ANY tag : StringEquals(tag.key, 'Environment')"
+    evaluation_context:
+      resourceAttributes:
+        tags:
+          - key: "Department"
+            value: "Finance"
+          - key: "Environment"
+            value: "Production"
+    want_result: true
+
+  - note: string_interpolation
+    description: Test string interpolation in condition values
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals '${@Principal[microsoft.directory/user:department]}-data'"
+    evaluation_context:
+      resourceAttributes:
+        containerName: "analytics-data"
+      principalAttributes:
+        department: "analytics"
+    want_result: true
+
+  - note: regex_capture_groups
+    description: Test regular expression with capture groups
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringMatches '^([a-z]+)/(.+)$' AND CaptureGroup(1) StringEquals 'public'"
+    evaluation_context:
+      resourceAttributes:
+        blobPath: "public/documents/report.pdf"
+    want_result: true
+
+  - note: null_coalescing_operator
+    description: Test null coalescing operator for missing attributes
+    condition: "(@Request[Microsoft.Storage/storageAccounts/blobServices/containers:category] ?? 'default') StringEquals 'analytics'"
+    evaluation_context:
+      resourceAttributes:
+        containerName: "analytics-data"
+        # category attribute is missing, should default to 'default'
+    want_result: false
+
+  - note: type_casting_operators
+    description: Test explicit type casting in expressions
+    condition: "ToString(@Request[Microsoft.Compute/virtualMachines:instanceCount]) StringEquals '3'"
+    evaluation_context:
+      resourceAttributes:
+        instanceCount: 3
+    want_result: true
+
+  - note: mathematical_operators
+    description: Test mathematical operators in numeric conditions
+    condition: "(@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:sizeBytes] / 1048576) NumericLessThan 100"
+    evaluation_context:
+      resourceAttributes:
+        blobSizeBytes: 52428800  # 50 MB
+    want_result: true
+
+  - note: date_arithmetic_operators
+    description: Test date arithmetic in datetime conditions
+    condition: "AddDays(@Environment[utcNow], -30) DateTimeGreaterThan @Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:createdDate]"
+    evaluation_context:
+      environment:
+        utcNow: "2024-06-15T14:30:00Z"
+      resourceAttributes:
+        blobCreatedDate: "2024-05-01T10:00:00Z"
+    want_result: true
+
+  - note: error_handling_missing_attribute
+    description: Test error handling when referenced attribute is missing
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:nonExistentAttribute] StringEquals 'value'"
+    evaluation_context:
+      resourceAttributes:
+        containerName: "test-container"
+    want_result: false
+    should_handle_gracefully: true
+
+  - note: error_handling_type_mismatch
+    description: Test error handling when attribute type doesn't match operator
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] NumericGreaterThan 100"
+    evaluation_context:
+      resourceAttributes:
+        containerName: "test-container"
+    expect_evaluation_error: true
+    error_type: "TYPE_MISMATCH"
+
+  - note: whitespace_handling
+    description: Test proper whitespace handling in condition parsing
+    condition: "   @Request[Microsoft.Storage/storageAccounts/blobServices/containers:name]    StringEquals    'test-data'   "
+    evaluation_context:
+      resourceAttributes:
+        containerName: "test-data"
+    want_result: true
+
+  - note: case_insensitive_operators
+    description: Test case insensitive string operators
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEqualsIgnoreCase 'TEST-DATA'"
+    evaluation_context:
+      resourceAttributes:
+        containerName: "test-data"
+    want_result: true

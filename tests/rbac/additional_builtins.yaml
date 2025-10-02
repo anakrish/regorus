@@ -1,0 +1,501 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Azure RBAC Additional Builtin Functions Test Suite
+# Tests additional Azure-specific builtin functions for comprehensive coverage
+# Includes time functions, string utilities, network functions, and condition parsing
+
+cases:
+  # Time and Date Functions
+  - note: time_now_utc
+    description: Test time.now_utc function returns current UTC time
+    builtin: "time.now_utc"
+    args: []
+    want_result_type: "datetime"
+    validation: "is_valid_iso8601_datetime"
+
+  - note: time_local_time
+    description: Test time.local_time function returns current local time
+    builtin: "time.local_time"
+    args: []
+    want_result_type: "time"
+    validation: "is_valid_time_format"
+
+  - note: time_parse_datetime
+    description: Test time.parse_datetime for parsing ISO8601 datetime strings
+    builtin: "time.parse_datetime"
+    args:
+      - "2024-06-15T14:30:00Z"
+    want_result:
+      year: 2024
+      month: 6
+      day: 15
+      hour: 14
+      minute: 30
+      second: 0
+      timezone: "UTC"
+
+  - note: time_parse_datetime_with_timezone
+    description: Test time.parse_datetime with timezone offset
+    builtin: "time.parse_datetime"
+    args:
+      - "2024-06-15T14:30:00-07:00"
+    want_result:
+      year: 2024
+      month: 6
+      day: 15
+      hour: 14
+      minute: 30
+      second: 0
+      timezone: "-07:00"
+
+  - note: time_add_days
+    description: Test time.add_days for date arithmetic
+    builtin: "time.add_days"
+    args:
+      - "2024-06-15T14:30:00Z"
+      - 30
+    want_result: "2024-07-15T14:30:00Z"
+
+  - note: time_subtract_days
+    description: Test time.add_days with negative value for subtraction
+    builtin: "time.add_days"
+    args:
+      - "2024-06-15T14:30:00Z"
+      - -7
+    want_result: "2024-06-08T14:30:00Z"
+
+  - note: time_add_hours
+    description: Test time.add_hours for hour arithmetic
+    builtin: "time.add_hours"
+    args:
+      - "2024-06-15T14:30:00Z"
+      - 8
+    want_result: "2024-06-15T22:30:00Z"
+
+  - note: time_format_datetime
+    description: Test time.format_datetime for custom formatting
+    builtin: "time.format_datetime"
+    args:
+      - "2024-06-15T14:30:00Z"
+      - "YYYY-MM-DD HH:mm:ss"
+    want_result: "2024-06-15 14:30:00"
+
+  - note: time_get_day_of_week
+    description: Test time.get_day_of_week function
+    builtin: "time.get_day_of_week"
+    args:
+      - "2024-06-15T14:30:00Z"  # Saturday
+    want_result: 6  # 0=Sunday, 6=Saturday
+
+  # Network Functions
+  - note: net_cidr_contains
+    description: Test net.cidr_contains for IP in CIDR range
+    builtin: "net.cidr_contains"
+    args:
+      - "10.0.0.0/16"
+      - "10.0.5.100"
+    want_result: true
+
+  - note: net_cidr_contains_false
+    description: Test net.cidr_contains for IP outside CIDR range
+    builtin: "net.cidr_contains"
+    args:
+      - "10.0.0.0/16"
+      - "192.168.1.100"
+    want_result: false
+
+  - note: net_ip_in_range
+    description: Test net.ip_in_range for IP address range checking
+    builtin: "net.ip_in_range"
+    args:
+      - "10.0.5.100"
+      - "10.0.0.1"
+      - "10.0.255.254"
+    want_result: true
+
+  - note: net_ip_in_range_false
+    description: Test net.ip_in_range for IP outside range
+    builtin: "net.ip_in_range"
+    args:
+      - "192.168.1.100"
+      - "10.0.0.1"
+      - "10.0.255.254"
+    want_result: false
+
+  - note: net_parse_cidr
+    description: Test net.parse_cidr for CIDR notation parsing
+    builtin: "net.parse_cidr"
+    args:
+      - "10.0.0.0/16"
+    want_result:
+      network: "10.0.0.0"
+      netmask: "255.255.0.0"
+      prefix_length: 16
+      first_ip: "10.0.0.0"
+      last_ip: "10.0.255.255"
+
+  - note: net_validate_ip_address
+    description: Test net.validate_ip_address for IP validation
+    builtin: "net.validate_ip_address"
+    args:
+      - "192.168.1.100"
+    want_result:
+      valid: true
+      version: "IPv4"
+      type: "private"
+
+  - note: net_validate_ipv6_address
+    description: Test net.validate_ip_address for IPv6 validation
+    builtin: "net.validate_ip_address"
+    args:
+      - "2001:db8::1"
+    want_result:
+      valid: true
+      version: "IPv6"
+      type: "unicast"
+
+  # String Utility Functions
+  - note: strings_startswith
+    description: Test strings.startswith function
+    builtin: "strings.startswith"
+    args:
+      - "analytics-data-2024"
+      - "analytics-"
+    want_result: true
+
+  - note: strings_startswith_false
+    description: Test strings.startswith with non-matching prefix
+    builtin: "strings.startswith"
+    args:
+      - "analytics-data-2024"
+      - "reports-"
+    want_result: false
+
+  - note: strings_endswith
+    description: Test strings.endswith function
+    builtin: "strings.endswith"
+    args:
+      - "report.pdf"
+      - ".pdf"
+    want_result: true
+
+  - note: strings_contains
+    description: Test strings.contains function
+    builtin: "strings.contains"
+    args:
+      - "analytics-data-temp-2024"
+      - "temp"
+    want_result: true
+
+  - note: strings_matches_regex
+    description: Test strings.matches_regex function
+    builtin: "strings.matches_regex"
+    args:
+      - "analytics-data"
+      - "^[a-z]+-[a-z]+$"
+    want_result: true
+
+  - note: strings_to_lower
+    description: Test strings.to_lower function
+    builtin: "strings.to_lower"
+    args:
+      - "Analytics-DATA"
+    want_result: "analytics-data"
+
+  - note: strings_to_upper
+    description: Test strings.to_upper function
+    builtin: "strings.to_upper"
+    args:
+      - "analytics-data"
+    want_result: "ANALYTICS-DATA"
+
+  - note: strings_trim
+    description: Test strings.trim function
+    builtin: "strings.trim"
+    args:
+      - "  analytics-data  "
+    want_result: "analytics-data"
+
+  - note: strings_length
+    description: Test strings.length function
+    builtin: "strings.length"
+    args:
+      - "analytics-data"
+    want_result: 14
+
+  - note: strings_substring
+    description: Test strings.substring function
+    builtin: "strings.substring"
+    args:
+      - "analytics-data-2024"
+      - 0
+      - 9
+    want_result: "analytics"
+
+  - note: strings_split
+    description: Test strings.split function
+    builtin: "strings.split"
+    args:
+      - "analytics-data-2024"
+      - "-"
+    want_result: ["analytics", "data", "2024"]
+
+  - note: strings_join
+    description: Test strings.join function
+    builtin: "strings.join"
+    args:
+      - ["analytics", "data", "2024"]
+      - "-"
+    want_result: "analytics-data-2024"
+
+  - note: strings_replace
+    description: Test strings.replace function
+    builtin: "strings.replace"
+    args:
+      - "analytics-data-temp"
+      - "temp"
+      - "2024"
+    want_result: "analytics-data-2024"
+
+  # Condition Parsing and Evaluation Functions  
+  - note: azure_parse_condition_ast
+    description: Test azure.parse_condition_ast for ABAC condition parsing
+    builtin: "azure.parse_condition_ast"
+    args:
+      - "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'analytics-data'"
+    want_result:
+      type: "BinaryExpression"
+      operator: "StringEquals"
+      left:
+        type: "AttributeReference"
+        source: "Request"
+        namespace: "Microsoft.Storage/storageAccounts/blobServices/containers"
+        attribute: "name"
+      right:
+        type: "StringLiteral"
+        value: "analytics-data"
+
+  - note: azure_validate_condition_syntax
+    description: Test azure.validate_condition_syntax for syntax validation
+    builtin: "azure.validate_condition_syntax"
+    args:
+      - "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'analytics-data' AND @Environment[localTime] TimeOfDayGreaterThan '09:00'"
+    want_result:
+      valid: true
+      attribute_references: 2
+      operators_used: ["StringEquals", "TimeOfDayGreaterThan", "AND"]
+
+  - note: azure_validate_condition_syntax_invalid
+    description: Test azure.validate_condition_syntax with invalid syntax
+    builtin: "azure.validate_condition_syntax"
+    args:
+      - "@Request[unclosed StringEquals 'value'"
+    want_result:
+      valid: false
+      error: "Unclosed attribute reference bracket"
+      position: 9
+
+  # Principal and Group Resolution Functions
+  - note: azure_resolve_group_membership
+    description: Test azure.resolve_group_membership for recursive group resolution
+    builtin: "azure.resolve_group_membership"
+    args:
+      - "user-123"
+      - rbac_data: |
+          {
+            "principalMemberships": [
+              {
+                "principalId": "user-123",
+                "groupId": "group-a",
+                "membershipType": "Direct"
+              },
+              {
+                "principalId": "group-a", 
+                "groupId": "group-b",
+                "membershipType": "Direct"
+              }
+            ]
+          }
+    want_result:
+      direct_groups: ["group-a"]
+      nested_groups: ["group-b"]
+      all_groups: ["group-a", "group-b"]
+
+  - note: azure_get_principal_attributes
+    description: Test azure.get_principal_attributes for attribute lookup
+    builtin: "azure.get_principal_attributes"
+    args:
+      - "user-123"
+      - rbac_data: |
+          {
+            "principalAttributes": [
+              {
+                "principalId": "user-123",
+                "attributes": {
+                  "department": "Analytics",
+                  "employeeType": "Regular",
+                  "location": "Seattle"
+                }
+              }
+            ]
+          }
+    want_result:
+      department: "Analytics"
+      employeeType: "Regular"
+      location: "Seattle"
+
+  # Resource and Action Analysis Functions
+  - note: azure_analyze_action_hierarchy
+    description: Test azure.analyze_action_hierarchy for action pattern analysis
+    builtin: "azure.analyze_action_hierarchy"
+    args:
+      - "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+    want_result:
+      resource_provider: "Microsoft.Storage"
+      resource_type: "storageAccounts"
+      sub_resource: "blobServices/containers/blobs"
+      operation: "read"
+      hierarchy_level: 4
+
+  - note: azure_get_resource_attributes
+    description: Test azure.get_resource_attributes for resource property extraction
+    builtin: "azure.get_resource_attributes"
+    args:
+      - "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+      - evaluation_context: |
+          {
+            "resourceAttributes": {
+              "storageAccountTier": "Standard",
+              "location": "East US",
+              "isSecureTransferRequired": true
+            }
+          }
+    want_result:
+      storageAccountTier: "Standard"
+      location: "East US"
+      isSecureTransferRequired: true
+
+  # Utility Functions for Complex Conditions
+  - note: azure_evaluate_attribute_path
+    description: Test azure.evaluate_attribute_path for nested attribute resolution
+    builtin: "azure.evaluate_attribute_path"
+    args:
+      - "metadata.classification.level"
+      - context_data: |
+          {
+            "metadata": {
+              "classification": {
+                "level": "confidential",
+                "category": "financial"
+              }
+            }
+          }
+    want_result: "confidential"
+
+  - note: azure_evaluate_array_condition
+    description: Test azure.evaluate_array_condition for array operations
+    builtin: "azure.evaluate_array_condition"
+    args:
+      - operator: "ANY"
+      - array_data: ["tag1", "tag2", "Environment", "tag3"]
+      - condition: "StringEquals(item, 'Environment')"
+    want_result: true
+
+  # Cache and Performance Functions
+  - note: azure_cache_role_definition
+    description: Test azure.cache_role_definition for performance optimization
+    builtin: "azure.cache_role_definition"
+    args:
+      - role_definition: |
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["*/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+    want_result:
+      cached: true
+      cache_key: "reader"
+      expiry_time: "2024-06-15T15:30:00Z"
+
+  - note: azure_get_cached_role_definition
+    description: Test azure.get_cached_role_definition for cache retrieval
+    builtin: "azure.get_cached_role_definition"
+    args:
+      - "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader"
+    want_result:
+      found: true
+      role_definition:
+        id: "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader"
+        name: "Reader"
+      cache_hit: true
+
+  # Error Handling and Validation Functions
+  - note: azure_validate_rbac_policy
+    description: Test azure.validate_rbac_policy for policy structure validation
+    builtin: "azure.validate_rbac_policy"
+    args:
+      - rbac_policy: |
+          {
+            "roleDefinitions": [
+              {
+                "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+                "name": "Reader",
+                "permissions": [
+                  {
+                    "actions": ["*/read"],
+                    "notActions": [],
+                    "dataActions": [],
+                    "notDataActions": []
+                  }
+                ]
+              }
+            ],
+            "roleAssignments": [
+              {
+                "principalId": "user-123",
+                "principalType": "User",
+                "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+                "scope": "/subscriptions/sub1"
+              }
+            ]
+          }
+    want_result:
+      valid: true
+      role_definitions_count: 1
+      role_assignments_count: 1
+      validation_errors: []
+
+  - note: azure_check_circular_dependencies
+    description: Test azure.check_circular_dependencies for group membership cycles
+    builtin: "azure.check_circular_dependencies"
+    args:
+      - principal_memberships: |
+          [
+            {
+              "principalId": "group-a",
+              "groupId": "group-b",
+              "membershipType": "Direct"
+            },
+            {
+              "principalId": "group-b",
+              "groupId": "group-c",
+              "membershipType": "Direct"
+            },
+            {
+              "principalId": "group-c",
+              "groupId": "group-a",
+              "membershipType": "Direct"
+            }
+          ]
+    want_result:
+      circular_dependency_found: true
+      cycle_path: ["group-a", "group-b", "group-c", "group-a"]
+      affected_principals: ["group-a", "group-b", "group-c"]

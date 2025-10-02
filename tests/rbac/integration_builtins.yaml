@@ -1,0 +1,369 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Azure RBAC Integration and Advanced Builtin Functions Test Suite
+# Tests integration scenarios and advanced builtin functions for comprehensive coverage
+# Covers cross-cutting concerns, performance optimizations, and real-world scenarios
+
+cases:
+  # Cross-Function Integration Tests
+  - note: integrated_rbac_evaluation_workflow
+    description: Test complete RBAC evaluation workflow using multiple builtins
+    test_scenario: "complete_workflow"
+    input:
+      principalId: "user-analyst"
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      resource: "/subscriptions/sub1/resourceGroups/analytics-rg/providers/Microsoft.Storage/storageAccounts/account1"
+      resourceAttributes:
+        containerName: "analytics-data"
+      environment:
+        utcNow: "2024-06-15T14:30:00Z"
+        localTime: "14:30"
+    workflow_steps:
+      - builtin: "azure.get_effective_principals"
+        args: ["user-analyst"]
+        expected_result: ["user-analyst", "group-analytics"]
+      - builtin: "azure.find_role_assignments"
+        args: ["effective_principals", "rbac_data"]
+        expected_result: "filtered_assignments"
+      - builtin: "azure.scope_covers"
+        args: ["assignment_scope", "target_resource"]
+        expected_result: true
+      - builtin: "azure.action_allowed"
+        args: ["requested_action", "role_definition"]
+        expected_result: true
+      - builtin: "azure.evaluate_condition"
+        args: ["abac_condition", "evaluation_context"]
+        expected_result: true
+    final_result:
+      allow: true
+      evaluation_path: "complete"
+
+  # Performance and Optimization Functions
+  - note: azure_optimize_role_lookup
+    description: Test azure.optimize_role_lookup for large policy sets
+    builtin: "azure.optimize_role_lookup"
+    args:
+      - optimization_hint: "principal_id_index"
+      - rbac_data: |
+          {
+            "roleAssignments": [
+              {"principalId": "user-1", "scope": "/subscriptions/sub1"},
+              {"principalId": "user-2", "scope": "/subscriptions/sub1"},
+              {"principalId": "user-analyst", "scope": "/subscriptions/sub1"},
+              {"principalId": "group-analytics", "scope": "/subscriptions/sub1/resourceGroups/analytics-rg"}
+            ]
+          }
+    want_result:
+      optimization_applied: true
+      index_created: "principal_id_btree"
+      lookup_complexity: "O(log n)"
+      performance_improvement: "80%"
+
+  - note: azure_batch_evaluate_assignments
+    description: Test azure.batch_evaluate_assignments for bulk processing
+    builtin: "azure.batch_evaluate_assignments"
+    args:
+      - assignments: |
+          [
+            {
+              "principalId": "user-analyst",
+              "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+              "scope": "/subscriptions/sub1"
+            },
+            {
+              "principalId": "user-analyst", 
+              "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/data-reader",
+              "scope": "/subscriptions/sub1/resourceGroups/analytics-rg"
+            }
+          ]
+      - evaluation_context: |
+          {
+            "action": "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+            "resource": "/subscriptions/sub1/resourceGroups/analytics-rg/providers/Microsoft.Storage/storageAccounts/account1"
+          }
+    want_result:
+      evaluated_assignments: 2
+      successful_assignments: 1
+      batch_performance: "60% faster than individual evaluation"
+
+  # Advanced Condition Evaluation Functions
+  - note: azure_compile_condition_to_bytecode
+    description: Test azure.compile_condition_to_bytecode for performance optimization
+    builtin: "azure.compile_condition_to_bytecode"
+    args:
+      - condition: "(@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'analytics-data' OR @Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringStartsWith 'temp-') AND @Environment[localTime] TimeOfDayGreaterThan '09:00'"
+    want_result:
+      bytecode_generated: true
+      instruction_count: 15
+      optimizations_applied: ["constant_folding", "dead_code_elimination"]
+      execution_speedup: "3x faster"
+
+  - note: azure_evaluate_compiled_condition
+    description: Test azure.evaluate_compiled_condition with precompiled bytecode
+    builtin: "azure.evaluate_compiled_condition"
+    args:
+      - compiled_bytecode: "LOAD_ATTR 0x01; LOAD_CONST 0x02; STRING_EQUALS; ..."
+      - evaluation_context: |
+          {
+            "resourceAttributes": {
+              "containerName": "analytics-data"
+            },
+            "environment": {
+              "localTime": "14:30"
+            }
+          }
+    want_result: true
+    performance_metrics:
+      execution_time_us: 50
+      memory_usage_bytes: 1024
+
+  # Multi-Tenant and Isolation Functions
+  - note: azure_evaluate_with_tenant_isolation
+    description: Test azure.evaluate_with_tenant_isolation for multi-tenant scenarios
+    builtin: "azure.evaluate_with_tenant_isolation"
+    args:
+      - tenant_id: "tenant-123"
+      - principal_id: "user-analyst"
+      - rbac_policy: |
+          {
+            "tenantId": "tenant-123",
+            "roleDefinitions": [...],
+            "roleAssignments": [...]
+          }
+    want_result:
+      tenant_isolated: true
+      cross_tenant_access_blocked: true
+      evaluation_result: "tenant_scoped"
+
+  - note: azure_validate_cross_tenant_access
+    description: Test azure.validate_cross_tenant_access for security validation
+    builtin: "azure.validate_cross_tenant_access"
+    args:
+      - source_tenant: "tenant-123"
+      - target_resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+      - resource_tenant: "tenant-456"
+    want_result:
+      cross_tenant_access: false
+      security_violation: true
+      blocked_reason: "Resource belongs to different tenant"
+
+  # Audit and Compliance Functions
+  - note: azure_log_rbac_decision
+    description: Test azure.log_rbac_decision for audit trail creation
+    builtin: "azure.log_rbac_decision"
+    args:
+      - decision_context: |
+          {
+            "principalId": "user-analyst",
+            "action": "Microsoft.Storage/storageAccounts/read",
+            "resource": "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1",
+            "decision": "allow",
+            "timestamp": "2024-06-15T14:30:00Z"
+          }
+      - audit_level: "detailed"
+    want_result:
+      audit_log_created: true
+      log_id: "rbac-audit-12345"
+      compliance_metadata: true
+
+  - note: azure_generate_access_report
+    description: Test azure.generate_access_report for compliance reporting
+    builtin: "azure.generate_access_report"
+    args:
+      - principal_id: "user-analyst"
+      - time_range: |
+          {
+            "start": "2024-06-01T00:00:00Z",
+            "end": "2024-06-30T23:59:59Z"
+          }
+      - rbac_data: "full_policy_set"
+    want_result:
+      report_generated: true
+      total_assignments: 3
+      effective_permissions: ["Storage Blob Data Reader", "Reader"]
+      risk_level: "low"
+
+  # Dynamic Policy Functions
+  - note: azure_evaluate_dynamic_policy
+    description: Test azure.evaluate_dynamic_policy for runtime policy generation
+    builtin: "azure.evaluate_dynamic_policy"
+    args:
+      - policy_template: |
+          {
+            "roleDefinitions": [
+              {
+                "id": "/dynamic/roles/${department}-reader",
+                "name": "${department} Reader",
+                "permissions": [
+                  {
+                    "actions": ["Microsoft.${resourceType}/**/read"],
+                    "notActions": [],
+                    "dataActions": [],
+                    "notDataActions": []
+                  }
+                ]
+              }
+            ]
+          }
+      - template_variables: |
+          {
+            "department": "Analytics",
+            "resourceType": "Storage"
+          }
+    want_result:
+      policy_generated: true
+      dynamic_role_id: "/dynamic/roles/analytics-reader"
+      templating_successful: true
+
+  # Machine Learning and Pattern Detection Functions
+  - note: azure_detect_access_patterns
+    description: Test azure.detect_access_patterns for ML-based analysis
+    builtin: "azure.detect_access_patterns"
+    args:
+      - access_history: |
+          [
+            {
+              "principalId": "user-analyst",
+              "action": "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+              "timestamp": "2024-06-15T09:00:00Z",
+              "allowed": true
+            },
+            {
+              "principalId": "user-analyst", 
+              "action": "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+              "timestamp": "2024-06-15T14:30:00Z",
+              "allowed": true
+            }
+          ]
+      - analysis_type: "anomaly_detection"
+    want_result:
+      patterns_detected: ["business_hours_access", "consistent_resource_type"]
+      anomalies_found: 0
+      risk_score: 0.1
+      recommendation: "normal_access_pattern"
+
+  # Real-time Policy Updates
+  - note: azure_update_policy_cache
+    description: Test azure.update_policy_cache for real-time policy updates
+    builtin: "azure.update_policy_cache"
+    args:
+      - policy_update: |
+          {
+            "operation": "add_role_assignment",
+            "assignment": {
+              "principalId": "user-new",
+              "principalType": "User",
+              "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+              "scope": "/subscriptions/sub1"
+            }
+          }
+      - cache_strategy: "incremental_update"
+    want_result:
+      cache_updated: true
+      update_propagated: true
+      affected_principals: ["user-new"]
+      cache_invalidation_minimal: true
+
+  # Geographic and Regional Functions
+  - note: azure_evaluate_geographic_restrictions
+    description: Test azure.evaluate_geographic_restrictions for geo-compliance
+    builtin: "azure.evaluate_geographic_restrictions"
+    args:
+      - principal_location: "EU"
+      - resource_location: "US-East"
+      - compliance_requirements: ["GDPR", "data_residency"]
+    want_result:
+      geographic_compliance: false
+      violations: ["cross_border_data_access"]
+      mitigation_required: true
+      blocked_reason: "GDPR data residency requirement"
+
+  # Integration with External Systems
+  - note: azure_sync_external_identity_provider
+    description: Test azure.sync_external_identity_provider for identity federation
+    builtin: "azure.sync_external_identity_provider"
+    args:
+      - provider_type: "SAML"
+      - identity_mapping: |
+          {
+            "external_id": "analyst@company.com",
+            "azure_principal_id": "user-analyst",
+            "attribute_mappings": {
+              "department": "Analytics",
+              "role": "Senior Analyst"
+            }
+          }
+    want_result:
+      sync_successful: true
+      principal_updated: true
+      attribute_sync_count: 2
+
+  # Conditional Access Integration
+  - note: azure_evaluate_conditional_access
+    description: Test azure.evaluate_conditional_access for CA policy integration
+    builtin: "azure.evaluate_conditional_access"
+    args:
+      - conditional_access_policies: |
+          [
+            {
+              "name": "Require MFA for Storage Access",
+              "conditions": {
+                "applications": ["Microsoft.Storage/*"],
+                "locations": ["external"]
+              },
+              "controls": ["require_mfa"]
+            }
+          ]
+      - access_context: |
+          {
+            "principalId": "user-analyst",
+            "action": "Microsoft.Storage/storageAccounts/read",
+            "location": "external",
+            "mfa_completed": false
+          }
+    want_result:
+      conditional_access_required: true
+      required_controls: ["require_mfa"]
+      access_blocked: true
+      reason: "MFA required for external access to storage"
+
+  # Performance Monitoring and Metrics
+  - note: azure_get_rbac_performance_metrics
+    description: Test azure.get_rbac_performance_metrics for system monitoring
+    builtin: "azure.get_rbac_performance_metrics"
+    args:
+      - time_window: "last_hour"
+      - metric_types: ["evaluation_latency", "cache_hit_ratio", "error_rate"]
+    want_result:
+      evaluation_latency_p99: "15ms"
+      cache_hit_ratio: 0.95
+      error_rate: 0.001
+      total_evaluations: 150000
+      performance_grade: "A"
+
+  # Disaster Recovery and Backup
+  - note: azure_backup_rbac_state
+    description: Test azure.backup_rbac_state for disaster recovery
+    builtin: "azure.backup_rbac_state"
+    args:
+      - backup_scope: "tenant"
+      - compression: true
+      - encryption: true
+    want_result:
+      backup_created: true
+      backup_id: "rbac-backup-20240615-143000"
+      compressed_size_mb: 2.5
+      encryption_applied: "AES-256"
+
+  - note: azure_restore_rbac_state
+    description: Test azure.restore_rbac_state for disaster recovery
+    builtin: "azure.restore_rbac_state"
+    args:
+      - backup_id: "rbac-backup-20240615-143000"
+      - restore_strategy: "incremental"
+    want_result:
+      restore_successful: true
+      restored_assignments: 1250
+      restored_definitions: 45
+      consistency_verified: true

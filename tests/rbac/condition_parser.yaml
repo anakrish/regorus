@@ -1,0 +1,410 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Azure RBAC Condition Expression Parser Test Suite
+# Tests the parsing and AST generation for ABAC condition expressions
+# Validates lexical analysis, syntax parsing, and semantic validation
+
+cases:
+  - note: simple_expression_ast
+    description: Test AST generation for simple StringEquals expression
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'analytics-data'"
+    expected_ast:
+      type: "BinaryExpression"
+      operator: "StringEquals"
+      left:
+        type: "AttributeReference"
+        source: "Request"
+        namespace: "Microsoft.Storage/storageAccounts/blobServices/containers"
+        attribute: "name"
+      right:
+        type: "StringLiteral"
+        value: "analytics-data"
+
+  - note: logical_and_expression_ast
+    description: Test AST generation for AND expression
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'test' AND @Environment[localTime] TimeOfDayGreaterThan '09:00'"
+    expected_ast:
+      type: "LogicalExpression"
+      operator: "AND"
+      left:
+        type: "BinaryExpression"
+        operator: "StringEquals"
+        left:
+          type: "AttributeReference"
+          source: "Request"
+          namespace: "Microsoft.Storage/storageAccounts/blobServices/containers"
+          attribute: "name"
+        right:
+          type: "StringLiteral"
+          value: "test"
+      right:
+        type: "BinaryExpression"
+        operator: "TimeOfDayGreaterThan"
+        left:
+          type: "AttributeReference"
+          source: "Environment"
+          attribute: "localTime"
+        right:
+          type: "TimeLiteral"
+          value: "09:00"
+
+  - note: parentheses_grouping_ast
+    description: Test AST generation respects parentheses grouping
+    condition: "(@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'public' OR @Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'shared') AND @Environment[localTime] TimeOfDayGreaterThan '09:00'"
+    expected_ast:
+      type: "LogicalExpression"
+      operator: "AND"
+      left:
+        type: "LogicalExpression"
+        operator: "OR"
+        left:
+          type: "BinaryExpression"
+          operator: "StringEquals"
+          left:
+            type: "AttributeReference"
+            source: "Request"
+            namespace: "Microsoft.Storage/storageAccounts/blobServices/containers"
+            attribute: "name"
+          right:
+            type: "StringLiteral"
+            value: "public"
+        right:
+          type: "BinaryExpression"
+          operator: "StringEquals"
+          left:
+            type: "AttributeReference"
+            source: "Request"
+            namespace: "Microsoft.Storage/storageAccounts/blobServices/containers"
+            attribute: "name"
+          right:
+            type: "StringLiteral"
+            value: "shared"
+      right:
+        type: "BinaryExpression"
+        operator: "TimeOfDayGreaterThan"
+        left:
+          type: "AttributeReference"
+          source: "Environment"
+          attribute: "localTime"
+        right:
+          type: "TimeLiteral"
+          value: "09:00"
+
+  - note: function_call_ast
+    description: Test AST generation for function calls in expressions
+    condition: "ToLower(@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name]) StringEquals 'test'"
+    expected_ast:
+      type: "BinaryExpression"
+      operator: "StringEquals"
+      left:
+        type: "FunctionCall"
+        function: "ToLower"
+        arguments:
+          - type: "AttributeReference"
+            source: "Request"
+            namespace: "Microsoft.Storage/storageAccounts/blobServices/containers"
+            attribute: "name"
+      right:
+        type: "StringLiteral"
+        value: "test"
+
+  - note: array_operator_ast
+    description: Test AST generation for array operators
+    condition: "@Request[Microsoft.Storage/storageAccounts:tags] ANY tag : StringEquals(tag.key, 'Environment')"
+    expected_ast:
+      type: "ArrayExpression"
+      operator: "ANY"
+      array:
+        type: "AttributeReference"
+        source: "Request"
+        namespace: "Microsoft.Storage/storageAccounts"
+        attribute: "tags"
+      variable: "tag"
+      condition:
+        type: "FunctionCall"
+        function: "StringEquals"
+        arguments:
+          - type: "PropertyAccess"
+            object:
+              type: "VariableReference"
+              name: "tag"
+            property: "key"
+          - type: "StringLiteral"
+            value: "Environment"
+
+  - note: lexical_tokens_basic
+    description: Test lexical tokenization of basic condition
+    condition: "@Request[ns:attr] StringEquals 'value'"
+    expected_tokens:
+      - type: "ATTRIBUTE_REF"
+        value: "@Request[ns:attr]"
+        position: 0
+      - type: "OPERATOR"
+        value: "StringEquals"
+        position: 18
+      - type: "STRING_LITERAL"
+        value: "'value'"
+        position: 30
+
+  - note: lexical_tokens_complex
+    description: Test lexical tokenization of complex condition with operators
+    condition: "(attr1 StringEquals 'val1') AND (attr2 NumericGreaterThan 100)"
+    expected_tokens:
+      - type: "LPAREN"
+        value: "("
+        position: 0
+      - type: "IDENTIFIER"
+        value: "attr1"
+        position: 1
+      - type: "OPERATOR"
+        value: "StringEquals"
+        position: 7
+      - type: "STRING_LITERAL"
+        value: "'val1'"
+        position: 19
+      - type: "RPAREN"
+        value: ")"
+        position: 25
+      - type: "LOGICAL_OPERATOR"
+        value: "AND"
+        position: 27
+      - type: "LPAREN"
+        value: "("
+        position: 31
+      - type: "IDENTIFIER"
+        value: "attr2"
+        position: 32
+      - type: "OPERATOR"
+        value: "NumericGreaterThan"
+        position: 38
+      - type: "NUMBER_LITERAL"
+        value: "100"
+        position: 57
+      - type: "RPAREN"
+        value: ")"
+        position: 60
+
+  - note: operator_precedence_parsing
+    description: Test operator precedence in expression parsing
+    condition: "attr1 StringEquals 'val1' AND attr2 StringEquals 'val2' OR attr3 StringEquals 'val3'"
+    expected_ast:
+      type: "LogicalExpression"
+      operator: "OR"
+      left:
+        type: "LogicalExpression"
+        operator: "AND"
+        left:
+          type: "BinaryExpression"
+          operator: "StringEquals"
+          left:
+            type: "Identifier"
+            name: "attr1"
+          right:
+            type: "StringLiteral"
+            value: "val1"
+        right:
+          type: "BinaryExpression"
+          operator: "StringEquals"
+          left:
+            type: "Identifier"
+            name: "attr2"
+          right:
+            type: "StringLiteral"
+            value: "val2"
+      right:
+        type: "BinaryExpression"
+        operator: "StringEquals"
+        left:
+          type: "Identifier"
+          name: "attr3"
+        right:
+          type: "StringLiteral"
+          value: "val3"
+    note: "AND has higher precedence than OR"
+
+  - note: unary_not_operator_ast
+    description: Test AST generation for NOT unary operator
+    condition: "NOT @Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'restricted'"
+    expected_ast:
+      type: "UnaryExpression"
+      operator: "NOT"
+      operand:
+        type: "BinaryExpression"
+        operator: "StringEquals"
+        left:
+          type: "AttributeReference"
+          source: "Request"
+          namespace: "Microsoft.Storage/storageAccounts/blobServices/containers"
+          attribute: "name"
+        right:
+          type: "StringLiteral"
+          value: "restricted"
+
+  - note: nested_attribute_reference_ast
+    description: Test AST generation for nested attribute references with dots
+    condition: "@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:metadata.category] StringEquals 'financial'"
+    expected_ast:
+      type: "BinaryExpression"
+      operator: "StringEquals"
+      left:
+        type: "AttributeReference"
+        source: "Request"
+        namespace: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+        attribute: "metadata.category"
+        path: ["metadata", "category"]
+      right:
+        type: "StringLiteral"
+        value: "financial"
+
+  - note: array_index_attribute_reference_ast
+    description: Test AST generation for array index in attribute references
+    condition: "@Request[Microsoft.Compute/virtualMachines:networkInterfaces[0].ipAddress] IpMatch '10.0.0.0/16'"
+    expected_ast:
+      type: "BinaryExpression"
+      operator: "IpMatch"
+      left:
+        type: "AttributeReference"
+        source: "Request"
+        namespace: "Microsoft.Compute/virtualMachines"
+        attribute: "networkInterfaces[0].ipAddress"
+        path: ["networkInterfaces", 0, "ipAddress"]
+      right:
+        type: "StringLiteral"
+        value: "10.0.0.0/16"
+
+  - note: string_literal_types
+    description: Test different string literal formats
+    conditions:
+      - condition: "attr StringEquals 'single-quoted'"
+        expected_string_value: "single-quoted"
+      - condition: 'attr StringEquals "double-quoted"'
+        expected_string_value: "double-quoted"
+      - condition: "attr StringEquals `backtick-quoted`"
+        expected_string_value: "backtick-quoted"
+
+  - note: numeric_literal_types
+    description: Test different numeric literal formats
+    conditions:
+      - condition: "attr NumericEquals 42"
+        expected_numeric_value: 42
+        numeric_type: "integer"
+      - condition: "attr NumericEquals 3.14159"
+        expected_numeric_value: 3.14159
+        numeric_type: "float"
+      - condition: "attr NumericEquals 1.23e6"
+        expected_numeric_value: 1230000
+        numeric_type: "scientific"
+
+  - note: boolean_literal_types
+    description: Test boolean literal parsing
+    conditions:
+      - condition: "attr BooleanEquals true"
+        expected_boolean_value: true
+      - condition: "attr BooleanEquals false"
+        expected_boolean_value: false
+
+  - note: datetime_literal_parsing
+    description: Test datetime literal parsing and validation
+    condition: "attr DateTimeGreaterThan '2024-06-15T14:30:00Z'"
+    expected_ast:
+      type: "BinaryExpression"
+      operator: "DateTimeGreaterThan"
+      left:
+        type: "Identifier"
+        name: "attr"
+      right:
+        type: "DateTimeLiteral"
+        value: "2024-06-15T14:30:00Z"
+        parsed_date: "2024-06-15T14:30:00.000Z"
+
+  - note: ip_address_literal_validation
+    description: Test IP address literal validation in conditions
+    conditions:
+      - condition: "attr IpMatch '192.168.1.0/24'"
+        ip_format: "CIDR"
+        valid: true
+      - condition: "attr IpMatch '10.0.0.1'"
+        ip_format: "IPv4"
+        valid: true
+      - condition: "attr IpMatch '2001:db8::1'"
+        ip_format: "IPv6"
+        valid: true
+      - condition: "attr IpMatch 'invalid-ip'"
+        valid: false
+        expect_parse_error: true
+
+  - note: syntax_error_handling
+    description: Test syntax error reporting in condition parsing
+    invalid_conditions:
+      - condition: "@Request[unclosed-bracket StringEquals 'value'"
+        error_type: "UNCLOSED_BRACKET"
+        error_position: 9
+      - condition: "attr StringEquals"
+        error_type: "MISSING_OPERAND"
+        error_position: 17
+      - condition: "StringEquals 'value' attr"
+        error_type: "UNEXPECTED_TOKEN"
+        error_position: 21
+      - condition: "attr && attr2"
+        error_type: "INVALID_OPERATOR"
+        error_message: "Use 'AND' instead of '&&'"
+
+  - note: semantic_validation
+    description: Test semantic validation of condition expressions
+    validation_tests:
+      - condition: "@Request[Microsoft.Storage/storageAccounts:name] NumericGreaterThan 'string'"
+        error_type: "TYPE_MISMATCH"
+        error_message: "Cannot use numeric operator with string literal"
+      - condition: "@UnknownSource[attr] StringEquals 'value'"
+        error_type: "UNKNOWN_ATTRIBUTE_SOURCE"
+        valid_sources: ["Request", "Principal", "Environment", "Resource", "Context"]
+      - condition: "@Request[] StringEquals 'value'"
+        error_type: "EMPTY_ATTRIBUTE_PATH"
+        error_message: "Attribute path cannot be empty"
+
+  - note: operator_compatibility_validation
+    description: Test operator compatibility with different data types
+    compatibility_matrix:
+      string_operators: ["StringEquals", "StringNotEquals", "StringStartsWith", "StringEndsWith", "StringContains", "StringLike", "StringMatches"]
+      numeric_operators: ["NumericEquals", "NumericGreaterThan", "NumericLessThan", "NumericInRange"]
+      datetime_operators: ["DateTimeEquals", "DateTimeGreaterThan", "DateTimeLessThan"]
+      time_operators: ["TimeOfDayEquals", "TimeOfDayGreaterThan", "TimeOfDayLessThan", "TimeOfDayInRange"]
+      ip_operators: ["IpMatch", "IpNotMatch", "IpInRange"]
+      boolean_operators: ["BooleanEquals"]
+      array_operators: ["ListContains", "ListNotContains", "ALL", "ANY"]
+      existence_operators: ["Exists", "NotExists"]
+
+  - note: whitespace_and_formatting_tolerance
+    description: Test parser tolerance for various whitespace and formatting
+    equivalent_conditions:
+      - "@Request[attr]StringEquals'value'"
+      - "@Request[attr] StringEquals 'value'"
+      - "  @Request[attr]  StringEquals  'value'  "
+      - "@Request[\n  attr\n] StringEquals\n'value'"
+    all_should_parse_identically: true
+
+  - note: comment_handling
+    description: Test handling of comments in condition expressions
+    condition_with_comments: |
+      // Check container name
+      @Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'analytics-data' 
+      AND // Check business hours
+      @Environment[localTime] TimeOfDayGreaterThan '09:00'
+    expected_ast:
+      type: "LogicalExpression"
+      operator: "AND"
+      # AST should ignore comments
+      comments_stripped: true
+
+  - note: escape_sequence_handling
+    description: Test escape sequence handling in string literals
+    conditions:
+      - condition: "attr StringEquals 'can\\'t'"
+        expected_value: "can't"
+      - condition: "attr StringEquals 'line1\\nline2'"
+        expected_value: "line1\nline2"
+      - condition: "attr StringEquals 'tab\\there'"
+        expected_value: "tab\there"
+      - condition: "attr StringEquals 'backslash\\\\'"
+        expected_value: "backslash\\"

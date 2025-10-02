@@ -1,0 +1,601 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Azure RBAC Error Handling and Edge Cases Test Suite
+# Tests error conditions, malformed policies, boundary conditions, and edge cases
+# Validates robustness of RBAC language compiler and runtime behavior
+
+cases:
+  - note: malformed_json_policy
+    description: Test handling of malformed JSON in RBAC policy
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-123",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub1",
+            // Invalid comment in JSON
+          }
+        ]
+      }
+    input:
+      principalId: "user-123"
+      action: "Microsoft.Storage/storageAccounts/read"
+      resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    expect_compile_error: true
+    error_type: "JSON_PARSE_ERROR"
+    error_message: "Invalid JSON syntax in RBAC policy"
+
+  - note: missing_required_fields
+    description: Test handling of missing required fields in role assignment
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub1"
+          }
+        ]
+      }
+    input:
+      principalId: "user-123"
+      action: "Microsoft.Storage/storageAccounts/read"
+      resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    expect_compile_error: true
+    error_type: "MISSING_REQUIRED_FIELD"
+    error_field: "principalId"
+
+  - note: nonexistent_role_definition
+    description: Test assignment referencing nonexistent role definition
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-123",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/nonexistent",
+            "scope": "/subscriptions/sub1"
+          }
+        ]
+      }
+    input:
+      principalId: "user-123"
+      action: "Microsoft.Storage/storageAccounts/read"
+      resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    want_result:
+      allow: false
+      reason: "Role definition not found"
+      error_type: "ROLE_DEFINITION_NOT_FOUND"
+
+  - note: invalid_scope_format
+    description: Test handling of invalid scope format
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-123",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "invalid-scope-format"
+          }
+        ]
+      }
+    input:
+      principalId: "user-123"
+      action: "Microsoft.Storage/storageAccounts/read"
+      resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    expect_compile_error: true
+    error_type: "INVALID_SCOPE_FORMAT"
+    error_message: "Scope must start with '/subscriptions/'"
+
+  - note: invalid_principal_type
+    description: Test handling of invalid principal type
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-123",
+            "principalType": "InvalidPrincipalType",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub1"
+          }
+        ]
+      }
+    input:
+      principalId: "user-123"
+      action: "Microsoft.Storage/storageAccounts/read"
+      resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    expect_compile_error: true
+    error_type: "INVALID_PRINCIPAL_TYPE"
+    valid_values: ["User", "Group", "ServicePrincipal", "MSI"]
+
+  - note: circular_group_membership
+    description: Test handling of circular group memberships
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "group-a",
+            "principalType": "Group",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub1"
+          }
+        ],
+        "principalMemberships": [
+          {
+            "principalId": "group-b",
+            "groupId": "group-a",
+            "membershipType": "Direct"
+          },
+          {
+            "principalId": "group-c",
+            "groupId": "group-b", 
+            "membershipType": "Direct"
+          },
+          {
+            "principalId": "group-a",
+            "groupId": "group-c",
+            "membershipType": "Direct"
+          }
+        ]
+      }
+    input:
+      principalId: "group-a"
+      action: "Microsoft.Storage/storageAccounts/read"
+      resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    want_result:
+      allow: false
+      reason: "Circular group membership detected"
+      error_type: "CIRCULAR_GROUP_MEMBERSHIP"
+
+  - note: malformed_abac_condition
+    description: Test handling of malformed ABAC condition syntax
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-123",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub1",
+            "condition": "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals",
+            "conditionVersion": "2.0"
+          }
+        ]
+      }
+    input:
+      principalId: "user-123"
+      action: "Microsoft.Storage/storageAccounts/read"
+      resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    expect_compile_error: true
+    error_type: "INVALID_CONDITION_SYNTAX"
+    error_message: "StringEquals operator requires a value"
+
+  - note: unsupported_condition_version
+    description: Test handling of unsupported condition version
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-123",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub1",
+            "condition": "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'test'",
+            "conditionVersion": "3.0"
+          }
+        ]
+      }
+    input:
+      principalId: "user-123"
+      action: "Microsoft.Storage/storageAccounts/read"
+      resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    expect_compile_error: true
+    error_type: "UNSUPPORTED_CONDITION_VERSION"
+    supported_versions: ["2.0"]
+
+  - note: empty_actions_and_data_actions
+    description: Test role definition with empty actions and dataActions
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/empty-role",
+            "name": "Empty Role",
+            "permissions": [
+              {
+                "actions": [],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-123",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/empty-role",
+            "scope": "/subscriptions/sub1"
+          }
+        ]
+      }
+    input:
+      principalId: "user-123"
+      action: "Microsoft.Storage/storageAccounts/read"
+      resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    want_result:
+      allow: false
+      reason: "No permissions granted by role"
+
+  - note: extremely_long_scope_path
+    description: Test handling of extremely long scope paths
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-123",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub1/resourceGroups/extremely-long-resource-group-name-that-exceeds-normal-limits-and-might-cause-issues/providers/Microsoft.Storage/storageAccounts/extremely-long-storage-account-name-that-also-exceeds-normal-limits-and-might-cause-buffer-overflows-or-other-issues"
+          }
+        ]
+      }
+    input:
+      principalId: "user-123"
+      action: "Microsoft.Storage/storageAccounts/read"
+      resource: "/subscriptions/sub1/resourceGroups/extremely-long-resource-group-name-that-exceeds-normal-limits-and-might-cause-issues/providers/Microsoft.Storage/storageAccounts/extremely-long-storage-account-name-that-also-exceeds-normal-limits-and-might-cause-buffer-overflows-or-other-issues"
+    want_result:
+      allow: true
+      scope_length_handled: true
+
+  - note: null_values_in_policy
+    description: Test handling of null values in policy fields
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": null,
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-123",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub1",
+            "condition": null
+          }
+        ]
+      }
+    input:
+      principalId: "user-123"
+      action: "Microsoft.Storage/storageAccounts/read"
+      resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    want_result:
+      allow: true
+      null_handling: "graceful"
+
+  - note: large_number_of_assignments
+    description: Test performance with large number of role assignments
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-target",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub1"
+          }
+        ]
+      }
+    # Note: In real test, this would generate 1000+ dummy assignments
+    performance_test: true
+    max_assignment_count: 10000
+    target_principal: "user-target"
+    input:
+      principalId: "user-target"
+      action: "Microsoft.Storage/storageAccounts/read"
+      resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    performance_expectations:
+      max_evaluation_time_ms: 100
+      memory_usage_reasonable: true
+
+  - note: unicode_and_special_characters
+    description: Test handling of Unicode and special characters in identifiers
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/unicode-role-测试",
+            "name": "Unicode Role 测试",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-测试-123",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/unicode-role-测试",
+            "scope": "/subscriptions/sub1/resourceGroups/rg-测试"
+          }
+        ]
+      }
+    input:
+      principalId: "user-测试-123"
+      action: "Microsoft.Storage/storageAccounts/read"
+      resource: "/subscriptions/sub1/resourceGroups/rg-测试/providers/Microsoft.Storage/storageAccounts/account1"
+    want_result:
+      allow: true
+      unicode_handled: true
+
+  - note: missing_input_fields
+    description: Test handling of missing required input fields
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-123",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub1"
+          }
+        ]
+      }
+    input:
+      principalId: "user-123"
+      # Missing action and resource fields
+    expect_runtime_error: true
+    error_type: "MISSING_INPUT_FIELD"
+    required_fields: ["action", "resource"]
+
+  - note: invalid_action_format
+    description: Test handling of invalid action format
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader", 
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-123",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub1"
+          }
+        ]
+      }
+    input:
+      principalId: "user-123"
+      action: "invalid-action-format"
+      resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    want_result:
+      allow: false
+      reason: "Invalid action format"
+      validation_error: true
+
+  - note: condition_evaluation_timeout
+    description: Test handling of condition evaluation timeout
+    rbac_policy: |
+      {
+        "roleDefinitions": [
+          {
+            "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "name": "Reader",
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+        ],
+        "roleAssignments": [
+          {
+            "principalId": "user-123",
+            "principalType": "User",
+            "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+            "scope": "/subscriptions/sub1",
+            "condition": "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'test' AND @Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'test' AND @Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'test'",
+            "conditionVersion": "2.0"
+          }
+        ]
+      }
+    input:
+      principalId: "user-123"
+      action: "Microsoft.Storage/storageAccounts/read"
+      resource: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+      resourceAttributes:
+        containerName: "test"
+    timeout_test: true
+    max_evaluation_time_ms: 1000
+    want_result:
+      allow: true
+      evaluation_completed: true

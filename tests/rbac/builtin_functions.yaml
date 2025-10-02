@@ -1,0 +1,385 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Azure RBAC Builtin Functions Test Suite
+# Tests Azure-specific builtin functions used in RBAC compilation to RVM
+# These test the core functions that the RBAC compiler will generate calls to
+
+cases:
+  - note: azure_scope_covers_subscription_to_resource
+    description: Test azure.scope_covers for subscription covering specific resource
+    builtin: "azure.scope_covers"
+    args:
+      - "/subscriptions/sub1"
+      - "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    want_result: true
+
+  - note: azure_scope_covers_resource_group_to_resource
+    description: Test azure.scope_covers for resource group covering resource
+    builtin: "azure.scope_covers"
+    args:
+      - "/subscriptions/sub1/resourceGroups/rg1"
+      - "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    want_result: true
+
+  - note: azure_scope_covers_no_match
+    description: Test azure.scope_covers for different resource groups
+    builtin: "azure.scope_covers"
+    args:
+      - "/subscriptions/sub1/resourceGroups/rg1"
+      - "/subscriptions/sub1/resourceGroups/rg2/providers/Microsoft.Storage/storageAccounts/account1"
+    want_result: false
+
+  - note: azure_scope_covers_exact_match
+    description: Test azure.scope_covers for exact resource match
+    builtin: "azure.scope_covers"
+    args:
+      - "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+      - "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    want_result: true
+
+  - note: azure_action_allowed_exact_match
+    description: Test azure.action_allowed with exact action match
+    builtin: "azure.action_allowed"
+    args:
+      - "Microsoft.Storage/storageAccounts/read"
+      - rbac_role: |
+          {
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/read"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+    want_result: true
+
+  - note: azure_action_allowed_wildcard_match
+    description: Test azure.action_allowed with wildcard action match
+    builtin: "azure.action_allowed"
+    args:
+      - "Microsoft.Storage/storageAccounts/regenerateKey/action"
+      - rbac_role: |
+          {
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/*"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+    want_result: true
+
+  - note: azure_action_allowed_not_actions_deny
+    description: Test azure.action_allowed with notActions override
+    builtin: "azure.action_allowed"
+    args:
+      - "Microsoft.Storage/storageAccounts/delete"
+      - rbac_role: |
+          {
+            "permissions": [
+              {
+                "actions": ["Microsoft.Storage/storageAccounts/*"],
+                "notActions": ["Microsoft.Storage/storageAccounts/delete"],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+    want_result: false
+
+  - note: azure_action_allowed_data_action
+    description: Test azure.action_allowed with data plane action
+    builtin: "azure.action_allowed"
+    args:
+      - "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      - rbac_role: |
+          {
+            "permissions": [
+              {
+                "actions": [],
+                "notActions": [],
+                "dataActions": ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"],
+                "notDataActions": []
+              }
+            ]
+          }
+      - action_type: "dataAction"
+    want_result: true
+
+  - note: azure_action_allowed_global_wildcard
+    description: Test azure.action_allowed with global wildcard
+    builtin: "azure.action_allowed"
+    args:
+      - "Microsoft.Compute/virtualMachines/start/action"
+      - rbac_role: |
+          {
+            "permissions": [
+              {
+                "actions": ["*"],
+                "notActions": [],
+                "dataActions": [],
+                "notDataActions": []
+              }
+            ]
+          }
+    want_result: true
+
+  - note: azure_evaluate_condition_string_equals
+    description: Test azure.evaluate_condition with StringEquals operator
+    builtin: "azure.evaluate_condition"
+    args:
+      - "@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'analytics-data'"
+      - evaluation_context: |
+          {
+            "resourceAttributes": {
+              "containerName": "analytics-data"
+            }
+          }
+    want_result: true
+
+  - note: azure_evaluate_condition_string_starts_with
+    description: Test azure.evaluate_condition with StringStartsWith operator
+    builtin: "azure.evaluate_condition"
+    args:
+      - "@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringStartsWith 'public/'"
+      - evaluation_context: |
+          {
+            "resourceAttributes": {
+              "blobPath": "public/reports/data.pdf"
+            }
+          }
+    want_result: true
+
+  - note: azure_evaluate_condition_time_of_day
+    description: Test azure.evaluate_condition with TimeOfDay comparison
+    builtin: "azure.evaluate_condition"
+    args:
+      - "@Environment[localTime] TimeOfDayGreaterThan '09:00' AND @Environment[localTime] TimeOfDayLessThan '17:00'"
+      - evaluation_context: |
+          {
+            "environment": {
+              "localTime": "14:30"
+            }
+          }
+    want_result: true
+
+  - note: azure_evaluate_condition_date_time
+    description: Test azure.evaluate_condition with DateTime comparison
+    builtin: "azure.evaluate_condition"
+    args:
+      - "@Environment[utcNow] DateTimeGreaterThan '2024-01-01T00:00:00Z' AND @Environment[utcNow] DateTimeLessThan '2025-01-01T00:00:00Z'"
+      - evaluation_context: |
+          {
+            "environment": {
+              "utcNow": "2024-06-15T12:00:00Z"
+            }
+          }
+    want_result: true
+
+  - note: azure_evaluate_condition_ip_match
+    description: Test azure.evaluate_condition with IpMatch operator
+    builtin: "azure.evaluate_condition"
+    args:
+      - "@Request[Microsoft.Network/virtualNetworks:sourceIpAddress] IpMatch '10.0.0.0/16'"
+      - evaluation_context: |
+          {
+            "requestContext": {
+              "sourceIpAddress": "10.0.5.100"
+            }
+          }
+    want_result: true
+
+  - note: azure_evaluate_condition_principal_attribute
+    description: Test azure.evaluate_condition with principal attribute check
+    builtin: "azure.evaluate_condition"
+    args:
+      - "@Principal[microsoft.directory/user:department] StringEquals 'Analytics'"
+      - evaluation_context: |
+          {
+            "principalAttributes": {
+              "department": "Analytics"
+            }
+          }
+    want_result: true
+
+  - note: azure_evaluate_condition_complex_and_or
+    description: Test azure.evaluate_condition with complex AND/OR logic
+    builtin: "azure.evaluate_condition"
+    args:
+      - "(@Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'public-data' OR @Request[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringStartsWith 'temp-') AND @Principal[microsoft.directory/user:department] StringEquals 'Analytics'"
+      - evaluation_context: |
+          {
+            "resourceAttributes": {
+              "containerName": "temp-analysis-2024"
+            },
+            "principalAttributes": {
+              "department": "Analytics"
+            }
+          }
+    want_result: true
+
+  - note: azure_get_principal_memberships
+    description: Test azure.get_principal_memberships for group resolution
+    builtin: "azure.get_principal_memberships"
+    args:
+      - "user-123"
+      - rbac_data: |
+          {
+            "principalMemberships": [
+              {
+                "principalId": "user-123",
+                "groupId": "group-456",
+                "membershipType": "Direct"
+              },
+              {
+                "principalId": "user-123",
+                "groupId": "group-789",
+                "membershipType": "Nested"
+              }
+            ]
+          }
+    want_result:
+      - groupId: "group-456"
+        membershipType: "Direct"
+      - groupId: "group-789"
+        membershipType: "Nested"
+
+  - note: azure_get_effective_principals
+    description: Test azure.get_effective_principals combining user and groups
+    builtin: "azure.get_effective_principals"
+    args:
+      - "user-123"
+      - rbac_data: |
+          {
+            "principalMemberships": [
+              {
+                "principalId": "user-123",
+                "groupId": "group-456",
+                "membershipType": "Direct"
+              }
+            ]
+          }
+    want_result:
+      - "user-123"
+      - "group-456"
+
+  - note: azure_find_role_assignments
+    description: Test azure.find_role_assignments for principal
+    builtin: "azure.find_role_assignments"
+    args:
+      - effective_principals: ["user-123", "group-456"]
+      - rbac_data: |
+          {
+            "roleAssignments": [
+              {
+                "principalId": "user-123",
+                "principalType": "User",
+                "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+                "scope": "/subscriptions/sub1"
+              },
+              {
+                "principalId": "group-456",
+                "principalType": "Group",
+                "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/contributor",
+                "scope": "/subscriptions/sub1/resourceGroups/rg1"
+              },
+              {
+                "principalId": "user-999",
+                "principalType": "User",
+                "roleDefinitionId": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/owner",
+                "scope": "/subscriptions/sub1"
+              }
+            ]
+          }
+    want_result:
+      - principalId: "user-123"
+        principalType: "User"
+        roleDefinitionId: "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader"
+        scope: "/subscriptions/sub1"
+      - principalId: "group-456"
+        principalType: "Group"
+        roleDefinitionId: "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/contributor"
+        scope: "/subscriptions/sub1/resourceGroups/rg1"
+
+  - note: azure_get_role_definition
+    description: Test azure.get_role_definition lookup
+    builtin: "azure.get_role_definition"
+    args:
+      - "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader"
+      - rbac_data: |
+          {
+            "roleDefinitions": [
+              {
+                "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader",
+                "name": "Reader",
+                "permissions": [
+                  {
+                    "actions": ["*/read"],
+                    "notActions": [],
+                    "dataActions": [],
+                    "notDataActions": []
+                  }
+                ]
+              },
+              {
+                "id": "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/contributor",
+                "name": "Contributor",
+                "permissions": [
+                  {
+                    "actions": ["*"],
+                    "notActions": ["Microsoft.Authorization/*/Delete"],
+                    "dataActions": [],
+                    "notDataActions": []
+                  }
+                ]
+              }
+            ]
+          }
+    want_result:
+      id: "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/reader"
+      name: "Reader"
+      permissions:
+        - actions: ["*/read"]
+          notActions: []
+          dataActions: []
+          notDataActions: []
+
+  - note: azure_parse_scope_hierarchy
+    description: Test azure.parse_scope_hierarchy for scope components
+    builtin: "azure.parse_scope_hierarchy"
+    args:
+      - "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/account1"
+    want_result:
+      subscription: "sub1"
+      resourceGroup: "rg1"
+      resourceProvider: "Microsoft.Storage"
+      resourceType: "storageAccounts"
+      resourceName: "account1"
+
+  - note: azure_match_action_pattern
+    description: Test azure.match_action_pattern for wildcard matching
+    builtin: "azure.match_action_pattern"
+    args:
+      - "Microsoft.Storage/storageAccounts/regenerateKey/action"
+      - "Microsoft.Storage/storageAccounts/*"
+    want_result: true
+
+  - note: azure_match_action_pattern_no_match
+    description: Test azure.match_action_pattern for no match
+    builtin: "azure.match_action_pattern"
+    args:
+      - "Microsoft.Compute/virtualMachines/start/action"
+      - "Microsoft.Storage/storageAccounts/*"
+    want_result: false
+
+  - note: azure_normalize_scope
+    description: Test azure.normalize_scope for consistent format
+    builtin: "azure.normalize_scope"
+    args:
+      - "/subscriptions/SUB1/resourceGroups/RG1/"
+    want_result: "/subscriptions/sub1/resourceGroups/rg1"

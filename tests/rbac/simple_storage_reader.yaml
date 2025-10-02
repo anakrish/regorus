@@ -1,0 +1,114 @@
+---
+# Test case for simple storage reader role assignment
+# This matches the playground example
+
+name: "Simple Storage Reader Tests"
+description: "Basic storage reader role assignment tests matching the playground scenario"
+
+tests:
+  - name: "data_action_blob_read"
+    description: "User with StorageReader role can read blob (data action)"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "StorageReader"
+        actions: ["Microsoft.Storage/storageAccounts/read"]
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      roleAssignment:
+        principalId: "user-123"
+        principalType: "User"
+        roleDefinitionId: "StorageReader"
+        scope: "/subscriptions/sub1/resourceGroups/rg1"
+    input:
+      principal:
+        id: "user-123"
+        principal_type: "User"
+      resource:
+        id: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/storage1"
+        scope: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/storage1"
+        resource_type: "Microsoft.Storage/storageAccounts"
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      actionType: "dataAction"
+    expected:
+      result: "allow"
+      reason: "User has data action permission"
+    
+  - name: "control_plane_action_read"
+    description: "User with StorageReader role can read storage account (control plane)"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "StorageReader"
+        actions: ["Microsoft.Storage/storageAccounts/read"]
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      roleAssignment:
+        principalId: "user-123"
+        principalType: "User"
+        roleDefinitionId: "StorageReader"
+        scope: "/subscriptions/sub1/resourceGroups/rg1"
+    input:
+      principal:
+        id: "user-123"
+        principal_type: "User"
+      resource:
+        id: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/storage1"
+        scope: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/storage1"
+        resource_type: "Microsoft.Storage/storageAccounts"
+      action: "Microsoft.Storage/storageAccounts/read"
+    expected:
+      result: "allow"
+      reason: "User has control plane action permission"
+
+  - name: "different_user_denied"
+    description: "Different user without assignment is denied"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "StorageReader"
+        actions: ["Microsoft.Storage/storageAccounts/read"]
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      roleAssignment:
+        principalId: "user-123"
+        principalType: "User"
+        roleDefinitionId: "StorageReader"
+        scope: "/subscriptions/sub1/resourceGroups/rg1"
+    input:
+      principal:
+        id: "user-456"
+        principal_type: "User"
+      resource:
+        id: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/storage1"
+        scope: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/storage1"
+        resource_type: "Microsoft.Storage/storageAccounts"
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      actionType: "dataAction"
+    expected:
+      result: "deny"
+      reason: "Different user has no assignment"
+
+  - name: "wrong_action_denied"
+    description: "User tries action that's not allowed"
+    policy:
+      version: "1.0"
+      roleDefinition:
+        id: "StorageReader"
+        actions: ["Microsoft.Storage/storageAccounts/read"]
+        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+      roleAssignment:
+        principalId: "user-123"
+        principalType: "User"
+        roleDefinitionId: "StorageReader"
+        scope: "/subscriptions/sub1/resourceGroups/rg1"
+    input:
+      principal:
+        id: "user-123"
+        principal_type: "User"
+      resource:
+        id: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/storage1"
+        scope: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/storage1"
+        resource_type: "Microsoft.Storage/storageAccounts"
+      action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+      actionType: "dataAction"
+    expected:
+      result: "deny"
+      reason: "User doesn't have write permission"

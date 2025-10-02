@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RBAC RVM Playground - Test Page</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 900px;
+            margin: 2rem auto;
+            padding: 0 2rem;
+            background: #1e1e1e;
+            color: #cccccc;
+        }
+        h1 { color: #007acc; }
+        h2 { color: #4ec9b0; margin-top: 2rem; }
+        .test-section {
+            background: #252526;
+            padding: 1.5rem;
+            margin: 1rem 0;
+            border-radius: 8px;
+            border-left: 4px solid #007acc;
+        }
+        .success { border-left-color: #89d185; }
+        .error { border-left-color: #f48771; }
+        .warning { border-left-color: #dcdcaa; }
+        pre {
+            background: #1e1e1e;
+            padding: 1rem;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 0.875rem;
+        }
+        code {
+            background: #2d2d30;
+            padding: 0.2rem 0.4rem;
+            border-radius: 3px;
+            font-size: 0.875rem;
+        }
+        button {
+            background: #007acc;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.875rem;
+            margin: 0.5rem 0.5rem 0.5rem 0;
+        }
+        button:hover { background: #005a9e; }
+        #results { margin-top: 1rem; }
+        .test-result {
+            padding: 0.75rem;
+            margin: 0.5rem 0;
+            border-radius: 4px;
+            background: #2d2d30;
+        }
+        .test-result.pass { border-left: 4px solid #89d185; }
+        .test-result.fail { border-left: 4px solid #f48771; }
+        a { color: #007acc; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <h1>🧪 RBAC RVM Playground - Test Suite</h1>
+    
+    <div class="test-section warning">
+        <h2>Prerequisites</h2>
+        <ul>
+            <li>WASM module built: <code>./build.sh</code></li>
+            <li>Local server running: <code>python3 -m http.server 8000</code></li>
+            <li>Browser with WebAssembly support</li>
+        </ul>
+    </div>
+
+    <div class="test-section">
+        <h2>Manual Testing Checklist</h2>
+        
+        <h3>✅ Basic Functionality</h3>
+        <ol>
+            <li><input type="checkbox"> Page loads without errors</li>
+            <li><input type="checkbox"> Three panels visible (Policy, RVM, Evaluation)</li>
+            <li><input type="checkbox"> Navigation bar shows title and buttons</li>
+            <li><input type="checkbox"> CodeMirror editors load with syntax highlighting</li>
+            <li><input type="checkbox"> Status bar shows "Ready" or WASM loaded message</li>
+        </ol>
+
+        <h3>✅ Example Loading</h3>
+        <ol>
+            <li><input type="checkbox"> "Load Example..." dropdown populated with 6 examples</li>
+            <li><input type="checkbox"> Selecting "Simple Storage Reader" loads policy and context</li>
+            <li><input type="checkbox"> Each example loads valid JSON in both editors</li>
+            <li><input type="checkbox"> Status updates when example is loaded</li>
+        </ol>
+
+        <h3>✅ Policy Validation</h3>
+        <ol>
+            <li><input type="checkbox"> "Validate" button works with valid policy</li>
+            <li><input type="checkbox"> Shows success message for valid JSON</li>
+            <li><input type="checkbox"> Shows error for invalid JSON (try removing a bracket)</li>
+            <li><input type="checkbox"> Shows error for missing required fields</li>
+        </ol>
+
+        <h3>✅ Policy Compilation</h3>
+        <ol>
+            <li><input type="checkbox"> "Compile to RVM" button compiles simple policy</li>
+            <li><input type="checkbox"> RVM instructions appear in middle panel</li>
+            <li><input type="checkbox"> Statistics show instruction count, constants</li>
+            <li><input type="checkbox"> Instructions formatted with line numbers, opcodes, operands</li>
+            <li><input type="checkbox"> Download and Copy buttons become enabled</li>
+        </ol>
+
+        <h3>✅ Policy Evaluation</h3>
+        <ol>
+            <li><input type="checkbox"> "Evaluate" button works with valid context</li>
+            <li><input type="checkbox"> Results tab shows ALLOW or DENY decision</li>
+            <li><input type="checkbox"> Execution time displayed</li>
+            <li><input type="checkbox"> Try modifying context to change result</li>
+            <li><input type="checkbox"> Invalid context shows error message</li>
+        </ol>
+
+        <h3>✅ Tab Navigation</h3>
+        <ol>
+            <li><input type="checkbox"> Context tab shows evaluation context editor</li>
+            <li><input type="checkbox"> Trace tab visible (may be empty if not implemented)</li>
+            <li><input type="checkbox"> Results tab shows evaluation results</li>
+            <li><input type="checkbox"> VM State tab visible</li>
+            <li><input type="checkbox"> Tab switching works smoothly</li>
+        </ol>
+
+        <h3>✅ Share Functionality</h3>
+        <ol>
+            <li><input type="checkbox"> "Share" button opens modal</li>
+            <li><input type="checkbox"> Share URL generated with encoded data</li>
+            <li><input type="checkbox"> "Copy Link" button copies to clipboard</li>
+            <li><input type="checkbox"> Opening share URL loads policy and context</li>
+            <li><input type="checkbox"> Modal closes when clicking X or outside</li>
+        </ol>
+
+        <h3>✅ Help Modal</h3>
+        <ol>
+            <li><input type="checkbox"> "Help" button opens modal</li>
+            <li><input type="checkbox"> Quick Start section visible</li>
+            <li><input type="checkbox"> Policy structure documentation shown</li>
+            <li><input type="checkbox"> Condition expressions documented</li>
+            <li><input type="checkbox"> Modal scrollable if content overflows</li>
+        </ol>
+
+        <h3>✅ Visual Design</h3>
+        <ol>
+            <li><input type="checkbox"> Dark theme applied consistently</li>
+            <li><input type="checkbox"> Syntax highlighting in editors (JSON)</li>
+            <li><input type="checkbox"> Buttons have hover effects</li>
+            <li><input type="checkbox"> Status bar changes color based on message type</li>
+            <li><input type="checkbox"> Responsive layout (try resizing window)</li>
+        </ol>
+    </div>
+
+    <div class="test-section">
+        <h2>Automated Tests</h2>
+        <p>Run automated checks for WASM module integration:</p>
+        <button onclick="runTests()">▶️ Run All Tests</button>
+        <button onclick="clearResults()">🗑️ Clear Results</button>
+        <div id="results"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>Example Test Scenarios</h2>
+        
+        <h3>Scenario 1: Simple Allow</h3>
+        <ol>
+            <li>Load "Simple Storage Reader" example</li>
+            <li>Compile policy (should succeed)</li>
+            <li>Evaluate (should return ALLOW)</li>
+            <li>Expected: principalId matches, action matches, scope matches</li>
+        </ol>
+
+        <h3>Scenario 2: Deny on Action Mismatch</h3>
+        <ol>
+            <li>Load "Simple Storage Reader" example</li>
+            <li>Change context action to "write" instead of "read"</li>
+            <li>Evaluate (should return DENY)</li>
+            <li>Expected: Action doesn't match permitted actions</li>
+        </ol>
+
+        <h3>Scenario 3: Conditional Access</h3>
+        <ol>
+            <li>Load "Conditional Blob Access" example</li>
+            <li>Compile (should show condition evaluation instructions)</li>
+            <li>Evaluate with container "public-data" (should ALLOW)</li>
+            <li>Change container to "private-data" (should DENY)</li>
+        </ol>
+
+        <h3>Scenario 4: Time-Based Policy</h3>
+        <ol>
+            <li>Load "Time-Based Access" example</li>
+            <li>Compile (should include TimeOfDay* instructions)</li>
+            <li>Evaluate (result depends on current time)</li>
+            <li>Check if current time is 8 AM - 6 PM matches result</li>
+        </ol>
+
+        <h3>Scenario 5: Complex Multi-Condition</h3>
+        <ol>
+            <li>Load "Azure Storage Full" example</li>
+            <li>Compile (should show multiple OR/AND branches)</li>
+            <li>Evaluate with valid conditions (should ALLOW)</li>
+            <li>Remove encryptionScope from context (should DENY)</li>
+        </ol>
+    </div>
+
+    <div class="test-section">
+        <h2>Performance Testing</h2>
+        
+        <h3>Compilation Performance</h3>
+        <ol>
+            <li>Load "Simple Storage Reader"</li>
+            <li>Note compilation time (should be < 50ms)</li>
+            <li>Load "Azure Storage Full"</li>
+            <li>Note compilation time (should be < 100ms)</li>
+        </ol>
+
+        <h3>Evaluation Performance</h3>
+        <ol>
+            <li>Evaluate simple policy 10 times</li>
+            <li>Average execution time should be < 10ms</li>
+            <li>No memory leaks (check browser DevTools)</li>
+        </ol>
+    </div>
+
+    <div class="test-section warning">
+        <h2>Known Limitations</h2>
+        <ul>
+            <li>Step-through debugger not yet implemented</li>
+            <li>VM state inspector shows placeholder</li>
+            <li>Execution trace may be empty</li>
+            <li>No syntax errors shown inline in editors</li>
+            <li>Large policies may cause browser slowdown</li>
+        </ul>
+    </div>
+
+    <div class="test-section success">
+        <h2>Reporting Issues</h2>
+        <p>If you find bugs or have suggestions:</p>
+        <ol>
+            <li>Check browser console (F12) for error messages</li>
+            <li>Note which browser and version you're using</li>
+            <li>Document steps to reproduce the issue</li>
+            <li>Include example policy and context if relevant</li>
+            <li>Report on GitHub repository</li>
+        </ol>
+    </div>
+
+    <div class="test-section">
+        <h2>Quick Links</h2>
+        <ul>
+            <li><a href="index.html">🎮 Open Playground</a></li>
+            <li><a href="README.md">📚 Read Documentation</a></li>
+            <li><a href="QUICKSTART.md">🚀 Quick Start Guide</a></li>
+        </ul>
+    </div>
+
+    <script type="module">
+        let testResults = [];
+
+        async function runTests() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<p>Running tests...</p>';
+            testResults = [];
+
+            // Test 1: Check if files exist
+            addTest('Files exist', await checkFilesExist());
+
+            // Test 2: Check if WASM module can be imported
+            addTest('WASM module import', await checkWasmImport());
+
+            // Test 3: Check if examples.js is valid
+            addTest('Examples file valid', await checkExamples());
+
+            // Test 4: Check if all CSS loads
+            addTest('Stylesheets load', await checkStyles());
+
+            displayResults();
+        }
+
+        async function checkFilesExist() {
+            try {
+                const files = ['index.html', 'app.js', 'examples.js', 'styles.css'];
+                for (const file of files) {
+                    const response = await fetch(file, { method: 'HEAD' });
+                    if (!response.ok) return `File ${file} not found`;
+                }
+                return true;
+            } catch (error) {
+                return `Error checking files: ${error.message}`;
+            }
+        }
+
+        async function checkWasmImport() {
+            try {
+                // Try to import the WASM module
+                const module = await import('./pkg/regorusjs.js');
+                if (module) {
+                    return true;
+                }
+                return 'WASM module imported but empty';
+            } catch (error) {
+                return `WASM import failed: ${error.message} (run ./build.sh)`;
+            }
+        }
+
+        async function checkExamples() {
+            try {
+                const response = await fetch('examples.js');
+                const text = await response.text();
+                if (text.includes('EXAMPLES')) {
+                    return true;
+                }
+                return 'Examples file missing EXAMPLES object';
+            } catch (error) {
+                return `Error loading examples: ${error.message}`;
+            }
+        }
+
+        async function checkStyles() {
+            try {
+                const response = await fetch('styles.css');
+                const text = await response.text();
+                if (text.includes('.container') && text.includes('.panel')) {
+                    return true;
+                }
+                return 'Styles file incomplete';
+            } catch (error) {
+                return `Error loading styles: ${error.message}`;
+            }
+        }
+
+        function addTest(name, result) {
+            testResults.push({
+                name,
+                pass: result === true,
+                message: result === true ? 'Passed' : result
+            });
+        }
+
+        function displayResults() {
+            const resultsDiv = document.getElementById('results');
+            let html = '<h3>Test Results</h3>';
+            
+            const passed = testResults.filter(t => t.pass).length;
+            const total = testResults.length;
+            
+            html += `<p><strong>${passed}/${total} tests passed</strong></p>`;
+            
+            testResults.forEach(test => {
+                html += `
+                    <div class="test-result ${test.pass ? 'pass' : 'fail'}">
+                        <strong>${test.pass ? '✓' : '✗'} ${test.name}</strong><br>
+                        ${test.message}
+                    </div>
+                `;
+            });
+            
+            resultsDiv.innerHTML = html;
+        }
+
+        function clearResults() {
+            document.getElementById('results').innerHTML = '';
+            testResults = [];
+        }
+
+        // Make functions global for button onclick
+        window.runTests = runTests;
+        window.clearResults = clearResults;
+    </script>
+</body>
+</html>

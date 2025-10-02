@@ -50,6 +50,10 @@ pub struct TestPolicy {
     pub role_definition: TestRoleDefinition,
     #[serde(default)]
     pub conditions: Vec<TestCondition>,
+    #[serde(default, rename = "roleAssignment")]
+    pub role_assignment: Option<TestRoleAssignment>,
+    #[serde(default, rename = "roleAssignments")]
+    pub role_assignments: Vec<TestRoleAssignment>,
 }
 
 /// Role definition in test policy
@@ -73,6 +77,22 @@ pub struct TestRoleDefinition {
     pub assignable_scopes: Vec<String>,
 }
 
+/// Role assignment definition in test policy
+#[cfg(feature = "yaml")]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TestRoleAssignment {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(rename = "principalId")]
+    pub principal_id: Option<String>,
+    #[serde(default, rename = "principalType")]
+    pub principal_type: Option<String>,
+    #[serde(rename = "roleDefinitionId")]
+    pub role_definition_id: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+}
+
 /// Condition definition in test
 #[cfg(feature = "yaml")]
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -92,6 +112,14 @@ pub struct TestInput {
     pub principal: Option<TestPrincipal>,
     pub resource: Option<TestResource>,
     pub action: String,
+    #[serde(default, rename = "actionType")]
+    pub action_type: Option<String>,
+    #[serde(default, rename = "subOperation")]
+    pub sub_operation: Option<String>,
+    #[serde(default)]
+    pub request: Option<TestRequest>,
+    #[serde(default)]
+    pub environment: Option<TestEnvironment>,
     pub evaluation_context: Option<BTreeMap<String, Value>>,
 }
 
@@ -113,6 +141,32 @@ pub struct TestResource {
     pub resource_type: Option<String>,
     pub scope: Option<String>,
     pub attributes: Option<BTreeMap<String, Value>>,
+}
+
+/// Request details in test input
+#[cfg(feature = "yaml")]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TestRequest {
+    #[serde(default)]
+    pub attributes: Option<BTreeMap<String, Value>>,
+    #[serde(default, rename = "dataAction")]
+    pub data_action: Option<String>,
+    #[serde(default, rename = "subOperation")]
+    pub sub_operation: Option<String>,
+}
+
+/// Environment details in test input
+#[cfg(feature = "yaml")]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TestEnvironment {
+    #[serde(default, rename = "isPrivateLink")]
+    pub is_private_link: Option<bool>,
+    #[serde(default, rename = "privateEndpoint")]
+    pub private_endpoint: Option<String>,
+    #[serde(default)]
+    pub subnet: Option<String>,
+    #[serde(default, rename = "utcNow")]
+    pub utc_now: Option<String>,
 }
 
 /// Expected result definition
@@ -228,20 +282,38 @@ impl RbacTestRunner {
             assignable_scopes,
         };
 
-        let role_assignments = vec![RoleAssignment {
-            span: EmptySpan,
-            id: format!("assignment-{}", context.principal.id),
-            principal_id: context.principal.id.clone(),
-            principal_type: context.principal.principal_type.clone(),
-            role_definition_id: role_definition.id.clone(),
-            scope: if context.resource.scope.is_empty() {
-                "/".to_string()
-            } else {
-                context.resource.scope.clone()
-            },
-            condition: None,
-            condition_version: None,
-        }];
+        let mut role_assignments = Vec::new();
+
+        if !test_policy.role_assignments.is_empty() {
+            for assignment in &test_policy.role_assignments {
+                role_assignments.push(self.convert_test_role_assignment(
+                    assignment,
+                    &role_definition,
+                    context,
+                ));
+            }
+        } else if let Some(assignment) = &test_policy.role_assignment {
+            role_assignments.push(self.convert_test_role_assignment(
+                assignment,
+                &role_definition,
+                context,
+            ));
+        } else {
+            role_assignments.push(RoleAssignment {
+                span: EmptySpan,
+                id: format!("assignment-{}", context.principal.id),
+                principal_id: context.principal.id.clone(),
+                principal_type: context.principal.principal_type.clone(),
+                role_definition_id: role_definition.id.clone(),
+                scope: if context.resource.scope.is_empty() {
+                    "/".to_string()
+                } else {
+                    context.resource.scope.clone()
+                },
+                condition: None,
+                condition_version: None,
+            });
+        }
 
         RbacPolicy {
             span: EmptySpan,
@@ -251,6 +323,62 @@ impl RbacTestRunner {
                 .unwrap_or_else(|| "1.0".to_string()),
             role_definitions: vec![role_definition],
             role_assignments,
+        }
+    }
+
+    fn convert_test_role_assignment(
+        &self,
+        assignment: &TestRoleAssignment,
+        role_definition: &RoleDefinition,
+        context: &EvaluationContext,
+    ) -> RoleAssignment {
+        let principal_id = assignment
+            .principal_id
+            .clone()
+            .unwrap_or_else(|| context.principal.id.clone());
+
+        let principal_type = assignment
+            .principal_type
+            .as_deref()
+            .map(Self::parse_principal_type)
+            .unwrap_or_else(|| context.principal.principal_type.clone());
+
+        let scope = assignment.scope.clone().unwrap_or_else(|| {
+            if context.resource.scope.is_empty() {
+                "/".to_string()
+            } else {
+                context.resource.scope.clone()
+            }
+        });
+
+        let role_definition_id = assignment
+            .role_definition_id
+            .clone()
+            .unwrap_or_else(|| role_definition.id.clone());
+
+        let assignment_id = assignment
+            .id
+            .clone()
+            .unwrap_or_else(|| format!("assignment-{}", principal_id));
+
+        RoleAssignment {
+            span: EmptySpan,
+            id: assignment_id,
+            principal_id,
+            principal_type,
+            role_definition_id,
+            scope,
+            condition: None,
+            condition_version: None,
+        }
+    }
+
+    fn parse_principal_type(principal_type: &str) -> PrincipalType {
+        match principal_type {
+            "Group" => PrincipalType::Group,
+            "ServicePrincipal" => PrincipalType::ServicePrincipal,
+            "ManagedServiceIdentity" => PrincipalType::ManagedServiceIdentity,
+            _ => PrincipalType::User,
         }
     }
 
@@ -325,31 +453,70 @@ impl RbacTestRunner {
         };
 
         let mut request_attrs = BTreeMap::new();
+        if let Some(test_request) = &test_input.request {
+            if let Some(attrs) = &test_request.attributes {
+                for (key, value) in attrs {
+                    request_attrs.insert(Value::String(key.clone().into()), value.clone());
+                }
+            }
+        }
         if let Some(extra_context) = &test_input.evaluation_context {
             for (key, value) in extra_context {
                 request_attrs.insert(Value::String(key.clone().into()), value.clone());
             }
         }
 
-        let context = EvaluationContext {
-            principal,
-            resource,
-            request: RequestContext {
-                action: Some(test_input.action.clone()),
-                data_action: None,
-                attributes: Value::from_map(request_attrs),
-            },
-            environment: EnvironmentContext {
+        let explicit_data_action = test_input
+            .request
+            .as_ref()
+            .and_then(|req| req.data_action.clone());
+        let is_data_action = test_input.action_type.as_deref() == Some("dataAction")
+            || explicit_data_action.is_some();
+        let data_action_value = explicit_data_action.unwrap_or_else(|| test_input.action.clone());
+
+        let suboperation = test_input.sub_operation.clone().or_else(|| {
+            test_input
+                .request
+                .as_ref()
+                .and_then(|req| req.sub_operation.clone())
+        });
+
+        let environment = if let Some(env) = &test_input.environment {
+            EnvironmentContext {
+                is_private_link: env.is_private_link,
+                private_endpoint: env.private_endpoint.clone(),
+                subnet: env.subnet.clone(),
+                utc_now: env.utc_now.clone(),
+            }
+        } else {
+            EnvironmentContext {
                 is_private_link: None,
                 private_endpoint: None,
                 subnet: None,
                 utc_now: None,
-            },
-            action: Some(test_input.action.clone()),
-            suboperation: None,
+            }
         };
 
-        context
+        EvaluationContext {
+            principal,
+            resource,
+            request: RequestContext {
+                action: if is_data_action {
+                    None
+                } else {
+                    Some(test_input.action.clone())
+                },
+                data_action: if is_data_action {
+                    Some(data_action_value)
+                } else {
+                    None
+                },
+                attributes: Value::from_map(request_attrs),
+            },
+            environment,
+            action: Some(test_input.action.clone()),
+            suboperation,
+        }
     }
 
     /// Execute a single test case
@@ -688,6 +855,8 @@ mod tests {
                 assignable_scopes: vec!["/".to_string()],
             },
             conditions: Vec::new(),
+            role_assignment: None,
+            role_assignments: Vec::new(),
         };
 
         let context = RbacEngine::create_test_context(

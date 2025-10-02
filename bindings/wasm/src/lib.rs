@@ -308,6 +308,19 @@ impl RvmProgram {
     pub fn serializeBinary(&self) -> Result<Vec<u8>, JsValue> {
         self.program.serialize_binary().map_err(error_to_jsvalue)
     }
+
+    /// Serialize the program to JSON format for inspection.
+    pub fn toJson(&self) -> Result<String, JsValue> {
+        serde_json::to_string_pretty(&*self.program).map_err(error_to_jsvalue)
+    }
+
+    /// Get a formatted assembly listing of the program.
+    pub fn toAssemblyListing(&self) -> String {
+        use regorus::rvm::{generate_assembly_listing, AssemblyListingConfig};
+        
+        let config = AssemblyListingConfig::default();
+        generate_assembly_listing(&self.program, &config)
+    }
 }
 
 #[wasm_bindgen]
@@ -765,16 +778,48 @@ fn parse_evaluation_context(json: &serde_json::Value) -> Result<regorus::rbac::E
 
 fn build_vm_input(context: &regorus::rbac::EvaluationContext) -> regorus::Value {
     use regorus::Value;
+    use std::collections::BTreeMap;
     
-    // Build input as a JSON object using serde
-    let input_json = serde_json::json!({
-        "principalId": context.principal.id,
-        "resource": context.resource.scope,
-        "action": context.action,
-    });
+    let mut input_map: BTreeMap<Value, Value> = BTreeMap::new();
+
+    // The RBAC compiler expects input with these fields:
+    // - principalId: the principal making the request
+    // - resource: the resource being accessed (uses scope)
+    // - action: the action being performed
+    // - actionType: "dataAction" or "action"
     
-    // Convert to Value
-    serde_json::from_value(input_json).unwrap_or_else(|_| Value::new_object())
+    input_map.insert(
+        Value::String("principalId".into()),
+        Value::String(context.principal.id.clone().into()),
+    );
+    
+    input_map.insert(
+        Value::String("resource".into()),
+        Value::String(context.resource.scope.clone().into()),
+    );
+    
+    // Determine action and actionType following the same logic as test_runner.rs
+    let (action_value, action_type) = if let Some(data_action) = &context.request.data_action {
+        (data_action.clone(), "dataAction")
+    } else if let Some(action) = &context.request.action {
+        (action.clone(), "action")
+    } else if let Some(action) = &context.action {
+        (action.clone(), "action")
+    } else {
+        (String::new(), "action")
+    };
+    
+    input_map.insert(
+        Value::String("action".into()),
+        Value::String(action_value.into()),
+    );
+    
+    input_map.insert(
+        Value::String("actionType".into()),
+        Value::String(action_type.into()),
+    );
+
+    Value::from(input_map)
 }
 
 #[cfg(test)]

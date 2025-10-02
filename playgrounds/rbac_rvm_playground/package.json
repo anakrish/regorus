@@ -1,0 +1,13 @@
+{
+  "name": "rbac-rvm-playground",
+  "version": "1.0.0",
+  "description": "Interactive RBAC RVM Playground for Regorus",
+  "scripts": {
+    "build": "./build.sh",
+    "serve": "python3 -m http.server 8000",
+    "dev": "npm run build && npm run serve"
+  },
+  "keywords": ["rbac", "rvm", "regorus", "wasm", "azure", "policy"],
+  "author": "Microsoft Regorus Team",
+  "license": "MIT"
+}

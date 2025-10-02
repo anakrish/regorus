@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Regorus RBAC RVM Playground</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/theme/eclipse.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/addon/lint/lint.min.css">
+</head>
+<body>
+    <!-- Top Navigation -->
+    <nav class="navbar">
+        <div class="nav-content">
+            <div class="nav-left">
+                <h1>🎮 Regorus RBAC RVM Playground</h1>
+                <span class="subtitle">Interactive Azure RBAC Policy Debugger</span>
+            </div>
+            <div class="nav-right">
+                <select id="exampleSelector" class="nav-button">
+                    <option value="">Load Example...</option>
+                    <option value="simple">Simple Storage Reader</option>
+                    <option value="conditional">Conditional Blob Access</option>
+                    <option value="storage">Azure Storage Full</option>
+                    <option value="time">Time-Based Access</option>
+                    <option value="tags">Tag-Based ABAC</option>
+                    <option value="multi">Multi-Role Complex</option>
+                </select>
+                <button id="shareBtn" class="nav-button">🔗 Share</button>
+                <button id="settingsBtn" class="nav-button">⚙️ Settings</button>
+                <button id="helpBtn" class="nav-button">❓ Help</button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container">
+        <!-- Left Panel: Policy Editor -->
+        <div class="panel left-panel">
+            <div class="panel-header">
+                <h2>📝 RBAC Policy</h2>
+                <div class="panel-actions">
+                    <button id="validateBtn" class="btn btn-secondary">✓ Validate</button>
+                    <button id="compileBtn" class="btn btn-primary">🔧 Compile to RVM</button>
+                </div>
+            </div>
+            <div class="panel-content">
+                <div id="policyStatus" class="status-bar">Ready</div>
+                <textarea id="policyEditor"></textarea>
+            </div>
+        </div>
+
+        <!-- Middle Panel: RVM Instructions -->
+        <div class="panel middle-panel">
+            <div class="panel-header">
+                <h2>RVM Instructions</h2>
+                <div class="rvm-stats" id="rvmStats"></div>
+            </div>
+            <div class="panel-content">
+                <div id="rvmInstructions"></div>
+            </div>
+        </div>
+
+        <!-- Right Panel: Context & Results -->
+        <div class="panel right-panel">
+            <div class="panel-header">
+                <h2>🔍 Evaluation</h2>
+                <div class="tab-buttons">
+                    <button class="tab-btn active" data-tab="context">Context</button>
+                    <button class="tab-btn" data-tab="trace">Trace</button>
+                    <button class="tab-btn" data-tab="results">Results</button>
+                    <button class="tab-btn" data-tab="vmstate">VM State</button>
+                </div>
+            </div>
+            <div class="panel-content">
+                <!-- Context Tab -->
+                <div id="contextTab" class="tab-content active">
+                    <div class="context-header">
+                        <label>Request Context (JSON)</label>
+                        <button id="evalBtn" class="btn btn-primary btn-small">▶️ Evaluate</button>
+                    </div>
+                    <textarea id="contextEditor"></textarea>
+                </div>
+
+                <!-- Trace Tab -->
+                <div id="traceTab" class="tab-content">
+                    <div id="executionTrace" class="trace-view"></div>
+                </div>
+
+                <!-- Results Tab -->
+                <div id="resultsTab" class="tab-content">
+                    <div id="evaluationResults" class="results-view"></div>
+                </div>
+
+                <!-- VM State Tab -->
+                <div id="vmstateTab" class="tab-content">
+                    <div id="vmState" class="vmstate-view"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Status Bar -->
+    <div class="status-bar-bottom">
+        <span id="statusText">Ready</span>
+        <span id="executionTime"></span>
+    </div>
+
+    <!-- Modals -->
+    <div id="shareModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>🔗 Share This Playground</h2>
+            <p>Copy this URL to share your policy and context:</p>
+            <input type="text" id="shareUrl" readonly>
+            <button id="copyShareBtn" class="btn btn-primary">📋 Copy Link</button>
+        </div>
+    </div>
+
+    <div id="helpModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>❓ Help & Documentation</h2>
+            <div class="help-content">
+                <h3>Quick Start</h3>
+                <ol>
+                    <li>Load an example from the dropdown or write your own RBAC policy</li>
+                    <li>Click "Compile to RVM" to see the bytecode</li>
+                    <li>Modify the request context on the right</li>
+                    <li>Click "Evaluate" to see if access is allowed</li>
+                    <li>Use "Step" to debug instruction by instruction</li>
+                </ol>
+                
+                <h3>RBAC Policy Structure</h3>
+                <p>A policy contains <strong>roleDefinitions</strong> and <strong>roleAssignments</strong>:</p>
+                <pre>{
+  "version": "1.0",
+  "roleDefinitions": [{
+    "id": "reader",
+    "permissions": [{
+      "actions": ["read"],
+      "dataActions": []
+    }]
+  }],
+  "roleAssignments": [{
+    "principalId": "user1",
+    "roleDefinitionId": "reader",
+    "scope": "/"
+  }]
+}</pre>
+                
+                <h3>Condition Expressions</h3>
+                <p>Conditions use Azure ABAC syntax:</p>
+                <ul>
+                    <li><code>@Resource[name] StringEquals 'value'</code></li>
+                    <li><code>@Request[prefix] StringStartsWith 'public/'</code></li>
+                    <li><code>ActionMatches{'Microsoft.Storage/*'}</code></li>
+                    <li>Operators: <code>&&</code>, <code>||</code>, <code>!</code></li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/javascript/javascript.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/addon/edit/matchbrackets.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/addon/edit/closebrackets.min.js"></script>
+    <script src="examples.js"></script>
+    <script type="module" src="app.js"></script>
+</body>
+</html>

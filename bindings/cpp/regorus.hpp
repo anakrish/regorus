@@ -6,6 +6,7 @@
 
 #include "regorus.ffi.hpp"
 #include "regorus_value.hpp"
+#include "regorus_lazy.hpp"
 
 namespace regorus {
 
@@ -39,21 +40,20 @@ namespace regorus {
 	    }
 	}
 	
-	Value value() const {
-	    if (*this && result.pointer_value) {
-		// Clone the value since Result owns it
-		auto json_result = regorus_value_to_json(result.pointer_value);
-		if (json_result.status == RegorusStatus::Ok) {
-		    auto val = Value::FromJson(json_result.output);
-		    regorus_result_drop(json_result);
-		    return val;
-		}
-		regorus_result_drop(json_result);
-	    }
-	    return Value::Null();
-	}
-
-	~Result() {
+    Value value() const {
+        if (*this && result.pointer_value) {
+            // Clone the value directly without JSON conversion
+            auto clone_result = regorus_value_clone(result.pointer_value);
+            if (clone_result.status == RegorusStatus::Ok) {
+                void* ptr = clone_result.pointer_value;
+                clone_result.pointer_value = nullptr;  // Transfer ownership
+                regorus_result_drop(clone_result);
+                return Value(ptr);
+            }
+            regorus_result_drop(clone_result);
+        }
+        return Value::Null();
+    }	~Result() {
 	    regorus_result_drop(result);
 	}
 	
@@ -167,6 +167,11 @@ namespace regorus {
 	Engine(Engine&&) = delete;
 	Engine& operator=(const Engine&) = delete;
     };
+
+    // Implementation of LazyObject::to_value() helper
+    inline Value value_from_lazy_object_impl(void* lazy_object_ptr) {
+        return Value::from_lazy_object(lazy_object_ptr);
+    }
 }
 
 #endif // REGORUS_WRAPPER_HPP

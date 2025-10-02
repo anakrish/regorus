@@ -5,19 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
-#include <stdbool.h>
-#include <stdint.h>
 
-// Forward declare C API
-typedef struct {
-    int status;
-    int data_type;
-    char* output;
-    bool bool_value;
-    int64_t int_value;
-    void* pointer_value;
-    char* error_message;
-} RegorusResult;
+// Include the generated C header
+#include "../ffi/regorus.h"
 
 // Value creation
 extern RegorusResult regorus_value_create_null(void);
@@ -63,6 +53,7 @@ void test_create_primitives() {
     RegorusResult null_result = regorus_value_create_null();
     check_result(null_result, "create null");
     void* null_value = null_result.pointer_value;
+    null_result.pointer_value = NULL;  // Transfer ownership
     regorus_result_drop(null_result);
     
     // Check it's null
@@ -77,6 +68,7 @@ void test_create_primitives() {
     RegorusResult bool_result = regorus_value_create_bool(true);
     check_result(bool_result, "create bool");
     void* bool_value = bool_result.pointer_value;
+    bool_result.pointer_value = NULL;  // Transfer ownership
     regorus_result_drop(bool_result);
     regorus_value_drop(bool_value);
     
@@ -84,6 +76,7 @@ void test_create_primitives() {
     RegorusResult int_result = regorus_value_create_int(42);
     check_result(int_result, "create int");
     void* int_value = int_result.pointer_value;
+    int_result.pointer_value = NULL;  // Transfer ownership
     regorus_result_drop(int_result);
     regorus_value_drop(int_value);
     
@@ -91,6 +84,7 @@ void test_create_primitives() {
     RegorusResult str_result = regorus_value_create_string("hello");
     check_result(str_result, "create string");
     void* str_value = str_result.pointer_value;
+    str_result.pointer_value = NULL;  // Transfer ownership
     regorus_result_drop(str_result);
     regorus_value_drop(str_value);
     
@@ -104,6 +98,7 @@ void test_create_collections() {
     RegorusResult obj_result = regorus_value_create_object();
     check_result(obj_result, "create object");
     void* obj_value = obj_result.pointer_value;
+    obj_result.pointer_value = NULL;  // Transfer ownership
     regorus_result_drop(obj_result);
     
     // Check it's an object
@@ -118,6 +113,7 @@ void test_create_collections() {
     RegorusResult arr_result = regorus_value_create_array();
     check_result(arr_result, "create array");
     void* arr_value = arr_result.pointer_value;
+    arr_result.pointer_value = NULL;  // Transfer ownership
     regorus_result_drop(arr_result);
     regorus_value_drop(arr_value);
     
@@ -125,6 +121,7 @@ void test_create_collections() {
     RegorusResult set_result = regorus_value_create_set();
     check_result(set_result, "create set");
     void* set_value = set_result.pointer_value;
+    set_result.pointer_value = NULL;  // Transfer ownership
     regorus_result_drop(set_result);
     regorus_value_drop(set_value);
     
@@ -138,12 +135,14 @@ void test_object_operations() {
     RegorusResult obj_result = regorus_value_create_object();
     check_result(obj_result, "create object");
     void* obj = obj_result.pointer_value;
+    obj_result.pointer_value = NULL;  // Transfer ownership
     regorus_result_drop(obj_result);
     
     // Create a string value to insert
     RegorusResult str_result = regorus_value_create_string("world");
     check_result(str_result, "create string");
     void* str_value = str_result.pointer_value;
+    str_result.pointer_value = NULL;  // Transfer ownership
     regorus_result_drop(str_result);
     
     // Insert into object
@@ -151,10 +150,11 @@ void test_object_operations() {
     check_result(insert_result, "object insert");
     regorus_result_drop(insert_result);
     
-    // Get from object
+    // Get the value back (use same key "hello" that we inserted)
     RegorusResult get_result = regorus_value_object_get(obj, "hello");
     check_result(get_result, "object get");
     void* retrieved = get_result.pointer_value;
+    get_result.pointer_value = NULL;  // Transfer ownership
     regorus_result_drop(get_result);
     
     regorus_value_drop(retrieved);
@@ -172,6 +172,7 @@ void test_json_roundtrip() {
     RegorusResult parse_result = regorus_value_from_json(json);
     check_result(parse_result, "from_json");
     void* value = parse_result.pointer_value;
+    parse_result.pointer_value = NULL;  // Transfer ownership
     regorus_result_drop(parse_result);
     
     // Check it's an object

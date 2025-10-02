@@ -52,6 +52,8 @@ INTERFACE
 
 set(regorus_ffi_HEADER_FILES
   regorus.hpp
+  regorus_value.hpp
+  regorus_lazy.hpp
   ../ffi/regorus.ffi.hpp
 )
 
@@ -96,8 +98,20 @@ add_executable(test_raii test_raii.cpp)
 target_include_directories(test_raii PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(test_raii regorus_ffi::regorus_ffi)
 
+# Lazy evaluation example
+add_executable(test_lazy main_lazy.cpp)
+target_include_directories(test_lazy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(test_lazy regorus_ffi::regorus_ffi)
+
+# COSE lazy evaluation example
+add_executable(cose_lazy main_cose_lazy.cpp)
+target_include_directories(cose_lazy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(cose_lazy regorus_ffi::regorus_ffi)
+
 # Add tests to CTest
 enable_testing()
 add_test(NAME c_value_test COMMAND test_value_c)
 add_test(NAME cpp_value_test COMMAND test_value_cpp)
 add_test(NAME cpp_raii_test COMMAND test_raii)
+add_test(NAME cpp_lazy_test COMMAND test_lazy)
+add_test(NAME cpp_cose_lazy_test COMMAND cose_lazy)

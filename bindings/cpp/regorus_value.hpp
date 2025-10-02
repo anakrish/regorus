@@ -31,6 +31,9 @@ private:
         }
     }
 
+    // Friend class to allow Result to construct Values
+    friend class Result;
+
     // Helper to check result and extract pointer
     static void* extract_pointer(RegorusResult result) {
         if (result.status != RegorusStatus::Ok) { // 0 = Ok
@@ -39,6 +42,7 @@ private:
             throw RegorusException(error);
         }
         void* ptr = result.pointer_value;
+        result.pointer_value = nullptr;  // Transfer ownership
         regorus_result_drop(result);
         return ptr;
     }
@@ -79,6 +83,9 @@ private:
     }
 
 public:
+    // Get the raw pointer (for FFI usage)
+    void* get_ptr() const { return ptr_; }
+
     // Factory methods for creating values
     static Value Null() {
         return Value(extract_pointer(regorus_value_create_null()));
@@ -177,6 +184,13 @@ public:
         return value;
     }
 
+    bool is_string() const noexcept {
+        RegorusResult result = regorus_value_is_string(ptr_);
+        bool value = (result.status == RegorusStatus::Ok) ? result.bool_value : false;
+        regorus_result_drop(result);
+        return value;
+    }
+
     // Clone - creates a deep copy
     Value clone() const {
         return Value(extract_pointer(regorus_value_clone(ptr_)));
@@ -232,6 +246,17 @@ public:
 
     std::string as_string() const {
         return extract_string(regorus_value_as_string(ptr_));
+    }
+
+    // Create Value from LazyObject (defined in regorus_lazy.hpp)
+    static Value from_lazy_object(void* lazy_object_ptr) {
+        RegorusResult result = regorus_value_from_lazy_object(lazy_object_ptr);
+        if (result.status != RegorusStatus::Ok) {
+            std::string error = result.error_message ? result.error_message : "Unknown error";
+            regorus_result_drop(result);
+            throw RegorusException(error);
+        }
+        return Value(result.pointer_value);
     }
 };
 

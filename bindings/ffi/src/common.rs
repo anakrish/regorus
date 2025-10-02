@@ -49,6 +49,24 @@ pub enum RegorusDataType {
     Pointer,
 }
 
+/// Type of pointer stored in RegorusResult
+#[repr(C)]
+#[allow(unused)]
+pub enum RegorusPointerType {
+    /// No pointer or unknown type
+    PointerNone,
+    /// Value pointer (Box<Value>)
+    PointerValue,
+    /// TypeId pointer (Box<TypeId>)
+    PointerTypeId,
+    /// LazyContext pointer (Box<LazyContext>)
+    PointerLazyContext,
+    /// LazyObject pointer (Box<LazyObject>)
+    PointerLazyObject,
+    /// CompiledPolicy pointer (Box<RegorusCompiledPolicy>)
+    PointerCompiledPolicy,
+}
+
 /// Result of a call on `RegorusEngine`.
 ///
 /// Must be freed using `regorus_result_drop`.
@@ -72,9 +90,17 @@ pub struct RegorusResult {
     /// Valid when data_type is Integer.
     pub(crate) int_value: c_longlong,
 
+    /// Unsigned 64-bit integer value.
+    /// Valid when data_type is Integer (used for u64 returns).
+    pub(crate) u64_value: u64,
+
     /// Pointer value.
     /// Valid when data_type is Pointer.
     pub(crate) pointer_value: *mut std::os::raw::c_void,
+
+    /// Type of pointer stored in pointer_value.
+    /// Used for proper cleanup in regorus_result_drop.
+    pub(crate) pointer_type: RegorusPointerType,
 
     /// Errors produced by the call.
     /// Owned by Rust.
@@ -90,7 +116,9 @@ impl RegorusResult {
             output: std::ptr::null_mut(),
             bool_value: false,
             int_value: 0,
+            u64_value: 0,
             pointer_value: std::ptr::null_mut(),
+            pointer_type: RegorusPointerType::PointerNone,
             error_message: std::ptr::null_mut(),
         }
     }
@@ -103,7 +131,9 @@ impl RegorusResult {
             output: to_c_str(output),
             bool_value: false,
             int_value: 0,
+            u64_value: 0,
             pointer_value: std::ptr::null_mut(),
+            pointer_type: RegorusPointerType::PointerNone,
             error_message: std::ptr::null_mut(),
         }
     }
@@ -116,7 +146,9 @@ impl RegorusResult {
             output,
             bool_value: false,
             int_value: 0,
+            u64_value: 0,
             pointer_value: std::ptr::null_mut(),
+            pointer_type: RegorusPointerType::PointerNone,
             error_message: std::ptr::null_mut(),
         }
     }
@@ -130,7 +162,9 @@ impl RegorusResult {
             output: std::ptr::null_mut(),
             bool_value: value,
             int_value: 0,
+            u64_value: 0,
             pointer_value: std::ptr::null_mut(),
+            pointer_type: RegorusPointerType::PointerNone,
             error_message: std::ptr::null_mut(),
         }
     }
@@ -144,20 +178,39 @@ impl RegorusResult {
             output: std::ptr::null_mut(),
             bool_value: false,
             int_value: value as c_longlong,
+            u64_value: 0,
             pointer_value: std::ptr::null_mut(),
+            pointer_type: RegorusPointerType::PointerNone,
+            error_message: std::ptr::null_mut(),
+        }
+    }
+
+    /// Create a successful result with unsigned 64-bit integer value.
+    pub(crate) fn ok_u64(value: u64) -> Self {
+        Self {
+            status: RegorusStatus::Ok,
+            data_type: RegorusDataType::Integer,
+            output: std::ptr::null_mut(),
+            bool_value: false,
+            int_value: 0,
+            u64_value: value,
+            pointer_value: std::ptr::null_mut(),
+            pointer_type: RegorusPointerType::PointerNone,
             error_message: std::ptr::null_mut(),
         }
     }
 
     /// Create a successful result with pointer value.
-    pub(crate) fn ok_pointer(pointer: *mut std::os::raw::c_void) -> Self {
+    pub(crate) fn ok_pointer(pointer: *mut std::os::raw::c_void, pointer_type: RegorusPointerType) -> Self {
         Self {
             status: RegorusStatus::Ok,
             data_type: RegorusDataType::Pointer,
             output: std::ptr::null_mut(),
             bool_value: false,
             int_value: 0,
+            u64_value: 0,
             pointer_value: pointer,
+            pointer_type,
             error_message: std::ptr::null_mut(),
         }
     }
@@ -170,7 +223,9 @@ impl RegorusResult {
             output: std::ptr::null_mut(),
             bool_value: false,
             int_value: 0,
+            u64_value: 0,
             pointer_value: std::ptr::null_mut(),
+            pointer_type: RegorusPointerType::PointerNone,
             error_message: std::ptr::null_mut(),
         }
     }
@@ -183,7 +238,9 @@ impl RegorusResult {
             output: std::ptr::null_mut(),
             bool_value: false,
             int_value: 0,
+            u64_value: 0,
             pointer_value: std::ptr::null_mut(),
+            pointer_type: RegorusPointerType::PointerNone,
             error_message: to_c_str(message),
         }
     }
@@ -228,15 +285,46 @@ pub(crate) fn to_regorus_string_result(r: Result<String>) -> RegorusResult {
 
 /// Drop a `RegorusResult`.
 ///
-/// `output` and `error_message` strings are not valid after drop.
+/// `output`, `error_message` strings and `pointer_value` (if not transferred) are not valid after drop.
 #[no_mangle]
 pub extern "C" fn regorus_result_drop(r: RegorusResult) {
+    use regorus::{lazy::TypeId, lazy::LazyContext, lazy::LazyObject, Value};
+    
     unsafe {
         if !r.error_message.is_null() {
             let _ = CString::from_raw(r.error_message);
         }
         if !r.output.is_null() {
             let _ = CString::from_raw(r.output);
+        }
+        
+        // Free the pointer if ownership wasn't transferred (pointer is still non-null)
+        if !r.pointer_value.is_null() {
+            match r.pointer_type {
+                RegorusPointerType::PointerValue => {
+                    let _ = Box::from_raw(r.pointer_value as *mut Value);
+                }
+                RegorusPointerType::PointerTypeId => {
+                    let _ = Box::from_raw(r.pointer_value as *mut TypeId);
+                }
+                RegorusPointerType::PointerLazyContext => {
+                    let _ = Box::from_raw(r.pointer_value as *mut LazyContext);
+                }
+                RegorusPointerType::PointerLazyObject => {
+                    let _ = Box::from_raw(r.pointer_value as *mut LazyObject);
+                }
+                RegorusPointerType::PointerCompiledPolicy => {
+                    // Import the compiled policy type
+                    #[cfg(feature = "azure_policy")]
+                    {
+                        use crate::compiled_policy::RegorusCompiledPolicy;
+                        let _ = Box::from_raw(r.pointer_value as *mut RegorusCompiledPolicy);
+                    }
+                }
+                RegorusPointerType::PointerNone => {
+                    // No cleanup needed
+                }
+            }
         }
     }
 }

@@ -263,9 +263,12 @@ mod tests {
         let condition_str = "true && false";
         let condition_expr = RbacParser::parse_condition_expression(condition_str)
             .expect("Failed to parse simple boolean condition");
-        
-        assert!(condition_expr.expression.is_some(), "Should have parsed expression");
-        
+
+        assert!(
+            condition_expr.expression.is_some(),
+            "Should have parsed expression"
+        );
+
         let policy = RbacPolicy {
             span: EmptySpan::default(),
             version: "2.0".to_string(),
@@ -298,6 +301,9 @@ mod tests {
 
         // Condition expressions are now supported
         let result = RbacCompiler::compile(&policy);
-        assert!(result.is_ok(), "Compilation should succeed with condition expressions");
+        assert!(
+            result.is_ok(),
+            "Compilation should succeed with condition expressions"
+        );
     }
 }

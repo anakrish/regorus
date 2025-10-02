@@ -96,11 +96,7 @@ impl ConditionExpression {
         }
     }
 
-    pub fn with_parsed(
-        span: EmptySpan,
-        raw_expression: String,
-        parsed: ConditionExpr,
-    ) -> Self {
+    pub fn with_parsed(span: EmptySpan, raw_expression: String, parsed: ConditionExpr) -> Self {
         Self {
             span,
             raw_expression,

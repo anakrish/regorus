@@ -444,6 +444,339 @@ pub fn compileToRvmProgram(
     compiled_policy.compileToRvmProgram(entry_points)
 }
 
+// ============================================================================
+// RBAC API
+// ============================================================================
+
+#[wasm_bindgen]
+/// WASM wrapper for RBAC Policy
+pub struct RbacPolicy {
+    policy: regorus::rbac::RbacPolicy,
+}
+
+#[wasm_bindgen]
+impl RbacPolicy {
+    /// Parse an RBAC policy from JSON string
+    /// * `policy_json`: JSON string containing the RBAC policy definition
+    #[wasm_bindgen(constructor)]
+    pub fn fromJson(policy_json: String) -> Result<RbacPolicy, JsValue> {
+        let policy = regorus::rbac::RbacParser::parse_policy(&policy_json)
+            .map_err(error_to_jsvalue)?;
+        Ok(RbacPolicy { policy })
+    }
+
+    /// Get the version of the RBAC policy
+    pub fn getVersion(&self) -> String {
+        self.policy.version.clone()
+    }
+
+    /// Get the number of role definitions in the policy
+    pub fn getRoleDefinitionCount(&self) -> usize {
+        self.policy.role_definitions.len()
+    }
+
+    /// Get the number of role assignments in the policy
+    pub fn getRoleAssignmentCount(&self) -> usize {
+        self.policy.role_assignments.len()
+    }
+
+    /// Compile the RBAC policy to an RVM program
+    /// * `context_json`: JSON string containing the evaluation context
+    pub fn compileToRvmProgram(&self, context_json: String) -> Result<RvmProgram, JsValue> {
+        // Parse the context JSON manually
+        let context_value: serde_json::Value = serde_json::from_str(&context_json)
+            .map_err(error_to_jsvalue)?;
+        
+        let context = parse_evaluation_context(&context_value)
+            .map_err(error_to_jsvalue)?;
+        
+        let program = regorus::rbac::RbacCompiler::compile_to_program(&self.policy, &context)
+            .map_err(error_to_jsvalue)?;
+        
+        Ok(RvmProgram::new(std::sync::Arc::new(program)))
+    }
+}
+
+#[wasm_bindgen]
+/// WASM wrapper for RBAC Evaluation Context
+pub struct RbacEvaluationContext {
+    context: regorus::rbac::EvaluationContext,
+}
+
+#[wasm_bindgen]
+impl RbacEvaluationContext {
+    /// Create an evaluation context from JSON string
+    /// * `context_json`: JSON string with principal, resource, action fields
+    #[wasm_bindgen(constructor)]
+    pub fn fromJson(context_json: String) -> Result<RbacEvaluationContext, JsValue> {
+        let context_value: serde_json::Value = serde_json::from_str(&context_json)
+            .map_err(error_to_jsvalue)?;
+        
+        let context = parse_evaluation_context(&context_value)
+            .map_err(error_to_jsvalue)?;
+        
+        Ok(RbacEvaluationContext { context })
+    }
+
+    /// Get the principal ID from the context
+    pub fn getPrincipalId(&self) -> String {
+        self.context.principal.id.clone()
+    }
+
+    /// Get the resource scope from the context
+    pub fn getResourceScope(&self) -> String {
+        self.context.resource.scope.clone()
+    }
+
+    /// Get the action being requested
+    pub fn getAction(&self) -> Option<String> {
+        self.context.action.clone()
+    }
+}
+
+#[wasm_bindgen]
+/// WASM wrapper for RBAC Engine
+pub struct RbacEngine {
+    policy: Option<regorus::rbac::RbacPolicy>,
+}
+
+#[wasm_bindgen]
+impl RbacEngine {
+    /// Create a new RBAC engine instance
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            policy: None,
+        }
+    }
+
+    /// Load an RBAC policy from JSON string
+    /// * `policy_json`: JSON string containing the RBAC policy definition
+    pub fn loadPolicyFromJson(&mut self, policy_json: String) -> Result<(), JsValue> {
+        let policy = regorus::rbac::RbacParser::parse_policy(&policy_json)
+            .map_err(error_to_jsvalue)?;
+        self.policy = Some(policy);
+        Ok(())
+    }
+
+    /// Evaluate whether an action is allowed
+    /// * `context_json`: JSON string with principal, resource, action fields
+    pub fn evaluate(&self, context_json: String) -> Result<bool, JsValue> {
+        let policy = self.policy.as_ref()
+            .ok_or_else(|| JsValue::from_str("No policy loaded"))?;
+        
+        let context_value: serde_json::Value = serde_json::from_str(&context_json)
+            .map_err(error_to_jsvalue)?;
+        
+        let context = parse_evaluation_context(&context_value)
+            .map_err(error_to_jsvalue)?;
+        
+        regorus::rbac::RbacEngine::evaluate(policy, &context).map_err(error_to_jsvalue)
+    }
+
+    /// Evaluate and return detailed result as JSON
+    /// * `context_json`: JSON string with principal, resource, action fields
+    pub fn evaluateDetailed(&self, context_json: String) -> Result<String, JsValue> {
+        let policy = self.policy.as_ref()
+            .ok_or_else(|| JsValue::from_str("No policy loaded"))?;
+        
+        let context_value: serde_json::Value = serde_json::from_str(&context_json)
+            .map_err(error_to_jsvalue)?;
+        
+        let context = parse_evaluation_context(&context_value)
+            .map_err(error_to_jsvalue)?;
+        
+        let result = regorus::rbac::RbacEngine::evaluate(policy, &context).map_err(error_to_jsvalue)?;
+        
+        let response = serde_json::json!({
+            "allowed": result,
+            "principal_id": context.principal.id,
+            "resource_scope": context.resource.scope,
+            "action": context.action,
+        });
+        
+        serde_json::to_string(&response).map_err(error_to_jsvalue)
+    }
+}
+
+impl Default for RbacEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Compile an RBAC policy directly to an RVM program
+/// 
+/// This is a convenience function that parses an RBAC policy and compiles it
+/// to an RVM program in one step.
+///
+/// * `policy_json`: JSON string containing the RBAC policy definition
+/// * `context_json`: JSON string containing the evaluation context
+#[wasm_bindgen]
+pub fn compileRbacToRvmProgram(
+    policy_json: String,
+    context_json: String,
+) -> Result<RvmProgram, JsValue> {
+    let policy = regorus::rbac::RbacParser::parse_policy(&policy_json)
+        .map_err(error_to_jsvalue)?;
+    
+    let context_value: serde_json::Value = serde_json::from_str(&context_json)
+        .map_err(error_to_jsvalue)?;
+    let context = parse_evaluation_context(&context_value)
+        .map_err(error_to_jsvalue)?;
+    
+    let program = regorus::rbac::RbacCompiler::compile_to_program(&policy, &context)
+        .map_err(error_to_jsvalue)?;
+    
+    Ok(RvmProgram::new(std::sync::Arc::new(program)))
+}
+
+/// Evaluate an RBAC policy using the RVM
+///
+/// This is a convenience function that compiles an RBAC policy to RVM and executes it.
+///
+/// * `policy_json`: JSON string containing the RBAC policy definition
+/// * `context_json`: JSON string containing the evaluation context
+#[wasm_bindgen]
+pub fn evaluateRbacPolicy(
+    policy_json: String,
+    context_json: String,
+) -> Result<bool, JsValue> {
+    let policy = regorus::rbac::RbacParser::parse_policy(&policy_json)
+        .map_err(error_to_jsvalue)?;
+    
+    let context_value: serde_json::Value = serde_json::from_str(&context_json)
+        .map_err(error_to_jsvalue)?;
+    let context = parse_evaluation_context(&context_value)
+        .map_err(error_to_jsvalue)?;
+    
+    let program = regorus::rbac::RbacCompiler::compile_to_program(&policy, &context)
+        .map_err(error_to_jsvalue)?;
+    
+    let mut vm = regorus::rvm::vm::RegoVM::new();
+    vm.load_program(std::sync::Arc::new(program));
+    
+    // Build VM input from context
+    let vm_input = build_vm_input(&context);
+    vm.set_input(vm_input);
+    vm.set_data(regorus::Value::new_object()).map_err(error_to_jsvalue)?;
+    
+    let result = vm.execute().map_err(error_to_jsvalue)?;
+    
+    match result {
+        regorus::Value::Bool(b) => Ok(b),
+        regorus::Value::Undefined => Ok(false), // Undefined means deny
+        _ => Err(JsValue::from_str(&format!("Unexpected result type: {:?}", result))),
+    }
+}
+
+// Helper functions for WASM bindings
+
+fn parse_evaluation_context(json: &serde_json::Value) -> Result<regorus::rbac::EvaluationContext, String> {
+    use regorus::rbac::*;
+    use regorus::Value;
+    
+    // Parse principal
+    let principal_obj = json.get("principal")
+        .ok_or_else(|| "Missing 'principal' field".to_string())?;
+    
+    let principal_id = principal_obj.get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing or invalid 'principal.id'".to_string())?;
+    
+    let principal_type_str = principal_obj.get("principalType")
+        .and_then(|v| v.as_str())
+        .unwrap_or("User");
+    
+    let principal_type = match principal_type_str {
+        "User" => PrincipalType::User,
+        "Group" => PrincipalType::Group,
+        "ServicePrincipal" => PrincipalType::ServicePrincipal,
+        "ManagedServiceIdentity" => PrincipalType::ManagedServiceIdentity,
+        _ => PrincipalType::User,
+    };
+    
+    let principal_attributes = principal_obj.get("attributes")
+        .and_then(|v| serde_json::from_value::<Value>(v.clone()).ok())
+        .unwrap_or_else(Value::new_object);
+    
+    // Parse resource
+    let resource_obj = json.get("resource")
+        .ok_or_else(|| "Missing 'resource' field".to_string())?;
+    
+    let resource_scope = resource_obj.get("scope")
+        .and_then(|v| v.as_str())
+        .unwrap_or("/");
+    
+    let resource_id = resource_obj.get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or(resource_scope);
+    
+    let resource_type = resource_obj.get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Microsoft.Resources/subscriptions");
+    
+    let resource_attributes = resource_obj.get("attributes")
+        .and_then(|v| serde_json::from_value::<Value>(v.clone()).ok())
+        .unwrap_or_else(Value::new_object);
+    
+    // Parse action
+    let action = json.get("action")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    
+    let suboperation = json.get("subOperation")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    
+    // Parse request attributes
+    let request_attributes = json.get("request")
+        .and_then(|req| req.get("attributes"))
+        .and_then(|v| serde_json::from_value::<Value>(v.clone()).ok())
+        .unwrap_or_else(Value::new_object);
+    
+    Ok(EvaluationContext {
+        principal: Principal {
+            id: principal_id.to_string(),
+            principal_type,
+            custom_security_attributes: principal_attributes,
+        },
+        resource: Resource {
+            id: resource_id.to_string(),
+            resource_type: resource_type.to_string(),
+            scope: resource_scope.to_string(),
+            attributes: resource_attributes,
+        },
+        request: RequestContext {
+            action: action.clone(),
+            data_action: None,
+            attributes: request_attributes,
+        },
+        environment: EnvironmentContext {
+            is_private_link: None,
+            private_endpoint: None,
+            subnet: None,
+            utc_now: None,
+        },
+        action,
+        suboperation,
+    })
+}
+
+fn build_vm_input(context: &regorus::rbac::EvaluationContext) -> regorus::Value {
+    use regorus::Value;
+    
+    // Build input as a JSON object using serde
+    let input_json = serde_json::json!({
+        "principalId": context.principal.id,
+        "resource": context.resource.scope,
+        "action": context.action,
+    });
+    
+    // Convert to Value
+    serde_json::from_value(input_json).unwrap_or_else(|_| Value::new_object())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{error_to_jsvalue, PolicyModule, RegoVM};
@@ -660,6 +993,214 @@ mod tests {
         let result = vm.execute()?;
         let result_value = regorus::Value::from_json_str(&result).map_err(error_to_jsvalue)?;
         assert_eq!(result_value, regorus::Value::Undefined);
+
+        Ok(())
+    }
+
+    #[wasm_bindgen_test]
+    pub fn rbac_basic_test() -> Result<(), JsValue> {
+        // Test basic RBAC policy evaluation
+        let policy_json = r#"{
+            "version": "1.0",
+            "roleDefinitions": [{
+                "id": "reader",
+                "name": "Reader",
+                "permissions": [{
+                    "actions": ["read"],
+                    "notActions": [],
+                    "dataActions": [],
+                    "notDataActions": []
+                }],
+                "assignableScopes": ["/"]
+            }],
+            "roleAssignments": [{
+                "id": "assignment1",
+                "principalId": "user1",
+                "principalType": "User",
+                "roleDefinitionId": "reader",
+                "scope": "/"
+            }]
+        }"#;
+
+        let context_json = r#"{
+            "principal": {
+                "id": "user1",
+                "principalType": "User"
+            },
+            "resource": {
+                "scope": "/subscriptions/sub1"
+            },
+            "action": "read"
+        }"#;
+
+        // Test RbacPolicy parsing
+        let policy = crate::RbacPolicy::fromJson(policy_json.to_string())?;
+        assert_eq!(policy.getVersion(), "1.0");
+        assert_eq!(policy.getRoleDefinitionCount(), 1);
+        assert_eq!(policy.getRoleAssignmentCount(), 1);
+
+        // Test RbacEvaluationContext parsing
+        let context = crate::RbacEvaluationContext::fromJson(context_json.to_string())?;
+        assert_eq!(context.getPrincipalId(), "user1");
+        assert_eq!(context.getAction(), Some("read".to_string()));
+
+        // Test RbacEngine evaluation
+        let mut engine = crate::RbacEngine::new();
+        engine.loadPolicyFromJson(policy_json.to_string())?;
+        let allowed = engine.evaluate(context_json.to_string())?;
+        assert_eq!(allowed, true);
+
+        // Test detailed evaluation
+        let detailed = engine.evaluateDetailed(context_json.to_string())?;
+        let detailed_value = regorus::Value::from_json_str(&detailed).map_err(error_to_jsvalue)?;
+        assert_eq!(detailed_value["allowed"], regorus::Value::Bool(true));
+        assert_eq!(detailed_value["principal_id"], regorus::Value::from("user1"));
+
+        Ok(())
+    }
+
+    #[wasm_bindgen_test]
+    pub fn rbac_compilation_test() -> Result<(), JsValue> {
+        // Test RBAC policy compilation to RVM
+        let policy_json = r#"{
+            "version": "1.0",
+            "roleDefinitions": [{
+                "id": "admin",
+                "name": "Administrator",
+                "permissions": [{
+                    "actions": ["*"],
+                    "notActions": [],
+                    "dataActions": [],
+                    "notDataActions": []
+                }],
+                "assignableScopes": ["/"]
+            }],
+            "roleAssignments": [{
+                "id": "assignment1",
+                "principalId": "admin1",
+                "principalType": "User",
+                "roleDefinitionId": "admin",
+                "scope": "/"
+            }]
+        }"#;
+
+        let context_json = r#"{
+            "principal": {
+                "id": "admin1",
+                "principalType": "User"
+            },
+            "resource": {
+                "scope": "/subscriptions/sub1"
+            },
+            "action": "write"
+        }"#;
+
+        // Test compileRbacToRvmProgram
+        let program = crate::compileRbacToRvmProgram(
+            policy_json.to_string(),
+            context_json.to_string(),
+        )?;
+        
+        assert!(program.getInstructionCount() > 0);
+
+        // Test evaluateRbacPolicy convenience function
+        let allowed = crate::evaluateRbacPolicy(
+            policy_json.to_string(),
+            context_json.to_string(),
+        )?;
+        assert_eq!(allowed, true);
+
+        // Test with non-matching principal
+        let context_json_deny = r#"{
+            "principal": {
+                "id": "user2",
+                "principalType": "User"
+            },
+            "resource": {
+                "scope": "/subscriptions/sub1"
+            },
+            "action": "write"
+        }"#;
+
+        let denied = crate::evaluateRbacPolicy(
+            policy_json.to_string(),
+            context_json_deny.to_string(),
+        )?;
+        assert_eq!(denied, false);
+
+        Ok(())
+    }
+
+    #[wasm_bindgen_test]
+    pub fn rbac_conditions_test() -> Result<(), JsValue> {
+        // Test RBAC policy with conditions
+        let policy_json = r#"{
+            "version": "1.0",
+            "roleDefinitions": [{
+                "id": "conditional-reader",
+                "name": "Conditional Reader",
+                "permissions": [{
+                    "actions": ["read"],
+                    "notActions": [],
+                    "dataActions": [],
+                    "notDataActions": []
+                }],
+                "assignableScopes": ["/"]
+            }],
+            "roleAssignments": [{
+                "id": "assignment1",
+                "principalId": "user1",
+                "principalType": "User",
+                "roleDefinitionId": "conditional-reader",
+                "scope": "/",
+                "condition": {
+                    "version": "2.0",
+                    "expression": "@Resource[name] StringEquals 'allowed-resource'"
+                }
+            }]
+        }"#;
+
+        // Test with matching condition
+        let context_allow = r#"{
+            "principal": {
+                "id": "user1",
+                "principalType": "User"
+            },
+            "resource": {
+                "scope": "/subscriptions/sub1",
+                "attributes": {
+                    "name": "allowed-resource"
+                }
+            },
+            "action": "read"
+        }"#;
+
+        let allowed = crate::evaluateRbacPolicy(
+            policy_json.to_string(),
+            context_allow.to_string(),
+        )?;
+        assert_eq!(allowed, true);
+
+        // Test with non-matching condition
+        let context_deny = r#"{
+            "principal": {
+                "id": "user1",
+                "principalType": "User"
+            },
+            "resource": {
+                "scope": "/subscriptions/sub1",
+                "attributes": {
+                    "name": "forbidden-resource"
+                }
+            },
+            "action": "read"
+        }"#;
+
+        let denied = crate::evaluateRbacPolicy(
+            policy_json.to_string(),
+            context_deny.to_string(),
+        )?;
+        assert_eq!(denied, false);
 
         Ok(())
     }

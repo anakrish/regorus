@@ -6,8 +6,8 @@
 //! This module provides functionality to parse Azure RBAC policies from JSON format
 //! into the RBAC AST representation, including parsing of ABAC condition expressions.
 
-use crate::rbac::ast::*;
 use crate::lexer::{Lexer, Source, Token, TokenKind};
+use crate::rbac::ast::*;
 use crate::*;
 
 use alloc::boxed::Box;
@@ -350,7 +350,7 @@ impl<'source> ConditionParser<'source> {
         let mut lexer = Lexer::new(source);
         lexer.set_enable_rbac_tokens(true);
         lexer.set_allow_single_quoted_strings(true);
-        
+
         let current = lexer
             .next_token()
             .map_err(|e| RbacParseError::InvalidJson(e.to_string()))?;
@@ -473,7 +473,7 @@ impl<'source> ConditionParser<'source> {
         // Check for binary operator
         if self.current.0 == TokenKind::Ident {
             let op_text = self.current_text().to_string();
-            
+
             // Check if this is a known operator
             if self.is_binary_operator(&op_text) {
                 self.advance()?;
@@ -494,22 +494,55 @@ impl<'source> ConditionParser<'source> {
     fn is_binary_operator(&self, op: &str) -> bool {
         matches!(
             op,
-            "StringEquals" | "StringNotEquals" | "StringEqualsIgnoreCase" | "StringNotEqualsIgnoreCase"
-            | "StringLike" | "StringNotLike" | "StringStartsWith" | "StringNotStartsWith"
-            | "StringEndsWith" | "StringNotEndsWith" | "StringContains" | "StringNotContains"
-            | "StringMatches" | "StringNotMatches"
-            | "NumericEquals" | "NumericNotEquals" | "NumericLessThan" | "NumericLessThanEquals"
-            | "NumericGreaterThan" | "NumericGreaterThanEquals" | "NumericInRange"
-            | "BoolEquals" | "BoolNotEquals"
-            | "DateTimeEquals" | "DateTimeNotEquals" | "DateTimeGreaterThan" | "DateTimeGreaterThanEquals"
-            | "DateTimeLessThan" | "DateTimeLessThanEquals"
-            | "TimeOfDayEquals" | "TimeOfDayNotEquals" | "TimeOfDayGreaterThan" | "TimeOfDayGreaterThanEquals"
-            | "TimeOfDayLessThan" | "TimeOfDayLessThanEquals" | "TimeOfDayInRange"
-            | "GuidEquals" | "GuidNotEquals"
-            | "IpMatch" | "IpNotMatch" | "IpInRange"
-            | "ListContains" | "ListNotContains"
-            | "ForAnyOfAnyValues" | "ForAllOfAnyValues" | "ForAnyOfAllValues" | "ForAllOfAllValues"
-            | "ActionMatches" | "SubOperationMatches"
+            "StringEquals"
+                | "StringNotEquals"
+                | "StringEqualsIgnoreCase"
+                | "StringNotEqualsIgnoreCase"
+                | "StringLike"
+                | "StringNotLike"
+                | "StringStartsWith"
+                | "StringNotStartsWith"
+                | "StringEndsWith"
+                | "StringNotEndsWith"
+                | "StringContains"
+                | "StringNotContains"
+                | "StringMatches"
+                | "StringNotMatches"
+                | "NumericEquals"
+                | "NumericNotEquals"
+                | "NumericLessThan"
+                | "NumericLessThanEquals"
+                | "NumericGreaterThan"
+                | "NumericGreaterThanEquals"
+                | "NumericInRange"
+                | "BoolEquals"
+                | "BoolNotEquals"
+                | "DateTimeEquals"
+                | "DateTimeNotEquals"
+                | "DateTimeGreaterThan"
+                | "DateTimeGreaterThanEquals"
+                | "DateTimeLessThan"
+                | "DateTimeLessThanEquals"
+                | "TimeOfDayEquals"
+                | "TimeOfDayNotEquals"
+                | "TimeOfDayGreaterThan"
+                | "TimeOfDayGreaterThanEquals"
+                | "TimeOfDayLessThan"
+                | "TimeOfDayLessThanEquals"
+                | "TimeOfDayInRange"
+                | "GuidEquals"
+                | "GuidNotEquals"
+                | "IpMatch"
+                | "IpNotMatch"
+                | "IpInRange"
+                | "ListContains"
+                | "ListNotContains"
+                | "ForAnyOfAnyValues"
+                | "ForAllOfAnyValues"
+                | "ForAnyOfAllValues"
+                | "ForAllOfAllValues"
+                | "ActionMatches"
+                | "SubOperationMatches"
         )
     }
 

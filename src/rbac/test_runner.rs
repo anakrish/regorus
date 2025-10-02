@@ -17,8 +17,8 @@ use crate::*;
 
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 extern crate alloc;
 extern crate std;
@@ -262,11 +262,7 @@ impl RbacTestRunner {
                     .id
                     .clone()
                     .unwrap_or_else(|| "test-user".to_string()),
-                principal_type: match test_principal
-                    .principal_type
-                    .as_deref()
-                    .unwrap_or("User")
-                {
+                principal_type: match test_principal.principal_type.as_deref().unwrap_or("User") {
                     "User" => PrincipalType::User,
                     "Group" => PrincipalType::Group,
                     "ServicePrincipal" => PrincipalType::ServicePrincipal,
@@ -360,9 +356,9 @@ impl RbacTestRunner {
     pub fn execute_test_case(&mut self, test_case: &RbacTestCase) -> TestExecutionResult {
         let start_time = std::time::Instant::now();
 
-    // Convert test definitions to RBAC structures
-    let context = self.convert_test_input(&test_case.input);
-    let policy = self.convert_test_policy(&test_case.policy, &context);
+        // Convert test definitions to RBAC structures
+        let context = self.convert_test_input(&test_case.input);
+        let policy = self.convert_test_policy(&test_case.policy, &context);
 
         // Compile to RVM program
         match RbacCompiler::compile_to_program(&policy, &context) {

@@ -29,7 +29,10 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
     // Time-of-day operations
     m.insert("rbac.time_of_day_equals", (time_of_day_equals, 2));
     m.insert("rbac.time_of_day_not_equals", (time_of_day_not_equals, 2));
-    m.insert("rbac.time_of_day_greater_than", (time_of_day_greater_than, 2));
+    m.insert(
+        "rbac.time_of_day_greater_than",
+        (time_of_day_greater_than, 2),
+    );
     m.insert(
         "rbac.time_of_day_greater_than_equals",
         (time_of_day_greater_than_equals, 2),
@@ -431,12 +434,7 @@ fn ip_match(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) ->
 }
 
 /// Check if IP address does not match CIDR pattern
-fn ip_not_match(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn ip_not_match(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let result = ip_match(span, params, args, _strict)?;
     match result {
         Value::Bool(b) => Ok(Value::Bool(!b)),
@@ -445,12 +443,7 @@ fn ip_not_match(
 }
 
 /// Check if IP is in range [start, end] inclusive
-fn ip_in_range(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn ip_in_range(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "rbac.ip_in_range";
     ensure_args_count(span, name, params, args, 3)?;
 

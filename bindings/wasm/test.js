@@ -239,4 +239,246 @@ console.log('\n=== Coverage Report ===');
 const coverageReport = engine.getCoverageReportPretty();
 console.log(coverageReport);
 
+console.log('\n=== RBAC Tests ===');
+
+// Test 1: Basic RBAC Policy
+console.log('\n--- Test 1: Basic RBAC Policy ---');
+
+const rbacPolicy1 = {
+    "version": "1.0",
+    "roleDefinitions": [{
+        "id": "reader",
+        "name": "Reader",
+        "permissions": [{
+            "actions": ["read", "list"],
+            "notActions": [],
+            "dataActions": [],
+            "notDataActions": []
+        }],
+        "assignableScopes": ["/"]
+    }],
+    "roleAssignments": [{
+        "id": "assignment1",
+        "principalId": "user1",
+        "principalType": "User",
+        "roleDefinitionId": "reader",
+        "scope": "/"
+    }]
+};
+
+const rbacContext1 = {
+    "principal": {
+        "id": "user1",
+        "principalType": "User"
+    },
+    "resource": {
+        "scope": "/subscriptions/sub1"
+    },
+    "action": "read"
+};
+
+// Test RbacPolicy parsing and compilation
+const policy1 = new regorus.RbacPolicy(JSON.stringify(rbacPolicy1));
+console.log('Policy Version:', policy1.getVersion());
+console.log('Role Definitions:', policy1.getRoleDefinitionCount());
+console.log('Role Assignments:', policy1.getRoleAssignmentCount());
+
+// Test RbacEngine
+const rbacEngine1 = new regorus.RbacEngine();
+rbacEngine1.loadPolicyFromJson(JSON.stringify(rbacPolicy1));
+
+const allowed1 = rbacEngine1.evaluate(JSON.stringify(rbacContext1));
+console.log('Action "read" allowed for user1:', allowed1);
+
+const detailed1 = rbacEngine1.evaluateDetailed(JSON.stringify(rbacContext1));
+console.log('Detailed result:', JSON.parse(detailed1));
+
+// Test deny case
+const rbacContext1Deny = {
+    "principal": {
+        "id": "user2", // Different user
+        "principalType": "User"
+    },
+    "resource": {
+        "scope": "/subscriptions/sub1"
+    },
+    "action": "read"
+};
+
+const denied1 = rbacEngine1.evaluate(JSON.stringify(rbacContext1Deny));
+console.log('Action "read" allowed for user2:', denied1, '(should be false)');
+
+// Test 2: RBAC Policy with Conditions
+console.log('\n--- Test 2: RBAC Policy with Conditions ---');
+
+const rbacPolicy2 = {
+    "version": "1.0",
+    "roleDefinitions": [{
+        "id": "conditional-reader",
+        "name": "Conditional Reader",
+        "permissions": [{
+            "actions": ["read"],
+            "notActions": [],
+            "dataActions": [],
+            "notDataActions": []
+        }],
+        "assignableScopes": ["/"]
+    }],
+    "roleAssignments": [{
+        "id": "assignment1",
+        "principalId": "user1",
+        "principalType": "User",
+        "roleDefinitionId": "conditional-reader",
+        "scope": "/",
+        "condition": {
+            "version": "2.0",
+            "expression": "@Resource[name] StringEquals 'allowed-resource'"
+        }
+    }]
+};
+
+// Test with matching condition
+const rbacContext2Allow = {
+    "principal": {
+        "id": "user1",
+        "principalType": "User"
+    },
+    "resource": {
+        "scope": "/subscriptions/sub1",
+        "attributes": {
+            "name": "allowed-resource"
+        }
+    },
+    "action": "read"
+};
+
+const allowed2 = regorus.evaluateRbacPolicy(
+    JSON.stringify(rbacPolicy2),
+    JSON.stringify(rbacContext2Allow)
+);
+console.log('Condition matches (name=allowed-resource):', allowed2);
+
+// Test with non-matching condition
+const rbacContext2Deny = {
+    "principal": {
+        "id": "user1",
+        "principalType": "User"
+    },
+    "resource": {
+        "scope": "/subscriptions/sub1",
+        "attributes": {
+            "name": "forbidden-resource"
+        }
+    },
+    "action": "read"
+};
+
+const denied2 = regorus.evaluateRbacPolicy(
+    JSON.stringify(rbacPolicy2),
+    JSON.stringify(rbacContext2Deny)
+);
+console.log('Condition does not match (name=forbidden-resource):', denied2, '(should be false)');
+
+// Test 3: Complex RBAC Policy with Azure Storage
+console.log('\n--- Test 3: Azure Storage RBAC Policy ---');
+
+const rbacPolicy3 = {
+    "version": "1.0",
+    "roleDefinitions": [{
+        "id": "storage-blob-contributor",
+        "name": "Storage Blob Data Contributor",
+        "permissions": [{
+            "actions": [],
+            "notActions": [],
+            "dataActions": [
+                "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+                "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+            ],
+            "notDataActions": []
+        }],
+        "assignableScopes": ["/"]
+    }],
+    "roleAssignments": [{
+        "id": "assignment1",
+        "principalId": "app1",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "storage-blob-contributor",
+        "scope": "/subscriptions/sub1/resourceGroups/rg1",
+        "condition": {
+            "version": "2.0",
+            "expression": "(@Request[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:prefix] StringStartsWith 'public/') OR (@Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'public')"
+        }
+    }]
+};
+
+// Test allowed - prefix matches
+const rbacContext3Allow = {
+    "principal": {
+        "id": "app1",
+        "principalType": "ServicePrincipal"
+    },
+    "resource": {
+        "scope": "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/storage1"
+    },
+    "action": "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+    "request": {
+        "attributes": {
+            "prefix": "public/documents"
+        }
+    }
+};
+
+const rbacEngine3 = new regorus.RbacEngine();
+rbacEngine3.loadPolicyFromJson(JSON.stringify(rbacPolicy3));
+
+const allowed3 = rbacEngine3.evaluate(JSON.stringify(rbacContext3Allow));
+console.log('Storage blob read with prefix "public/documents":', allowed3);
+
+// Test denied - prefix doesn't match
+const rbacContext3Deny = {
+    "principal": {
+        "id": "app1",
+        "principalType": "ServicePrincipal"
+    },
+    "resource": {
+        "scope": "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/storage1",
+        "attributes": {
+            "name": "private"
+        }
+    },
+    "action": "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+    "request": {
+        "attributes": {
+            "prefix": "private/secrets"
+        }
+    }
+};
+
+const denied3 = rbacEngine3.evaluate(JSON.stringify(rbacContext3Deny));
+console.log('Storage blob read with prefix "private/secrets":', denied3, '(should be false)');
+
+// Test 4: RVM Compilation for RBAC
+console.log('\n--- Test 4: RBAC RVM Compilation ---');
+
+const rbacProgram = regorus.compileRbacToRvmProgram(
+    JSON.stringify(rbacPolicy1),
+    JSON.stringify(rbacContext1)
+);
+
+console.log('RBAC RVM Program Instructions:', rbacProgram.getInstructionCount());
+
+const rbacVm = new regorus.RegoVM();
+rbacVm.loadProgram(rbacProgram);
+rbacVm.setInput(JSON.stringify({
+    "principalId": "user1",
+    "resource": "/subscriptions/sub1",
+    "action": "read"
+}));
+rbacVm.setData(JSON.stringify({}));
+
+const rbacRvmResult = rbacVm.execute();
+console.log('RBAC RVM Result:', JSON.parse(rbacRvmResult));
+
+console.log('\n✅ All RBAC tests completed successfully!');
+
 console.log('\n=== Test Complete ===');

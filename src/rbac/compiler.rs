@@ -663,10 +663,10 @@ impl ProgramBuilder {
             .add_instruction(Instruction::LoadInput { dest: input_reg }, None);
 
         let principal_reg = self.emit_input_lookup(input_reg, "principalId");
-    let resource_reg = self.emit_input_lookup(input_reg, "resource");
-    let action_reg = self.emit_input_lookup(input_reg, "action");
-    let null_reg = self.null_register();
-    let action_type_reg = self.emit_object_get(input_reg, "actionType", null_reg);
+        let resource_reg = self.emit_input_lookup(input_reg, "resource");
+        let action_reg = self.emit_input_lookup(input_reg, "action");
+        let null_reg = self.null_register();
+        let action_type_reg = self.emit_object_get(input_reg, "actionType", null_reg);
 
         let data_action_literal_reg = self.load_string("dataAction");
         let action_type_matches_reg = self.alloc_register();
@@ -912,8 +912,13 @@ impl ProgramBuilder {
                 let reg = self.alloc_register();
                 let num_value = lit.raw.parse::<f64>().unwrap_or(0.0);
                 let literal_idx = self.add_literal_value(Value::from(num_value));
-                self.program
-                    .add_instruction(Instruction::Load { dest: reg, literal_idx }, None);
+                self.program.add_instruction(
+                    Instruction::Load {
+                        dest: reg,
+                        literal_idx,
+                    },
+                    None,
+                );
                 reg
             }
             ConditionExpr::BooleanLiteral(lit) => self.load_bool(lit.value),
@@ -966,14 +971,18 @@ impl ProgramBuilder {
     fn emit_binary_expr(&mut self, binary: &BinaryExpression) -> u8 {
         let left_reg = self.emit_condition_expr(&binary.left);
         let right_reg = self.emit_condition_expr(&binary.right);
-        
+
         // Map RBAC operators to builtin functions or instructions
         match binary.operator.name.as_str() {
             // String operators
             "StringEquals" => {
                 let dest = self.alloc_register();
                 self.program.add_instruction(
-                    Instruction::Eq { dest, left: left_reg, right: right_reg },
+                    Instruction::Eq {
+                        dest,
+                        left: left_reg,
+                        right: right_reg,
+                    },
                     None,
                 );
                 dest
@@ -981,7 +990,11 @@ impl ProgramBuilder {
             "StringNotEquals" => {
                 let eq_reg = self.alloc_register();
                 self.program.add_instruction(
-                    Instruction::Eq { dest: eq_reg, left: left_reg, right: right_reg },
+                    Instruction::Eq {
+                        dest: eq_reg,
+                        left: left_reg,
+                        right: right_reg,
+                    },
                     None,
                 );
                 self.emit_not(eq_reg)
@@ -998,15 +1011,20 @@ impl ProgramBuilder {
                 self.emit_builtin_call("rbac.action_matches", &[left_reg, right_reg])
             }
             "StringNotLike" | "StringNotMatches" => {
-                let result_reg = self.emit_builtin_call("rbac.action_matches", &[left_reg, right_reg]);
+                let result_reg =
+                    self.emit_builtin_call("rbac.action_matches", &[left_reg, right_reg]);
                 self.emit_not(result_reg)
             }
-            
+
             // Numeric operators
             "NumericEquals" => {
                 let dest = self.alloc_register();
                 self.program.add_instruction(
-                    Instruction::Eq { dest, left: left_reg, right: right_reg },
+                    Instruction::Eq {
+                        dest,
+                        left: left_reg,
+                        right: right_reg,
+                    },
                     None,
                 );
                 dest
@@ -1014,7 +1032,11 @@ impl ProgramBuilder {
             "NumericNotEquals" => {
                 let eq_reg = self.alloc_register();
                 self.program.add_instruction(
-                    Instruction::Eq { dest: eq_reg, left: left_reg, right: right_reg },
+                    Instruction::Eq {
+                        dest: eq_reg,
+                        left: left_reg,
+                        right: right_reg,
+                    },
                     None,
                 );
                 self.emit_not(eq_reg)
@@ -1022,7 +1044,11 @@ impl ProgramBuilder {
             "NumericLessThan" => {
                 let dest = self.alloc_register();
                 self.program.add_instruction(
-                    Instruction::Lt { dest, left: left_reg, right: right_reg },
+                    Instruction::Lt {
+                        dest,
+                        left: left_reg,
+                        right: right_reg,
+                    },
                     None,
                 );
                 dest
@@ -1031,7 +1057,11 @@ impl ProgramBuilder {
                 // left <= right is equivalent to !(left > right)
                 let gt_reg = self.alloc_register();
                 self.program.add_instruction(
-                    Instruction::Gt { dest: gt_reg, left: left_reg, right: right_reg },
+                    Instruction::Gt {
+                        dest: gt_reg,
+                        left: left_reg,
+                        right: right_reg,
+                    },
                     None,
                 );
                 self.emit_not(gt_reg)
@@ -1039,7 +1069,11 @@ impl ProgramBuilder {
             "NumericGreaterThan" => {
                 let dest = self.alloc_register();
                 self.program.add_instruction(
-                    Instruction::Gt { dest, left: left_reg, right: right_reg },
+                    Instruction::Gt {
+                        dest,
+                        left: left_reg,
+                        right: right_reg,
+                    },
                     None,
                 );
                 dest
@@ -1048,7 +1082,11 @@ impl ProgramBuilder {
                 // left >= right is equivalent to !(left < right)
                 let lt_reg = self.alloc_register();
                 self.program.add_instruction(
-                    Instruction::Lt { dest: lt_reg, left: left_reg, right: right_reg },
+                    Instruction::Lt {
+                        dest: lt_reg,
+                        left: left_reg,
+                        right: right_reg,
+                    },
                     None,
                 );
                 self.emit_not(lt_reg)
@@ -1056,15 +1094,13 @@ impl ProgramBuilder {
             "NumericInRange" => {
                 self.emit_builtin_call("rbac.numeric_in_range", &[left_reg, right_reg])
             }
-            
+
             // List operators
-            "ListContains" => {
-                self.emit_builtin_call("rbac.list_contains", &[left_reg, right_reg])
-            }
+            "ListContains" => self.emit_builtin_call("rbac.list_contains", &[left_reg, right_reg]),
             "ListNotContains" => {
                 self.emit_builtin_call("rbac.list_not_contains", &[left_reg, right_reg])
             }
-            
+
             // Cross-product operators
             "ForAnyOfAnyValues:StringEquals" | "ForAnyOfAnyValues" => {
                 let op_reg = self.load_string("StringEquals");
@@ -1082,12 +1118,16 @@ impl ProgramBuilder {
                 let op_reg = self.load_string("StringEquals");
                 self.emit_builtin_call("rbac.for_all_of_all_values", &[left_reg, right_reg, op_reg])
             }
-            
+
             // Default: equality comparison
             _ => {
                 let dest = self.alloc_register();
                 self.program.add_instruction(
-                    Instruction::Eq { dest, left: left_reg, right: right_reg },
+                    Instruction::Eq {
+                        dest,
+                        left: left_reg,
+                        right: right_reg,
+                    },
                     None,
                 );
                 dest
@@ -1101,7 +1141,7 @@ impl ProgramBuilder {
             .iter()
             .map(|arg| self.emit_condition_expr(arg))
             .collect();
-        
+
         // Map function names to RBAC builtins (need static str)
         match call.function.as_str() {
             "ActionMatches" => self.emit_builtin_call("rbac.action_matches", &arg_regs),
@@ -1109,11 +1149,19 @@ impl ProgramBuilder {
             "Exists" => self.emit_builtin_call("rbac.attribute_exists", &arg_regs),
             "NotExists" => self.emit_builtin_call("rbac.attribute_not_exists", &arg_regs),
             "TimeOfDayEquals" => self.emit_builtin_call("rbac.time_of_day_equals", &arg_regs),
-            "TimeOfDayNotEquals" => self.emit_builtin_call("rbac.time_of_day_not_equals", &arg_regs),
-            "TimeOfDayGreaterThan" => self.emit_builtin_call("rbac.time_of_day_greater_than", &arg_regs),
-            "TimeOfDayGreaterThanEquals" => self.emit_builtin_call("rbac.time_of_day_greater_than_equals", &arg_regs),
+            "TimeOfDayNotEquals" => {
+                self.emit_builtin_call("rbac.time_of_day_not_equals", &arg_regs)
+            }
+            "TimeOfDayGreaterThan" => {
+                self.emit_builtin_call("rbac.time_of_day_greater_than", &arg_regs)
+            }
+            "TimeOfDayGreaterThanEquals" => {
+                self.emit_builtin_call("rbac.time_of_day_greater_than_equals", &arg_regs)
+            }
             "TimeOfDayLessThan" => self.emit_builtin_call("rbac.time_of_day_less_than", &arg_regs),
-            "TimeOfDayLessThanEquals" => self.emit_builtin_call("rbac.time_of_day_less_than_equals", &arg_regs),
+            "TimeOfDayLessThanEquals" => {
+                self.emit_builtin_call("rbac.time_of_day_less_than_equals", &arg_regs)
+            }
             "TimeOfDayInRange" => self.emit_builtin_call("rbac.time_of_day_in_range", &arg_regs),
             "IpMatch" => self.emit_builtin_call("rbac.ip_match", &arg_regs),
             "IpNotMatch" => self.emit_builtin_call("rbac.ip_not_match", &arg_regs),
@@ -1128,7 +1176,7 @@ impl ProgramBuilder {
         let input_reg = self.alloc_register();
         self.program
             .add_instruction(Instruction::LoadInput { dest: input_reg }, None);
-        
+
         // Map attribute source to input field
         let source_field = match attr.source {
             AttributeSource::Request => "request",
@@ -1137,10 +1185,10 @@ impl ProgramBuilder {
             AttributeSource::Environment => "environment",
             AttributeSource::Context => "context",
         };
-        
+
         // Navigate to source object
         let source_reg = self.emit_input_lookup(input_reg, source_field);
-        
+
         // If there's a namespace, navigate further
         let null_reg = self.null_register();
         let object_reg = if let Some(ref namespace) = attr.namespace {
@@ -1148,10 +1196,10 @@ impl ProgramBuilder {
         } else {
             source_reg
         };
-        
+
         // Get the attribute
         let result_reg = self.emit_object_get(object_reg, &attr.attribute, null_reg);
-        
+
         // Navigate any additional path segments
         let mut current_reg = result_reg;
         for segment in &attr.path {
@@ -1163,14 +1211,20 @@ impl ProgramBuilder {
                 AttributePathSegment::Index(idx) => {
                     let idx_reg = self.alloc_register();
                     let idx_literal = self.add_literal_value(Value::from(*idx as i64));
-                    self.program
-                        .add_instruction(Instruction::Load { dest: idx_reg, literal_idx: idx_literal }, None);
+                    self.program.add_instruction(
+                        Instruction::Load {
+                            dest: idx_reg,
+                            literal_idx: idx_literal,
+                        },
+                        None,
+                    );
                     let null_reg = self.null_register();
-                    current_reg = self.emit_builtin_call("object.get", &[current_reg, idx_reg, null_reg]);
+                    current_reg =
+                        self.emit_builtin_call("object.get", &[current_reg, idx_reg, null_reg]);
                 }
             }
         }
-        
+
         current_reg
     }
 
@@ -1191,7 +1245,7 @@ impl ProgramBuilder {
             },
             None,
         );
-        
+
         // Append each element to the array
         for elem in elements {
             let elem_reg = self.emit_condition_expr(elem);
@@ -1204,7 +1258,7 @@ impl ProgramBuilder {
                 },
                 None,
             );
-            
+
             // Use array.concat to build up the array
             let concat_result = self.emit_builtin_call("array.concat", &[array_reg, elem_reg]);
             self.program.add_instruction(
@@ -1215,7 +1269,7 @@ impl ProgramBuilder {
                 None,
             );
         }
-        
+
         array_reg
     }
 

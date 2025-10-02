@@ -498,6 +498,29 @@ enum RegorusCommand {
         #[arg(long)]
         v0: bool,
     },
+
+    /// Evaluate an RBAC policy.
+    Rbac {
+        /// RBAC policy file (JSON).
+        #[arg(long, short, value_name = "policy.json")]
+        policy: String,
+
+        /// Evaluation context file (JSON).
+        #[arg(long, short, value_name = "context.json")]
+        context: String,
+
+        /// Show RVM assembly listing.
+        #[arg(long, short)]
+        assembly: bool,
+
+        /// Use tabular format for assembly listing.
+        #[arg(long, short)]
+        tabular: bool,
+
+        /// Enable verbose output with execution details.
+        #[arg(long, short)]
+        verbose: bool,
+    },
 }
 
 fn rego_debug(
@@ -626,6 +649,289 @@ fn rego_debug(
     Ok(())
 }
 
+fn rbac_eval(
+    policy_file: &str,
+    context_file: &str,
+    show_assembly: bool,
+    tabular: bool,
+    verbose: bool,
+) -> Result<()> {
+    use regorus::rbac::{RbacCompiler, RbacParser};
+    use std::sync::Arc;
+
+    // Read policy file
+    let policy_json = std::fs::read_to_string(policy_file)
+        .map_err(|e| anyhow!("Failed to read policy file {}: {}", policy_file, e))?;
+
+    // Read context file
+    let context_json = std::fs::read_to_string(context_file)
+        .map_err(|e| anyhow!("Failed to read context file {}: {}", context_file, e))?;
+
+    if verbose {
+        println!("=== RBAC POLICY ===");
+        println!("{}", policy_json);
+        println!("\n=== EVALUATION CONTEXT ===");
+        println!("{}", context_json);
+        println!();
+    }
+
+    // Parse policy
+    let policy = RbacParser::parse_policy(&policy_json)
+        .map_err(|e| anyhow!("Failed to parse policy: {}", e))?;
+
+    if verbose {
+        println!("=== PARSED POLICY ===");
+        println!("Role Definitions: {}", policy.role_definitions.len());
+        for role_def in &policy.role_definitions {
+            println!("  - {} ({})", role_def.name, role_def.id);
+            println!("    Permissions: {}", role_def.permissions.len());
+            for perm in &role_def.permissions {
+                println!("      Actions: {}", perm.actions.len());
+                println!("      Data Actions: {}", perm.data_actions.len());
+            }
+        }
+        println!("Role Assignments: {}", policy.role_assignments.len());
+        for assignment in &policy.role_assignments {
+            println!(
+                "  - Principal {} -> Role {} @ {}",
+                assignment.principal_id, assignment.role_definition_id, assignment.scope
+            );
+            if let Some(condition) = &assignment.condition {
+                println!("    Condition: {:?}", condition);
+            }
+        }
+        println!();
+    }
+
+    // Parse context
+    let context_value: serde_json::Value = serde_json::from_str(&context_json)
+        .map_err(|e| anyhow!("Failed to parse context JSON: {}", e))?;
+
+    // Convert to EvaluationContext using the same logic as WASM binding
+    let context = parse_evaluation_context(&context_value)
+        .map_err(|e| anyhow!("Failed to parse evaluation context: {}", e))?;
+
+    if verbose {
+        println!("=== EVALUATION CONTEXT ===");
+        println!("Principal: {} ({:?})", context.principal.id, context.principal.principal_type);
+        println!("Resource: {} ({})", context.resource.scope, context.resource.resource_type);
+        if let Some(action) = &context.action {
+            println!("Action: {}", action);
+        }
+        if let Some(data_action) = &context.request.data_action {
+            println!("Data Action: {}", data_action);
+        }
+        if let Some(action) = &context.request.action {
+            println!("Request Action: {}", action);
+        }
+        println!();
+    }
+
+    // Compile to RVM program
+    let program = RbacCompiler::compile_to_program(&policy, &context)
+        .map_err(|e| anyhow!("Failed to compile RBAC policy: {}", e))?;
+
+    if show_assembly {
+        println!("=== RVM ASSEMBLY LISTING ===");
+        let config = AssemblyListingConfig::default();
+        let listing = if tabular {
+            generate_tabular_assembly_listing(&program, &config)
+        } else {
+            generate_assembly_listing(&program, &config)
+        };
+        println!("{}", listing);
+        println!();
+    }
+
+    // Execute the program
+    let mut vm = RegoVM::new();
+    vm.load_program(Arc::new(program));
+
+    // Build VM input from context
+    let vm_input = build_vm_input(&context);
+    vm.set_input(vm_input);
+    vm.set_data(regorus::Value::new_object())
+        .map_err(|e| anyhow!("Failed to set data: {}", e))?;
+
+    let start_time = std::time::Instant::now();
+    let result = vm.execute().map_err(|e| anyhow!("Execution failed: {}", e))?;
+    let duration = start_time.elapsed();
+
+    // Display results
+    println!("=== EVALUATION RESULT ===");
+    let allow = match &result {
+        regorus::Value::Bool(b) => *b,
+        regorus::Value::Undefined => false,
+        _ => {
+            return Err(anyhow!("Unexpected result type: {:?}", result));
+        }
+    };
+
+    println!("Decision: {}", if allow { "ALLOW" } else { "DENY" });
+    println!("Execution Time: {:.3}ms", duration.as_secs_f64() * 1000.0);
+
+    if verbose {
+        println!("Raw Result: {:?}", result);
+    }
+
+    Ok(())
+}
+
+// Helper function to parse evaluation context (same as WASM binding)
+fn parse_evaluation_context(json: &serde_json::Value) -> Result<regorus::rbac::EvaluationContext> {
+    use regorus::rbac::*;
+    use regorus::Value;
+
+    // Parse principal
+    let principal_obj = json
+        .get("principal")
+        .ok_or_else(|| anyhow!("Missing 'principal' field"))?;
+
+    let principal_id = principal_obj
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("Missing or invalid 'principal.id'"))?;
+
+    let principal_type_str = principal_obj
+        .get("principalType")
+        .and_then(|v| v.as_str())
+        .unwrap_or("User");
+
+    let principal_type = match principal_type_str {
+        "User" => PrincipalType::User,
+        "Group" => PrincipalType::Group,
+        "ServicePrincipal" => PrincipalType::ServicePrincipal,
+        "ManagedServiceIdentity" => PrincipalType::ManagedServiceIdentity,
+        _ => PrincipalType::User,
+    };
+
+    let principal_attributes = principal_obj
+        .get("attributes")
+        .and_then(|v| serde_json::from_value::<Value>(v.clone()).ok())
+        .unwrap_or_else(Value::new_object);
+
+    // Parse resource
+    let resource_obj = json
+        .get("resource")
+        .ok_or_else(|| anyhow!("Missing 'resource' field"))?;
+
+    let resource_scope = resource_obj
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .unwrap_or("/");
+
+    let resource_id = resource_obj
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or(resource_scope);
+
+    let resource_type = resource_obj
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Microsoft.Resources/subscriptions");
+
+    let resource_attributes = resource_obj
+        .get("attributes")
+        .and_then(|v| serde_json::from_value::<Value>(v.clone()).ok())
+        .unwrap_or_else(Value::new_object);
+
+    // Parse action and actionType
+    let action_value = json.get("action").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+    let action_type = json.get("actionType").and_then(|v| v.as_str());
+
+    // Determine whether this is a data action or regular action
+    let (request_action, request_data_action) = match action_type {
+        Some("dataAction") => (None, action_value.clone()),
+        _ => (action_value.clone(), None),
+    };
+
+    let suboperation = json
+        .get("subOperation")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // Parse request attributes
+    let request_attributes = json
+        .get("request")
+        .and_then(|req| req.get("attributes"))
+        .and_then(|v| serde_json::from_value::<Value>(v.clone()).ok())
+        .unwrap_or_else(Value::new_object);
+
+    Ok(EvaluationContext {
+        principal: Principal {
+            id: principal_id.to_string(),
+            principal_type,
+            custom_security_attributes: principal_attributes,
+        },
+        resource: Resource {
+            id: resource_id.to_string(),
+            resource_type: resource_type.to_string(),
+            scope: resource_scope.to_string(),
+            attributes: resource_attributes,
+        },
+        request: RequestContext {
+            action: request_action.clone(),
+            data_action: request_data_action,
+            attributes: request_attributes,
+        },
+        environment: EnvironmentContext {
+            is_private_link: None,
+            private_endpoint: None,
+            subnet: None,
+            utc_now: None,
+        },
+        action: action_value,
+        suboperation,
+    })
+}
+
+fn build_vm_input(context: &regorus::rbac::EvaluationContext) -> regorus::Value {
+    use regorus::Value;
+    use std::collections::BTreeMap;
+
+    let mut input_map: BTreeMap<Value, Value> = BTreeMap::new();
+
+    // The RBAC compiler expects input with these fields:
+    // - principalId: the principal making the request
+    // - resource: the resource being accessed (uses scope)
+    // - action: the action being performed
+    // - actionType: "dataAction" or "action"
+
+    input_map.insert(
+        Value::String("principalId".into()),
+        Value::String(context.principal.id.clone().into()),
+    );
+
+    input_map.insert(
+        Value::String("resource".into()),
+        Value::String(context.resource.scope.clone().into()),
+    );
+
+    // Determine action and actionType following the same logic as test_runner.rs
+    let (action_value, action_type) = if let Some(data_action) = &context.request.data_action {
+        (data_action.clone(), "dataAction")
+    } else if let Some(action) = &context.request.action {
+        (action.clone(), "action")
+    } else if let Some(action) = &context.action {
+        (action.clone(), "action")
+    } else {
+        (String::new(), "action")
+    };
+
+    input_map.insert(
+        Value::String("action".into()),
+        Value::String(action_value.into()),
+    );
+
+    input_map.insert(
+        Value::String("actionType".into()),
+        Value::String(action_type.into()),
+    );
+
+    Value::from(input_map)
+}
+
 #[derive(clap::Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
@@ -681,5 +987,12 @@ fn main() -> Result<()> {
         ),
         RegorusCommand::Lex { file, verbose } => rego_lex(file, verbose),
         RegorusCommand::Parse { file, v0 } => rego_parse(file, v0),
+        RegorusCommand::Rbac {
+            policy,
+            context,
+            assembly,
+            tabular,
+            verbose,
+        } => rbac_eval(&policy, &context, assembly, tabular, verbose),
     }
 }

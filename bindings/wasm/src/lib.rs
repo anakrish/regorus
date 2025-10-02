@@ -733,10 +733,19 @@ fn parse_evaluation_context(json: &serde_json::Value) -> Result<regorus::rbac::E
         .and_then(|v| serde_json::from_value::<Value>(v.clone()).ok())
         .unwrap_or_else(Value::new_object);
     
-    // Parse action
-    let action = json.get("action")
+    // Parse action and actionType
+    let action_value = json.get("action")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+    
+    let action_type = json.get("actionType")
+        .and_then(|v| v.as_str());
+    
+    // Determine whether this is a data action or regular action
+    let (request_action, request_data_action) = match action_type {
+        Some("dataAction") => (None, action_value.clone()),
+        _ => (action_value.clone(), None),
+    };
     
     let suboperation = json.get("subOperation")
         .and_then(|v| v.as_str())
@@ -761,8 +770,8 @@ fn parse_evaluation_context(json: &serde_json::Value) -> Result<regorus::rbac::E
             attributes: resource_attributes,
         },
         request: RequestContext {
-            action: action.clone(),
-            data_action: None,
+            action: request_action.clone(),
+            data_action: request_data_action,
             attributes: request_attributes,
         },
         environment: EnvironmentContext {
@@ -771,7 +780,7 @@ fn parse_evaluation_context(json: &serde_json::Value) -> Result<regorus::rbac::E
             subnet: None,
             utc_now: None,
         },
-        action,
+        action: action_value,
         suboperation,
     })
 }

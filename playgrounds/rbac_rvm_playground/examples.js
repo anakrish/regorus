@@ -40,6 +40,7 @@ const EXAMPLES = {
                         attributes: {}
                     },
                     action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+                    actionType: "dataAction",
                     request: {
                         attributes: {}
                     }
@@ -61,6 +62,7 @@ const EXAMPLES = {
                         attributes: {}
                     },
                     action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+                    actionType: "dataAction",
                     request: {
                         attributes: {}
                     }
@@ -82,6 +84,7 @@ const EXAMPLES = {
                         attributes: {}
                     },
                     action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
+                    actionType: "dataAction",
                     request: {
                         attributes: {}
                     }
@@ -133,6 +136,7 @@ const EXAMPLES = {
                         }
                     },
                     action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+                    actionType: "dataAction",
                     request: {
                         attributes: {}
                     }
@@ -156,6 +160,7 @@ const EXAMPLES = {
                         }
                     },
                     action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+                    actionType: "dataAction",
                     request: {
                         attributes: {}
                     }
@@ -179,6 +184,7 @@ const EXAMPLES = {
                         }
                     },
                     action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+                    actionType: "dataAction",
                     request: {
                         attributes: {}
                     }
@@ -228,6 +234,7 @@ const EXAMPLES = {
                 }
             },
             action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+            actionType: "dataAction",
             request: {
                 attributes: {
                     "Microsoft.Storage/storageAccounts/blobServices/containers/blobs:encryptionScope": "default"
@@ -271,6 +278,7 @@ const EXAMPLES = {
                 attributes: {}
             },
             action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+            actionType: "dataAction",
             request: {
                 attributes: {}
             }
@@ -316,6 +324,7 @@ const EXAMPLES = {
                 }
             },
             action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+            actionType: "dataAction",
             request: {
                 attributes: {}
             }
@@ -383,6 +392,7 @@ const EXAMPLES = {
                 }
             },
             action: "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
+            actionType: "dataAction",
             request: {
                 attributes: {}
             }

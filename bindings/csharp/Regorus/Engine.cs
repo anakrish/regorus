@@ -4,6 +4,7 @@
 using System;
 using System.Runtime.InteropServices;
 using System.Text;
+using Regorus.Internal;
 
 
 #nullable enable
@@ -90,15 +91,10 @@ namespace Regorus
         {
             CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_strict_builtin_errors(E, strict));
         }
-        byte[] NullTerminatedUTF8Bytes(string s)
-        {
-            return Encoding.UTF8.GetBytes(s + char.MinValue);
-        }
-
         public string? AddPolicy(string path, string rego)
         {
-            var pathBytes = NullTerminatedUTF8Bytes(path);
-            var regoBytes = NullTerminatedUTF8Bytes(rego);
+            var pathBytes = NativeUtf8.GetNullTerminatedBytes(path);
+            var regoBytes = NativeUtf8.GetNullTerminatedBytes(rego);
 
 
             fixed (byte* pathPtr = pathBytes)
@@ -118,7 +114,7 @@ namespace Regorus
 
         public string? AddPolicyFromFile(string path)
         {
-            var pathBytes = NullTerminatedUTF8Bytes(path);
+            var pathBytes = NativeUtf8.GetNullTerminatedBytes(path);
             fixed (byte* pathPtr = pathBytes)
             {
                 return CheckAndDropResult(Regorus.Internal.API.regorus_engine_add_policy_from_file(E, pathPtr));
@@ -128,7 +124,7 @@ namespace Regorus
 
         public void AddDataJson(string data)
         {
-            var dataBytes = NullTerminatedUTF8Bytes(data);
+            var dataBytes = NativeUtf8.GetNullTerminatedBytes(data);
             fixed (byte* dataPtr = dataBytes)
             {
                 CheckAndDropResult(Regorus.Internal.API.regorus_engine_add_data_json(E, dataPtr));
@@ -138,7 +134,7 @@ namespace Regorus
 
         public void AddDataFromJsonFile(string path)
         {
-            var pathBytes = NullTerminatedUTF8Bytes(path);
+            var pathBytes = NativeUtf8.GetNullTerminatedBytes(path);
             fixed (byte* pathPtr = pathBytes)
             {
                 CheckAndDropResult(Regorus.Internal.API.regorus_engine_add_data_from_json_file(E, pathPtr));
@@ -146,9 +142,20 @@ namespace Regorus
 
         }
 
+        public void AddDataValue(Value value)
+        {
+            if (value is null)
+            {
+                throw new ArgumentNullException(nameof(value));
+            }
+
+            var handle = value.Detach();
+            NativeResult.EnsureSuccess(Regorus.Internal.API.regorus_engine_add_data_value(E, (void*)handle));
+        }
+
         public void SetInputJson(string input)
         {
-            var inputBytes = NullTerminatedUTF8Bytes(input);
+            var inputBytes = NativeUtf8.GetNullTerminatedBytes(input);
             fixed (byte* inputPtr = inputBytes)
             {
                 CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_input_json(E, inputPtr));
@@ -157,28 +164,61 @@ namespace Regorus
 
         public void SetInputFromJsonFile(string path)
         {
-            var pathBytes = NullTerminatedUTF8Bytes(path);
+            var pathBytes = NativeUtf8.GetNullTerminatedBytes(path);
             fixed (byte* pathPtr = pathBytes)
             {
                 CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_input_from_json_file(E, pathPtr));
             }
         }
 
+        public void SetInputValue(Value value)
+        {
+            if (value is null)
+            {
+                throw new ArgumentNullException(nameof(value));
+            }
+
+            var handle = value.Detach();
+            NativeResult.EnsureSuccess(Regorus.Internal.API.regorus_engine_set_input_value(E, (void*)handle));
+        }
+
         public string? EvalQuery(string query)
         {
-            var queryBytes = NullTerminatedUTF8Bytes(query);
+            var queryBytes = NativeUtf8.GetNullTerminatedBytes(query);
             fixed (byte* queryPtr = queryBytes)
             {
                 return CheckAndDropResult(Regorus.Internal.API.regorus_engine_eval_query(E, queryPtr));
             }
         }
 
+        public Value EvalQueryAsValue(string query)
+        {
+            var queryBytes = NativeUtf8.GetNullTerminatedBytes(query);
+            fixed (byte* queryPtr = queryBytes)
+            {
+                var result = Regorus.Internal.API.regorus_engine_eval_query_as_value(E, queryPtr);
+                var pointer = NativeResult.GetPointerAndDrop(result, RegorusPointerType.PointerValue);
+                return Value.FromHandle(pointer);
+            }
+        }
+
         public string? EvalRule(string rule)
         {
-            var ruleBytes = NullTerminatedUTF8Bytes(rule);
+            var ruleBytes = NativeUtf8.GetNullTerminatedBytes(rule);
             fixed (byte* rulePtr = ruleBytes)
             {
                 return CheckAndDropResult(Regorus.Internal.API.regorus_engine_eval_rule(E, rulePtr));
+            }
+        }
+
+        public Value EvalRuleAsValue(string rule)
+        {
+            var ruleBytes = NativeUtf8.GetNullTerminatedBytes(rule);
+            fixed (byte* rulePtr = ruleBytes)
+            {
+                var result = Regorus.Internal.API.regorus_engine_eval_rule_as_value(E, rulePtr);
+                var pointer = NativeResult.GetPointerAndDrop(result, RegorusPointerType.PointerValue);
+                return Value.FromHandle(pointer);
             }
         }
 
@@ -227,37 +267,9 @@ namespace Regorus
             return CheckAndDropResult(Regorus.Internal.API.regorus_engine_get_policy_parameters(E));
         }
 
-        string? StringFromUTF8(IntPtr ptr)
-        {
-
-#if NETSTANDARD2_1
-				return System.Runtime.InteropServices.Marshal.PtrToStringUTF8(ptr);
-#else
-            int len = 0;
-            while (Marshal.ReadByte(ptr, len) != 0) { ++len; }
-            byte[] buffer = new byte[len];
-            Marshal.Copy(ptr, buffer, 0, buffer.Length);
-            return Encoding.UTF8.GetString(buffer);
-#endif
-        }
-
         string? CheckAndDropResult(Regorus.Internal.RegorusResult result)
         {
-            if (result.status != Regorus.Internal.RegorusStatus.Ok)
-            {
-                var message = StringFromUTF8((IntPtr)result.error_message);
-                var ex = new Exception(message);
-                Regorus.Internal.API.regorus_result_drop(result);
-                throw ex;
-            }
-
-            var resultString = "";
-            if (result.output is not null)
-            {
-                resultString = StringFromUTF8((IntPtr)result.output);
-            }
-            Regorus.Internal.API.regorus_result_drop(result);
-            return resultString;
+            return NativeResult.GetStringAndDrop(result);
         }
 
     }

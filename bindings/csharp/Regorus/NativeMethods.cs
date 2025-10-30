@@ -17,6 +17,9 @@ namespace Regorus.Internal
     {
         private const string LibraryName = "regorus_ffi";
 
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        internal delegate IntPtr FieldGetterCallback(IntPtr context, IntPtr fieldName, IntPtr userData);
+
         #region Common Methods
 
         /// <summary>
@@ -126,6 +129,18 @@ namespace Regorus.Internal
         [DllImport(LibraryName, EntryPoint = "regorus_engine_eval_rule", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern RegorusResult regorus_engine_eval_rule(RegorusEngine* engine, byte* rule);
 
+    [DllImport(LibraryName, EntryPoint = "regorus_engine_set_input_value", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    internal static extern RegorusResult regorus_engine_set_input_value(RegorusEngine* engine, void* value);
+
+    [DllImport(LibraryName, EntryPoint = "regorus_engine_add_data_value", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    internal static extern RegorusResult regorus_engine_add_data_value(RegorusEngine* engine, void* value);
+
+    [DllImport(LibraryName, EntryPoint = "regorus_engine_eval_query_as_value", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    internal static extern RegorusResult regorus_engine_eval_query_as_value(RegorusEngine* engine, byte* query);
+
+    [DllImport(LibraryName, EntryPoint = "regorus_engine_eval_rule_as_value", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    internal static extern RegorusResult regorus_engine_eval_rule_as_value(RegorusEngine* engine, byte* rule);
+
         /// <summary>
         /// Enable/disable coverage.
         /// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.set_enable_coverage
@@ -219,6 +234,148 @@ namespace Regorus.Internal
 
         #endregion
 
+        #region Value Methods
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_create_null", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_create_null();
+
+    [DllImport(LibraryName, EntryPoint = "regorus_value_create_undefined", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    internal static extern RegorusResult regorus_value_create_undefined();
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_create_bool", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_create_bool([MarshalAs(UnmanagedType.U1)] bool value);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_create_int", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_create_int(long value);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_create_float", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_create_float(double value);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_create_string", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_create_string(byte* value);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_create_array", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_create_array();
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_create_object", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_create_object();
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_create_set", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_create_set();
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_from_json", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_from_json(byte* json);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_to_json", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_to_json(void* value);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_is_null", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_is_null(void* value);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_is_object", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_is_object(void* value);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_is_lazy_object", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_is_lazy_object(void* value);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_is_string", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_is_string(void* value);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_as_bool", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_as_bool(void* value);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_as_i64", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_as_i64(void* value);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_as_string", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_as_string(void* value);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_object_insert", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_object_insert(void* obj, byte* key, void* value);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_object_get", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_object_get(void* obj, byte* key);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_array_len", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_array_len(void* array);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_array_get", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_array_get(void* array, long index);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_clone", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_clone(void* value);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_drop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern void regorus_value_drop(void* value);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_value_from_lazy_object", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_value_from_lazy_object(void* lazyObject);
+
+        #endregion
+
+        #region Lazy and Deferred Methods
+
+        [DllImport(LibraryName, EntryPoint = "regorus_typeid_create", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_typeid_create(byte* name);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_typeid_drop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern void regorus_typeid_drop(void* typeId);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_lazy_context_create", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_lazy_context_create();
+
+        [DllImport(LibraryName, EntryPoint = "regorus_lazy_context_insert_u64", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_lazy_context_insert_u64(void* context, byte* key, ulong value);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_lazy_context_insert_i64", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_lazy_context_insert_i64(void* context, byte* key, long value);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_lazy_context_insert_string", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_lazy_context_insert_string(void* context, byte* key, byte* value);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_lazy_context_insert_bool", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_lazy_context_insert_bool(void* context, byte* key, byte value);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_lazy_context_insert_bytes", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_lazy_context_insert_bytes(void* context, byte* key, byte* bytes, UIntPtr len);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_lazy_context_get_u64", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_lazy_context_get_u64(void* context, byte* key);
+
+    [DllImport(LibraryName, EntryPoint = "regorus_lazy_context_get_string", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    internal static extern RegorusResult regorus_lazy_context_get_string(void* context, byte* key);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_lazy_context_drop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern void regorus_lazy_context_drop(void* context);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_lazy_object_create", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_lazy_object_create(void* typeId, void* context);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_lazy_object_drop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern void regorus_lazy_object_drop(void* lazyObject);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_register_context_schema", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_register_context_schema(
+            byte* typeName,
+            byte** stringFields,
+            UIntPtr stringFieldsLen,
+            byte** i64Fields,
+            UIntPtr i64FieldsLen,
+            byte** u64Fields,
+            UIntPtr u64FieldsLen,
+            byte** boolFields,
+            UIntPtr boolFieldsLen);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_register_callback_schema", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_register_callback_schema(
+            byte* typeName,
+            byte** fieldNames,
+            IntPtr* fieldCallbacks,
+            IntPtr* userData,
+            UIntPtr fieldsLen);
+
+        #endregion
+
         #region Compilation Methods
 
         /// <summary>
@@ -245,11 +402,11 @@ namespace Regorus.Internal
         [DllImport(LibraryName, EntryPoint = "regorus_compiled_policy_drop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern void regorus_compiled_policy_drop(RegorusCompiledPolicy* compiled_policy);
 
-        /// <summary>
-        /// Evaluate the compiled policy with the given input.
-        /// For target policies, evaluates the target's effect rule.
-        /// For regular policies, evaluates the originally compiled rule.
-        /// </summary>
+    /// <summary>
+    /// Evaluate the compiled policy with the given input.
+    /// For target policies, evaluates the target's effect rule.
+    /// For regular policies, evaluates the originally compiled rule.
+    /// </summary>
         [DllImport(LibraryName, EntryPoint = "regorus_compiled_policy_eval_with_input", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern RegorusResult regorus_compiled_policy_eval_with_input(RegorusCompiledPolicy* compiled_policy, byte* input);
 
@@ -333,9 +490,9 @@ namespace Regorus.Internal
         [DllImport(LibraryName, EntryPoint = "regorus_resource_schema_len", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern RegorusResult regorus_resource_schema_len();
 
-        /// <summary>
-        /// Check if the resource schema registry is empty.
-        /// </summary>
+    /// <summary>
+    /// Check if the resource schema registry is empty.
+    /// </summary>
         [DllImport(LibraryName, EntryPoint = "regorus_resource_schema_is_empty", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern RegorusResult regorus_resource_schema_is_empty();
 
@@ -436,6 +593,19 @@ namespace Regorus.Internal
     }
 
     /// <summary>
+    /// Type of pointer contained in RegorusResult.
+    /// </summary>
+    internal enum RegorusPointerType : uint
+    {
+        PointerNone,
+        PointerValue,
+        PointerTypeId,
+        PointerLazyContext,
+        PointerLazyObject,
+        PointerCompiledPolicy,
+    }
+
+    /// <summary>
     /// Status of a call on RegorusEngine.
     /// </summary>
     internal enum RegorusStatus : uint
@@ -505,10 +675,19 @@ namespace Regorus.Internal
         /// </summary>
         public long int_value;
         /// <summary>
+        /// Unsigned 64-bit integer value.
+        /// Valid when data_type is Integer.
+        /// </summary>
+        public ulong u64_value;
+        /// <summary>
         /// Pointer value.
         /// Valid when data_type is Pointer.
         /// </summary>
         public void* pointer_value;
+        /// <summary>
+        /// Type of pointer contained in pointer_value.
+        /// </summary>
+        public RegorusPointerType pointer_type;
         /// <summary>
         /// Errors produced by the call.
         /// Owned by Rust.

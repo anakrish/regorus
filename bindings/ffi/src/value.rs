@@ -33,6 +33,12 @@ pub extern "C" fn regorus_value_create_null() -> RegorusResult {
 }
 
 #[no_mangle]
+pub extern "C" fn regorus_value_create_undefined() -> RegorusResult {
+    let value = Box::new(Value::Undefined);
+    RegorusResult::ok_pointer(Box::into_raw(value) as *mut c_void, RegorusPointerType::PointerValue)
+}
+
+#[no_mangle]
 pub extern "C" fn regorus_value_create_bool(value: bool) -> RegorusResult {
     let val = Box::new(Value::Bool(value));
     RegorusResult::ok_pointer(Box::into_raw(val) as *mut c_void, RegorusPointerType::PointerValue)
@@ -672,6 +678,40 @@ pub extern "C" fn regorus_lazy_context_get_u64(
     
     match result {
         Ok(value) => RegorusResult::ok_u64(value),
+        Err(e) => RegorusResult::err_with_message(RegorusStatus::Error, format!("{}", e)),
+    }
+}
+
+/// Gets a string value from a LazyContext.
+///
+/// # Parameters
+/// * `context` - Pointer to LazyContext
+/// * `key` - C string key
+///
+/// # Returns
+/// RegorusResult containing string value on success
+#[no_mangle]
+pub extern "C" fn regorus_lazy_context_get_string(
+    context: *mut c_void,
+    key: *const c_char,
+) -> RegorusResult {
+    let result = || -> Result<String> {
+        if context.is_null() {
+            return Err(anyhow!("Null context pointer"));
+        }
+
+        let context_ref = unsafe { &*(context as *const LazyContext) };
+        let key_str = from_c_str(key)?;
+
+        match context_ref.get(&key_str) {
+            Some(ContextValue::String(value)) => Ok(value.as_ref().to_string()),
+            Some(_) => Err(anyhow!("Context value for key '{}' is not a string", key_str)),
+            None => Err(anyhow!("Key '{}' not found in context", key_str)),
+        }
+    }();
+
+    match result {
+        Ok(value) => RegorusResult::ok_string(value),
         Err(e) => RegorusResult::err_with_message(RegorusStatus::Error, format!("{}", e)),
     }
 }

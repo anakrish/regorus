@@ -604,10 +604,22 @@ impl LoopHoister {
             Expr { expr, .. } => {
                 self.analyze_expr(module_idx, expr, context, loops)?;
             }
-            Every { domain, query, .. } => {
+            Every {
+                domain,
+                query,
+                key,
+                value,
+                ..
+            } => {
                 self.analyze_expr(module_idx, domain, context, loops)?;
 
-                let every_context = context.child_with_output_exprs(ContextType::Every, None, None);
+                let mut every_context =
+                    context.child_with_output_exprs(ContextType::Every, None, None);
+                if let Some(key_span) = key {
+                    every_context.bind_variable(key_span.text());
+                }
+                every_context.bind_variable(value.text());
+
                 let populated_context =
                     self.populate_query(module_idx, query.as_ref(), &every_context)?;
                 self.lookup.ensure_query_capacity(module_idx, query.qidx);

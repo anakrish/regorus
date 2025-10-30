@@ -251,6 +251,12 @@ pub(crate) fn plan_only_if_binds(plan: Option<DestructuringPlan>) -> Option<Dest
         }
     })
 }
+pub(crate) fn format_literal_key_for_error(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.as_ref().to_string(),
+        _ => value.to_string(),
+    }
+}
 
 pub(crate) fn extract_literal_key(expr: &ExprRef) -> Option<Value> {
     match expr.as_ref() {
@@ -261,23 +267,4 @@ pub(crate) fn extract_literal_key(expr: &ExprRef) -> Option<Value> {
         Expr::Null { .. } => Some(Value::Null),
         _ => None,
     }
-}
-
-pub(crate) fn format_literal_key_for_error(value: &Value) -> String {
-    match value {
-        Value::String(s) => s.as_ref().to_string(),
-        _ => value.to_string(),
-    }
-}
-
-/// Check if an expression contains any unbound variables.
-pub(crate) fn has_unbound_vars_in_expr<T: VariableBindingContext>(
-    expr: &ExprRef,
-    context: &T,
-) -> bool {
-    let mut var_spans = Vec::new();
-    collect_pattern_var_spans(expr, &mut var_spans);
-    var_spans
-        .iter()
-        .any(|span| context.is_var_unbound(span.text(), ScopingMode::RespectParent))
 }

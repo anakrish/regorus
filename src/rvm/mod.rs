@@ -16,4 +16,5 @@ pub use instructions::Instruction;
 pub use program::{
     generate_assembly_listing, generate_tabular_assembly_listing, AssemblyListingConfig, Program,
 };
+pub use tests::test_utils;
 pub use vm::RegoVM;

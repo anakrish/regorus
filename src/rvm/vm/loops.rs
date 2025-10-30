@@ -233,24 +233,22 @@ impl RegoVM {
                     } else {
                         Ok(false)
                     }
-                } else {
-                    if let Some(ref current) = current_key {
-                        let mut range_iter = obj.range((
-                            core::ops::Bound::Excluded(current),
-                            core::ops::Bound::Unbounded,
-                        ));
-                        if let Some((key, value)) = range_iter.next() {
-                            if key_reg != value_reg {
-                                self.registers[key_reg as usize] = key.clone();
-                            }
-                            self.registers[value_reg as usize] = value.clone();
-                            Ok(true)
-                        } else {
-                            Ok(false)
+                } else if let Some(ref current) = current_key {
+                    let mut range_iter = obj.range((
+                        core::ops::Bound::Excluded(current),
+                        core::ops::Bound::Unbounded,
+                    ));
+                    if let Some((key, value)) = range_iter.next() {
+                        if key_reg != value_reg {
+                            self.registers[key_reg as usize] = key.clone();
                         }
+                        self.registers[value_reg as usize] = value.clone();
+                        Ok(true)
                     } else {
                         Ok(false)
                     }
+                } else {
+                    Ok(false)
                 }
             }
             IterationState::Set {
@@ -268,24 +266,22 @@ impl RegoVM {
                     } else {
                         Ok(false)
                     }
-                } else {
-                    if let Some(ref current) = current_item {
-                        let mut range_iter = items.range((
-                            core::ops::Bound::Excluded(current),
-                            core::ops::Bound::Unbounded,
-                        ));
-                        if let Some(item) = range_iter.next() {
-                            if key_reg != value_reg {
-                                self.registers[key_reg as usize] = item.clone();
-                            }
-                            self.registers[value_reg as usize] = item.clone();
-                            Ok(true)
-                        } else {
-                            Ok(false)
+                } else if let Some(ref current) = current_item {
+                    let mut range_iter = items.range((
+                        core::ops::Bound::Excluded(current),
+                        core::ops::Bound::Unbounded,
+                    ));
+                    if let Some(item) = range_iter.next() {
+                        if key_reg != value_reg {
+                            self.registers[key_reg as usize] = item.clone();
                         }
+                        self.registers[value_reg as usize] = item.clone();
+                        Ok(true)
                     } else {
                         Ok(false)
                     }
+                } else {
+                    Ok(false)
                 }
             }
         }

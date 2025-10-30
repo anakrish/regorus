@@ -373,8 +373,12 @@ impl<'a> Compiler<'a> {
         let reg = self.register_counter;
         self.register_counter += 1;
 
-        // Debug logging for register allocation tracking
-        if self.register_counter > 200 {}
+        // Debug logging for register allocation tracking (enabled via feature)
+        #[cfg(feature = "rvm-debug")]
+        #[allow(clippy::needless_if)]
+        if self.register_counter > 200 {
+            // Hook for downstream debug instrumentation.
+        }
 
         reg
     }
@@ -516,7 +520,7 @@ impl<'a> Compiler<'a> {
             }
             Ok(())
         } else {
-            return Err(CompilerError::MissingYieldContext);
+            Err(CompilerError::MissingYieldContext)
         }
     }
 
@@ -560,18 +564,6 @@ impl<'a> Compiler<'a> {
 
     pub fn bind_unbound_variable(&mut self, var_name: &str) {
         self.current_scope_mut().unbound_vars.remove(var_name);
-    }
-
-    /// Check if a variable can be resolved either locally or as a rule
-    fn can_resolve_variable(&self, var_name: &str) -> bool {
-        // Check local variables first
-        if self.lookup_variable(var_name).is_some() {
-            return true;
-        }
-
-        // Check if there's a rule for this variable
-        let rule_path = format!("{}.{}", &self.current_package, var_name);
-        self.policy.inner.rules.contains_key(&rule_path)
     }
 
     /// Compile chained reference expressions (Var, RefDot, RefBrack chains)
@@ -2075,7 +2067,7 @@ impl<'a> Compiler<'a> {
                                     self.expect_binding_plan_for_expr(arg, &context_desc)?;
 
                                 if let BindingPlan::Parameter { .. } = &binding_plan {
-                                    self.apply_binding_plan(&binding_plan, param_reg, &arg.span())
+                                    self.apply_binding_plan(&binding_plan, param_reg, arg.span())
                                         .map_err(CompilerError::from)?;
                                 } else {
                                     return Err(CompilerError::UnexpectedBindingPlan {
@@ -2257,15 +2249,12 @@ impl<'a> Compiler<'a> {
                     let package_path: Vec<String> =
                         package_parts.iter().map(|s| s.to_string()).collect();
 
-                    if let Err(_e) =
-                        self.program
-                            .add_rule_to_tree(&package_path, rule_name, rule_index as usize)
-                    {
-                    } else {
-                    }
-                } else {
+                    let _ = self.program.add_rule_to_tree(
+                        &package_path,
+                        rule_name,
+                        rule_index as usize,
+                    );
                 }
-            } else {
             }
 
             // Restore the global register counter and package context
@@ -2865,10 +2854,16 @@ impl<'a> Compiler<'a> {
         #[cfg(feature = "rvm-debug")]
         {
             // Debug: Print all instructions generated for this loop
-            for (i, instr) in self.program.instructions.iter().enumerate() {}
+            #[allow(unused_variables)]
+            for (idx, instr) in self.program.instructions.iter().enumerate() {
+                let _ = (idx, instr);
+            }
 
             // Debug: Print literals table
-            for (i, literal) in self.program.literals.iter().enumerate() {}
+            #[allow(unused_variables)]
+            for (idx, literal) in self.program.literals.iter().enumerate() {
+                let _ = (idx, literal);
+            }
         }
 
         Ok(result_reg)
@@ -3017,9 +3012,8 @@ impl<'a> Compiler<'a> {
             fcn_path
         } else {
             // If not found, try with current package prefix
-            let with_package = get_path_string(fcn, Some(&self.current_package))
-                .map_err(|_| CompilerError::InvalidFunctionExpressionWithPackage)?;
-            with_package
+            get_path_string(fcn, Some(&self.current_package))
+                .map_err(|_| CompilerError::InvalidFunctionExpressionWithPackage)?
         };
 
         // Compile all parameter expressions first

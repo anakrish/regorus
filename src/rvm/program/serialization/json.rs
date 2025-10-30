@@ -160,7 +160,7 @@ impl Program {
         let rule_tree: Value = json_data
             .get("rule_tree")
             .map(|v| serde_json::from_value(v.clone()).unwrap_or_else(|_| Value::new_object()))
-            .unwrap_or_else(|| Value::new_object());
+            .unwrap_or_else(Value::new_object);
 
         let mut program = Program {
             instructions,

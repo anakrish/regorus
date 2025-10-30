@@ -135,12 +135,10 @@ fn rego_compile(
         let serialized = match format {
             SerializationFormat::Msgpack => program
                 .serialize_messagepack()
-                .map_err(|e| anyhow!("messagepack serialization failed: {}", e))?
-                .into(),
+                .map_err(|e| anyhow!("messagepack serialization failed: {}", e))?,
             SerializationFormat::MsgpackHybrid => program
                 .serialize_messagepack_hybrid()
-                .map_err(|e| anyhow!("messagepack hybrid serialization failed: {}", e))?
-                .into(),
+                .map_err(|e| anyhow!("messagepack hybrid serialization failed: {}", e))?,
             SerializationFormat::Bincode => bincode::serialize(&program)
                 .map_err(|e| anyhow!("bincode serialization failed: {}", e))?,
             SerializationFormat::Json => program

@@ -276,9 +276,8 @@ fn aci_multi_entrypoint_serialization(c: &mut Criterion) {
     let mut corrupted_program = serialized_program.clone();
 
     // Just corrupt the end of the data
-    let end = corrupted_program.len();
-    for i in (end - 10)..end {
-        corrupted_program[i] = 0xFF;
+    for byte in corrupted_program.iter_mut().rev().take(10) {
+        *byte = 0xFF;
     }
 
     // Verify that our corruption actually triggers partial deserialization
@@ -342,14 +341,7 @@ fn aci_multi_entrypoint_serialization(c: &mut Criterion) {
             b.iter_batched(
                 || {
                     // Try to deserialize the corrupted program
-                    match regorus::rvm::program::Program::deserialize_binary(corrupted_data) {
-                        Ok(result) => Some(result),
-                        Err(_) => {
-                            // If deserialization fails completely (e.g., artifact section corrupted),
-                            // we can't benchmark recompilation, so skip this iteration
-                            None
-                        }
-                    }
+                    regorus::rvm::program::Program::deserialize_binary(corrupted_data).ok()
                 },
                 |deserialization_result_opt| {
                     if let Some(deserialization_result) = deserialization_result_opt {

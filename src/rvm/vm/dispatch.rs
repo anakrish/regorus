@@ -247,7 +247,7 @@ impl RegoVM {
                 let params = program
                     .instruction_data
                     .get_object_create_params(params_index)
-                    .ok_or_else(|| VmError::InvalidObjectCreateParams {
+                    .ok_or(VmError::InvalidObjectCreateParams {
                         index: params_index,
                     })?;
 
@@ -277,7 +277,7 @@ impl RegoVM {
                     let mut obj_value = program
                         .literals
                         .get(params.template_literal_idx as usize)
-                        .ok_or_else(|| VmError::InvalidTemplateLiteralIndex {
+                        .ok_or(VmError::InvalidTemplateLiteralIndex {
                             index: params.template_literal_idx,
                         })?
                         .clone();
@@ -533,7 +533,7 @@ impl RegoVM {
                 let params = program
                     .instruction_data
                     .get_chained_index_params(params_index)
-                    .ok_or_else(|| VmError::InvalidChainedIndexParams {
+                    .ok_or(VmError::InvalidChainedIndexParams {
                         index: params_index,
                     })?;
 
@@ -544,7 +544,7 @@ impl RegoVM {
                         LiteralOrRegister::Literal(idx) => program
                             .literals
                             .get(*idx as usize)
-                            .ok_or_else(|| VmError::LiteralIndexOutOfBounds {
+                            .ok_or(VmError::LiteralIndexOutOfBounds {
                                 index: *idx as usize,
                             })?
                             .clone(),
@@ -569,7 +569,7 @@ impl RegoVM {
                 let params = program
                     .instruction_data
                     .get_comprehension_begin_params(params_index)
-                    .ok_or_else(|| VmError::InvalidComprehensionBeginParams {
+                    .ok_or(VmError::InvalidComprehensionBeginParams {
                         index: params_index,
                     })?
                     .clone();

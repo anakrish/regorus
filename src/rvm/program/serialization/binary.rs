@@ -10,6 +10,8 @@ use super::super::types::SourceFile;
 use super::{DeserializationResult, Program};
 use crate::value::Value;
 
+type ArtifactMetadata = (IndexMap<String, usize>, Vec<SourceFile>, bool);
+
 impl Program {
     /// Serialize program to binary format with hybrid approach:
     /// - Binary serialization for most data (fast)
@@ -51,9 +53,7 @@ impl Program {
     }
 
     /// Deserialize only the artifact section (entry_points and sources) from binary format
-    pub fn deserialize_artifacts_only(
-        data: &[u8],
-    ) -> Result<(IndexMap<String, usize>, Vec<SourceFile>, bool), String> {
+    pub fn deserialize_artifacts_only(data: &[u8]) -> Result<ArtifactMetadata, String> {
         if data.len() < 17 {
             return Err("Data too short for artifact header".to_string());
         }

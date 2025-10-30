@@ -143,7 +143,7 @@ impl RegoVM {
             .program
             .rule_infos
             .get(rule_idx)
-            .ok_or_else(|| VmError::RuleInfoMissing { index: rule_index })?
+            .ok_or(VmError::RuleInfoMissing { index: rule_index })?
             .clone();
 
         let is_function_rule = rule_info.function_info.is_some();

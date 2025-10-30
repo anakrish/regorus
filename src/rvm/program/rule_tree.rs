@@ -42,65 +42,60 @@ impl Program {
             _ => {}
         }
 
-        self.check_conflicts_recursive(actual_rule_tree, data, &mut Vec::new())
+        check_conflicts_recursive(actual_rule_tree, data, &mut Vec::new())
     }
+}
 
-    fn check_conflicts_recursive(
-        &self,
-        rule_tree: &Value,
-        data: &Value,
-        current_path: &mut Vec<String>,
-    ) -> Result<(), crate::rvm::vm::VmError> {
-        match rule_tree {
-            Value::Object(rule_obj) => {
-                for (key, rule_value) in rule_obj.iter() {
-                    if let Value::String(key_str) = key {
-                        current_path.push(key_str.to_string());
+fn check_conflicts_recursive(
+    rule_tree: &Value,
+    data: &Value,
+    current_path: &mut Vec<String>,
+) -> Result<(), crate::rvm::vm::VmError> {
+    match rule_tree {
+        Value::Object(rule_obj) => {
+            for (key, rule_value) in rule_obj.iter() {
+                if let Value::String(key_str) = key {
+                    current_path.push(key_str.to_string());
 
-                        let data_value = &data[key];
+                    let data_value = &data[key];
 
-                        match rule_value {
-                            Value::Number(_) => {
-                                if data_value != &Value::Undefined {
-                                    return Err(crate::rvm::vm::VmError::RuleDataConflict(format!(
-                                        "Conflict: rule defines path '{}' but data also provides this path",
-                                        current_path.join("."),
-                                    )));
-                                }
-                            }
-                            Value::Object(_) => {
-                                if let Value::Object(_) = data_value {
-                                    self.check_conflicts_recursive(
-                                        rule_value,
-                                        data_value,
-                                        current_path,
-                                    )?;
-                                } else if data_value != &Value::Undefined {
-                                    return Err(crate::rvm::vm::VmError::RuleDataConflict(format!(
-                                        "Conflict: rule defines subpaths under '{}' but data provides a non-object value at this path",
-                                        current_path.join("."),
-                                    )));
-                                }
-                            }
-                            _ => {
+                    match rule_value {
+                        Value::Number(_) => {
+                            if data_value != &Value::Undefined {
                                 return Err(crate::rvm::vm::VmError::RuleDataConflict(format!(
-                                    "Invalid rule tree structure at path '{}'",
+                                    "Conflict: rule defines path '{}' but data also provides this path",
                                     current_path.join("."),
                                 )));
                             }
                         }
-
-                        current_path.pop();
+                        Value::Object(_) => {
+                            if let Value::Object(_) = data_value {
+                                check_conflicts_recursive(rule_value, data_value, current_path)?;
+                            } else if data_value != &Value::Undefined {
+                                return Err(crate::rvm::vm::VmError::RuleDataConflict(format!(
+                                    "Conflict: rule defines subpaths under '{}' but data provides a non-object value at this path",
+                                    current_path.join("."),
+                                )));
+                            }
+                        }
+                        _ => {
+                            return Err(crate::rvm::vm::VmError::RuleDataConflict(format!(
+                                "Invalid rule tree structure at path '{}'",
+                                current_path.join("."),
+                            )));
+                        }
                     }
+
+                    current_path.pop();
                 }
             }
-            _ => {
-                return Err(crate::rvm::vm::VmError::RuleDataConflict(
-                    "Rule tree root must be an object".to_string(),
-                ));
-            }
         }
-
-        Ok(())
+        _ => {
+            return Err(crate::rvm::vm::VmError::RuleDataConflict(
+                "Rule tree root must be an object".to_string(),
+            ));
+        }
     }
+
+    Ok(())
 }

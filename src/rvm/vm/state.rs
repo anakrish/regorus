@@ -43,7 +43,7 @@ impl RegoVM {
 
     /// Get a register window from the pool or create a new one
     pub(super) fn new_register_window(&mut self) -> Vec<Value> {
-        self.register_window_pool.pop().unwrap_or_else(Vec::new)
+        self.register_window_pool.pop().unwrap_or_default()
     }
 
     /// Return a register window to the pool for reuse

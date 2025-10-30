@@ -140,7 +140,7 @@ impl Program {
                     let rule_tree = combined_data
                         .get("rule_tree")
                         .and_then(|rt| serde_json::from_value::<Value>(rt.clone()).ok())
-                        .unwrap_or_else(|| Value::new_object());
+                        .unwrap_or_else(Value::new_object);
                     (literals, rule_tree)
                 }
                 Err(_e) => {

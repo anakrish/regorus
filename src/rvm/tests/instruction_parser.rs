@@ -607,6 +607,7 @@ fn parse_comprehension_add(params_text: &str) -> Result<Instruction> {
     })
 }
 
+#[allow(dead_code)]
 fn parse_comprehension_end(params_text: &str) -> Result<Instruction> {
     let _params = parse_params(params_text)?;
     Ok(Instruction::ComprehensionEnd {})

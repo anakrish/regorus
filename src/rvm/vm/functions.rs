@@ -11,9 +11,7 @@ impl RegoVM {
     pub(super) fn execute_function_call(&mut self, params_index: u16) -> Result<()> {
         let params =
             self.program.instruction_data.function_call_params[params_index as usize].clone();
-        let result =
-            self.execute_call_rule_common(params.dest, params.func_rule_index, Some(&params));
-        result
+        self.execute_call_rule_common(params.dest, params.func_rule_index, Some(&params))
     }
 
     pub(super) fn execute_builtin_call(&mut self, params_index: u16) -> Result<()> {

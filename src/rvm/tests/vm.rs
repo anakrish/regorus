@@ -207,7 +207,7 @@ mod tests {
             // For function calls, use result_reg 0; for other rules, use result_reg 1
             let result_reg = if instruction_params
                 .as_ref()
-                .map_or(false, |params| !params.function_call_params.is_empty())
+                .is_some_and(|params| !params.function_call_params.is_empty())
             {
                 0 // Function calls use register 0 as return register
             } else {

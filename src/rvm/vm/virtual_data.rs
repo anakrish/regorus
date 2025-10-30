@@ -21,7 +21,7 @@ impl RegoVM {
                     .program
                     .literals
                     .get(*idx as usize)
-                    .ok_or_else(|| VmError::LiteralIndexOutOfBounds {
+                    .ok_or(VmError::LiteralIndexOutOfBounds {
                         index: *idx as usize,
                     })?
                     .clone(),
@@ -183,7 +183,7 @@ impl RegoVM {
             .program
             .instruction_data
             .get_virtual_data_document_lookup_params(params_index)
-            .ok_or_else(|| VmError::InvalidVirtualDataDocumentLookupParams {
+            .ok_or(VmError::InvalidVirtualDataDocumentLookupParams {
                 index: params_index,
             })?
             .clone();
@@ -197,7 +197,7 @@ impl RegoVM {
                     .program
                     .literals
                     .get(*idx as usize)
-                    .ok_or_else(|| VmError::LiteralIndexOutOfBounds {
+                    .ok_or(VmError::LiteralIndexOutOfBounds {
                         index: *idx as usize,
                     })?
                     .clone(),
@@ -229,7 +229,7 @@ impl RegoVM {
                                     .program
                                     .literals
                                     .get(*idx as usize)
-                                    .ok_or_else(|| VmError::LiteralIndexOutOfBounds {
+                                    .ok_or(VmError::LiteralIndexOutOfBounds {
                                         index: *idx as usize,
                                     })?
                                     .clone(),
@@ -260,7 +260,7 @@ impl RegoVM {
                             .program
                             .literals
                             .get(*idx as usize)
-                            .ok_or_else(|| VmError::LiteralIndexOutOfBounds {
+                            .ok_or(VmError::LiteralIndexOutOfBounds {
                                 index: *idx as usize,
                             })?
                             .clone(),

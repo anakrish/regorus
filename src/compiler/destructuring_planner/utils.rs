@@ -269,3 +269,15 @@ pub(crate) fn format_literal_key_for_error(value: &Value) -> String {
         _ => value.to_string(),
     }
 }
+
+/// Check if an expression contains any unbound variables.
+pub(crate) fn has_unbound_vars_in_expr<T: VariableBindingContext>(
+    expr: &ExprRef,
+    context: &T,
+) -> bool {
+    let mut var_spans = Vec::new();
+    collect_pattern_var_spans(expr, &mut var_spans);
+    var_spans
+        .iter()
+        .any(|span| context.is_var_unbound(span.text(), ScopingMode::RespectParent))
+}

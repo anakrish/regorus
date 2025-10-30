@@ -58,7 +58,7 @@ impl RegoVM {
                 }
                 Value::Undefined => None,
                 Value::Null => None,
-                _ => None
+                _ => None,
             }
         } else {
             None
@@ -155,19 +155,17 @@ impl RegoVM {
         if let Some(iter_state) = comprehension_context.iteration_state.as_mut() {
             match iter_state {
                 IterationState::Object { current_key, .. } => {
-                    let tracked_key = if comprehension_context.key_reg
-                        != comprehension_context.value_reg
-                    {
-                        self.registers[comprehension_context.key_reg as usize].clone()
-                    } else {
-                        self.registers[comprehension_context.value_reg as usize].clone()
-                    };
+                    let tracked_key =
+                        if comprehension_context.key_reg != comprehension_context.value_reg {
+                            self.registers[comprehension_context.key_reg as usize].clone()
+                        } else {
+                            self.registers[comprehension_context.value_reg as usize].clone()
+                        };
                     *current_key = Some(tracked_key);
                 }
                 IterationState::Set { current_item, .. } => {
-                    *current_item = Some(
-                        self.registers[comprehension_context.value_reg as usize].clone(),
-                    );
+                    *current_item =
+                        Some(self.registers[comprehension_context.value_reg as usize].clone());
                 }
                 IterationState::Array { .. } => {}
             }

@@ -73,6 +73,20 @@ pub fn create_assignment_binding_plan<T: VariableBindingContext>(
             let rhs_struct_plan =
                 create_destructuring_plan(rhs_expr, context, ScopingMode::RespectParent);
 
+            // If we failed to build a plan for a set containing bindings, surface a meaningful error early.
+            if lhs_struct_plan.is_none() && matches!(lhs_expr.as_ref(), Expr::Set { .. }) {
+                return Err(BindingPlannerError::FailedToCreateDestructuringPlan {
+                    plan_type: "assignment left-hand side".to_string(),
+                    span: lhs_expr.span().clone(),
+                });
+            }
+            if rhs_struct_plan.is_none() && matches!(rhs_expr.as_ref(), Expr::Set { .. }) {
+                return Err(BindingPlannerError::FailedToCreateDestructuringPlan {
+                    plan_type: "assignment right-hand side".to_string(),
+                    span: rhs_expr.span().clone(),
+                });
+            }
+
             let lhs_plan = plan_only_if_binds(lhs_struct_plan.clone());
             let rhs_plan = plan_only_if_binds(rhs_struct_plan.clone());
 

@@ -100,6 +100,27 @@ pub(crate) fn create_destructuring_plan_with_tracking<T: VariableBindingContext>
             })
         }
 
+        // Set destructuring is not supported - but only fail if the set contains unbound variables
+        // Otherwise treat it as an equality check (e.g., for literal sets or empty sets)
+        Expr::Set { items, .. } => {
+            // Check if any item in the set contains unbound variables
+            let has_unbound_vars = items.iter().any(|item| {
+                if let Expr::Var { span: name, .. } = item.as_ref() {
+                    overlay.is_var_unbound(name.text(), scoping)
+                } else {
+                    false
+                }
+            });
+
+            if has_unbound_vars {
+                // Set contains unbound variables - can't destructure
+                None
+            } else {
+                // Set is a literal or contains only bound vars - treat as equality check
+                Some(DestructuringPlan::EqualityExpr(expr.clone()))
+            }
+        }
+
         // For all others, treat as equality checks
         _ => Some(DestructuringPlan::EqualityExpr(expr.clone())),
     }

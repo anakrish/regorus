@@ -12,6 +12,8 @@ use super::Instruction;
 mod destructuring;
 use crate::ast::{Expr, ExprRef, Rule, RuleHead};
 use crate::builtins;
+use crate::compiler::destructuring_planner::plans::BindingPlan;
+use crate::compiler::hoist::{HoistedLoop, LoopType};
 use crate::interpreter::Interpreter;
 use crate::lexer::Span;
 use crate::rvm::program::RuleType;
@@ -25,7 +27,6 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
-use destructuring::DestructuringContext;
 use indexmap::IndexMap;
 
 pub type Register = u8;
@@ -120,6 +121,12 @@ pub enum CompilerError {
 
     #[error("Not a simple reference chain")]
     NotSimpleReferenceChain,
+
+    #[error("Missing binding plan for {context}")]
+    MissingBindingPlan { context: String },
+
+    #[error("Unexpected binding plan variant for {context}: {found}")]
+    UnexpectedBindingPlan { context: String, found: String },
 
     #[error("Invalid destructuring pattern in assignment")]
     InvalidDestructuringPattern,
@@ -250,7 +257,7 @@ pub struct Compiler<'a> {
     rule_worklist: Vec<WorklistEntry>,     // Rules that need to be compiled with caller tracking
     rule_definitions: Vec<Vec<Vec<u32>>>, // rule_index -> Vec<definition> where definition is Vec<body_entry_point>
     rule_definition_function_params: Vec<Vec<Option<Vec<String>>>>, // rule_index -> Vec<definition> -> Some(param_names) for function defs, None for others
-    rule_definition_destructuring_patterns: Vec<Vec<Option<Vec<(usize, Register)>>>>, // rule_index -> Vec<definition> -> Some(destructuring_block_entries) for defs with destructuring
+    rule_definition_destructuring_patterns: Vec<Vec<Option<u32>>>, // rule_index -> Vec<definition> -> Some(destructuring_block_entry) for defs with destructuring
     rule_types: Vec<RuleType>, // rule_index -> true if set rule, false if regular rule
     rule_function_param_count: Vec<Option<usize>>, // rule_index -> Some(param_count) for function rules, None for others
     rule_result_registers: Vec<u8>, // rule_index -> result register allocated for this rule
@@ -367,8 +374,7 @@ impl<'a> Compiler<'a> {
         self.register_counter += 1;
 
         // Debug logging for register allocation tracking
-        if self.register_counter > 200 {
-        }
+        if self.register_counter > 200 {}
 
         reg
     }
@@ -579,6 +585,48 @@ impl<'a> Compiler<'a> {
             "data" => self.compile_data_chain(&chain, span),
             _ => self.compile_local_var_chain(&chain, span),
         }
+    }
+
+    fn get_statement_loops(&self, stmt: &crate::ast::LiteralStmt) -> Result<Vec<HoistedLoop>> {
+        self.policy
+            .inner
+            .loop_hoisting_table
+            .get_statement_loops(self.current_module_index, stmt.sidx)
+            .cloned()
+            .ok_or_else(|| CompilerError::General {
+                message: format!(
+                    "missing loop hoisting data for statement at {}:{}",
+                    stmt.span.line, stmt.span.col
+                ),
+            })
+    }
+
+    fn get_expr_loops(&self, expr: &ExprRef) -> Vec<HoistedLoop> {
+        let module_idx = self.current_module_index;
+        let expr_idx = expr.as_ref().eidx();
+        self.policy
+            .inner
+            .loop_hoisting_table
+            .get_expr_loops(module_idx, expr_idx)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn get_binding_plan_for_expr(&self, expr: &ExprRef) -> Option<BindingPlan> {
+        let module_idx = self.current_module_index;
+        let expr_idx = expr.as_ref().eidx();
+        self.policy
+            .inner
+            .loop_hoisting_table
+            .get_expr_binding_plan(module_idx, expr_idx)
+            .cloned()
+    }
+
+    fn expect_binding_plan_for_expr(&self, expr: &ExprRef, context: &str) -> Result<BindingPlan> {
+        self.get_binding_plan_for_expr(expr)
+            .ok_or_else(|| CompilerError::MissingBindingPlan {
+                context: context.to_string(),
+            })
     }
 
     /// Compile input variable access chain
@@ -916,7 +964,6 @@ impl<'a> Compiler<'a> {
     /// Store a variable mapping (backward compatibility)
     /// Look up a variable, first in local scope, then as a rule reference
     fn resolve_variable(&mut self, var_name: &str, span: &Span) -> Result<Register> {
-
         // Handle special built-in variables first
         match var_name {
             "input" => {
@@ -954,7 +1001,6 @@ impl<'a> Compiler<'a> {
         if let Some(var_reg) = self.lookup_variable(var_name) {
             return Ok(var_reg);
         }
-
 
         let rule_path = format!("{}.{}", &self.current_package, var_name);
 
@@ -1293,7 +1339,6 @@ impl<'a> Compiler<'a> {
         // Transfer entry points to program
         self.program.entry_points = self.entry_points;
 
-
         // Initialize resolved builtins if we have builtin info
         if !self.program.builtin_info_table.is_empty() {
             self.program.initialize_resolved_builtins()?;
@@ -1609,62 +1654,21 @@ impl<'a> Compiler<'a> {
                 }
                 dest
             }
-            Expr::AssignExpr { op, lhs, rhs, .. } => {
-                // Handle variable assignment with destructuring support
-                // First compile the right-hand side value (don't assert - this is assignment)
-                let rhs_reg = self.compile_rego_expr_with_span(rhs, rhs.span(), false)?;
+            Expr::AssignExpr { .. } => {
+                let binding_plan =
+                    self.expect_binding_plan_for_expr(expr, "assignment expression")?;
 
-                // Determine the destructuring context based on the assignment operator
-                let context = match op {
-                    crate::ast::AssignOp::ColEq => DestructuringContext::ColonAssignment,
-                    crate::ast::AssignOp::Eq => DestructuringContext::Assignment,
+                let result: Result<Register> = match binding_plan {
+                    BindingPlan::Assignment { plan } => self
+                        .compile_assignment_plan_using_hoisted_destructuring(&plan, span)
+                        .map_err(CompilerError::from),
+                    other => Err(CompilerError::UnexpectedBindingPlan {
+                        context: "assignment expression".to_string(),
+                        found: format!("{other:?}"),
+                    }),
                 };
 
-                // Check if this is a simple variable or a destructuring pattern
-                match lhs.as_ref() {
-                    Expr::Var {
-                        value: Value::String(var_name),
-                        ..
-                    } => {
-                        // Simple variable assignment - use existing logic
-                        // Allocate a NEW register for the LHS variable
-                        let lhs_reg = self.alloc_register();
-
-                        // Copy the value from RHS to LHS register
-                        self.emit_instruction(
-                            Instruction::Move {
-                                dest: lhs_reg,
-                                src: rhs_reg,
-                            },
-                            span,
-                        );
-
-                        // Store the variable binding to the NEW register
-                        self.add_variable(var_name.as_ref(), lhs_reg);
-
-                        // Return the register containing the assigned value
-                        return Ok(lhs_reg);
-                    }
-
-                    // Destructuring patterns - arrays, objects, sets
-                    Expr::Array { .. } | Expr::Object { .. } | Expr::Set { .. } => {
-                        // Validate the destructuring pattern first
-                        if let Err(_e) = Compiler::validate_destructuring_pattern(lhs, &context) {
-                            return Err(CompilerError::InvalidDestructuringPattern);
-                        }
-
-                        // Compile the destructuring pattern
-                        self.compile_destructuring_pattern(lhs, rhs_reg, context, span)?;
-
-                        // Return the register containing the assigned value
-                        return Ok(rhs_reg);
-                    }
-
-                    _ => {
-                        // Not a supported LHS pattern - return the RHS register
-                        return Ok(rhs_reg);
-                    }
-                }
+                return result;
             }
             Expr::Var { value, .. } => {
                 // Check if this is a variable reference that we should resolve
@@ -1679,12 +1683,8 @@ impl<'a> Compiler<'a> {
                 }
             }
             // Use sophisticated chained reference compilation
-            Expr::RefDot { .. } => {
-                self.compile_chained_ref(expr, span)?
-            }
-            Expr::RefBrack { .. } => {
-                self.compile_chained_ref(expr, span)?
-            }
+            Expr::RefDot { .. } => self.compile_chained_ref(expr, span)?,
+            Expr::RefBrack { .. } => self.compile_chained_ref(expr, span)?,
             Expr::Membership {
                 value, collection, ..
             } => {
@@ -1716,9 +1716,7 @@ impl<'a> Compiler<'a> {
             }
             Expr::ObjectCompr {
                 key, value, query, ..
-            } => {
-                self.compile_object_comprehension(key, value, query, span)?
-            }
+            } => self.compile_object_comprehension(key, value, query, span)?,
             Expr::Call { fcn, params, .. } => {
                 // Compile function call
                 self.compile_function_call(fcn, params, span.clone())?
@@ -1924,7 +1922,6 @@ impl<'a> Compiler<'a> {
             // Add to call stack
             call_stack.push(entry.rule_path.clone());
 
-
             // Set current rule context for tracking caller context
             let old_rule_path = self.current_rule_path.clone();
             let old_call_stack = self.current_call_stack.clone();
@@ -1985,7 +1982,6 @@ impl<'a> Compiler<'a> {
             }
             self.rule_result_registers[rule_index as usize] = result_register;
 
-
             // Ensure rule_definitions vec has space for this rule
             while self.rule_definitions.len() <= rule_index as usize {
                 self.rule_definitions.push(Vec::new());
@@ -2008,7 +2004,6 @@ impl<'a> Compiler<'a> {
             for (def_idx, rule_ref) in rule_definitions.iter().enumerate() {
                 core::convert::identity(def_idx);
                 if let Rule::Spec { head, bodies, span } = rule_ref.as_ref() {
-
                     // Set up register window for this rule definition - each rule starts with registers from 0
                     self.push_scope();
                     self.register_counter = 0; // Reset to 0 for this rule's window
@@ -2051,64 +2046,59 @@ impl<'a> Compiler<'a> {
                         RuleHead::Func { assign, args, .. } => {
                             // Set up function parameters for THIS definition
                             let mut param_names = Vec::new();
-                            let mut destructuring_patterns = Vec::new();
+                            let mut last_param_span: Option<Span> = None;
+
+                            let destructuring_entry = if args.is_empty() {
+                                None
+                            } else {
+                                Some(self.program.instructions.len())
+                            };
+
+                            let param_base_register = self.register_counter;
+                            self.register_counter =
+                                self.register_counter.saturating_add(args.len() as u8);
 
                             for (arg_idx, arg) in args.iter().enumerate() {
-                                let param_reg = self.alloc_register(); // This will be 1, 2, 3, etc.
+                                let param_reg = param_base_register + arg_idx as u8;
 
-                                match arg.as_ref() {
+                                let param_name = match arg.as_ref() {
                                     Expr::Var {
-                                        value: Value::String(param_name),
+                                        value: Value::String(name),
                                         ..
-                                    } => {
-                                        // Simple parameter: x
-                                        param_names.push(param_name.to_string());
-                                        self.scopes
-                                            .last_mut()
-                                            .unwrap()
-                                            .bound_vars
-                                            .insert(param_name.to_string(), param_reg);
-                                        self.store_variable(param_name.to_string(), param_reg);
-                                    }
-                                    _ => {
-                                        // Destructuring parameter: [x, y], {a, b}, etc.
-                                        let generated_param_name = format!("__param_{}", arg_idx);
-                                        param_names.push(generated_param_name.clone());
+                                    } => name.to_string(),
+                                    _ => format!("__param_{}", arg_idx),
+                                };
+                                param_names.push(param_name);
 
-                                        // Compile destructuring block inline
-                                        let destructuring_block_entry =
-                                            self.program.instructions.len();
+                                let context_desc = format!("function parameter {arg_idx}");
+                                let binding_plan =
+                                    self.expect_binding_plan_for_expr(arg, &context_desc)?;
 
-
-                                        // Compile the destructuring pattern to validate and bind variables
-                                        self.compile_destructuring_pattern(
-                                            arg,
-                                            param_reg,
-                                            destructuring::DestructuringContext::FunctionParameter,
-                                            &arg.span(),
-                                        )?;
-
-                                        // Emit DestructuringSuccess to mark successful completion
-                                        self.emit_instruction(
-                                            crate::rvm::instructions::Instruction::DestructuringSuccess {},
-                                            &arg.span(),
-                                        );
-
-                                        // Store destructuring block entry point
-                                        destructuring_patterns
-                                            .push((destructuring_block_entry, param_reg));
-                                    }
+                                if let BindingPlan::Parameter { .. } = &binding_plan {
+                                    self.apply_binding_plan(&binding_plan, param_reg, &arg.span())
+                                        .map_err(CompilerError::from)?;
+                                } else {
+                                    return Err(CompilerError::UnexpectedBindingPlan {
+                                        context: context_desc,
+                                        found: format!("{binding_plan:?}"),
+                                    });
                                 }
+
+                                last_param_span = Some(arg.span().clone());
                             }
 
                             // Store the parameter names for this definition
                             self.rule_definition_function_params[rule_index as usize]
                                 .push(Some(param_names.clone()));
 
-                            // Store destructuring patterns for this definition
-                            if !destructuring_patterns.is_empty() {
+                            if let Some(entry) = destructuring_entry {
+                                let success_span = last_param_span.as_ref().unwrap_or(span);
+                                self.emit_instruction(
+                                    crate::rvm::instructions::Instruction::DestructuringSuccess {},
+                                    success_span,
+                                );
                                 self.rule_definition_destructuring_patterns[rule_index as usize]
-                                    .push(Some(destructuring_patterns));
+                                    .push(Some(entry as u32));
                             } else {
                                 self.rule_definition_destructuring_patterns[rule_index as usize]
                                     .push(None);
@@ -2243,10 +2233,8 @@ impl<'a> Compiler<'a> {
                     if self.register_counter > num_registers_used {
                         num_registers_used = self.register_counter;
                     }
-
                 }
             }
-
 
             // Calculate the number of registers used by this rule (window starts at 0)
 
@@ -2259,7 +2247,6 @@ impl<'a> Compiler<'a> {
 
             // Store the rule-level function parameter count
             self.rule_function_param_count[rule_index as usize] = rule_param_count;
-
 
             // Add the compiled rule to the rule tree for efficient lookups
             // Skip function rules since they require parameters and cannot be evaluated via virtual data document lookup
@@ -2295,15 +2282,10 @@ impl<'a> Compiler<'a> {
         // Push a new scope for this query
         self.push_scope();
 
-
         let result = {
             let schedule = match &self.policy.inner.schedule {
-                Some(s) => {
-                    s.queries.get(self.current_module_index, query.qidx)
-                }
-                None => {
-                    None
-                }
+                Some(s) => s.queries.get(self.current_module_index, query.qidx),
+                None => None,
             };
 
             let ordered_stmts: Vec<&crate::ast::LiteralStmt> = match schedule {
@@ -2328,214 +2310,35 @@ impl<'a> Compiler<'a> {
         &mut self,
         stmts: &[&crate::ast::LiteralStmt],
     ) -> Result<()> {
-
         for (idx, stmt) in stmts.iter().enumerate() {
-
-            // Hoist loops from this statement (like interpreter)
-            let loop_exprs = self.hoist_loops_from_literal(&stmt.literal)?;
+            let loop_exprs = self.get_statement_loops(stmt)?;
 
             if !loop_exprs.is_empty() {
-                // If there are hoisted loop expressions, execute subsequent statements within loops
                 return self.compile_hoisted_loops(&stmts[idx..], &loop_exprs);
             }
 
-            // No loops, compile statement normally
+            if matches!(&stmt.literal, crate::ast::Literal::SomeIn { .. }) {
+                if let crate::ast::Literal::SomeIn {
+                    ref key,
+                    ref value,
+                    ref collection,
+                    ..
+                } = &stmt.literal
+                {
+                    self.compile_some_in_loop_with_remaining_statements(
+                        key,
+                        value,
+                        collection,
+                        &stmts[idx..],
+                    )?;
+                    return Ok(());
+                }
+            }
+
             self.compile_single_statement(stmt)?;
         }
 
         self.hoist_loops_and_emit_context_yield()
-    }
-
-    /// TODO: Share code with interpreter
-    /// Hoist loops from a literal (similar to interpreter's hoist_loops)
-    fn hoist_loops_from_literal(
-        &mut self,
-        literal: &crate::ast::Literal,
-    ) -> Result<Vec<HoistedLoop>> {
-        let mut loops = Vec::new();
-
-        use crate::ast::Literal::*;
-        match literal {
-            SomeIn {
-                key,
-                value,
-                collection,
-                ..
-            } => {
-                if let Some(key) = key {
-                    self.hoist_loops_from_expr(key, &mut loops)?;
-                }
-                self.hoist_loops_from_expr(value, &mut loops)?;
-                self.hoist_loops_from_expr(collection, &mut loops)?;
-                loops.push(HoistedLoop {
-                    loop_expr: None,
-                    key: key.clone(),
-                    value: value.clone(),
-                    collection: collection.clone(),
-                    loop_type: LoopType::SomeIn,
-                });
-            }
-            Expr { expr, .. } => {
-                // Hoist loops from expressions (like array[_] patterns)
-                self.hoist_loops_from_expr(expr, &mut loops)?;
-            }
-            Every {
-                key: _key,
-                value: _value,
-                domain: _domain,
-                query: _query,
-                ..
-            } => {
-                // Every quantifiers are not hoisted as loops
-                // They are compiled directly in compile_single_statement
-                self.hoist_loops_from_expr(_domain, &mut loops)?;
-            }
-            _ => {
-                // Other literal types don't have loops to hoist
-            }
-        }
-
-        Ok(loops)
-    }
-
-    /// Hoist loops from expressions (like array[_] patterns)
-    fn hoist_loops_from_expr(
-        &mut self,
-        expr: &ExprRef,
-        loops: &mut Vec<HoistedLoop>,
-    ) -> Result<()> {
-        use crate::ast::Expr::*;
-        match expr.as_ref() {
-            // Primitive types - no loops to hoist
-            String { .. }
-            | RawString { .. }
-            | Number { .. }
-            | Bool { .. }
-            | Null { .. }
-            | Var { .. } => {
-                // No sub-expressions to process
-            }
-
-            // Collection types - hoist from items
-            Array { items, .. } => {
-                for item in items {
-                    self.hoist_loops_from_expr(item, loops)?;
-                }
-            }
-            Set { items, .. } => {
-                for item in items {
-                    self.hoist_loops_from_expr(item, loops)?;
-                }
-            }
-            Object { fields, .. } => {
-                for (_, key_expr, value_expr) in fields {
-                    self.hoist_loops_from_expr(key_expr, loops)?;
-                    self.hoist_loops_from_expr(value_expr, loops)?;
-                }
-            }
-
-            // Comprehensions - hoist from term and query
-            ArrayCompr { .. } | SetCompr { .. } | ObjectCompr { .. } => {
-                // Will be hoisted by their queries
-            }
-
-            // Function calls - hoist from function and parameters
-            Call { fcn, params, .. } => {
-                self.hoist_loops_from_expr(fcn, loops)?;
-                for param in params {
-                    self.hoist_loops_from_expr(param, loops)?;
-                }
-            }
-
-            // Unary expressions - hoist from operand
-            UnaryExpr { expr, .. } => {
-                self.hoist_loops_from_expr(expr, loops)?;
-            }
-
-            // Reference expressions - check for array[_] patterns
-            RefDot { refr, .. } => {
-                self.hoist_loops_from_expr(refr, loops)?;
-            }
-            RefBrack { refr, index, .. } => {
-                // Recursively hoist from sub-expressions
-                self.hoist_loops_from_expr(refr, loops)?;
-                self.hoist_loops_from_expr(index, loops)?;
-
-                // Check if this is an array[_] pattern or unbound variable pattern
-                if let Var {
-                    value: Value::String(var_name),
-                    ..
-                } = index.as_ref()
-                {
-                    if var_name.as_ref() == "_"
-                        || self.is_unbound_var(var_name.as_ref())
-                        || !self.can_resolve_variable(var_name.as_ref())
-                    {
-                        if var_name.as_ref() == "_" {
-                            // Anonymous variable
-                        } else if self.is_unbound_var(var_name.as_ref()) {
-                            // Already marked as unbound variable
-                        } else {
-                            // Add as unbound variable for proper tracking
-                            self.add_unbound_variable(var_name.as_ref());
-                        }
-                        // This is array[_] or object[unbound_var] - create a loop to iterate over the collection
-                        loops.push(HoistedLoop {
-                            loop_expr: Some(expr.clone()),
-                            key: Some(index.clone()),
-                            value: expr.clone(),
-                            collection: refr.clone(),
-                            loop_type: LoopType::IndexIteration,
-                        });
-                        // Bind the unbound variable so that its usage is not misinterpreted as a loop
-                        if var_name.as_ref() != "_" {
-                            self.bind_unbound_variable(var_name.as_ref());
-                        }
-                        return Ok(());
-                    }
-                }
-            }
-
-            // Binary expressions - hoist from both operands
-            BinExpr { lhs, rhs, .. } => {
-                self.hoist_loops_from_expr(lhs, loops)?;
-                self.hoist_loops_from_expr(rhs, loops)?;
-            }
-            BoolExpr { lhs, rhs, .. } => {
-                self.hoist_loops_from_expr(lhs, loops)?;
-                self.hoist_loops_from_expr(rhs, loops)?;
-            }
-            ArithExpr { lhs, rhs, .. } => {
-                self.hoist_loops_from_expr(lhs, loops)?;
-                self.hoist_loops_from_expr(rhs, loops)?;
-            }
-            AssignExpr { lhs, rhs, .. } => {
-                self.hoist_loops_from_expr(lhs, loops)?;
-                self.hoist_loops_from_expr(rhs, loops)?;
-            }
-
-            // Membership expressions - hoist from key, value, and collection
-            Membership {
-                key,
-                value,
-                collection,
-                ..
-            } => {
-                if let Some(key_expr) = key {
-                    self.hoist_loops_from_expr(key_expr, loops)?;
-                }
-                self.hoist_loops_from_expr(value, loops)?;
-                self.hoist_loops_from_expr(collection, loops)?;
-            }
-
-            // Handle conditionally compiled expression types
-            #[cfg(feature = "rego-extensions")]
-            OrExpr { lhs, rhs, .. } => {
-                self.hoist_loops_from_expr(lhs, loops)?;
-                self.hoist_loops_from_expr(rhs, loops)?;
-            }
-        }
-        Ok(())
     }
 
     /// Compile statements within loops (similar to interpreter's eval_stmts_in_loop)
@@ -2558,19 +2361,7 @@ impl<'a> Compiler<'a> {
         let current_loop = &loops[0];
         let remaining_loops = &loops[1..];
 
-
         match current_loop.loop_type {
-            LoopType::SomeIn => {
-                // Compile SomeIn loop with remaining statements as body
-                self.compile_some_in_loop_with_remaining_statements(
-                    &current_loop.key,
-                    &current_loop.value,
-                    &current_loop.collection,
-                    stmts,
-                    remaining_loops,
-                )?;
-                Ok(())
-            }
             LoopType::IndexIteration => {
                 // Compile index iteration loop
                 self.compile_index_iteration_loop(
@@ -2583,6 +2374,9 @@ impl<'a> Compiler<'a> {
                 )?;
                 Ok(())
             }
+            LoopType::Walk => Err(CompilerError::General {
+                message: "walk loops are not yet supported in the RVM compiler".to_string(),
+            }),
         }
     }
 
@@ -2610,21 +2404,17 @@ impl<'a> Compiler<'a> {
                 // Loops already hoisted, emit context yield
                 self.emit_context_yield()
             } else {
-                // Need to hoist loops from key/value expressions first
                 let mut key_value_loops = Vec::new();
 
-                // Clone expressions to avoid borrowing issues
                 let key_expr = context.key_expr.clone();
                 let value_expr = context.value_expr.clone();
 
-                // Collect loops from key expression
-                if let Some(ref expr) = key_expr {
-                    self.hoist_loops_from_expr(expr, &mut key_value_loops)?;
+                if let Some(expr) = key_expr.as_ref() {
+                    key_value_loops.extend(self.get_expr_loops(expr));
                 }
 
-                // Collect loops from value expression
-                if let Some(ref expr) = value_expr {
-                    self.hoist_loops_from_expr(expr, &mut key_value_loops)?;
+                if let Some(expr) = value_expr.as_ref() {
+                    key_value_loops.extend(self.get_expr_loops(expr));
                 }
 
                 if !key_value_loops.is_empty() {
@@ -2656,7 +2446,6 @@ impl<'a> Compiler<'a> {
         query: &crate::ast::Query,
         span: &crate::lexer::Span,
     ) -> Result<()> {
-
         // Compile the domain expression
         let collection_reg = self.compile_rego_expr(domain)?;
 
@@ -2676,7 +2465,6 @@ impl<'a> Compiler<'a> {
             } else {
                 key_reg
             };
-
 
         // Generate loop start instruction for Every mode
         let loop_params_index = self.program.add_loop_params(LoopStartParams {
@@ -2718,7 +2506,6 @@ impl<'a> Compiler<'a> {
             self.add_variable(key_name, key_reg);
         }
 
-
         // Compile the query body using standard query compilation
         // Note: compile_query will push/pop its own additional scope
         self.compile_query(query)?;
@@ -2754,7 +2541,6 @@ impl<'a> Compiler<'a> {
         {
             *end = loop_end;
         }
-
 
         Ok(())
     }
@@ -2824,7 +2610,6 @@ impl<'a> Compiler<'a> {
         remaining_stmts: &[&crate::ast::LiteralStmt],
         remaining_loops: &[HoistedLoop],
     ) -> Result<()> {
-
         // Compile the collection expression
         let collection_reg = self.compile_rego_expr(collection)?;
 
@@ -2837,34 +2622,38 @@ impl<'a> Compiler<'a> {
             self.loop_expr_register_map
                 .insert(loop_expr.clone(), value_reg);
         }
+        let mut key_binding_plan: Option<(BindingPlan, Span)> = None;
         if let Some(key_var) = key_var {
-            // Store loop variable in scope (extract variable name from key_var)
-            match key_var.as_ref() {
-                crate::ast::Expr::Var { value, .. } => {
-                    let var_name = match value {
-                        Value::String(s) => {
-                            if s.as_ref() == "_" {
-                                // For underscore, we'll use the value (array element), not the index
-                                "".to_string() // Will be handled specially
-                            } else {
-                                s.to_string()
-                            }
-                        }
-                        _ => value.to_string(),
-                    };
-                    if !var_name.is_empty() && var_name != "_" {
-                        self.store_variable(var_name, key_reg);
-                    }
+            if let Some(binding_plan) = self.get_binding_plan_for_expr(key_var) {
+                if let BindingPlan::LoopIndex { .. } = &binding_plan {
+                    key_binding_plan = Some((binding_plan, key_var.span().clone()));
+                } else {
+                    return Err(CompilerError::UnexpectedBindingPlan {
+                        context: format!("loop index pattern {}", key_var.span().text()),
+                        found: format!("{binding_plan:?}"),
+                    });
                 }
-                _ => {
-                    // Destructuring pattern in iteration: [a, b][_] in collection
-                    if let Err(_err) = self.compile_destructuring_pattern(
-                        key_var,
-                        key_reg,
-                        DestructuringContext::SomeInLoop,
-                        key_var.span(),
-                    ) {
-                        return Err(CompilerError::InvalidDestructuringPattern);
+            } else {
+                match key_var.as_ref() {
+                    crate::ast::Expr::Var { value, .. } => {
+                        let var_name = match value {
+                            Value::String(s) => {
+                                if s.as_ref() == "_" {
+                                    "".to_string()
+                                } else {
+                                    s.to_string()
+                                }
+                            }
+                            _ => value.to_string(),
+                        };
+                        if !var_name.is_empty() && var_name != "_" {
+                            self.store_variable(var_name, key_reg);
+                        }
+                    }
+                    _ => {
+                        return Err(CompilerError::MissingBindingPlan {
+                            context: format!("loop index pattern {}", key_var.span().text()),
+                        });
                     }
                 }
             }
@@ -2889,6 +2678,11 @@ impl<'a> Compiler<'a> {
         );
 
         let body_start = self.program.instructions.len() as u16;
+
+        if let Some((binding_plan, plan_span)) = key_binding_plan.as_ref() {
+            self.apply_binding_plan(binding_plan, key_reg, plan_span)
+                .map_err(CompilerError::from)?;
+        }
 
         // Include the first statement as part of the loop body, then compile remaining statements.
         let body_stmts = &remaining_stmts[0..];
@@ -2924,7 +2718,6 @@ impl<'a> Compiler<'a> {
             *end = loop_end;
         }
 
-
         Ok(())
     }
 
@@ -2935,7 +2728,6 @@ impl<'a> Compiler<'a> {
         value: &ExprRef,
         collection: &ExprRef,
         remaining_stmts: &[&crate::ast::LiteralStmt],
-        _remaining_loops: &[HoistedLoop],
     ) -> Result<Register> {
         // Use the existing compile_some_in_loop_with_body method but with proper statement handling
         // Skip the first statement (which is the SomeIn) and use the rest as loop body
@@ -2944,22 +2736,6 @@ impl<'a> Compiler<'a> {
             self.compile_some_in_loop_with_body(key, value, collection, loop_body_stmts)?;
         Ok(result_reg)
     }
-}
-
-/// Helper types for loop hoisting
-#[derive(Debug, Clone)]
-struct HoistedLoop {
-    loop_expr: Option<ExprRef>,
-    key: Option<ExprRef>,
-    value: ExprRef,
-    collection: ExprRef,
-    loop_type: LoopType,
-}
-
-#[derive(Debug, Clone)]
-enum LoopType {
-    SomeIn,
-    IndexIteration,
 }
 
 impl<'a> Compiler<'a> {
@@ -3000,47 +2776,56 @@ impl<'a> Compiler<'a> {
         // Calculate body_start after adding LoopStart instruction
         let body_start = self.program.instructions.len() as u16;
 
-        // Store loop variables in scope for body compilation
-        if let Some(key_expr) = key {
-            match key_expr.as_ref() {
-                crate::ast::Expr::Var {
-                    value: var_name, ..
-                } => {
-                    // Simple key variable: some k, v in collection
-                    let var_name = var_name.as_string()?.to_string();
-                    self.store_variable(var_name, key_reg);
-                }
-                _ => {
-                    // Destructuring key pattern: some [a, b], v in collection
-                    if let Err(_err) = self.compile_destructuring_pattern(
-                        key_expr,
-                        key_reg,
-                        DestructuringContext::SomeInLoop,
-                        key_expr.span(),
-                    ) {
-                        return Err(CompilerError::InvalidDestructuringPattern);
+        if let Some(binding_plan) = self.get_binding_plan_for_expr(collection) {
+            if let BindingPlan::SomeIn {
+                key_plan,
+                value_plan,
+                ..
+            } = &binding_plan
+            {
+                let key_register = key_plan.as_ref().map(|_| key_reg);
+                self.apply_some_in_binding_plan(
+                    key_plan.as_ref(),
+                    key_register,
+                    value_plan,
+                    value_reg,
+                    collection.span(),
+                )
+                .map_err(CompilerError::from)?;
+            } else {
+                return Err(CompilerError::UnexpectedBindingPlan {
+                    context: format!("some-in binding {}", collection.span().text()),
+                    found: format!("{binding_plan:?}"),
+                });
+            }
+        } else {
+            if let Some(key_expr) = key {
+                match key_expr.as_ref() {
+                    crate::ast::Expr::Var {
+                        value: var_name, ..
+                    } => {
+                        let var_name = var_name.as_string()?.to_string();
+                        self.store_variable(var_name, key_reg);
+                    }
+                    _ => {
+                        return Err(CompilerError::MissingBindingPlan {
+                            context: format!("some-in key pattern {}", key_expr.span().text()),
+                        });
                     }
                 }
             }
-        }
 
-        match value.as_ref() {
-            crate::ast::Expr::Var {
-                value: var_name, ..
-            } => {
-                // Simple value variable: some k, v in collection
-                let var_name = var_name.as_string()?.to_string();
-                self.store_variable(var_name, value_reg);
-            }
-            _ => {
-                // Destructuring value pattern: some k, [x, y] in collection
-                if let Err(_err) = self.compile_destructuring_pattern(
-                    value,
-                    value_reg,
-                    DestructuringContext::SomeInLoop,
-                    value.span(),
-                ) {
-                    return Err(CompilerError::InvalidDestructuringPattern);
+            match value.as_ref() {
+                crate::ast::Expr::Var {
+                    value: var_name, ..
+                } => {
+                    let var_name = var_name.as_string()?.to_string();
+                    self.store_variable(var_name, value_reg);
+                }
+                _ => {
+                    return Err(CompilerError::MissingBindingPlan {
+                        context: format!("some-in value pattern {}", value.span().text()),
+                    });
                 }
             }
         }
@@ -3077,16 +2862,13 @@ impl<'a> Compiler<'a> {
             *end = loop_end;
         }
 
-
         #[cfg(feature = "rvm-debug")]
         {
             // Debug: Print all instructions generated for this loop
-            for (i, instr) in self.program.instructions.iter().enumerate() {
-            }
+            for (i, instr) in self.program.instructions.iter().enumerate() {}
 
             // Debug: Print literals table
-            for (i, literal) in self.program.literals.iter().enumerate() {
-            }
+            for (i, literal) in self.program.literals.iter().enumerate() {}
         }
 
         Ok(result_reg)
@@ -3102,7 +2884,6 @@ impl<'a> Compiler<'a> {
         query: &crate::ast::Query,
         span: &Span,
     ) -> Result<Register> {
-
         // Allocate result register and initialize comprehension
         let result_reg = self.alloc_register();
 
@@ -3275,7 +3056,6 @@ impl<'a> Compiler<'a> {
             // Emit the FunctionCall instruction
             self.emit_instruction(Instruction::FunctionCall { params_index }, &span);
         } else if self.is_builtin(&original_fcn_path) {
-
             // Get builtin index
             let builtin_index = self.get_builtin_index(&original_fcn_path)?;
 
@@ -3297,7 +3077,6 @@ impl<'a> Compiler<'a> {
 
             // Emit the BuiltinCall instruction
             self.emit_instruction(Instruction::BuiltinCall { params_index }, &span);
-
         } else {
             return Err(CompilerError::UnknownFunction {
                 name: original_fcn_path.to_string(),
@@ -3321,14 +3100,12 @@ impl<'a> Compiler<'a> {
         match interpreter.eval_default_rule_for_compiler(rule_path) {
             Ok(computed_value) => {
                 if computed_value != Value::Undefined {
-
                     // Add the computed value to the literal table
                     let literal_index = self.add_literal(computed_value);
                     return Some(literal_index);
                 }
             }
-            Err(_e) => {
-            }
+            Err(_e) => {}
         }
 
         None
@@ -3336,28 +3113,6 @@ impl<'a> Compiler<'a> {
 
     /// Extract destructuring block entry points from the compiled patterns
     fn extract_destructuring_blocks(&self, rule_index: u16) -> Vec<Option<u32>> {
-        let destructuring_patterns =
-            &self.rule_definition_destructuring_patterns[rule_index as usize];
-        let mut destructuring_blocks = Vec::new();
-
-        for patterns_opt in destructuring_patterns.iter() {
-            match patterns_opt {
-                Some(patterns) => {
-                    if patterns.is_empty() {
-                        destructuring_blocks.push(None);
-                    } else {
-                        // Use the first destructuring block entry point for this definition
-                        // All parameters in a definition share the same destructuring block
-                        destructuring_blocks.push(Some(patterns[0].0 as u32));
-                    }
-                }
-                None => {
-                    // No destructuring patterns for this definition
-                    destructuring_blocks.push(None);
-                }
-            }
-        }
-
-        destructuring_blocks
+        self.rule_definition_destructuring_patterns[rule_index as usize].clone()
     }
 }

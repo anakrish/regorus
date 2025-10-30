@@ -129,7 +129,7 @@ cases:
           result := [a, b]
         }
     query: data.test.main
-    want_error: "Invalid destructuring pattern"
+    want_error: "assignment operator := requires left-hand side to have bindable variables"
     allow_interpreter_success: true
 
   # Set destructuring in function parameters should error
@@ -141,7 +141,7 @@ cases:
         has_element({x, y}, elem) := elem in {x, y}
         main := has_element({10, 20}, 20)
     query: data.test.main
-    want_error: "Invalid destructuring pattern"
+    want_error: "failed to create parameter destructuring plan"
     allow_interpreter_success: true
 
   # Set destructuring in equals assignment should error
@@ -156,7 +156,7 @@ cases:
           result := [x, y]
         }
     query: data.test.main
-    want_error: "Invalid destructuring pattern"
+    want_error: "failed to create assignment left-hand side destructuring plan"
     allow_interpreter_success: true
 
   # Option 2: Function parameter destructuring with multiple definitions and definition-level failure

@@ -706,7 +706,10 @@ fn format_instruction_readable(
                     crate::rvm::instructions::ComprehensionMode::Object => "object",
                 };
                 let (source_desc, result_desc) = if params.collection_reg == params.result_reg {
-                    (format!("r{}", params.collection_reg), format!("r{}", params.result_reg))
+                    (
+                        format!("r{}", params.collection_reg),
+                        format!("r{}", params.result_reg),
+                    )
                 } else {
                     (
                         format!("r{} (src)", params.collection_reg),
@@ -715,12 +718,7 @@ fn format_instruction_readable(
                 };
                 let base = format!(
                     "{}CompBegin   {} {} → {} k:{} v:{} {{",
-                    indent,
-                    mode_str,
-                    source_desc,
-                    result_desc,
-                    params.key_reg,
-                    params.value_reg
+                    indent, mode_str, source_desc, result_desc, params.key_reg, params.value_reg
                 );
                 let comment = format!(
                     "{} comprehension in r{}, body: {}-{} (P{})",

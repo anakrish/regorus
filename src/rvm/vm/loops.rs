@@ -27,7 +27,6 @@ enum LoopAction {
 
 impl RegoVM {
     pub(super) fn execute_loop_start(&mut self, mode: &LoopMode, params: LoopParams) -> Result<()> {
-
         let initial_result = match mode {
             LoopMode::Any | LoopMode::Every | LoopMode::ForEach => Value::Bool(false),
         };
@@ -172,7 +171,8 @@ impl RegoVM {
 
                 self.registers[loop_ctx.result_reg as usize] = final_result;
 
-                self.pc = loop_end as usize - 1;            }
+                self.pc = loop_end as usize - 1;
+            }
 
             Ok(())
         } else {
@@ -326,16 +326,19 @@ impl RegoVM {
                         loop_ctx_mut.current_iteration_failed = true;
                     }
 
-                    self.pc = loop_next_pc as usize - 1;                }
+                    self.pc = loop_next_pc as usize - 1;
+                }
                 LoopMode::Every => {
                     self.loop_stack.pop();
                     self.pc = loop_end as usize - 1;
-                    self.registers[result_reg as usize] = Value::Bool(false);                }
+                    self.registers[result_reg as usize] = Value::Bool(false);
+                }
                 _ => {
                     if let Some(loop_ctx_mut) = self.loop_stack.last_mut() {
                         loop_ctx_mut.current_iteration_failed = true;
                     }
-                    self.pc = loop_next_pc as usize - 1;                }
+                    self.pc = loop_next_pc as usize - 1;
+                }
             }
         } else {
             return Err(VmError::AssertionFailed);

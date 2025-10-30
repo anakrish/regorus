@@ -696,8 +696,11 @@ Actual: {}",
 
         for file in test_files {
             if std::path::Path::new(file).exists() {
-                std::println!("
-🔍 Searching in file: {}", file);
+                std::println!(
+                    "
+🔍 Searching in file: {}",
+                    file
+                );
                 if let Err(e) = yaml_test_impl(file) {
                     std::println!("❌ Error in file {}: {}", file, e);
                 }

@@ -151,7 +151,8 @@ impl RegoVM {
         if !is_function_rule {
             let (computed, cached_result) = &self.rule_cache[rule_idx];
             if *computed {
-                self.registers[dest as usize] = cached_result.clone();                return Ok(());
+                self.registers[dest as usize] = cached_result.clone();
+                return Ok(());
             }
         }
 
@@ -163,7 +164,8 @@ impl RegoVM {
             if !is_function_rule {
                 self.rule_cache[rule_idx] = (true, result.clone());
             }
-            self.registers[dest as usize] = result;            return Ok(());
+            self.registers[dest as usize] = result;
+            return Ok(());
         }
 
         self.call_rule_stack.push(CallRuleContext {

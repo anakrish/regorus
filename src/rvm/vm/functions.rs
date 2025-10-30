@@ -9,7 +9,6 @@ use super::machine::RegoVM;
 
 impl RegoVM {
     pub(super) fn execute_function_call(&mut self, params_index: u16) -> Result<()> {
-
         let params =
             self.program.instruction_data.function_call_params[params_index as usize].clone();
         let result =

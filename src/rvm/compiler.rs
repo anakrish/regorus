@@ -78,8 +78,12 @@ fn parse_reference_chain(expr: &ExprRef) -> Result<ReferenceChain> {
                 return Ok(ReferenceChain { root, components });
             }
             Expr::RefDot { refr, field, .. } => {
-                // Static field access
-                components.push(AccessComponent::Field(field.0.text().to_string()));
+                // Static field access – tolerate missing field metadata
+                if let Some((span, _)) = field.as_ref() {
+                    components.push(AccessComponent::Field(span.text().to_string()));
+                } else {
+                    return Err(CompilerError::UnsupportedChainedExpression);
+                }
                 current_expr = refr;
             }
             Expr::RefBrack { refr, index, .. } => {

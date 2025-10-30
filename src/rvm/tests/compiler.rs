@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 #[cfg(test)]
 mod tests {
     //! RVM (Regorus Virtual Machine) test suite
@@ -8,7 +11,7 @@ mod tests {
     //! Set TEST_CASE_FILTER=pattern to run specific test cases
 
     use crate::rvm::compiler::Compiler;
-    use crate::rvm::test_utils::test_round_trip_serialization;
+    use crate::rvm::tests::test_utils::test_round_trip_serialization;
     use crate::rvm::vm::RegoVM;
     use crate::tests::common::{check_output, value_or_vec_to_vec, YamlTest};
     use crate::value::Value;
@@ -117,9 +120,9 @@ mod tests {
         std::println!("Debug: Round-trip serialization test passed");
 
         // Use proper assembly listing format
-        let assembly_listing = crate::rvm::assembly_listing::generate_assembly_listing(
+        let assembly_listing = crate::rvm::program::generate_assembly_listing(
             &program,
-            &crate::rvm::assembly_listing::AssemblyListingConfig::default(),
+            &crate::rvm::program::AssemblyListingConfig::default(),
         );
         std::println!("{}", assembly_listing);
 
@@ -300,7 +303,9 @@ mod tests {
                         continue;
                     } else {
                         panic!(
-                            "RVM compilation error does not match expected for case '{}':\nExpected: '{}'\nActual: '{}'",
+                            "RVM compilation error does not match expected for case '{}':
+Expected: '{}'
+Actual: '{}'",
                             case.note, expected_error, error_str
                         );
                     }
@@ -433,7 +438,9 @@ mod tests {
                                     if actual_result != *interpreter_value {
                                         // Mismatch detected!
                                         std::println!(
-                                            "🔍 RVM result does not match interpreter result for case '{}':\nRVM result: {:?}\nInterpreter result: {:?}",
+                                            "🔍 RVM result does not match interpreter result for case '{}':
+RVM result: {:?}
+Interpreter result: {:?}",
                                             case.note, actual_result, interpreter_value
                                         );
 
@@ -464,12 +471,16 @@ mod tests {
                                         // Check if this is an allowed interpreter incorrect behavior case
                                         if case.allow_interpreter_incorrect_behavior == Some(true) {
                                             std::println!(
-                                                "✓ RVM result differs from interpreter for case '{}' (interpreter incorrect behavior allowed):\nRVM result: {:?}\nInterpreter result: {:?}",
+                                                "✓ RVM result differs from interpreter for case '{}' (interpreter incorrect behavior allowed):
+RVM result: {:?}
+Interpreter result: {:?}",
                                                 case.note, actual_result, interpreter_value
                                             );
                                         } else {
                                             panic!(
-                                                "RVM result does not match interpreter result for case '{}':\nRVM result: {:?}\nInterpreter result: {:?}",
+                                                "RVM result does not match interpreter result for case '{}':
+RVM result: {:?}
+Interpreter result: {:?}",
                                                 case.note, actual_result, interpreter_value
                                             );
                                         }
@@ -482,7 +493,9 @@ mod tests {
                                 }
                                 Err(interpreter_error) => {
                                     panic!(
-                                        "Interpreter failed for case '{}' but RVM succeeded:\nRVM result: {:?}\nInterpreter error: {}",
+                                        "Interpreter failed for case '{}' but RVM succeeded:
+RVM result: {:?}
+Interpreter error: {}",
                                         case.note, actual_result, interpreter_error
                                     );
                                 }
@@ -508,7 +521,9 @@ mod tests {
                                         );
                                     } else {
                                         panic!(
-                                            "RVM failed for case '{}' but interpreter succeeded:\nRVM error: {}\nInterpreter result: {:?}",
+                                            "RVM failed for case '{}' but interpreter succeeded:
+RVM error: {}
+Interpreter result: {:?}",
                                             case.note, e, interpreter_value
                                         );
                                     }
@@ -516,7 +531,8 @@ mod tests {
                                 Err(_interpreter_error) => {
                                     // Both failed - this could be expected, but for success cases it's not
                                     panic!(
-                                        "Test case '{}' expected success but both RVM and interpreter failed:\nRVM error: {}",
+                                        "Test case '{}' expected success but both RVM and interpreter failed:
+RVM error: {}",
                                         case.note, e
                                     );
                                 }
@@ -549,7 +565,9 @@ mod tests {
                                 Ok(interpreter_value) => {
                                     // Both succeeded, but test expected error
                                     panic!(
-                                        "Test case '{}' expected error '{}' but both RVM and interpreter succeeded:\nRVM result: {}\nInterpreter result: {:?}",
+                                        "Test case '{}' expected error '{}' but both RVM and interpreter succeeded:
+RVM result: {}
+Interpreter result: {:?}",
                                         case.note,
                                         expected_error,
                                         serde_json::to_string_pretty(&result)?,
@@ -558,7 +576,8 @@ mod tests {
                                 }
                                 Err(_interpreter_error) => {
                                     panic!(
-                                        "Test case '{}' expected error '{}' but RVM succeeded while interpreter failed:\nRVM result: {}",
+                                        "Test case '{}' expected error '{}' but RVM succeeded while interpreter failed:
+RVM result: {}",
                                         case.note,
                                         expected_error,
                                         serde_json::to_string_pretty(&result)?
@@ -576,7 +595,9 @@ mod tests {
                                         let actual_error_str = actual_error.to_string();
                                         if !actual_error_str.contains(expected_error) {
                                             panic!(
-                                                "Error message mismatch for case '{}':\nExpected to contain: {}\nActual: {}",
+                                                "Error message mismatch for case '{}':
+Expected to contain: {}
+Actual: {}",
                                                 case.note, expected_error, actual_error_str
                                             );
                                         }
@@ -586,7 +607,9 @@ mod tests {
                                         );
                                     } else {
                                         panic!(
-                                            "RVM failed for case '{}' but interpreter succeeded:\nRVM error: {}\nInterpreter result: {:?}",
+                                            "RVM failed for case '{}' but interpreter succeeded:
+RVM error: {}
+Interpreter result: {:?}",
                                             case.note, actual_error, interpreter_value
                                         );
                                     }
@@ -596,7 +619,9 @@ mod tests {
                                     let actual_error_str = actual_error.to_string();
                                     if !actual_error_str.contains(expected_error) {
                                         panic!(
-                                            "Error message mismatch for case '{}':\nExpected to contain: {}\nActual: {}",
+                                            "Error message mismatch for case '{}':
+Expected to contain: {}
+Actual: {}",
                                             case.note, expected_error, actual_error_str
                                         );
                                     }
@@ -671,7 +696,8 @@ mod tests {
 
         for file in test_files {
             if std::path::Path::new(file).exists() {
-                std::println!("\n🔍 Searching in file: {}", file);
+                std::println!("
+🔍 Searching in file: {}", file);
                 if let Err(e) = yaml_test_impl(file) {
                     std::println!("❌ Error in file {}: {}", file, e);
                 }

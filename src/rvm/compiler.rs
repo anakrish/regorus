@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 use super::instructions::{
     ArrayCreateParams, ChainedIndexParams, ComprehensionBeginParams, ComprehensionMode,
     LiteralOrRegister, LoopMode, LoopStartParams, ObjectCreateParams, SetCreateParams,
@@ -13,7 +16,6 @@ use crate::interpreter::Interpreter;
 use crate::lexer::Span;
 use crate::rvm::program::RuleType;
 use crate::rvm::program::SpanInfo;
-use crate::rvm::tracing_utils::{debug, info, span};
 use crate::utils::get_path_string;
 use crate::Map;
 use crate::{CompiledPolicy, Value};
@@ -349,10 +351,6 @@ impl<'a> Compiler<'a> {
         self.builtin_index_map
             .insert(builtin_name.to_string(), index);
 
-        debug!(
-            "Assigned builtin index {} to '{}' (num_args={})",
-            index, builtin_name, num_args
-        );
         Ok(index)
     }
 
@@ -370,10 +368,6 @@ impl<'a> Compiler<'a> {
 
         // Debug logging for register allocation tracking
         if self.register_counter > 200 {
-            debug!(
-                "High register usage - allocated register {}, approaching 256 limit",
-                reg
-            );
         }
 
         reg
@@ -922,17 +916,12 @@ impl<'a> Compiler<'a> {
     /// Store a variable mapping (backward compatibility)
     /// Look up a variable, first in local scope, then as a rule reference
     fn resolve_variable(&mut self, var_name: &str, span: &Span) -> Result<Register> {
-        debug!("resolve_variable called for '{}'", var_name);
 
         // Handle special built-in variables first
         match var_name {
             "input" => {
                 // Check if input is already loaded in current rule definition
                 if let Some(register) = self.current_input_register {
-                    debug!(
-                        "Variable 'input' already loaded in register {} for current rule definition",
-                        register
-                    );
                     return Ok(register);
                 }
 
@@ -940,19 +929,11 @@ impl<'a> Compiler<'a> {
                 let dest = self.alloc_register();
                 self.emit_instruction(Instruction::LoadInput { dest }, span);
                 self.current_input_register = Some(dest);
-                debug!(
-                    "Variable 'input' resolved to LoadInput instruction, register {} (first load in rule definition)",
-                    dest
-                );
                 return Ok(dest);
             }
             "data" => {
                 // Check if data is already loaded in current rule definition
                 if let Some(register) = self.current_data_register {
-                    debug!(
-                        "Variable 'data' already loaded in register {} for current rule definition",
-                        register
-                    );
                     return Ok(register);
                 }
 
@@ -962,10 +943,6 @@ impl<'a> Compiler<'a> {
                 let dest = self.alloc_register();
                 self.emit_instruction(Instruction::LoadData { dest }, span);
                 self.current_data_register = Some(dest);
-                debug!(
-                    "Variable 'data' resolved to LoadData instruction, register {} (first load in rule definition)",
-                    dest
-                );
                 return Ok(dest);
             }
             _ => {
@@ -975,17 +952,9 @@ impl<'a> Compiler<'a> {
 
         // First check local variables
         if let Some(var_reg) = self.lookup_variable(var_name) {
-            debug!(
-                "Variable '{}' found in local scope at register {}",
-                var_name, var_reg
-            );
             return Ok(var_reg);
         }
 
-        debug!(
-            "Variable '{}' not found in local scope, checking rules",
-            var_name
-        );
 
         let rule_path = format!("{}.{}", &self.current_package, var_name);
 
@@ -1020,13 +989,8 @@ impl<'a> Compiler<'a> {
                         },
                         _ => RuleType::Complete,
                     };
-                    debug!(
-                        "Rule '{}' head type: {:?}, is_set: {:?}",
-                        rule_path, head, result
-                    );
                     result
                 } else {
-                    debug!("Rule '{}' is not a Spec rule", rule_path);
                     RuleType::Complete
                 }
             })
@@ -1097,13 +1061,11 @@ impl<'a> Compiler<'a> {
                 self.rule_result_registers.push(0); // Default to register 0
             }
 
-            debug!("Assigned rule index {} to '{}'", index, rule_path);
             Ok(index)
         }
     }
 
     fn store_variable(&mut self, var_name: String, register: Register) {
-        debug!("Storing variable '{}' in register {}", var_name, register);
         self.add_variable(&var_name, register);
     }
 
@@ -1145,14 +1107,12 @@ impl<'a> Compiler<'a> {
             for policy_rule in &module.policy {
                 let policy_rule_ptr = policy_rule.as_ref() as *const Rule;
                 if policy_rule_ptr == rule_ptr {
-                    debug!("Found rule in module index: {}", module_idx);
                     return Ok(module_idx as u32);
                 }
             }
         }
 
         // If we can't find the module, default to 0
-        debug!("Could not find module for rule, defaulting to module index 0");
         Ok(0)
     }
 
@@ -1181,10 +1141,6 @@ impl<'a> Compiler<'a> {
                                         e
                                     ),
                                 })?;
-                            debug!(
-                                "Found rule '{}' in module {} with package '{}'",
-                                rule_path, module_index, package_path
-                            );
                             return Ok((package_path, module_index as u32));
                         }
                     }
@@ -1193,10 +1149,6 @@ impl<'a> Compiler<'a> {
         }
 
         // Fallback: extract package from rule path if we can't find the module
-        debug!(
-            "Could not find module for rule '{}', falling back to path extraction",
-            rule_path
-        );
         let package = if let Some(last_dot) = rule_path.rfind('.') {
             rule_path[..last_dot].to_string()
         } else {
@@ -1327,35 +1279,6 @@ impl<'a> Compiler<'a> {
 
         self.program.rule_infos = rule_infos_map.into_values().collect();
 
-        // Debug: Print rule definitions
-        #[cfg(feature = "rvm-tracing")]
-        {
-            debug!("Rule definitions in program:");
-            for (rule_idx, rule_info) in self.program.rule_infos.iter().enumerate() {
-                let function_info = match &rule_info.function_info {
-                    Some(func_info) => format!(
-                        " (function with {} params: {:?})",
-                        func_info.num_params, func_info.param_names
-                    ),
-                    None => String::new(),
-                };
-                debug!(
-                    "  Rule {}: {} definitions{}",
-                    rule_idx,
-                    rule_info.definitions.len(),
-                    function_info
-                );
-                for (def_idx, bodies) in rule_info.definitions.iter().enumerate() {
-                    debug!(
-                        "    Definition {}: {} bodies at entry points {:?}",
-                        def_idx,
-                        bodies.len(),
-                        bodies
-                    );
-                }
-            }
-        }
-
         // Extract source contents from the policy modules and add them to the program
         for module in self.policy.get_modules().iter() {
             let source = &module.package.refr.span().source;
@@ -1370,24 +1293,10 @@ impl<'a> Compiler<'a> {
         // Transfer entry points to program
         self.program.entry_points = self.entry_points;
 
-        debug!(
-            "Final program has {} instructions, {} rule infos",
-            self.program.instructions.len(),
-            self.program.rule_infos.len()
-        );
-        debug!("Program requires {} registers", self.program.num_registers);
-        debug!(
-            "Program has {} entry points",
-            self.program.entry_points.len()
-        );
 
         // Initialize resolved builtins if we have builtin info
         if !self.program.builtin_info_table.is_empty() {
             self.program.initialize_resolved_builtins()?;
-            debug!(
-                "Initialized {} resolved builtins",
-                self.program.resolved_builtins.len()
-            );
         }
 
         Ok(self.program)
@@ -1407,7 +1316,6 @@ impl<'a> Compiler<'a> {
     ) -> Result<Register> {
         // TODO: If expr is a loop expr or a loop var, look up.
         if let Some(reg) = self.loop_expr_register_map.get(expr).cloned() {
-            debug!("Found loop expression in map, using register {}", reg);
             let result_reg = reg;
             // If this expression should be asserted as a condition, emit AssertCondition
             if assert_condition {
@@ -1732,10 +1640,6 @@ impl<'a> Compiler<'a> {
                         );
 
                         // Store the variable binding to the NEW register
-                        debug!(
-                            "Assignment '{}' {:?} value from register {} to new register {}",
-                            var_name, op, rhs_reg, lhs_reg
-                        );
                         self.add_variable(var_name.as_ref(), lhs_reg);
 
                         // Return the register containing the assigned value
@@ -1765,7 +1669,6 @@ impl<'a> Compiler<'a> {
             Expr::Var { value, .. } => {
                 // Check if this is a variable reference that we should resolve
                 if let Value::String(_var_name) = value {
-                    debug!("Using chained reference compilation for variable");
                     self.compile_chained_ref(expr, span)?
                 } else {
                     // Otherwise, load as literal value
@@ -1777,11 +1680,9 @@ impl<'a> Compiler<'a> {
             }
             // Use sophisticated chained reference compilation
             Expr::RefDot { .. } => {
-                debug!("Using chained reference compilation for RefDot");
                 self.compile_chained_ref(expr, span)?
             }
             Expr::RefBrack { .. } => {
-                debug!("Using chained reference compilation for RefBrack");
                 self.compile_chained_ref(expr, span)?
             }
             Expr::Membership {
@@ -1808,17 +1709,14 @@ impl<'a> Compiler<'a> {
                 dest
             }
             Expr::ArrayCompr { term, query, .. } => {
-                debug!("Compiling array comprehension");
                 self.compile_array_comprehension(term, query, span)?
             }
             Expr::SetCompr { term, query, .. } => {
-                debug!("Compiling set comprehension");
                 self.compile_set_comprehension(term, query, span)?
             }
             Expr::ObjectCompr {
                 key, value, query, ..
             } => {
-                debug!("Compiling object comprehension");
                 self.compile_object_comprehension(key, value, query, span)?
             }
             Expr::Call { fcn, params, .. } => {
@@ -1943,35 +1841,15 @@ impl<'a> Compiler<'a> {
         policy: &CompiledPolicy,
         entry_points: &[&str],
     ) -> Result<Arc<Program>> {
-        let _span = span!(
-            tracing::Level::INFO,
-            "compile_from_policy",
-            entry_points = ?entry_points
-        );
-        info!("Starting compilation for entry points: {:?}", entry_points);
-
         let mut compiler = Compiler::with_policy(policy);
         compiler.current_rule_path = "".to_string(); // Entry point has no caller
         let rules = policy.get_rules();
-
-        #[cfg(feature = "rvm-tracing")]
-        {
-            debug!("Available rules in policy:");
-            for (key, rule_list) in rules.iter() {
-                debug!("  Rule key: '{}' ({} variants)", key, rule_list.len());
-            }
-            debug!("Looking for entry points: {:?}", entry_points);
-        }
 
         // Emit CallRule instructions for each entry point and track their instruction indices
         for &entry_point_name in entry_points {
             let instruction_index = compiler.program.instructions.len();
             let result_reg = compiler.alloc_register();
             let rule_idx = compiler.get_or_assign_rule_index(entry_point_name)?;
-            debug!(
-                "Assigned rule index {} for entry point '{}'",
-                rule_idx, entry_point_name
-            );
             compiler
                 .entry_points
                 .insert(entry_point_name.to_string(), instruction_index);
@@ -1981,17 +1859,9 @@ impl<'a> Compiler<'a> {
             compiler.emit_return(result_reg);
         }
 
-        info!(
-            "Starting worklist compilation for {} rule groups",
-            rules.len()
-        );
         compiler.compile_worklist_rules(rules)?;
 
         let program = Arc::new(compiler.finish()?);
-        info!(
-            "Compilation completed successfully, program has {} instructions",
-            program.instructions.len()
-        );
         Ok(program)
     }
 
@@ -1999,12 +1869,6 @@ impl<'a> Compiler<'a> {
         &mut self,
         rules: &Map<String, Vec<crate::ast::NodeRef<Rule>>>,
     ) -> Result<()> {
-        let _span = span!(tracing::Level::DEBUG, "compile_worklist_rules");
-        debug!(
-            "Starting worklist compilation with {} rules in worklist",
-            self.rule_worklist.len()
-        );
-
         // Track compiled rules to avoid recompilation
         let mut compiled_rules = BTreeSet::new();
         let mut call_stack = Vec::new(); // Track current call stack for recursion detection
@@ -2045,7 +1909,6 @@ impl<'a> Compiler<'a> {
 
             // Skip if already compiled
             if compiled_rules.contains(&entry.rule_path) {
-                debug!("Skipping already compiled rule: '{}'", entry.rule_path);
                 continue;
             }
 
@@ -2061,7 +1924,6 @@ impl<'a> Compiler<'a> {
             // Add to call stack
             call_stack.push(entry.rule_path.clone());
 
-            debug!("Compiling worklist rule: '{}'", entry.rule_path);
 
             // Set current rule context for tracking caller context
             let old_rule_path = self.current_rule_path.clone();
@@ -2082,7 +1944,6 @@ impl<'a> Compiler<'a> {
             result?;
             compiled_rules.insert(entry.rule_path);
         }
-        debug!("Worklist compilation completed");
         Ok(())
     }
 
@@ -2092,13 +1953,6 @@ impl<'a> Compiler<'a> {
         rule_path: &str,
         rules: &Map<String, Vec<crate::ast::NodeRef<Rule>>>,
     ) -> Result<()> {
-        /*let _span = span!(
-            tracing::Level::DEBUG,
-            "compile_worklist_rule",
-            rule_path = rule_path
-        );*/
-        debug!("Starting compilation of worklist rule: '{}'", rule_path);
-
         // Find the module that contains this rule and use its package and index
         let (module_package, module_index) =
             self.find_module_package_and_index_for_rule(rule_path, rules)?;
@@ -2108,10 +1962,6 @@ impl<'a> Compiler<'a> {
         let saved_module_index = self.current_module_index;
         self.current_package = module_package.clone();
         self.current_module_index = module_index;
-        debug!(
-            "Set current_package to '{}' and current_module_index to {} for rule compilation '{}'",
-            self.current_package, self.current_module_index, rule_path
-        );
 
         let saved_register_counter = self.register_counter;
         if let Some(rule_definitions) = rules.get(rule_path) {
@@ -2135,12 +1985,6 @@ impl<'a> Compiler<'a> {
             }
             self.rule_result_registers[rule_index as usize] = result_register;
 
-            debug!(
-                "Rule '{}' has {} definitions, result_reg={}",
-                rule_path,
-                rule_definitions.len(),
-                result_register
-            );
 
             // Ensure rule_definitions vec has space for this rule
             while self.rule_definitions.len() <= rule_index as usize {
@@ -2164,16 +2008,10 @@ impl<'a> Compiler<'a> {
             for (def_idx, rule_ref) in rule_definitions.iter().enumerate() {
                 core::convert::identity(def_idx);
                 if let Rule::Spec { head, bodies, span } = rule_ref.as_ref() {
-                    debug!(
-                        "Compiling definition {} with {} bodies",
-                        def_idx,
-                        bodies.len()
-                    );
 
                     // Set up register window for this rule definition - each rule starts with registers from 0
                     self.push_scope();
                     self.register_counter = 0; // Reset to 0 for this rule's window
-                    debug!("Rule '{}' register window starts at 0", rule_path);
 
                     // Allocate result register within the window (starts at 0)
                     let result_register = self.alloc_register(); // This will be 0
@@ -2230,10 +2068,6 @@ impl<'a> Compiler<'a> {
                                             .unwrap()
                                             .bound_vars
                                             .insert(param_name.to_string(), param_reg);
-                                        debug!(
-                                            "Function parameter '{}' assigned to register {} in definition {}",
-                                            param_name, param_reg, def_idx
-                                        );
                                         self.store_variable(param_name.to_string(), param_reg);
                                     }
                                     _ => {
@@ -2245,10 +2079,6 @@ impl<'a> Compiler<'a> {
                                         let destructuring_block_entry =
                                             self.program.instructions.len();
 
-                                        debug!(
-                                            "Compiling destructuring block for parameter {} at offset {}",
-                                            arg_idx, destructuring_block_entry
-                                        );
 
                                         // Compile the destructuring pattern to validate and bind variables
                                         self.compile_destructuring_pattern(
@@ -2267,10 +2097,6 @@ impl<'a> Compiler<'a> {
                                         // Store destructuring block entry point
                                         destructuring_patterns
                                             .push((destructuring_block_entry, param_reg));
-                                        debug!(
-                                            "Function parameter {} has destructuring pattern stored for register {} in definition {}",
-                                            arg_idx, param_reg, def_idx
-                                        );
                                     }
                                 }
                             }
@@ -2293,11 +2119,6 @@ impl<'a> Compiler<'a> {
                                 None => {
                                     // First definition sets the parameter count
                                     rule_param_count = Some(param_names.len());
-                                    debug!(
-                                        "Rule '{}' is a function with {} parameters",
-                                        rule_path,
-                                        param_names.len()
-                                    );
                                 }
                                 Some(expected_count) => {
                                     // Subsequent definitions must have the same parameter count
@@ -2377,10 +2198,6 @@ impl<'a> Compiler<'a> {
                             body_entry_points.push(body_entry_point);
 
                             core::convert::identity(body_idx);
-                            debug!(
-                                "Compiling body {} at entry point {}",
-                                body_idx, body_entry_point
-                            );
 
                             self.emit_instruction(
                                 Instruction::RuleInit {
@@ -2427,25 +2244,11 @@ impl<'a> Compiler<'a> {
                         num_registers_used = self.register_counter;
                     }
 
-                    debug!(
-                        "Definition {} compiled with {} bodies",
-                        def_idx,
-                        bodies.len()
-                    );
                 }
             }
 
-            debug!(
-                "Rule '{}' compiled with {} definitions",
-                rule_path,
-                rule_definitions.len()
-            );
 
             // Calculate the number of registers used by this rule (window starts at 0)
-            debug!(
-                "Rule '{}' used {} registers in all definitions",
-                rule_path, num_registers_used
-            );
 
             // Store the number of registers used by this rule
             // Ensure rule_num_registers has enough capacity
@@ -2457,10 +2260,6 @@ impl<'a> Compiler<'a> {
             // Store the rule-level function parameter count
             self.rule_function_param_count[rule_index as usize] = rule_param_count;
 
-            debug!(
-                "Rule '{}' parameter count: {:?}",
-                rule_path, rule_param_count
-            );
 
             // Add the compiled rule to the rule tree for efficient lookups
             // Skip function rules since they require parameters and cannot be evaluated via virtual data document lookup
@@ -2475,21 +2274,11 @@ impl<'a> Compiler<'a> {
                         self.program
                             .add_rule_to_tree(&package_path, rule_name, rule_index as usize)
                     {
-                        debug!("Failed to add rule '{}' to tree: {:?}", rule_path, _e);
                     } else {
-                        debug!(
-                            "Added rule '{}' to rule tree at index {}",
-                            rule_path, rule_index
-                        );
                     }
                 } else {
-                    debug!("Could not parse rule path '{}'", rule_path);
                 }
             } else {
-                debug!(
-                    "Skipping function rule '{}' (param_count: {:?}) from rule tree - function rules require parameters",
-                    rule_path, rule_param_count
-                );
             }
 
             // Restore the global register counter and package context
@@ -2506,22 +2295,13 @@ impl<'a> Compiler<'a> {
         // Push a new scope for this query
         self.push_scope();
 
-        debug!(
-            "Compiling query with current_module_index: {}",
-            self.current_module_index
-        );
 
         let result = {
             let schedule = match &self.policy.inner.schedule {
                 Some(s) => {
-                    debug!(
-                        "Looking up schedule for module_index: {}, qidx: {}",
-                        self.current_module_index, query.qidx
-                    );
                     s.queries.get(self.current_module_index, query.qidx)
                 }
                 None => {
-                    debug!("No schedule available in policy, using default order");
                     None
                 }
             };
@@ -2548,36 +2328,21 @@ impl<'a> Compiler<'a> {
         &mut self,
         stmts: &[&crate::ast::LiteralStmt],
     ) -> Result<()> {
-        debug!("Compiling {} statements with loop hoisting", stmts.len());
 
         for (idx, stmt) in stmts.iter().enumerate() {
-            debug!(
-                "Processing statement {} of {}: {}",
-                idx + 1,
-                stmts.len(),
-                stmt.span.text()
-            );
 
             // Hoist loops from this statement (like interpreter)
             let loop_exprs = self.hoist_loops_from_literal(&stmt.literal)?;
 
             if !loop_exprs.is_empty() {
-                debug!(
-                    "Found {} loop expressions in statement {} {}",
-                    loop_exprs.len(),
-                    idx,
-                    stmt.span.text()
-                );
                 // If there are hoisted loop expressions, execute subsequent statements within loops
                 return self.compile_hoisted_loops(&stmts[idx..], &loop_exprs);
             }
 
             // No loops, compile statement normally
-            debug!("Compiling statement {} normally (no loops)", idx + 1);
             self.compile_single_statement(stmt)?;
         }
 
-        debug!("Finished compiling all statements, calling emit_context_yield");
         self.hoist_loops_and_emit_context_yield()
     }
 
@@ -2597,7 +2362,6 @@ impl<'a> Compiler<'a> {
                 collection,
                 ..
             } => {
-                debug!("Found SomeIn literal - creating loop");
                 if let Some(key) = key {
                     self.hoist_loops_from_expr(key, &mut loops)?;
                 }
@@ -2794,7 +2558,6 @@ impl<'a> Compiler<'a> {
         let current_loop = &loops[0];
         let remaining_loops = &loops[1..];
 
-        debug!("Compiling loop of type {:?}", current_loop.loop_type);
 
         match current_loop.loop_type {
             LoopType::SomeIn => {
@@ -2831,7 +2594,6 @@ impl<'a> Compiler<'a> {
             match &context.context_type {
                 ContextType::Every => {
                     // Every quantifiers don't emit context yield
-                    debug!("Skipping context yield for Every quantifier context");
                     return Ok(());
                 }
                 ContextType::Rule(_) => {
@@ -2894,7 +2656,6 @@ impl<'a> Compiler<'a> {
         query: &crate::ast::Query,
         span: &crate::lexer::Span,
     ) -> Result<()> {
-        debug!("Compiling Every quantifier with domain and query");
 
         // Compile the domain expression
         let collection_reg = self.compile_rego_expr(domain)?;
@@ -2916,10 +2677,6 @@ impl<'a> Compiler<'a> {
                 key_reg
             };
 
-        debug!(
-            "Every quantifier - value var: '{}', key var: {:?}",
-            value_var_name, key_var_name
-        );
 
         // Generate loop start instruction for Every mode
         let loop_params_index = self.program.add_loop_params(LoopStartParams {
@@ -2961,12 +2718,6 @@ impl<'a> Compiler<'a> {
             self.add_variable(key_name, key_reg);
         }
 
-        debug!(
-            "Added Every loop variables to scope - value: '{}' -> reg {}, key: {:?}",
-            value_var_name,
-            value_reg,
-            key_var_name.as_ref().map(|k| (k, key_reg))
-        );
 
         // Compile the query body using standard query compilation
         // Note: compile_query will push/pop its own additional scope
@@ -3004,17 +2755,12 @@ impl<'a> Compiler<'a> {
             *end = loop_end;
         }
 
-        debug!(
-            "Every quantifier compiled - body_start={}, loop_end={}",
-            body_start, loop_end
-        );
 
         Ok(())
     }
 
     /// Compile a single statement without loops
     fn compile_single_statement(&mut self, stmt: &crate::ast::LiteralStmt) -> Result<()> {
-        debug!("Compiling single statement: {}", stmt.span.text());
         match &stmt.literal {
             crate::ast::Literal::Expr { expr, .. } => {
                 // Compile the condition and assert it must be true
@@ -3031,26 +2777,18 @@ impl<'a> Compiler<'a> {
                 query,
                 ..
             } => {
-                debug!("Compiling Every quantifier");
                 self.compile_every_quantifier(key, value, domain, query, &stmt.span)?;
 
                 // Every quantifier acts as an assertion - if it succeeds,
                 // we continue with the next statement
-                debug!("Every quantifier completed - continuing with next statements");
             }
             crate::ast::Literal::SomeVars { span: _span, vars } => {
-                debug!(
-                    "Compiling SomeVars statement with {:?} variables at span {:?}",
-                    vars.iter().map(|v| v.text()),
-                    _span
-                );
                 // Add each variable to the current scope's unbound variables
                 for var in vars {
                     self.add_unbound_variable(var.text());
                 }
             }
             crate::ast::Literal::NotExpr { expr, .. } => {
-                debug!("Compiling NotExpr statement");
                 // Compile the expression (don't assert it directly)
                 let expr_reg = self.compile_rego_expr_with_span(expr, expr.span(), false)?;
 
@@ -3086,7 +2824,6 @@ impl<'a> Compiler<'a> {
         remaining_stmts: &[&crate::ast::LiteralStmt],
         remaining_loops: &[HoistedLoop],
     ) -> Result<()> {
-        debug!("Compiling index iteration loop");
 
         // Compile the collection expression
         let collection_reg = self.compile_rego_expr(collection)?;
@@ -3100,7 +2837,6 @@ impl<'a> Compiler<'a> {
             self.loop_expr_register_map
                 .insert(loop_expr.clone(), value_reg);
         }
-        debug!("Index iteration loop for {key_var:?} over {loop_expr:?}");
         if let Some(key_var) = key_var {
             // Store loop variable in scope (extract variable name from key_var)
             match key_var.as_ref() {
@@ -3130,10 +2866,6 @@ impl<'a> Compiler<'a> {
                     ) {
                         return Err(CompilerError::InvalidDestructuringPattern);
                     }
-                    debug!(
-                        "Compiled destructuring pattern for iteration key at register {}",
-                        key_reg
-                    );
                 }
             }
             self.loop_expr_register_map.insert(key_var.clone(), key_reg);
@@ -3192,10 +2924,6 @@ impl<'a> Compiler<'a> {
             *end = loop_end;
         }
 
-        debug!(
-            "Array iteration loop compiled - body_start={}, loop_end={}",
-            body_start, loop_end
-        );
 
         Ok(())
     }
@@ -3280,10 +3008,6 @@ impl<'a> Compiler<'a> {
                 } => {
                     // Simple key variable: some k, v in collection
                     let var_name = var_name.as_string()?.to_string();
-                    debug!(
-                        "Storing loop key variable '{}' at register {}",
-                        var_name, key_reg
-                    );
                     self.store_variable(var_name, key_reg);
                 }
                 _ => {
@@ -3296,10 +3020,6 @@ impl<'a> Compiler<'a> {
                     ) {
                         return Err(CompilerError::InvalidDestructuringPattern);
                     }
-                    debug!(
-                        "Compiled destructuring pattern for loop key at register {}",
-                        key_reg
-                    );
                 }
             }
         }
@@ -3310,10 +3030,6 @@ impl<'a> Compiler<'a> {
             } => {
                 // Simple value variable: some k, v in collection
                 let var_name = var_name.as_string()?.to_string();
-                debug!(
-                    "Storing loop value variable '{}' at register {}",
-                    var_name, value_reg
-                );
                 self.store_variable(var_name, value_reg);
             }
             _ => {
@@ -3326,10 +3042,6 @@ impl<'a> Compiler<'a> {
                 ) {
                     return Err(CompilerError::InvalidDestructuringPattern);
                 }
-                debug!(
-                    "Compiled destructuring pattern for loop value at register {}",
-                    value_reg
-                );
             }
         }
 
@@ -3365,26 +3077,15 @@ impl<'a> Compiler<'a> {
             *end = loop_end;
         }
 
-        debug!(
-            "SomeIn loop compiled - body_start={}, loop_end={}",
-            body_start, loop_end
-        );
 
         #[cfg(feature = "rvm-debug")]
         {
             // Debug: Print all instructions generated for this loop
-            debug!(
-                "Generated {} instructions for SomeIn loop:",
-                self.program.instructions.len()
-            );
             for (i, instr) in self.program.instructions.iter().enumerate() {
-                debug!("  {i}: {instr:?}");
             }
 
             // Debug: Print literals table
-            debug!("Literals table:");
             for (i, literal) in self.program.literals.iter().enumerate() {
-                debug!("  literal_idx {i}: {literal:?}");
             }
         }
 
@@ -3401,7 +3102,6 @@ impl<'a> Compiler<'a> {
         query: &crate::ast::Query,
         span: &Span,
     ) -> Result<Register> {
-        debug!("Compiling {:?} comprehension", mode);
 
         // Allocate result register and initialize comprehension
         let result_reg = self.alloc_register();
@@ -3417,6 +3117,7 @@ impl<'a> Compiler<'a> {
                 .add_comprehension_begin_params(ComprehensionBeginParams {
                     mode,
                     collection_reg: result_reg, // The result register is the collection being built
+                    result_reg,
                     key_reg,
                     value_reg,
                     body_start: 0, // Will be filled in after emitting ComprehensionBegin
@@ -3529,24 +3230,14 @@ impl<'a> Compiler<'a> {
         let fcn_path =
             get_path_string(fcn, None).map_err(|_| CompilerError::InvalidFunctionExpression)?;
 
-        let _span = span!(tracing::Level::DEBUG, "compile_function_call");
-        let _enter = _span.enter();
-        debug!(
-            "Compiling function call: '{}' with {} parameters",
-            fcn_path,
-            params.len()
-        );
-
         // Try to find user-defined function first with the original path
         let original_fcn_path = fcn_path.clone();
         let full_fcn_path = if self.policy.inner.rules.contains_key(&fcn_path) {
-            debug!("Found user-defined function: '{}'", fcn_path);
             fcn_path
         } else {
             // If not found, try with current package prefix
             let with_package = get_path_string(fcn, Some(&self.current_package))
                 .map_err(|_| CompilerError::InvalidFunctionExpressionWithPackage)?;
-            debug!("Trying with package prefix: '{}'", with_package);
             with_package
         };
 
@@ -3559,14 +3250,11 @@ impl<'a> Compiler<'a> {
 
         // Allocate destination register for the result
         let dest = self.alloc_register();
-        debug!("Allocated destination register: {}", dest);
 
         // First check if this is a user-defined function rule
         if self.is_user_defined_function(&full_fcn_path) {
-            debug!("Compiling as user-defined function: '{}'", full_fcn_path);
             // Get the function rule index for user-defined functions
             let rule_index = self.get_or_assign_rule_index(&full_fcn_path)?;
-            debug!("Function rule index: {}", rule_index);
 
             // Create function call parameters with fixed-size array
             let mut args_array = [0u8; 8];
@@ -3586,13 +3274,10 @@ impl<'a> Compiler<'a> {
 
             // Emit the FunctionCall instruction
             self.emit_instruction(Instruction::FunctionCall { params_index }, &span);
-            debug!("Emitted FunctionCall instruction for user-defined function");
         } else if self.is_builtin(&original_fcn_path) {
-            debug!("Compiling as builtin function: '{}'", original_fcn_path);
 
             // Get builtin index
             let builtin_index = self.get_builtin_index(&original_fcn_path)?;
-            debug!("Builtin index: {}", builtin_index);
 
             // Create builtin call parameters with fixed-size array
             let mut args_array = [0u8; 8];
@@ -3613,24 +3298,12 @@ impl<'a> Compiler<'a> {
             // Emit the BuiltinCall instruction
             self.emit_instruction(Instruction::BuiltinCall { params_index }, &span);
 
-            debug!(
-                "Builtin call compiled - dest={}, params_index={}, builtin_index={}",
-                dest, params_index, builtin_index
-            );
         } else {
-            debug!(
-                "Function '{}' not found as user-defined or builtin",
-                original_fcn_path
-            );
             return Err(CompilerError::UnknownFunction {
                 name: original_fcn_path.to_string(),
             });
         }
 
-        debug!(
-            "Function call compilation completed, result in register {}",
-            dest
-        );
         Ok(dest)
     }
 
@@ -3638,7 +3311,6 @@ impl<'a> Compiler<'a> {
     fn evaluate_default_rule(&mut self, rule_path: &str) -> Option<u16> {
         // Check if there are default rules for this path in the compiled policy
         if !self.policy.inner.default_rules.contains_key(rule_path) {
-            debug!("No default rules found for '{}'", rule_path);
             return None;
         }
 
@@ -3649,10 +3321,6 @@ impl<'a> Compiler<'a> {
         match interpreter.eval_default_rule_for_compiler(rule_path) {
             Ok(computed_value) => {
                 if computed_value != Value::Undefined {
-                    debug!(
-                        "Evaluated default rule for '{}': {:?}",
-                        rule_path, computed_value
-                    );
 
                     // Add the computed value to the literal table
                     let literal_index = self.add_literal(computed_value);
@@ -3660,10 +3328,6 @@ impl<'a> Compiler<'a> {
                 }
             }
             Err(_e) => {
-                debug!(
-                    "Failed to evaluate default rule for '{}': {}",
-                    rule_path, _e
-                );
             }
         }
 

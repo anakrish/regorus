@@ -2,10 +2,10 @@
 // Licensed under the MIT License.
 
 use anyhow::{anyhow, bail, Result};
-use regorus::rvm::{
-    generate_assembly_listing, generate_tabular_assembly_listing, AssemblyListingConfig, Compiler,
-    RegoVM,
+use regorus::rvm::program::{
+    generate_assembly_listing, generate_tabular_assembly_listing, AssemblyListingConfig,
 };
+use regorus::rvm::{Compiler, RegoVM};
 
 mod helpers;
 

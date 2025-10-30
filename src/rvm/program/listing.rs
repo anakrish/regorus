@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -702,9 +705,22 @@ fn format_instruction_readable(
                     crate::rvm::instructions::ComprehensionMode::Set => "set",
                     crate::rvm::instructions::ComprehensionMode::Object => "object",
                 };
+                let (source_desc, result_desc) = if params.collection_reg == params.result_reg {
+                    (format!("r{}", params.collection_reg), format!("r{}", params.result_reg))
+                } else {
+                    (
+                        format!("r{} (src)", params.collection_reg),
+                        format!("r{} (dst)", params.result_reg),
+                    )
+                };
                 let base = format!(
-                    "{}CompBegin   {} r{} k:{} v:{} {{",
-                    indent, mode_str, params.collection_reg, params.key_reg, params.value_reg
+                    "{}CompBegin   {} {} → {} k:{} v:{} {{",
+                    indent,
+                    mode_str,
+                    source_desc,
+                    result_desc,
+                    params.key_reg,
+                    params.value_reg
                 );
                 let comment = format!(
                     "{} comprehension in r{}, body: {}-{} (P{})",

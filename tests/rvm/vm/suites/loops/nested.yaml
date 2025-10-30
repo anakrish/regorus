@@ -36,8 +36,8 @@ cases:
           key_reg: 17
           value_reg: 18
           result_reg: 19
-          body_start: 16
-          loop_end: 19
+          body_start: 15
+          loop_end: 18
     instructions:
       - "ComprehensionBegin { params_index: 0 }"  # array comprehension in r1, body: 4-21 (P0)
       - "Load { dest: 4, literal_idx: 0 }"       # Load literal: 1
@@ -72,7 +72,7 @@ cases:
   - note: "some_nested_comprehension"
     description: "Test some with nested array comprehension"
     example_rego: |
-      some [1, 2][_] == [x | x := [1, 2, 3][_]; x > 1][_]
+      [1, 2][_] == [x | x := [1, 2, 3][_]; x > 1][_]
     literals:
       - 1
       - 2
@@ -80,10 +80,11 @@ cases:
     instruction_params:
       comprehension_begin_params:
         - mode: "Array"
-          collection_reg: 3
+          collection_reg: 12
+          result_reg: 12
           key_reg: 10
           value_reg: 11
-          body_start: 15
+          body_start: 16
           comprehension_end: 20
       loop_params:
         - mode: "Any"
@@ -92,42 +93,50 @@ cases:
           value_reg: 8
           result_reg: 9
           body_start: 14
-          loop_end: 23
+          loop_end: 27
         - mode: "ForEach"
           collection: 3
           key_reg: 10
           value_reg: 11
-          result_reg: 12
+          result_reg: 21
           body_start: 16
           loop_end: 20
+        - mode: "Any"
+          collection: 12
+          key_reg: 13
+          value_reg: 14
+          result_reg: 15
+          body_start: 22
+          loop_end: 25
     instructions:
-      - "ArrayNew { dest: 0 }"              # Create collection [1, 2]
-      - "Load { dest: 1, literal_idx: 0 }"  # Load 1
-      - "ArrayPush { arr: 0, value: 1 }"
-      - "Load { dest: 2, literal_idx: 1 }"  # Load 2
-      - "ArrayPush { arr: 0, value: 2 }"
-      - "ArrayNew { dest: 3 }"              # Create inner source [1, 2, 3]
-      - "Load { dest: 4, literal_idx: 0 }"  # Load 1
-      - "ArrayPush { arr: 3, value: 4 }"
-      - "Load { dest: 5, literal_idx: 1 }"  # Load 2
-      - "ArrayPush { arr: 3, value: 5 }"
-      - "Load { dest: 6, literal_idx: 2 }"  # Load 3
-      - "ArrayPush { arr: 3, value: 6 }"
-      - "LoopStart { params_index: 0 }"     # Start outer some loop
-      # Outer some body
-      - "ComprehensionBegin { params_index: 0 }"  # Start inner comprehension
-      - "LoopStart { params_index: 1 }"     # Start inner comprehension loop
-      # Inner comprehension body - check if x > 1
-      - "Load { dest: 13, literal_idx: 0 }"  # Load 1 for comparison
-      - "Gt { dest: 14, left: 11, right: 13 }"  # Check x > 1
-      - "AssertCondition { condition: 14 }"  # Assert x > 1 (only add if true)
-      - "ComprehensionYield { value_reg: 11 }"   # Add x to result if x > 1
-      - "LoopNext { body_start: 16, loop_end: 20 }"  # Continue inner loop
-      # After inner comprehension, check if some value matches
-      - "Eq { dest: 15, left: 8, right: 12 }"   # Compare outer value with inner array
-      - "AssertCondition { condition: 15 }"  # Assert equality for some
-      - "LoopNext { body_start: 14, loop_end: 23 }"  # Continue outer loop
-      - "Return { value: 9 }"
+      - "ArrayNew { dest: 0 }"              # Index 0: Build left array [1, 2]
+      - "Load { dest: 1, literal_idx: 0 }"  # Index 1: Load literal 1
+      - "ArrayPush { arr: 0, value: 1 }"    # Index 2
+      - "Load { dest: 2, literal_idx: 1 }"  # Index 3: Load literal 2
+      - "ArrayPush { arr: 0, value: 2 }"    # Index 4
+      - "ArrayNew { dest: 3 }"              # Index 5: Build source array [1, 2, 3]
+      - "Load { dest: 4, literal_idx: 0 }"  # Index 6
+      - "ArrayPush { arr: 3, value: 4 }"    # Index 7
+      - "Load { dest: 5, literal_idx: 1 }"  # Index 8
+      - "ArrayPush { arr: 3, value: 5 }"    # Index 9
+      - "Load { dest: 6, literal_idx: 2 }"  # Index 10
+      - "ArrayPush { arr: 3, value: 6 }"    # Index 11
+      - "Load { dest: 16, literal_idx: 0 }" # Index 12: Load 1 for comparison (stays stable)
+      - "LoopStart { params_index: 0 }"     # Index 13: Start outer some loop over [1, 2]
+      - "ComprehensionBegin { params_index: 0 }"  # Index 14: Build filtered comprehension
+      - "LoopStart { params_index: 1 }"     # Index 15: Iterate source values for comprehension
+      - "Gt { dest: 17, left: 11, right: 16 }"  # Index 16: Check x > 1
+      - "AssertCondition { condition: 17 }"  # Index 17: Skip values <= 1
+      - "ComprehensionYield { value_reg: 11 }"   # Index 18: Include qualifying value
+      - "LoopNext { body_start: 16, loop_end: 20 }"  # Index 19: Continue comprehension loop
+      - "ComprehensionEnd"                    # Index 20: Finish comprehension block
+      - "LoopStart { params_index: 2 }"     # Index 21: Iterate comprehension results
+      - "Eq { dest: 18, left: 8, right: 14 }"   # Index 22: Compare outer value with result value
+      - "AssertCondition { condition: 18 }"  # Index 23: Success when values match
+      - "LoopNext { body_start: 22, loop_end: 25 }"  # Index 24: Continue inner any loop
+      - "AssertCondition { condition: 15 }"  # Index 25: Require some match from inner any loop
+      - "LoopNext { body_start: 14, loop_end: 27 }"  # Index 26: Continue outer some loop
+      - "Return { value: 9 }"                # Index 27
     want_result: true
 
   - note: "nested_with_condition"
@@ -141,7 +150,8 @@ cases:
     instruction_params:
       comprehension_begin_params:
         - mode: "Array"
-          collection_reg: 0
+          collection_reg: 6
+          result_reg: 6
           key_reg: 4
           value_reg: 5
           body_start: 9
@@ -151,24 +161,23 @@ cases:
           collection: 0
           key_reg: 4
           value_reg: 5
-          result_reg: 6
-          body_start: 10
+          result_reg: 7
+          body_start: 9
           loop_end: 14
     instructions:
-      - "ArrayNew { dest: 0 }"              # Create input array [1, 2, 3]
-      - "Load { dest: 1, literal_idx: 0 }"  # Load 1
-      - "ArrayPush { arr: 0, value: 1 }"    # Push 1 to array
-      - "Load { dest: 2, literal_idx: 1 }"  # Load 2
-      - "ArrayPush { arr: 0, value: 2 }"    # Push 2 to array
-      - "Load { dest: 3, literal_idx: 2 }"  # Load 3
-      - "ArrayPush { arr: 0, value: 3 }"    # Push 3 to array
-      - "ComprehensionBegin { params_index: 0 }"  # Start comprehension
-      - "LoopStart { params_index: 0 }"     # Start loop
-      # Comprehension body with condition (index 9)
-      - "Load { dest: 7, literal_idx: 0 }"  # Load 1
-      - "Gt { dest: 8, left: 5, right: 7 }" # x > 1
-      - "AssertCondition { condition: 8 }" # Assert x > 1 (only add if true)
-      - "ComprehensionYield { value_reg: 5 }"    # Push x to result if condition true
-      - "LoopNext { body_start: 10, loop_end: 14 }"  # Continue loop
-      - "Return { value: 6 }"
+      - "ArrayNew { dest: 0 }"              # Index 0: Create input array [1, 2, 3]
+      - "Load { dest: 1, literal_idx: 0 }"  # Index 1: Load 1
+      - "ArrayPush { arr: 0, value: 1 }"    # Index 2: Push 1 to array
+      - "Load { dest: 2, literal_idx: 1 }"  # Index 3: Load 2
+      - "ArrayPush { arr: 0, value: 2 }"    # Index 4: Push 2 to array
+      - "Load { dest: 3, literal_idx: 2 }"  # Index 5: Load 3
+      - "ArrayPush { arr: 0, value: 3 }"    # Index 6: Push 3 to array
+      - "ComprehensionBegin { params_index: 0 }"  # Index 7: Start comprehension
+      - "LoopStart { params_index: 0 }"     # Index 8: Start loop
+      - "Load { dest: 7, literal_idx: 0 }"  # Index 9: Load 1 for comparison
+      - "Gt { dest: 8, left: 5, right: 7 }" # Index 10: x > 1
+      - "AssertCondition { condition: 8 }" # Index 11: Assert x > 1 (skip if false)
+      - "ComprehensionYield { value_reg: 5 }"    # Index 12: Push x to result if condition true
+      - "LoopNext { body_start: 9, loop_end: 13 }"  # Index 13: Continue loop
+      - "Return { value: 6 }"               # Index 14: Return comprehension result
     want_result: [2, 3]

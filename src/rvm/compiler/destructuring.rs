@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 use super::super::instructions::Instruction;
 use super::super::Compiler;
 use super::Register;
@@ -8,7 +11,6 @@ use alloc::collections::BTreeSet;
 use alloc::format;
 use alloc::string::{String, ToString};
 
-use crate::rvm::tracing_utils::debug;
 use anyhow::Result;
 use thiserror::Error;
 
@@ -129,11 +131,9 @@ impl<'a> Compiler<'a> {
 
             if vars_to_introduce.is_empty() {
                 // No new variables to introduce, just do validation/assertion
-                debug!("No new variables to introduce in destructuring pattern");
                 self.compile_destructuring_validation_only(pattern, value_register, span)?;
             } else {
                 // Some variables need to be introduced
-                debug!("Variables to introduce: {:?}", vars_to_introduce);
                 self.compile_destructuring_selective(
                     pattern,
                     value_register,

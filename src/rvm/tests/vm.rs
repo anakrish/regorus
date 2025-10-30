@@ -1,6 +1,9 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 #[cfg(test)]
 mod tests {
-    use crate::rvm::instruction_parser::{parse_instruction, parse_loop_mode};
+    use crate::rvm::tests::instruction_parser::{parse_instruction, parse_loop_mode};
     #[derive(Debug, Deserialize, Serialize, Default)]
     struct RuleInfoSpec {
         rule_type: String,
@@ -78,7 +81,7 @@ mod tests {
         builtin_infos: Vec<BuiltinInfoSpec>,
         #[serde(default)]
         object_create_params: Vec<ObjectCreateParamsSpec>,
-        #[serde(default)]
+        #[serde(default, alias = "comprehension_start_params")]
         comprehension_begin_params: Vec<ComprehensionBeginParamsSpec>,
     }
 
@@ -133,6 +136,8 @@ mod tests {
     struct ComprehensionBeginParamsSpec {
         mode: String,
         collection_reg: u16,
+        #[serde(default)]
+        result_reg: Option<u16>,
         key_reg: u16,
         value_reg: u16,
         body_start: u16,
@@ -336,6 +341,11 @@ mod tests {
                 let comprehension_params = ComprehensionBeginParams {
                     mode,
                     collection_reg: comprehension_spec.collection_reg.try_into().unwrap(),
+                    result_reg: comprehension_spec
+                        .result_reg
+                        .unwrap_or(comprehension_spec.collection_reg)
+                        .try_into()
+                        .unwrap(),
                     key_reg: comprehension_spec.key_reg.try_into().unwrap(),
                     value_reg: comprehension_spec.value_reg.try_into().unwrap(),
                     body_start: comprehension_spec.body_start,

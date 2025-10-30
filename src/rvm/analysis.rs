@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 use crate::ast::ExprRef;
 use crate::interpreter::Interpreter;
 use crate::rvm::instructions::LoopMode;

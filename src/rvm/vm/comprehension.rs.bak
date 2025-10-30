@@ -1,0 +1,277 @@
+use crate::rvm::instructions::{ComprehensionBeginParams, ComprehensionMode};
+use crate::rvm::tracing_utils::debug;
+use crate::value::Value;
+use crate::Rc;
+use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
+        if value_reg == 20 {
+            panic!(
+                "ComprehensionYield debug: mode={:?} result_before={:?} value={:?} value_reg={} result_reg={}",
+                comprehension_context.mode,
+                self.registers[comprehension_context.result_reg as usize].clone(),
+                value_to_add,
+                value_reg,
+                comprehension_context.result_reg
+            );
+        } else {
+            let key_value = if let Some(key_reg) = key_reg {
+                let key = self.registers[key_reg as usize].clone();
+                debug!("Adding with explicit key: {:?}", key);
+                Some(key)
+            } else if matches!(comprehension_context.mode, ComprehensionMode::Object) {
+                let key = self.registers[comprehension_context.key_reg as usize].clone();
+                debug!("Adding with context key: {:?}", key);
+                Some(key)
+            } else {
+                None
+            };
+
+            let result_reg = comprehension_context.result_reg as usize;
+            let current_result = self.registers[result_reg].clone();
+            let mode = comprehension_context.mode.clone();
+
+            let updated_result = match (mode, current_result) {
+                (ComprehensionMode::Set, Value::Set(set)) => {
+                    let mut new_set = set.as_ref().clone();
+                    new_set.insert(value_to_add);
+                    debug!("Added to set comprehension, new size: {}", new_set.len());
+                    Value::Set(crate::Rc::new(new_set))
+                }
+                (ComprehensionMode::Array, Value::Array(arr)) => {
+                    let mut new_arr = arr.as_ref().to_vec();
+                    new_arr.push(value_to_add);
+                    debug!("Added to array comprehension, new length: {}", new_arr.len());
+                    Value::Array(crate::Rc::new(new_arr))
+                }
+                (ComprehensionMode::Object, Value::Object(obj)) => {
+                    if let Some(key) = key_value {
+                        let mut new_obj = obj.as_ref().clone();
+                        new_obj.insert(key, value_to_add);
+                        debug!("Added to object comprehension, new size: {}", new_obj.len());
+                        Value::Object(crate::Rc::new(new_obj))
+                    } else {
+                        self.comprehension_stack.push(comprehension_context);
+                        return Err(VmError::InvalidIteration {
+                            value: Value::String(Arc::from("Object comprehension requires key")),
+                        });
+                    }
+                }
+                (_mode, other) => {
+                    self.comprehension_stack.push(comprehension_context);
+                    return Err(VmError::InvalidIteration { value: other });
+                }
+            };
+
+            self.registers[result_reg] = updated_result;
+        }
+                        debug!(
+                            "ComprehensionBegin: set source with {} elements",
+                            set.len()
+                        );
+                        Some(IterationState::Set {
+                            items: set,
+                            current_item: None,
+                            first_iteration: true,
+                        })
+                    }
+                }
+                Value::Undefined => {
+                    debug!("ComprehensionBegin: source collection is undefined");
+                    None
+                }
+                other => {
+                    let _ = &other;
+                    debug!(
+                        "ComprehensionBegin: unsupported source type {:?}, treating as empty",
+                        other
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let mut has_iteration = false;
+        if let Some(state) = iteration_state.as_ref() {
+            has_iteration = self.setup_next_iteration(state, params.key_reg, params.value_reg)?;
+            debug!("ComprehensionBegin: auto iteration available = {}", has_iteration);
+        }
+
+        let mut comprehension_context = ComprehensionContext {
+            mode: params.mode.clone(),
+            result_reg: params.result_reg,
+            key_reg: params.key_reg,
+            value_reg: params.value_reg,
+            body_start: params.body_start,
+            comprehension_end: params.comprehension_end,
+            iteration_state,
+        };
+
+        if auto_iterate {
+            if has_iteration {
+                debug!(
+                    "ComprehensionBegin: auto iteration starting at body {}",
+                    params.body_start
+                );
+                self.pc = params.body_start as usize - 1;
+            } else {
+                debug!("ComprehensionBegin: source empty, skipping body");
+                comprehension_context.iteration_state = None;
+                self.pc = params.comprehension_end as usize - 1;
+            }
+        } else {
+            debug!("ComprehensionBegin: iteration managed externally");
+        }
+
+        self.comprehension_stack.push(comprehension_context);
+        debug!(
+            "Pushed comprehension context, stack depth={} (auto_iterate={})",
+            self.comprehension_stack.len(),
+            auto_iterate
+        );
+
+        Ok(())
+    }
+
+    pub(super) fn execute_comprehension_yield(
+        &mut self,
+        value_reg: u8,
+        key_reg: Option<u8>,
+    ) -> Result<()> {
+        let mut comprehension_context = if let Some(context) = self.comprehension_stack.pop() {
+            context
+        } else {
+            debug!("ComprehensionYield called without active comprehension context");
+            return Err(VmError::InvalidIteration {
+                value: Value::String(Arc::from("No active comprehension")),
+            });
+        };
+
+        let value_to_add = self.registers[value_reg as usize].clone();
+        debug!("Adding value to comprehension: {:?}", value_to_add);
+        if value_reg == 20 {
+            panic!(
+                "ComprehensionYield debug: mode={:?} result_before={:?} value={:?} value_reg={} result_reg={}",
+                comprehension_context.mode,
+                self.registers[comprehension_context.result_reg as usize].clone(),
+                value_to_add,
+                value_reg,
+                comprehension_context.result_reg
+            );
+        }
+        panic!(
+            "ComprehensionYield debug: mode={:?} result_before={:?} value={:?} value_reg={} result_reg={}",
+            comprehension_context.mode,
+            self.registers[comprehension_context.result_reg as usize].clone(),
+            value_to_add,
+            value_reg,
+            comprehension_context.result_reg
+        );
+        let key_value = if let Some(key_reg) = key_reg {
+            let key = self.registers[key_reg as usize].clone();
+            debug!("Adding with explicit key: {:?}", key);
+            Some(key)
+        } else if matches!(comprehension_context.mode, ComprehensionMode::Object) {
+            let key = self.registers[comprehension_context.key_reg as usize].clone();
+            debug!("Adding with context key: {:?}", key);
+            Some(key)
+        } else {
+            None
+        };
+
+        let result_reg = comprehension_context.result_reg as usize;
+        let current_result = self.registers[result_reg].clone();
+        let mode = comprehension_context.mode.clone();
+
+        let updated_result = match (mode, current_result) {
+            (ComprehensionMode::Set, Value::Set(set)) => {
+                let mut new_set = set.as_ref().clone();
+                new_set.insert(value_to_add);
+                debug!("Added to set comprehension, new size: {}", new_set.len());
+                Value::Set(crate::Rc::new(new_set))
+            }
+            (ComprehensionMode::Array, Value::Array(arr)) => {
+                let mut new_arr = arr.as_ref().to_vec();
+                new_arr.push(value_to_add);
+                debug!("Added to array comprehension, new length: {}", new_arr.len());
+                Value::Array(crate::Rc::new(new_arr))
+            }
+            (ComprehensionMode::Object, Value::Object(obj)) => {
+                if let Some(key) = key_value {
+                    let mut new_obj = obj.as_ref().clone();
+                    new_obj.insert(key, value_to_add);
+                    debug!("Added to object comprehension, new size: {}", new_obj.len());
+                    Value::Object(crate::Rc::new(new_obj))
+                } else {
+                    self.comprehension_stack.push(comprehension_context);
+                    return Err(VmError::InvalidIteration {
+                        value: Value::String(Arc::from("Object comprehension requires key")),
+                    });
+                }
+            }
+            (_mode, other) => {
+                self.comprehension_stack.push(comprehension_context);
+                return Err(VmError::InvalidIteration { value: other });
+            }
+        };
+
+        self.registers[result_reg] = updated_result;
+
+        if let Some(iter_state) = comprehension_context.iteration_state.as_mut() {
+            match iter_state {
+                IterationState::Object { current_key, .. } => {
+                    let tracked_key = if comprehension_context.key_reg
+                        != comprehension_context.value_reg
+                    {
+                        self.registers[comprehension_context.key_reg as usize].clone()
+                    } else {
+                        self.registers[comprehension_context.value_reg as usize].clone()
+                    };
+                    *current_key = Some(tracked_key);
+                }
+                IterationState::Set { current_item, .. } => {
+                    *current_item = Some(
+                        self.registers[comprehension_context.value_reg as usize].clone(),
+                    );
+                }
+                IterationState::Array { .. } => {}
+            }
+
+            iter_state.advance();
+            let has_next = self.setup_next_iteration(
+                iter_state,
+                comprehension_context.key_reg,
+                comprehension_context.value_reg,
+            )?;
+
+                if has_next {
+                debug!(
+                    "ComprehensionYield: continuing iteration, jumping to body {}",
+                    comprehension_context.body_start
+                );
+                self.pc = comprehension_context.body_start as usize - 1;
+            } else {
+                debug!("ComprehensionYield: iteration complete");
+                comprehension_context.iteration_state = None;
+                self.pc = comprehension_context.comprehension_end as usize - 1;
+            }
+        }
+
+        self.comprehension_stack.push(comprehension_context);
+
+        Ok(())
+    }
+
+    pub(super) fn execute_comprehension_end(&mut self) -> Result<()> {
+        if let Some(_context) = self.comprehension_stack.pop() {
+            debug!("ComprehensionEnd: Popped comprehension context");
+            Ok(())
+        } else {
+            debug!("ComprehensionEnd called without active comprehension context");
+            Err(VmError::InvalidIteration {
+                value: Value::String(Arc::from("No active comprehension context")),
+            })
+        }
+    }
+}

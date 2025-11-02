@@ -5,7 +5,7 @@ use regorus::rvm::{compiler::Compiler, vm::RegoVM};
 use regorus::*;
 
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use clap::Parser;
@@ -59,7 +59,10 @@ fn eval_test_case_interpreter(dir: &Path, case: &TestCase) -> Result<Value> {
     Value::from_json_str(&result.to_string())
 }
 
-fn eval_test_case_rvm(dir: &Path, case: &TestCase) -> Result<Value> {
+fn eval_test_case_rvm(
+    dir: &Path,
+    case: &TestCase,
+) -> Result<(Value, Duration, Duration, Duration)> {
     let mut engine = setup_engine(dir, case)?;
 
     // Convert input and data for RVM
@@ -68,10 +71,15 @@ fn eval_test_case_rvm(dir: &Path, case: &TestCase) -> Result<Value> {
 
     // Create CompiledPolicy first (needed for RVM compiler)
     let rule = Rc::from(case.query.as_str());
+    let type_analysis_start = Instant::now();
     let compiled_policy = engine.compile_with_entrypoint(&rule)?;
+    let type_analysis_duration = type_analysis_start.elapsed();
 
     // Use RVM compiler to create a program
+    let compile_start = Instant::now();
     let program = Compiler::compile_from_policy(&compiled_policy, &[&case.query])?;
+
+    let compile_duration = compile_start.elapsed();
 
     // Test round-trip serialization
     test_round_trip_serialization(program.as_ref()).map_err(|e| {
@@ -89,10 +97,19 @@ fn eval_test_case_rvm(dir: &Path, case: &TestCase) -> Result<Value> {
     vm.set_input(input);
 
     // Execute on RVM
+    let execution_start = Instant::now();
     let result = vm.execute()?;
+    let execution_duration = execution_start.elapsed();
 
     // Make result json compatible. (E.g: avoid sets).
-    Value::from_json_str(&result.to_string())
+    let value = Value::from_json_str(&result.to_string())?;
+
+    Ok((
+        value,
+        type_analysis_duration,
+        compile_duration,
+        execution_duration,
+    ))
 }
 
 fn run_aci_tests(dir: &Path, filter: Option<&str>) -> Result<()> {
@@ -144,7 +161,8 @@ fn run_aci_tests(dir: &Path, filter: Option<&str>) -> Result<()> {
 
             // Test with RVM
             let start = Instant::now();
-            let rvm_results = eval_test_case_rvm(dir, case)?;
+            let (rvm_results, type_analysis_duration, compile_duration, execution_duration) =
+                eval_test_case_rvm(dir, case)?;
             let rvm_duration = start.elapsed();
 
             if interpreter_results != rvm_results {
@@ -164,8 +182,12 @@ fn run_aci_tests(dir: &Path, filter: Option<&str>) -> Result<()> {
             }
 
             print!(
-                "Interp: {:?}, RVM: {:?}\n",
-                interpreter_duration, rvm_duration
+                "Interp: {:?}, TypeAnalysis: {:?}, RVMCompile: {:?}, RVMRun: {:?}, RVMTotal: {:?}\n",
+                interpreter_duration,
+                type_analysis_duration,
+                compile_duration,
+                execution_duration,
+                rvm_duration
             );
         }
     }

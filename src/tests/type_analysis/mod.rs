@@ -157,6 +157,7 @@ fn run_case(case: &TypeCase) -> Result<()> {
         data_schema: parse_optional_schema(case.data_schema.clone())?,
         loop_lookup: None,
         entrypoints: None,
+        analyze_all_rules: false,
         disable_function_generic_pass: true,
     };
 

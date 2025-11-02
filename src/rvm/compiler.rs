@@ -13,11 +13,15 @@ mod destructuring;
 use crate::ast::{Expr, ExprRef, Rule, RuleHead};
 use crate::builtins;
 use crate::compiler::destructuring_planner::plans::BindingPlan;
-use crate::compiler::hoist::{HoistedLoop, LoopType};
+use crate::compiler::hoist::{HoistedLoop, HoistedLoopsLookup, LoopType};
 use crate::interpreter::Interpreter;
 use crate::lexer::Span;
 use crate::rvm::program::RuleType;
 use crate::rvm::program::SpanInfo;
+use crate::type_analysis::{
+    result::{LiteralTableSketch, VirtualDataLookup},
+    TypeAnalysisOptions, TypeAnalysisResult, TypeAnalyzer,
+};
 use crate::utils::get_path_string;
 use crate::Map;
 use crate::{CompiledPolicy, Value};
@@ -60,6 +64,23 @@ impl ReferenceChain {
             }
         }
         prefix
+    }
+
+    /// Render the reference chain into a human-readable path representation.
+    fn display_path(&self) -> String {
+        let mut path = self.root.clone();
+        for component in &self.components {
+            match component {
+                AccessComponent::Field(field) => {
+                    path.push('.');
+                    path.push_str(field);
+                }
+                AccessComponent::Expression(_) => {
+                    path.push_str("[expr]");
+                }
+            }
+        }
+        path
     }
 }
 
@@ -128,6 +149,9 @@ pub enum CompilerError {
 
     #[error("Missing binding plan for {context}")]
     MissingBindingPlan { context: String },
+
+    #[error("Missing virtual document metadata for '{path}'")]
+    MissingVirtualLookupMetadata { path: String },
 
     #[error("Unexpected binding plan variant for {context}: {found}")]
     UnexpectedBindingPlan { context: String, found: String },
@@ -254,7 +278,8 @@ pub struct Compiler<'a> {
     register_counter: Register,
     scopes: Vec<Scope>,         // Stack of variable scopes (like the interpreter)
     policy: &'a CompiledPolicy, // Reference to the compiled policy for rule lookup
-    current_package: String,    // Current package path (e.g., "data.test")
+    type_result: Option<crate::Rc<TypeAnalysisResult>>,
+    current_package: String,   // Current package path (e.g., "data.test")
     current_module_index: u32, // Current module index for scheduler lookup (set from rule's source file index)
     // Three-level hierarchy compilation fields
     rule_index_map: BTreeMap<String, u16>, // Maps rule paths to their assigned rule indices
@@ -276,6 +301,8 @@ pub struct Compiler<'a> {
     // Input/Data loading optimization - track registers per rule definition
     current_input_register: Option<Register>, // Register holding input in current rule definition
     current_data_register: Option<Register>,  // Register holding data in current rule definition
+    // Virtual lookup configuration
+    allow_virtual_lookup_fallbacks: bool,
     // Current rule being compiled for recursion detection
     current_rule_path: String, // Path of the rule currently being compiled
     // Call stack tracking for recursion detection
@@ -286,14 +313,27 @@ pub struct Compiler<'a> {
 
 impl<'a> Compiler<'a> {
     pub fn with_policy(policy: &'a CompiledPolicy) -> Self {
+        Self::with_policy_and_analysis(policy, None)
+    }
+
+    pub fn with_policy_and_analysis(
+        policy: &'a CompiledPolicy,
+        type_result: Option<crate::Rc<TypeAnalysisResult>>,
+    ) -> Self {
         let mut program = Program::new();
         program.rego_v0 = policy.is_rego_v0();
-        Self {
+        let allow_virtual_lookup_fallbacks = type_result.is_none();
+        let literal_table_snapshot = type_result
+            .as_ref()
+            .map(|result| result.literal_table().clone());
+
+        let mut compiler = Self {
             program,
             spans: Vec::new(),
             register_counter: 1,
             scopes: vec![Scope::default()],
             policy,
+            type_result,
             current_package: "".to_string(), // Default package, will be set dynamically during compilation
             current_module_index: 0, // Will be set from rule's source file index during compilation
             rule_index_map: BTreeMap::new(),
@@ -311,10 +351,22 @@ impl<'a> Compiler<'a> {
             builtin_index_map: BTreeMap::new(),
             current_input_register: None,
             current_data_register: None,
+            allow_virtual_lookup_fallbacks,
             current_rule_path: String::new(),
             current_call_stack: Vec::new(),
             entry_points: IndexMap::new(),
+        };
+
+        if let Some(literal_table) = literal_table_snapshot.as_ref() {
+            compiler.initialize_literal_table_from_analysis(literal_table);
         }
+
+        compiler
+    }
+
+    /// Configure whether the compiler may fall back to its legacy virtual lookup detection.
+    pub fn set_virtual_lookup_fallbacks(&mut self, allow: bool) {
+        self.allow_virtual_lookup_fallbacks = allow;
     }
 
     /// Check if a function path is a builtin function (similar to interpreter's is_builtin)
@@ -325,6 +377,33 @@ impl<'a> Compiler<'a> {
     /// Check if a function path is a user-defined function rule
     fn is_user_defined_function(&self, rule_path: &str) -> bool {
         self.policy.inner.rules.contains_key(rule_path)
+    }
+
+    /// Seed the program's literal table with analyzer-discovered literals so later insertions reuse stable slots.
+    fn initialize_literal_table_from_analysis(&mut self, literal_table: &LiteralTableSketch) {
+        for literal in literal_table.string_literals() {
+            self.program.add_literal(Value::from(literal));
+        }
+
+        for flag in literal_table.boolean_literals() {
+            self.program.add_literal(Value::from(flag));
+        }
+
+        for number in literal_table.numeric_literals() {
+            self.program.add_literal(number);
+        }
+
+        for composite in literal_table.composite_literals() {
+            self.program.add_literal(composite);
+        }
+
+        if literal_table.null_present() {
+            self.program.add_literal(Value::Null);
+        }
+
+        if literal_table.undefined_present() {
+            self.program.add_literal(Value::Undefined);
+        }
     }
 
     /// Get builtin index for a builtin function
@@ -578,15 +657,19 @@ impl<'a> Compiler<'a> {
 
         match chain.root.as_str() {
             "input" => self.compile_input_chain(&chain, span),
-            "data" => self.compile_data_chain(&chain, span),
+            "data" => self.compile_data_chain(expr, &chain, span),
             _ => self.compile_local_var_chain(&chain, span),
         }
     }
 
     fn get_statement_loops(&self, stmt: &crate::ast::LiteralStmt) -> Result<Vec<HoistedLoop>> {
-        self.policy
-            .inner
-            .loop_hoisting_table
+        if let Some(result) = self.type_result.as_deref() {
+            if let Some(loops) = result.statement_loops(self.current_module_index, stmt.sidx) {
+                return Ok(loops.to_vec());
+            }
+        }
+
+        self.loop_lookup()
             .get_statement_loops(self.current_module_index, stmt.sidx)
             .cloned()
             .ok_or_else(|| CompilerError::General {
@@ -600,9 +683,12 @@ impl<'a> Compiler<'a> {
     fn get_expr_loops(&self, expr: &ExprRef) -> Vec<HoistedLoop> {
         let module_idx = self.current_module_index;
         let expr_idx = expr.as_ref().eidx();
-        self.policy
-            .inner
-            .loop_hoisting_table
+        if let Some(result) = self.type_result.as_deref() {
+            if let Some(loops) = result.expression_loops(module_idx, expr_idx) {
+                return loops.to_vec();
+            }
+        }
+        self.loop_lookup()
             .get_expr_loops(module_idx, expr_idx)
             .cloned()
             .unwrap_or_default()
@@ -611,11 +697,24 @@ impl<'a> Compiler<'a> {
     fn get_binding_plan_for_expr(&self, expr: &ExprRef) -> Option<BindingPlan> {
         let module_idx = self.current_module_index;
         let expr_idx = expr.as_ref().eidx();
-        self.policy
-            .inner
-            .loop_hoisting_table
+        if let Some(result) = self.type_result.as_deref() {
+            if let Some(plan) = result.binding_plan(module_idx, expr_idx) {
+                return Some(plan.clone());
+            }
+        }
+        self.loop_lookup()
             .get_expr_binding_plan(module_idx, expr_idx)
             .cloned()
+    }
+
+    fn loop_lookup(&self) -> &HoistedLoopsLookup {
+        if let Some(result) = self.type_result.as_ref() {
+            if let Some(lookup) = result.loop_lookup() {
+                return lookup;
+            }
+        }
+
+        &self.policy.inner.loop_hoisting_table
     }
 
     fn expect_binding_plan_for_expr(&self, expr: &ExprRef, context: &str) -> Result<BindingPlan> {
@@ -638,7 +737,12 @@ impl<'a> Compiler<'a> {
     }
 
     /// Compile data namespace access chain (may involve rules)
-    fn compile_data_chain(&mut self, chain: &ReferenceChain, span: &Span) -> Result<Register> {
+    fn compile_data_chain(
+        &mut self,
+        expr: &ExprRef,
+        chain: &ReferenceChain,
+        span: &Span,
+    ) -> Result<Register> {
         if chain.components.is_empty() {
             // Just "data" - direct access to data root is not allowed
             return Err(CompilerError::DirectDataAccess);
@@ -675,34 +779,34 @@ impl<'a> Compiler<'a> {
             }
         }
 
-        // Check if this path could be a prefix of any rules (for virtual document lookup)
-        // Convert the full chain to a pattern that includes wildcards for dynamic components
-        let path_pattern = self.create_path_pattern(&chain.components);
-        let matching_rules: Vec<String> = self
-            .policy
-            .inner
-            .rules
-            .keys()
-            .filter(|rule_path| self.matches_path_pattern(rule_path, &path_pattern))
-            .cloned()
-            .collect();
+        // Use analysis-backed rule references when available to avoid scanning the full rule map
+        let matching_rules = self.matching_rules_for_expr(expr, &chain.components);
+
+        // Check for metadata FIRST before expensive rule collection
+        if let Some(_metadata) = self.virtual_data_lookup_for_expr(expr) {
+            // We have analysis metadata - enqueue referenced rules without a global scan
+            self.enqueue_virtual_rule_candidates(&matching_rules)?;
+            return self.compile_data_virtual_lookup(&chain.components, span);
+        }
+
+        // No metadata - fall back to rule candidates (analysis-driven when possible)
 
         if !matching_rules.is_empty() {
-            // This path is a prefix of some rules - use DataVirtualDocumentLookup
-            for rule_path in &matching_rules {
-                if !self
-                    .rule_worklist
-                    .iter()
-                    .any(|entry| entry.rule_path == *rule_path)
-                {
-                    // Assign a rule index for this rule before adding to worklist
-                    self.get_or_assign_rule_index(rule_path)?;
-                    let entry =
-                        WorklistEntry::new(rule_path.clone(), self.current_call_stack.clone());
-                    self.rule_worklist.push(entry);
-                }
+            // When fallbacks are not allowed, raise an error if metadata is missing
+            if !self.allow_virtual_lookup_fallbacks {
+                return Err(CompilerError::General {
+                    message: format!(
+                        "missing virtual data lookup metadata: module={} expr={} pattern={}. \
+                         Analysis metadata is required but was not found for this expression.",
+                        self.current_module_index,
+                        expr.as_ref().eidx(),
+                        self.create_path_pattern(&chain.components)
+                    ),
+                });
             }
 
+            // Fall back to legacy detection when analysis metadata is unavailable
+            self.enqueue_virtual_rule_candidates(&matching_rules)?;
             return self.compile_data_virtual_lookup(&chain.components, span);
         }
 
@@ -724,6 +828,79 @@ impl<'a> Compiler<'a> {
         }
 
         pattern_parts.join(".")
+    }
+
+    fn rule_references_for_expr(&self, expr: &ExprRef) -> Option<Vec<String>> {
+        let module_idx = self.current_module_index;
+        let expr_idx = expr.as_ref().eidx();
+
+        self.type_result.as_ref().map(|result| {
+            let mut paths = result
+                .rule_references(module_idx, expr_idx)
+                .map(|refs| refs.to_vec())
+                .unwrap_or_else(Vec::new);
+            paths.sort();
+            paths.dedup();
+            paths
+        })
+    }
+
+    fn matching_rules_for_expr(
+        &self,
+        expr: &ExprRef,
+        components: &[AccessComponent],
+    ) -> Vec<String> {
+        let pattern = self.create_path_pattern(components);
+        let has_dynamic = components
+            .iter()
+            .any(|component| matches!(component, AccessComponent::Expression(_)));
+
+        let mut referenced: BTreeSet<String> = BTreeSet::new();
+
+        if let Some(paths) = self.rule_references_for_expr(expr) {
+            for path in paths {
+                if self.matches_path_pattern(&path, &pattern) {
+                    referenced.insert(path);
+                }
+            }
+        }
+
+        if !has_dynamic && !referenced.is_empty() {
+            return referenced.into_iter().collect();
+        }
+
+        for path in self.collect_matching_rules(components) {
+            referenced.insert(path);
+        }
+
+        referenced.into_iter().collect()
+    }
+
+    fn collect_matching_rules(&self, components: &[AccessComponent]) -> Vec<String> {
+        let path_pattern = self.create_path_pattern(components);
+        self.policy
+            .inner
+            .rules
+            .keys()
+            .filter(|rule_path| self.matches_path_pattern(rule_path, &path_pattern))
+            .cloned()
+            .collect()
+    }
+
+    fn enqueue_virtual_rule_candidates(&mut self, matching_rules: &[String]) -> Result<()> {
+        for rule_path in matching_rules {
+            if !self
+                .rule_worklist
+                .iter()
+                .any(|entry| entry.rule_path == *rule_path)
+            {
+                // Assign a rule index for this rule before adding to worklist
+                self.get_or_assign_rule_index(rule_path)?;
+                let entry = WorklistEntry::new(rule_path.clone(), self.current_call_stack.clone());
+                self.rule_worklist.push(entry);
+            }
+        }
+        Ok(())
     }
 
     /// Check if a rule path matches the given pattern with wildcards
@@ -777,6 +954,14 @@ impl<'a> Compiler<'a> {
                 && pattern_parts[match_length..]
                     .iter()
                     .all(|&part| part == "*"))
+    }
+
+    fn virtual_data_lookup_for_expr(&self, expr: &ExprRef) -> Option<&VirtualDataLookup> {
+        let module_idx = self.current_module_index;
+        let expr_idx = expr.as_ref().eidx();
+        self.type_result
+            .as_deref()
+            .and_then(|result| result.virtual_data_lookup(module_idx, expr_idx))
     }
 
     /// Compile local variable access chain
@@ -1835,8 +2020,89 @@ impl<'a> Compiler<'a> {
         policy: &CompiledPolicy,
         entry_points: &[&str],
     ) -> Result<Arc<Program>> {
-        let mut compiler = Compiler::with_policy(policy);
-        compiler.current_rule_path = "".to_string(); // Entry point has no caller
+        Self::compile_from_policy_with_analysis(policy, None, entry_points)
+    }
+
+    fn analyze_policy_for_entrypoints(
+        policy: &CompiledPolicy,
+        entry_points: &[&str],
+    ) -> crate::Rc<TypeAnalysisResult> {
+        let mut options = TypeAnalysisOptions::default();
+        options.loop_lookup = Some(crate::Rc::new(policy.inner.loop_hoisting_table.clone()));
+        if !entry_points.is_empty() && entry_points.iter().all(|entry| entry.starts_with("data.")) {
+            options.entrypoints = Some(
+                entry_points
+                    .iter()
+                    .map(|entry| (*entry).to_string())
+                    .collect::<Vec<_>>(),
+            );
+        }
+        // For compilation, analyze ALL rules (not just entry points) because the compiler
+        // will compile all rules in all modules, and we need metadata for all of them
+        options.analyze_all_rules = true;
+
+        let analyzer = TypeAnalyzer::new(
+            policy.inner.modules.as_ref(),
+            policy.inner.schedule.as_deref(),
+            options,
+        );
+
+        crate::Rc::new(analyzer.analyze_modules())
+    }
+
+    fn analysis_covers_entrypoints(analysis: &TypeAnalysisResult, entry_points: &[&str]) -> bool {
+        if !analysis.entrypoints.analyzed_all_rules {
+            return false;
+        }
+
+        if entry_points.is_empty() {
+            return true;
+        }
+
+        let requested = &analysis.entrypoints.requested;
+        if requested.is_empty() {
+            return true;
+        }
+
+        let requested_set: BTreeSet<&str> = requested.iter().map(|ep| ep.as_str()).collect();
+
+        entry_points
+            .iter()
+            .filter(|ep| ep.starts_with("data."))
+            .all(|ep| requested_set.contains(*ep))
+    }
+
+    pub fn compile_from_policy_with_analysis(
+        policy: &CompiledPolicy,
+        analysis: Option<crate::Rc<TypeAnalysisResult>>,
+        entry_points: &[&str],
+    ) -> Result<Arc<Program>> {
+        let analysis = analysis
+            .or_else(|| {
+                policy
+                    .inner
+                    .type_analysis_result
+                    .clone()
+                    .and_then(|result| {
+                        if Self::analysis_covers_entrypoints(result.as_ref(), entry_points) {
+                            Some(result)
+                        } else {
+                            None
+                        }
+                    })
+            })
+            .unwrap_or_else(|| Self::analyze_policy_for_entrypoints(policy, entry_points));
+
+        let compiler = Compiler::with_policy_and_analysis(policy, Some(analysis.clone()));
+        Self::compile_with_entrypoints(compiler, policy, entry_points)
+    }
+
+    fn compile_with_entrypoints(
+        mut compiler: Compiler,
+        policy: &CompiledPolicy,
+        entry_points: &[&str],
+    ) -> Result<Arc<Program>> {
+        compiler.current_rule_path = "".to_string();
         let rules = policy.get_rules();
 
         // Emit CallRule instructions for each entry point and track their instruction indices
@@ -1955,6 +2221,7 @@ impl<'a> Compiler<'a> {
         let saved_module_index = self.current_module_index;
         self.current_package = module_package.clone();
         self.current_module_index = module_index;
+        let rule_module_index = module_index;
 
         let saved_register_counter = self.register_counter;
         if let Some(rule_definitions) = rules.get(rule_path) {
@@ -2008,7 +2275,7 @@ impl<'a> Compiler<'a> {
                     let result_register = self.alloc_register(); // This will be 0
 
                     // Set the current module index based on which module contains this rule
-                    self.current_module_index = self.find_module_index_for_rule(rule_ref)?;
+                    self.current_module_index = rule_module_index;
 
                     let (key_expr, value_expr) = match head {
                         RuleHead::Compr { refr, assign, .. } => {

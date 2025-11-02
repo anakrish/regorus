@@ -5,6 +5,7 @@ use crate::ast::*;
 use crate::compiler::hoist::HoistedLoopsLookup;
 use crate::engine::Engine;
 use crate::scheduler::*;
+use crate::type_analysis::TypeAnalysisResult;
 use crate::utils::*;
 use crate::*;
 
@@ -239,4 +240,7 @@ pub(crate) struct CompiledPolicyData {
 
     // Pre-computed loop hoisting information
     pub(crate) loop_hoisting_table: HoistedLoopsLookup,
+
+    // Optional cached type analysis result for the compiled policy
+    pub(crate) type_analysis_result: Option<Rc<TypeAnalysisResult>>,
 }

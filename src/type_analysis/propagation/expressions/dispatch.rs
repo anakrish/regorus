@@ -2,6 +2,8 @@
 // Licensed under the MIT License.
 
 use alloc::borrow::ToOwned;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 use crate::ast::{Expr, Ref};
 use crate::type_analysis::context::ScopedBindings;
@@ -14,6 +16,8 @@ use crate::type_analysis::propagation::facts::{
     schema_array_items,
 };
 use crate::type_analysis::propagation::pipeline::{AnalysisState, TypeAnalyzer};
+use crate::type_analysis::result::{VirtualComponent, VirtualDataLookup};
+use crate::utils::path::{matches_path_pattern, normalize_rule_path};
 use crate::value::Value;
 
 impl TypeAnalyzer {
@@ -351,6 +355,10 @@ impl TypeAnalyzer {
             }
         };
 
+        if matches!(expr.as_ref(), Expr::RefDot { .. } | Expr::RefBrack { .. }) {
+            self.maybe_record_virtual_data_lookup(module_idx, expr, result);
+        }
+
         result.lookup.record_expr(module_idx, eidx, fact.clone());
 
         if let ConstantValue::Known(value) = &fact.constant {
@@ -390,5 +398,194 @@ impl TypeAnalyzer {
         }
 
         HybridType::from_fact(fact)
+    }
+
+    fn maybe_record_virtual_data_lookup(
+        &self,
+        module_idx: u32,
+        expr: &Ref<Expr>,
+        result: &mut AnalysisState,
+    ) {
+        let expr_idx = expr.eidx();
+        let Some(metadata) = self.compute_virtual_data_lookup(module_idx, expr) else {
+            return;
+        };
+
+        let should_record = match result.lookup.get_virtual_data_lookup(module_idx, expr_idx) {
+            None => true,
+            Some(existing) => Self::is_better_virtual_lookup(existing, &metadata),
+        };
+
+        if should_record {
+            result
+                .lookup
+                .record_virtual_data_lookup(module_idx, expr_idx, metadata);
+        }
+    }
+
+    fn compute_virtual_data_lookup(
+        &self,
+        module_idx: u32,
+        expr: &Ref<Expr>,
+    ) -> Option<VirtualDataLookup> {
+        let chain = build_virtual_chain(expr)?;
+        if chain.root != "data" {
+            return None;
+        }
+
+        if chain.components.is_empty() {
+            return None;
+        }
+
+        let static_path = chain.static_prefix();
+        let path_pattern = chain.path_pattern();
+
+        if self.has_static_rule_match(&static_path) {
+            return None;
+        }
+
+        if !self.has_rule_matching_pattern(module_idx, &path_pattern, &static_path) {
+            return None;
+        }
+
+        Some(VirtualDataLookup::new(
+            static_path,
+            chain.components.clone(),
+            path_pattern,
+        ))
+    }
+
+    fn has_static_rule_match(&self, static_path: &[String]) -> bool {
+        if static_path.len() < 2 {
+            return false;
+        }
+
+        for idx in (1..static_path.len()).rev() {
+            let candidate = static_path[..=idx].join(".");
+            if self.rule_exists_by_path(&candidate) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn has_rule_matching_pattern(
+        &self,
+        module_idx: u32,
+        pattern: &str,
+        static_path: &[String],
+    ) -> bool {
+        let prefix = if static_path.is_empty() {
+            "data".to_owned()
+        } else {
+            static_path.join(".")
+        };
+
+        for info in self.rule_heads_with_prefix(module_idx, &prefix) {
+            let normalized_path = normalize_rule_path(&info.path);
+            if matches_path_pattern(&normalized_path, pattern) {
+                return true;
+            }
+        }
+
+        self.rule_exists_by_path(pattern)
+    }
+}
+
+impl TypeAnalyzer {
+    fn is_better_virtual_lookup(
+        existing: &VirtualDataLookup,
+        candidate: &VirtualDataLookup,
+    ) -> bool {
+        let existing_len = existing.components.len();
+        let candidate_len = candidate.components.len();
+
+        if candidate_len > existing_len {
+            return true;
+        }
+
+        if candidate_len == existing_len {
+            let existing_has_binding = existing
+                .components
+                .iter()
+                .any(|component| matches!(component, VirtualComponent::Binding(_)));
+            let candidate_has_binding = candidate
+                .components
+                .iter()
+                .any(|component| matches!(component, VirtualComponent::Binding(_)));
+
+            if candidate_has_binding && !existing_has_binding {
+                return true;
+            }
+        }
+
+        false
+    }
+}
+
+#[derive(Clone, Debug)]
+struct VirtualChain {
+    root: String,
+    components: Vec<VirtualComponent>,
+}
+
+impl VirtualChain {
+    fn static_prefix(&self) -> Vec<String> {
+        let mut prefix = Vec::with_capacity(self.components.len() + 1);
+        prefix.push(self.root.clone());
+        for component in &self.components {
+            match component {
+                VirtualComponent::Field(name) => prefix.push(name.clone()),
+                VirtualComponent::Binding(_) => break,
+            }
+        }
+        prefix
+    }
+
+    fn path_pattern(&self) -> String {
+        let mut parts = Vec::with_capacity(self.components.len() + 1);
+        parts.push(self.root.clone());
+        for component in &self.components {
+            match component {
+                VirtualComponent::Field(name) => parts.push(name.clone()),
+                VirtualComponent::Binding(_) => parts.push("*".to_owned()),
+            }
+        }
+        parts.join(".")
+    }
+}
+
+fn build_virtual_chain(expr: &Ref<Expr>) -> Option<VirtualChain> {
+    let mut components: Vec<VirtualComponent> = Vec::new();
+    let mut current = expr.clone();
+
+    loop {
+        match current.as_ref() {
+            Expr::RefDot { refr, field, .. } => {
+                let (_, field_value) = field.as_ref()?;
+                let field_name = field_value.as_string().ok()?.as_ref().to_owned();
+                components.push(VirtualComponent::Field(field_name));
+                current = refr.clone();
+            }
+            Expr::RefBrack { refr, index, .. } => {
+                match index.as_ref() {
+                    Expr::String { value, .. } | Expr::RawString { value, .. } => {
+                        let field_name = value.as_string().ok()?.as_ref().to_owned();
+                        components.push(VirtualComponent::Field(field_name));
+                    }
+                    _ => {
+                        components.push(VirtualComponent::Binding(index.clone()));
+                    }
+                }
+                current = refr.clone();
+            }
+            Expr::Var { value, .. } => {
+                let root = value.as_string().ok()?.as_ref().to_owned();
+                components.reverse();
+                return Some(VirtualChain { root, components });
+            }
+            _ => return None,
+        }
     }
 }

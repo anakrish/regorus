@@ -16,6 +16,9 @@ pub struct TypeAnalysisOptions {
     pub loop_lookup: Option<Rc<HoistedLoopsLookup>>,
     /// Optional entrypoint filtering - analyze only rules reachable from these paths
     pub entrypoints: Option<Vec<String>>,
+    /// Force analysis of all rules regardless of entrypoint filtering
+    /// When true, analyzes all rules in all modules even if entrypoints are specified
+    pub analyze_all_rules: bool,
     /// Experimental: disable the generic pass for function rules.
     pub disable_function_generic_pass: bool,
 }
@@ -27,6 +30,7 @@ impl Default for TypeAnalysisOptions {
             data_schema: None,
             loop_lookup: None,
             entrypoints: None,
+            analyze_all_rules: false,
             disable_function_generic_pass: true,
         }
     }

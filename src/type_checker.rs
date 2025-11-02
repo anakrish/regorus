@@ -167,6 +167,7 @@ impl TypeChecker {
             data_schema: self.data_schema.clone(),
             loop_lookup: self.loop_lookup.clone(),
             entrypoints: self.entrypoints.clone(),
+            analyze_all_rules: false,
             disable_function_generic_pass: true,
         };
 

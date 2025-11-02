@@ -15,6 +15,7 @@ use crate::scheduler::Schedule;
 use crate::Rc;
 
 use crate::utils::get_path_string;
+use crate::utils::path::normalize_rule_path;
 
 use super::{result::AnalysisState, TypeAnalysisOptions};
 
@@ -49,7 +50,7 @@ impl TypeAnalyzer {
         options: TypeAnalysisOptions,
     ) -> Self {
         let (module_rule_heads, global_rule_heads) = Self::build_rule_head_index(modules);
-        let entrypoint_filtering = options.is_entrypoint_filtered();
+        let entrypoint_filtering = options.is_entrypoint_filtered() && !options.analyze_all_rules;
         let requested_entrypoints = options.entrypoints.clone().unwrap_or_default();
         let disable_function_generic_pass = options.disable_function_generic_pass;
 
@@ -84,7 +85,7 @@ impl TypeAnalyzer {
             engine.get_type_analysis_context()?;
 
         let (module_rule_heads, global_rule_heads) = Self::build_rule_head_index(modules.as_ref());
-        let entrypoint_filtering = options.is_entrypoint_filtered();
+        let entrypoint_filtering = options.is_entrypoint_filtered() && !options.analyze_all_rules;
         let requested_entrypoints = options.entrypoints.clone().unwrap_or_default();
         let disable_function_generic_pass = options.disable_function_generic_pass;
 
@@ -137,6 +138,7 @@ impl TypeAnalyzer {
 
     pub fn analyze_modules(&self) -> crate::type_analysis::TypeAnalysisResult {
         let mut state = AnalysisState::new();
+        state.analyzed_all_rules = !self.entrypoint_filtering || self.options.analyze_all_rules;
 
         self.validate_rule_definitions(&mut state);
         state.requested_entrypoints = self.requested_entrypoints.clone();
@@ -168,9 +170,15 @@ impl TypeAnalyzer {
                     .ensure_expr_capacity(module_idx_u32, module.num_expressions);
                 state.ensure_rule_capacity(module_idx_u32, module.policy.len());
 
-                for rule_idx in 0..module.policy.len() {
-                    if entrypoints.contains(&(module_idx_u32, rule_idx)) {
-                        self.ensure_rule_analyzed(module_idx_u32, rule_idx, &mut state);
+                if self.options.analyze_all_rules {
+                    // When analyze_all_rules is set, analyze ALL rules in this module
+                    self.analyze_module(module_idx_u32, module, &mut state);
+                } else {
+                    // Only analyze rules that are entry points
+                    for rule_idx in 0..module.policy.len() {
+                        if entrypoints.contains(&(module_idx_u32, rule_idx)) {
+                            self.ensure_rule_analyzed(module_idx_u32, rule_idx, &mut state);
+                        }
                     }
                 }
             }
@@ -186,7 +194,11 @@ impl TypeAnalyzer {
         }
 
         // Convert AnalysisState to public TypeAnalysisResult
-        crate::type_analysis::TypeAnalysisResult::from_analysis_state(state, &self.modules)
+        crate::type_analysis::TypeAnalysisResult::from_analysis_state(
+            state,
+            &self.modules,
+            self.loop_lookup.clone(),
+        )
     }
 
     pub(crate) fn prepare_function_rule_specialization(
@@ -216,10 +228,8 @@ impl TypeAnalyzer {
                         crate::type_analysis::model::RuleAnalysis::default();
 
                     if let Some(refr) = Self::rule_head_expression_from_rule(rule.as_ref()) {
-                        result
-                            .lookup
-                            .expr_types_mut()
-                            .clear(module_idx, refr.eidx());
+                        let eidx = refr.eidx();
+                        result.lookup.expr_types_mut().clear(module_idx, eidx);
                     }
                 }
             }
@@ -255,5 +265,22 @@ impl TypeAnalyzer {
 
         let mut engine = engine_cell.borrow_mut();
         engine.try_eval_rule_constant(rule_path)
+    }
+
+    pub(crate) fn rule_exists_by_path(&self, path: &str) -> bool {
+        let normalized_candidate = normalize_rule_path(path);
+        let candidate_base = normalized_candidate
+            .strip_suffix(".default")
+            .unwrap_or(normalized_candidate.as_str());
+
+        self.global_rule_heads.values().any(|infos| {
+            infos.iter().any(|info| {
+                let normalized_rule = normalize_rule_path(&info.path);
+                let rule_base = normalized_rule
+                    .strip_suffix(".default")
+                    .unwrap_or(normalized_rule.as_str());
+                normalized_rule == normalized_candidate || rule_base == candidate_base
+            })
+        })
     }
 }

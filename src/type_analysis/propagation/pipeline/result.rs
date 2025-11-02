@@ -30,6 +30,8 @@ pub struct AnalysisState {
     pub(crate) requested_entrypoints: Vec<String>,
     /// Default rules included due to entrypoint filtering
     pub(crate) included_defaults: BTreeSet<String>,
+    /// True when the analysis covered every rule in every module
+    pub(crate) analyzed_all_rules: bool,
 }
 
 impl Default for AnalysisState {
@@ -49,6 +51,7 @@ impl AnalysisState {
             function_rule_specializations: BTreeMap::new(),
             requested_entrypoints: Vec::new(),
             included_defaults: BTreeSet::new(),
+            analyzed_all_rules: false,
         }
     }
 

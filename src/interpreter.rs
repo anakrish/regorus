@@ -14,6 +14,7 @@ use crate::lexer::*;
 use crate::lookup::Lookup;
 use crate::parser::Parser;
 use crate::scheduler::*;
+use crate::type_analysis::{TypeAnalysisOptions, TypeAnalyzer};
 use crate::utils::*;
 use crate::value::*;
 use crate::*;
@@ -318,12 +319,16 @@ impl Interpreter {
     }
 
     pub fn set_loop_hoisting_table(&mut self, table: crate::compiler::hoist::HoistedLoopsLookup) {
-        self.compiled_policy_mut().loop_hoisting_table = table;
+        let policy = self.compiled_policy_mut();
+        policy.loop_hoisting_table = table;
+        policy.type_analysis_result = None;
     }
 
     pub fn take_loop_hoisting_table(&mut self) -> crate::compiler::hoist::HoistedLoopsLookup {
+        let policy = self.compiled_policy_mut();
+        policy.type_analysis_result = None;
         core::mem::replace(
-            &mut self.compiled_policy_mut().loop_hoisting_table,
+            &mut policy.loop_hoisting_table,
             crate::compiler::hoist::HoistedLoopsLookup::new(),
         )
     }
@@ -4205,11 +4210,15 @@ impl Interpreter {
 
         compiled_policy.data = data;
         compiled_policy.extensions = extensions;
-        if let Some(rule) = rule {
-            if !compiled_policy.rule_paths.contains(rule.as_ref()) {
+        compiled_policy.type_analysis_result = None;
+
+        let mut entry_rule: Option<Rc<str>> = None;
+        if let Some(rule_path) = rule {
+            if !compiled_policy.rule_paths.contains(rule_path.as_ref()) {
                 bail!("not a valid rule path");
             }
-            compiled_policy.rule_to_evaluate = rule;
+            compiled_policy.rule_to_evaluate = rule_path.clone();
+            entry_rule = Some(rule_path);
         } else {
             compiled_policy.rule_to_evaluate = "".into();
         }
@@ -4219,6 +4228,25 @@ impl Interpreter {
         let hoister = LoopHoister::new();
         let loop_lookup = hoister.populate(compiled_policy.modules.as_ref())?;
         compiled_policy.loop_hoisting_table = loop_lookup;
+
+        // Run type analysis and cache the result alongside the hoist lookup
+        let mut options = TypeAnalysisOptions::default();
+        options.loop_lookup = Some(crate::Rc::new(compiled_policy.loop_hoisting_table.clone()));
+
+        if let Some(rule_path) = entry_rule
+            .as_ref()
+            .map(|rc| rc.as_ref())
+            .filter(|path| path.starts_with("data."))
+        {
+            options.entrypoints = Some(vec![rule_path.to_string()]);
+        }
+
+        let schedule = compiled_policy
+            .schedule
+            .as_ref()
+            .map(|schedule| schedule.as_ref());
+        let analyzer = TypeAnalyzer::new(compiled_policy.modules.as_ref(), schedule, options);
+        compiled_policy.type_analysis_result = Some(crate::Rc::new(analyzer.analyze_modules()));
 
         Ok(self.compiled_policy.clone())
     }

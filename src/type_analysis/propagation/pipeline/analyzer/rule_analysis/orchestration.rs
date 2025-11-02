@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 use alloc::borrow::ToOwned;
+use alloc::vec::Vec;
 
 use crate::ast::{Expr, Module, Rule, RuleHead};
 use crate::type_analysis::context::ScopedBindings;
@@ -206,16 +207,40 @@ impl TypeAnalyzer {
                         .borrow()
                         .contains_key(&(module_idx, rule_idx))
                 {
-                    result.ensure_rule_capacity(module_idx, rule_idx + 1);
-                    let entry = &mut result.rule_info[module_idx as usize][rule_idx];
-                    if matches!(
-                        entry.constant_state,
-                        crate::type_analysis::RuleConstantState::Unknown
-                    ) {
-                        entry.constant_state =
-                            crate::type_analysis::RuleConstantState::NeedsRuntime;
+                    // When analyze_all_rules is enabled, analyze function rules with
+                    // generic Unknown parameters to discover virtual data lookups
+                    if result.analyzed_all_rules {
+                        // Set generic unknown parameters for all function parameters
+                        if let Rule::Spec {
+                            head: RuleHead::Func { args, .. },
+                            ..
+                        } = rule.as_ref()
+                        {
+                            let generic_facts: Vec<_> = args
+                                .iter()
+                                .map(|_| {
+                                    crate::type_analysis::model::TypeFact::new(
+                                        TypeDescriptor::Structural(StructuralType::Unknown),
+                                        TypeProvenance::Unknown,
+                                    )
+                                })
+                                .collect();
+                            self.function_param_facts
+                                .borrow_mut()
+                                .insert((module_idx, rule_idx), generic_facts);
+                        }
+                    } else {
+                        result.ensure_rule_capacity(module_idx, rule_idx + 1);
+                        let entry = &mut result.rule_info[module_idx as usize][rule_idx];
+                        if matches!(
+                            entry.constant_state,
+                            crate::type_analysis::RuleConstantState::Unknown
+                        ) {
+                            entry.constant_state =
+                                crate::type_analysis::RuleConstantState::NeedsRuntime;
+                        }
+                        return;
                     }
-                    return;
                 }
 
                 let rule_path =

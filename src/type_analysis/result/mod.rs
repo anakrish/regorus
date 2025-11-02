@@ -8,11 +8,16 @@
 mod deps;
 mod entrypoints;
 mod expressions;
+mod literals;
 mod rules;
+mod virtual_data;
 
 use alloc::{borrow::ToOwned, collections::BTreeMap, format, string::String, vec, vec::Vec};
 
 use crate::ast::{Expr, Rule, RuleBody, RuleHead};
+use crate::compiler::destructuring_planner::BindingPlan;
+use crate::compiler::hoist::{HoistedLoop, HoistedLoopsLookup};
+use crate::type_analysis::context::DynamicReferencePattern;
 use crate::type_analysis::model::{
     ConstantValue, RuleAnalysis, RuleConstantState, StructuralType, TypeDescriptor, TypeDiagnostic,
     TypeFact, TypeProvenance,
@@ -20,15 +25,18 @@ use crate::type_analysis::model::{
 use crate::type_analysis::propagation::TypeAnalyzer;
 use crate::utils::get_path_string;
 use crate::value::Value;
+use crate::Rc;
 
 pub use deps::{DependencyEdge, DependencyGraph, DependencyKind};
 pub use entrypoints::{DynamicLookupPattern, EntrypointSummary};
 pub use expressions::ExpressionFacts;
+pub use literals::LiteralTableSketch;
 pub use rules::{
     DefinitionSummary, ModuleSummary, RuleBodyKind, RuleBodySummary, RuleKind,
     RuleSpecializationRecord, RuleSpecializationTrace, RuleSummary, RuleTable, RuleVerboseInfo,
     TraceLocal, TraceStatement,
 };
+pub use virtual_data::{VirtualComponent, VirtualDataLookup};
 
 /// Top-level aggregate returned after analysing a module set.
 #[derive(Clone, Debug, Default)]
@@ -37,7 +45,9 @@ pub struct TypeAnalysisResult {
     pub rules: RuleTable,
     pub dependencies: DependencyGraph,
     pub entrypoints: EntrypointSummary,
+    pub literal_table: LiteralTableSketch,
     pub diagnostics: Vec<TypeDiagnostic>,
+    pub loop_lookup: Option<Rc<HoistedLoopsLookup>>,
 }
 
 fn rule_returns_boolean_by_default(head: &RuleHead) -> bool {
@@ -74,12 +84,25 @@ impl TypeAnalysisResult {
     pub(crate) fn from_analysis_state(
         state: super::propagation::AnalysisState,
         modules: &[crate::ast::Ref<crate::ast::Module>],
+        loop_lookup: Option<Rc<HoistedLoopsLookup>>,
     ) -> Self {
         // Build ExpressionFacts from lookup and constants
         let expressions = ExpressionFacts {
             facts: state.lookup.clone(),
             constants: state.constants.clone(),
         };
+
+        // Collect literal information from constant facts
+        let mut literal_table = LiteralTableSketch::new();
+        for module in state.constants.clone().into_lookup().modules() {
+            for slot in module {
+                if let Some(fact) = slot {
+                    if let Some(value) = &fact.value {
+                        literal_table.record_literal(value);
+                    }
+                }
+            }
+        }
 
         // Collect reachable rules
         let reachable = expressions.facts.reachable_rules().cloned().collect();
@@ -305,6 +328,7 @@ impl TypeAnalysisResult {
             reachable,
             included_defaults: state.included_defaults,
             dynamic_refs,
+            analyzed_all_rules: state.analyzed_all_rules,
         };
 
         TypeAnalysisResult {
@@ -312,8 +336,84 @@ impl TypeAnalysisResult {
             rules,
             dependencies,
             entrypoints,
+            literal_table,
             diagnostics: state.diagnostics,
+            loop_lookup,
         }
+    }
+}
+
+impl TypeAnalysisResult {
+    /// Look up the inferred `TypeFact` for an expression, if any.
+    pub fn expression_fact(&self, module_idx: u32, expr_idx: u32) -> Option<&TypeFact> {
+        self.expressions.fact(module_idx, expr_idx)
+    }
+
+    /// Look up the constant value inferred for an expression, if any.
+    pub fn expression_constant(&self, module_idx: u32, expr_idx: u32) -> Option<&Value> {
+        self.expressions.constant_value(module_idx, expr_idx)
+    }
+
+    /// Retrieve the binding plan recorded for an expression, if available.
+    pub fn binding_plan(&self, module_idx: u32, expr_idx: u32) -> Option<&BindingPlan> {
+        self.loop_lookup
+            .as_ref()
+            .and_then(|lookup| lookup.get_expr_binding_plan(module_idx, expr_idx))
+    }
+
+    /// Retrieve the hoisted loops associated with a statement, if available.
+    pub fn statement_loops(&self, module_idx: u32, stmt_idx: u32) -> Option<&[HoistedLoop]> {
+        self.loop_lookup
+            .as_ref()
+            .and_then(|lookup| lookup.get_statement_loops(module_idx, stmt_idx))
+            .map(|loops| loops.as_slice())
+    }
+
+    /// Retrieve the hoisted loops associated with an expression, if available.
+    pub fn expression_loops(&self, module_idx: u32, expr_idx: u32) -> Option<&[HoistedLoop]> {
+        self.loop_lookup
+            .as_ref()
+            .and_then(|lookup| lookup.get_expr_loops(module_idx, expr_idx))
+            .map(|loops| loops.as_slice())
+    }
+
+    /// Get a read-only view of dynamic lookup patterns discovered during analysis.
+    pub fn dynamic_lookup_patterns(&self) -> &[DynamicLookupPattern] {
+        &self.entrypoints.dynamic_refs
+    }
+
+    /// Access the full set of dynamic reference patterns along with their source locations.
+    pub fn dynamic_references(&self) -> &[DynamicReferencePattern] {
+        self.expressions.dynamic_references()
+    }
+
+    /// Iterate over rules marked as reachable by the analyzer.
+    pub fn reachable_rules(&self) -> impl Iterator<Item = &String> {
+        self.expressions.reachable_rules()
+    }
+
+    /// Expose the underlying hoisted loop lookup, if present.
+    pub fn loop_lookup(&self) -> Option<&HoistedLoopsLookup> {
+        self.loop_lookup.as_deref()
+    }
+
+    /// Retrieve analyzer-produced metadata for virtual data document lookups, if available.
+    pub fn virtual_data_lookup(
+        &self,
+        module_idx: u32,
+        expr_idx: u32,
+    ) -> Option<&VirtualDataLookup> {
+        self.expressions.virtual_data_lookup(module_idx, expr_idx)
+    }
+
+    /// Retrieve rule reference paths recorded for a particular expression, if any.
+    pub fn rule_references(&self, module_idx: u32, expr_idx: u32) -> Option<&[String]> {
+        self.expressions.rule_references(module_idx, expr_idx)
+    }
+
+    /// Access the aggregated literal table sketch produced during analysis.
+    pub fn literal_table(&self) -> &LiteralTableSketch {
+        &self.literal_table
     }
 }
 

@@ -14,6 +14,7 @@ pub struct EntrypointSummary {
     pub reachable: BTreeSet<String>,
     pub included_defaults: BTreeSet<String>,
     pub dynamic_refs: Vec<DynamicLookupPattern>,
+    pub analyzed_all_rules: bool,
 }
 
 /// Pattern describing dynamic lookups discovered during analysis.

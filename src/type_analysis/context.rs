@@ -3,6 +3,7 @@
 use alloc::{borrow::ToOwned, collections::BTreeMap, string::String, vec::Vec};
 
 use crate::lookup::Lookup;
+use crate::type_analysis::result::VirtualDataLookup;
 
 use super::model::{TypeFact, TypeProvenance};
 
@@ -11,6 +12,7 @@ use super::model::{TypeFact, TypeProvenance};
 pub struct LookupContext {
     expr_types: Lookup<TypeFact>,
     expr_rule_references: Lookup<Vec<String>>,
+    virtual_data_lookups: Lookup<VirtualDataLookup>,
     /// Current rule being analyzed (for dependency tracking)
     current_rule: Option<String>,
     /// Set of reachable rules (when entrypoint filtering is enabled)
@@ -35,6 +37,7 @@ impl LookupContext {
         LookupContext {
             expr_types: Lookup::new(),
             expr_rule_references: Lookup::new(),
+            virtual_data_lookups: Lookup::new(),
             current_rule: None,
             reachable_rules: BTreeMap::new(),
             dynamic_references: Vec::new(),
@@ -50,9 +53,14 @@ impl LookupContext {
         if self.expr_rule_references.module_len() <= module_idx as usize {
             self.expr_rule_references.push_module(Vec::new());
         }
+        if self.virtual_data_lookups.module_len() <= module_idx as usize {
+            self.virtual_data_lookups.push_module(Vec::new());
+        }
 
         self.expr_types.ensure_capacity(module_idx, max_expr_idx);
         self.expr_rule_references
+            .ensure_capacity(module_idx, max_expr_idx);
+        self.virtual_data_lookups
             .ensure_capacity(module_idx, max_expr_idx);
     }
 
@@ -86,6 +94,31 @@ impl LookupContext {
         self.expr_rule_references
             .get_checked(module_idx, expr_idx)
             .map(|vec| vec.as_slice())
+    }
+
+    /// Record metadata describing a virtual data lookup for an expression.
+    pub fn record_virtual_data_lookup(
+        &mut self,
+        module_idx: u32,
+        expr_idx: u32,
+        lookup: VirtualDataLookup,
+    ) {
+        self.virtual_data_lookups
+            .ensure_capacity(module_idx, expr_idx);
+        self.virtual_data_lookups.set(module_idx, expr_idx, lookup);
+    }
+
+    /// Retrieve virtual data lookup metadata, if any.
+    pub fn get_virtual_data_lookup(
+        &self,
+        module_idx: u32,
+        expr_idx: u32,
+    ) -> Option<&VirtualDataLookup> {
+        self.virtual_data_lookups.get_checked(module_idx, expr_idx)
+    }
+
+    pub fn virtual_data_lookups_modules_snapshot(&self) -> &[Vec<Option<VirtualDataLookup>>] {
+        self.virtual_data_lookups.modules()
     }
 
     /// Set the current rule being analyzed

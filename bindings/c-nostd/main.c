@@ -1,4 +1,8 @@
 #include <stdio.h>
+#include <stdlib.h>
+#if defined(_WIN32)
+#include <malloc.h>
+#endif
 #include "regorus.h"
 
 
@@ -27,11 +31,35 @@ char*  file_to_string(const char* file) {
 
 // If regorus is built with custom-allocator, then provide implementation.
 uint8_t* regorus_aligned_alloc(size_t alignment, size_t size) {
-    return (uint8_t*) aligned_alloc(alignment, size);
+    // Aligned allocations must respect platform quirks: Windows offers
+    // _aligned_malloc/_aligned_free, while macOS/Linux reject aligned_alloc
+    // calls when size is not a multiple of alignment, so we rely on
+    // posix_memalign for the no_std build.
+#if defined(_WIN32)
+    return (uint8_t*) _aligned_malloc(size, alignment);
+#else
+    void* ptr = NULL;
+    // posix_memalign requires alignment to be at least sizeof(void*)
+    // and a power of two; normalize here so small requests succeed.
+    if (alignment < sizeof(void*))
+    {
+        alignment = sizeof(void*);
+    }
+
+    if (posix_memalign(&ptr, alignment, size) != 0)
+    {
+        return NULL;
+    }
+    return (uint8_t*) ptr;
+#endif
 }
 
 void regorus_free(uint8_t* ptr) {
+#if defined(_WIN32)
+    _aligned_free(ptr);
+#else
     free(ptr);
+#endif
 }
 
 

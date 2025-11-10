@@ -1,6 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use alloc::borrow::Cow;
+use core::str::FromStr;
+
 use crate::ast::{Expr, Ref};
 use crate::builtins;
 use crate::builtins::utils::{ensure_args_count, ensure_string};
@@ -88,25 +91,19 @@ fn parse(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Re
         _ => (string, ""),
     };
 
-    // Propagating the underlying error is not useful here.
-    let v: Value = if number_part.starts_with('.') {
-        serde_json::from_str(format!("0{number_part}").as_str())
-    } else {
-        serde_json::from_str(number_part)
-    }
-    .map_err(|_| params[0].span().error("could not parse number"))?;
-
-    let mut n = match v {
-        Value::Number(n) => n.clone(),
-        _ => bail!(span.error("could not parse number")),
-    };
+    let canonical_part = canonicalize_number_part(number_part);
 
     if let Some(e) = ten_exp(suffix) {
-        n.mul_assign(&Number::ten_pow(e)?)?;
-        Ok(Value::from(n))
+        let combined = combine_decimal_exponent(canonical_part.as_ref(), e)
+            .ok_or_else(|| params[0].span().error("could not parse number"))?;
+        let number = Number::from_str(&combined)
+            .map_err(|_| params[0].span().error("could not parse number"))?;
+        Ok(Value::from(number))
     } else if let Some(e) = two_exp(suffix) {
-        n.mul_assign(&Number::two_pow(e)?)?;
-        Ok(Value::from(n))
+        let mut number = Number::from_str(canonical_part.as_ref())
+            .map_err(|_| params[0].span().error("could not parse number"))?;
+        number.mul_assign(&Number::two_pow(e)?)?;
+        Ok(Value::from(number))
     } else {
         Ok(Value::Undefined)
     }
@@ -166,28 +163,75 @@ fn parse_bytes(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) 
         _ => (string, ""),
     };
 
-    let v: Value = match if number_part.starts_with('.') {
-        serde_json::from_str(format!("0{number_part}").as_str())
-    } else {
-        serde_json::from_str(number_part)
-    } {
-        Ok(v) => v,
-        Err(_) if strict => bail!(span.error("could not parse number")),
-        _ => return Ok(Value::Undefined),
-    };
-
-    let mut n = match v {
-        Value::Number(n) => n.clone(),
-        _ => bail!(span.error("could not parse number")),
-    };
+    let canonical_part = canonicalize_number_part(number_part);
 
     if let Some(e) = twob_exp(suffix) {
-        n.mul_assign(&Number::two_pow(e)?)?;
-        Ok(Value::from(n.round()))
+        let mut number = match Number::from_str(canonical_part.as_ref()) {
+            Ok(n) => n,
+            Err(_) if strict => bail!(span.error("could not parse number")),
+            Err(_) => return Ok(Value::Undefined),
+        };
+        number.mul_assign(&Number::two_pow(e)?)?;
+        Ok(Value::from(number.round()))
     } else if let Some(e) = tenb_exp(suffix) {
-        n.mul_assign(&Number::ten_pow(e)?)?;
-        Ok(Value::from(n.round()))
+        let combined = match combine_decimal_exponent(canonical_part.as_ref(), e) {
+            Some(s) => s,
+            None if strict => bail!(span.error("could not parse number")),
+            None => return Ok(Value::Undefined),
+        };
+        let number = match Number::from_str(&combined) {
+            Ok(n) => n,
+            Err(_) if strict => bail!(span.error("could not parse number")),
+            Err(_) => return Ok(Value::Undefined),
+        };
+        Ok(Value::from(number.round()))
     } else {
         Ok(Value::Undefined)
     }
+}
+
+fn canonicalize_number_part(number_part: &str) -> Cow<'_, str> {
+    if let Some(rest) = number_part.strip_prefix("-.") {
+        Cow::Owned(format!("-0.{rest}"))
+    } else if let Some(rest) = number_part.strip_prefix("+.") {
+        Cow::Owned(format!("+0.{rest}"))
+    } else if let Some(rest) = number_part.strip_prefix('.') {
+        Cow::Owned(format!("0.{rest}"))
+    } else {
+        Cow::Borrowed(number_part)
+    }
+}
+
+fn combine_decimal_exponent(number: &str, suffix_exp: i32) -> Option<String> {
+    if suffix_exp == 0 {
+        return Some(number.to_string());
+    }
+
+    let (mantissa, base_exp) = match split_decimal_exponent(number) {
+        Some(parts) => parts,
+        None => (number, 0),
+    };
+
+    if mantissa.is_empty() {
+        return None;
+    }
+
+    let combined_exp = base_exp.checked_add(suffix_exp)?;
+
+    if combined_exp == 0 {
+        Some(mantissa.to_string())
+    } else {
+        Some(format!("{}e{}", mantissa, combined_exp))
+    }
+}
+
+fn split_decimal_exponent(number: &str) -> Option<(&str, i32)> {
+    let idx = number.find(|c| c == 'e' || c == 'E')?;
+    let mantissa = &number[..idx];
+    let exp_part = &number[idx + 1..];
+    if exp_part.is_empty() {
+        return None;
+    }
+    let exponent = exp_part.parse::<i32>().ok()?;
+    Some((mantissa, exponent))
 }

@@ -1,0 +1,49 @@
+# Copyright (c) Microsoft Corporation.  Licensed under the MIT
+# License.
+
+cases:
+  - note: import-dot-newline
+    # Newline before the `.` makes the parser report the error at column 0.
+    rego: |
+      package test
+
+      import data
+      .foo
+    error: "invalid whitespace before ."
+  - note: import-bracket-newline
+    rego: |
+      package test
+
+      import data
+      ["foo"]
+    error: "invalid whitespace before ["
+  - note: import-dot-newline-trailing
+    rego: |
+      package test
+
+      import data
+      .foo
+
+      y := 1
+    error: "invalid whitespace before ."
+  - note: rule-dot-newline
+    rego: |
+      package test
+
+      default x = data
+      .foo
+    error: "expecting identifier. Failed to parse rule-ref."
+  - note: assign-dot-newline
+    rego: |
+      package test
+
+      x := data
+      .foo
+    error: "expecting identifier. Failed to parse rule-ref."
+  - note: bracket-index-newline
+    rego: |
+      package test
+
+      x := data.foo
+      ["bar"]
+    error: "expecting identifier. Failed to parse rule-ref."

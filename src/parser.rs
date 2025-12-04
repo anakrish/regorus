@@ -32,6 +32,15 @@ pub struct Parser<'source> {
 
 const FUTURE_KEYWORDS: [&str; 4] = ["contains", "every", "if", "in"];
 
+#[inline]
+fn col_before(col: u32) -> u32 {
+    if col > 1 {
+        col - 1
+    } else {
+        1
+    }
+}
+
 impl<'source> Parser<'source> {
     pub fn new(source: &'source Source) -> Result<Self> {
         let mut lexer = Lexer::new(source);
@@ -190,9 +199,11 @@ impl<'source> Parser<'source> {
                 }
                 _ => {
                     let s = &comps[3];
-                    return Err(self
-                        .source
-                        .error(s.line, s.col - 1, "invalid future keyword"));
+                    return Err(self.source.error(
+                        s.line,
+                        col_before(s.col),
+                        "invalid future keyword",
+                    ));
                 }
             }
             Ok(true)
@@ -645,7 +656,7 @@ impl<'source> Parser<'source> {
                             "{}",
                             self.source.error(
                                 field.line,
-                                field.col - 1,
+                                col_before(field.col),
                                 "invalid whitespace between . and identifier"
                             )
                         );
@@ -1266,7 +1277,7 @@ impl<'source> Parser<'source> {
                         "{}",
                         self.source.error(
                             self.tok.1.line,
-                            self.tok.1.col - 1,
+                            col_before(self.tok.1.col),
                             format!("invalid whitespace before {}", self.token_text()).as_str()
                         )
                     );
@@ -1283,7 +1294,7 @@ impl<'source> Parser<'source> {
                             "{}",
                             self.source.error(
                                 field.line,
-                                field.col - 1,
+                                col_before(field.col),
                                 "invalid whitespace between . and identifier"
                             )
                         );
@@ -1369,7 +1380,7 @@ impl<'source> Parser<'source> {
                         "{}",
                         self.source.error(
                             self.tok.1.line,
-                            self.tok.1.col - 1,
+                            col_before(self.tok.1.col),
                             format!("invalid whitespace before {}", self.token_text()).as_str()
                         )
                     );
@@ -1386,7 +1397,7 @@ impl<'source> Parser<'source> {
                             "{}",
                             self.source.error(
                                 field.line,
-                                field.col - 1,
+                                col_before(field.col),
                                 "invalid whitespace between . and identifier"
                             )
                         );

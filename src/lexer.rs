@@ -201,9 +201,16 @@ impl Source {
             return format!("{}: invalid line {} specified", self.src.file, line);
         }
 
+        if line == 0 || col == 0 {
+            return format!(
+                "{}: invalid span requested (line {}, col {})",
+                self.src.file, line, col
+            );
+        }
+
         let line_str = format!("{line}");
         let line_num_width = line_str.len() + 1;
-        let col_spaces = col as usize - 1;
+        let col_spaces = (col - 1) as usize;
 
         format!(
             "\n--> {}:{}:{}\n{:<line_num_width$}|\n\

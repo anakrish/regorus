@@ -44,6 +44,61 @@ cases:
     query: data.test.main
     want_result: true
 
+  - note: every_failure_prevents_assignment
+    data: {}
+    modules:
+      - |
+        package test
+        main := 5 if {
+          every x in [1, 2, 3] {
+            x > 10
+          }
+        }
+    query: data.test.main
+    want_result: "#undefined"
+
+  - note: every_undefined_domain_fails
+    modules:
+      - |
+        package test
+        main := true if {
+          every c in input.containers {
+            c > 0
+          }
+        }
+    query: data.test.main
+    want_result: "#undefined"
+
+  - note: every_some_failure_propagates
+    data: {}
+    input:
+      users:
+        - roles: ["reader"]
+        - roles: ["admin"]
+    modules:
+      - |
+        package test
+        main := true if {
+          every user in input.users {
+            some role in user.roles
+            role == "admin"
+          }
+        }
+    query: data.test.main
+    want_result: "#undefined"
+
+  - note: some_in_loop_without_match_is_undefined
+    data: {}
+    modules:
+      - |
+        package test
+        main := true if {
+          some role in ["reader", "writer"]
+          role == "admin"
+        }
+    query: data.test.main
+    want_result: "#undefined"
+
   - note: simple_loop_test
     data: {}
     modules:

@@ -26,7 +26,6 @@ const OPA_TODO_FOLDERS: &[&str] = &[
     "baseandvirtualdocs",
     "dataderef",
     "defaultkeyword",
-    "every",
     "fix1863",
     "functions",
     "partialdocconstants",

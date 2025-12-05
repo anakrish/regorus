@@ -167,6 +167,13 @@ impl<'a> Compiler<'a> {
             *end = loop_end;
         }
 
+        self.emit_instruction(
+            Instruction::AssertCondition {
+                condition: result_reg,
+            },
+            span,
+        );
+
         Ok(())
     }
 
@@ -430,6 +437,13 @@ impl<'a> Compiler<'a> {
         {
             *end = loop_end;
         }
+
+        self.emit_instruction(
+            Instruction::AssertCondition {
+                condition: result_reg,
+            },
+            collection.span(),
+        );
 
         Ok(result_reg)
     }

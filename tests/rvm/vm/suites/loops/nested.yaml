@@ -181,3 +181,97 @@ cases:
       - "LoopNext { body_start: 9, loop_end: 13 }"  # Index 13: Continue loop
       - "Return { value: 6 }"               # Index 14: Return comprehension result
     want_result: [2, 3]
+
+  - note: "every_nested_some_failure"
+    description: "Every quantifier fails when inner some loop finds no admin role"
+    example_rego: |
+      every user in users {
+        some role in user {
+          role == "admin"
+        }
+      }
+    literals:
+      - "reader"
+      - "admin"
+    instruction_params:
+      loop_params:
+        - mode: "Every"
+          collection: 0
+          key_reg: 5
+          value_reg: 6
+          result_reg: 7
+          body_start: 10
+          loop_end: 17
+        - mode: "ForEach"
+          collection: 8
+          key_reg: 9
+          value_reg: 10
+          result_reg: 11
+          body_start: 12
+          loop_end: 15
+    instructions:
+      - "ArrayNew { dest: 0 }"                # Build outer users array
+      - "ArrayNew { dest: 1 }"                # First user's roles
+      - "Load { dest: 2, literal_idx: 0 }"    # "reader"
+      - "ArrayPush { arr: 1, value: 2 }"
+      - "ArrayNew { dest: 3 }"                # Second user's roles
+      - "Load { dest: 4, literal_idx: 1 }"    # "admin"
+      - "ArrayPush { arr: 3, value: 4 }"
+      - "ArrayPush { arr: 0, value: 1 }"      # Append first user
+      - "ArrayPush { arr: 0, value: 3 }"      # Append second user
+      - "LoopStart { params_index: 0 }"       # every user in users
+      - "Move { dest: 8, src: 6 }"            # Prepare inner collection register
+      - "LoopStart { params_index: 1 }"       # some role in user
+      - "Eq { dest: 12, left: 10, right: 4 }" # role == "admin"
+      - "AssertCondition { condition: 12 }"   # marks iteration success/failure
+      - "LoopNext { body_start: 12, loop_end: 15 }"
+      - "AssertCondition { condition: 11 }"   # Require inner some to succeed
+      - "LoopNext { body_start: 10, loop_end: 17 }"
+      - "Return { value: 7 }"
+    want_result: false
+
+  - note: "every_nested_some_success"
+    description: "Every quantifier succeeds when each user has an admin role"
+    example_rego: |
+      every user in users {
+        some role in user {
+          role == "admin"
+        }
+      }
+    literals:
+      - "admin"
+    instruction_params:
+      loop_params:
+        - mode: "Every"
+          collection: 0
+          key_reg: 5
+          value_reg: 6
+          result_reg: 7
+          body_start: 9
+          loop_end: 16
+        - mode: "ForEach"
+          collection: 8
+          key_reg: 9
+          value_reg: 10
+          result_reg: 11
+          body_start: 11
+          loop_end: 14
+    instructions:
+      - "ArrayNew { dest: 0 }"                # Build outer users array
+      - "ArrayNew { dest: 1 }"                # First user's roles
+      - "Load { dest: 4, literal_idx: 0 }"    # "admin"
+      - "ArrayPush { arr: 1, value: 4 }"
+      - "ArrayNew { dest: 3 }"                # Second user's roles
+      - "ArrayPush { arr: 3, value: 4 }"
+      - "ArrayPush { arr: 0, value: 1 }"      # Append first user
+      - "ArrayPush { arr: 0, value: 3 }"      # Append second user
+      - "LoopStart { params_index: 0 }"       # every user in users
+      - "Move { dest: 8, src: 6 }"            # Prepare inner collection register
+      - "LoopStart { params_index: 1 }"       # some role in user
+      - "Eq { dest: 12, left: 10, right: 4 }"
+      - "AssertCondition { condition: 12 }"
+      - "LoopNext { body_start: 11, loop_end: 14 }"
+      - "AssertCondition { condition: 11 }"
+      - "LoopNext { body_start: 9, loop_end: 16 }"
+      - "Return { value: 7 }"
+    want_result: true

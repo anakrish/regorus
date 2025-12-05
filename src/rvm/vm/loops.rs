@@ -112,8 +112,12 @@ impl RegoVM {
                     first_iteration: true,
                 }
             }
+            Value::Undefined => {
+                self.handle_invalid_collection(mode, params.result_reg, params.loop_end)?;
+                return Ok(());
+            }
             _ => {
-                self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
+                self.handle_invalid_collection(mode, params.result_reg, params.loop_end)?;
                 return Ok(());
             }
         };
@@ -277,8 +281,12 @@ impl RegoVM {
                     first_iteration: true,
                 }
             }
+            Value::Undefined => {
+                self.handle_invalid_collection(mode, params.result_reg, params.loop_end)?;
+                return Ok(());
+            }
             _ => {
-                self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
+                self.handle_invalid_collection(mode, params.result_reg, params.loop_end)?;
                 return Ok(());
             }
         };
@@ -479,6 +487,18 @@ impl RegoVM {
         };
 
         self.registers[result_reg as usize] = result;
+        self.pc = (loop_end as usize).saturating_sub(1);
+        Ok(())
+    }
+
+    fn handle_invalid_collection(
+        &mut self,
+        mode: &LoopMode,
+        result_reg: u8,
+        loop_end: u16,
+    ) -> Result<()> {
+        let _ = mode; // all modes treated the same for invalid collections
+        self.registers[result_reg as usize] = Value::Bool(false);
         self.pc = (loop_end as usize).saturating_sub(1);
         Ok(())
     }

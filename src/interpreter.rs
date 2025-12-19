@@ -2549,8 +2549,7 @@ impl Interpreter {
                 let expr_idx = a.as_ref().eidx();
 
                 let binding_success = if let BindingPlan::Parameter {
-                    destructuring_plan,
-                    ..
+                    destructuring_plan, ..
                 } = self.require_binding_plan(module_idx, expr_idx)?
                 {
                     // Execute the destructuring plan with the parameter value
@@ -2589,7 +2588,9 @@ impl Interpreter {
             self.set_current_module(prev_module)?;
 
             let result = match &value {
-                Value::Set(s) if s.len() == 1 => s.iter().next().cloned().unwrap_or(Value::Undefined),
+                Value::Set(s) if s.len() == 1 => {
+                    s.iter().next().cloned().unwrap_or(Value::Undefined)
+                }
                 Value::Set(s) if !s.is_empty() => {
                     return Err(span.source.error(
                         span.line,

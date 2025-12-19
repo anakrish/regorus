@@ -105,26 +105,33 @@ pub fn schedule<Str: Clone + cmp::Ord + fmt::Debug>(
             }
 
             while !queue.is_empty() {
-                let n = queue.len();
-                for _ in 0..n {
-                    let defn = queue.pop_front().unwrap();
-                    // Check if the vars used by this definition are
-                    //  1) defined via prior assignments (or)
-                    //  2) defined in current statement
-                    if defn
-                        .used_vars
-                        .iter()
-                        .all(|uv| defined_vars.contains(uv) || defined_in_stmt.contains(uv))
-                    {
-                        defined_in_stmt.insert(defn.var.clone());
+                let pass_len = queue.len();
+                let mut progressed = false;
+
+                for _ in 0..pass_len {
+                    if let Some(defn) = queue.pop_front() {
+                        // Check if the vars used by this definition are
+                        //  1) defined via prior assignments (or)
+                        //  2) defined in current statement
+                        if defn
+                            .used_vars
+                            .iter()
+                            .all(|uv| defined_vars.contains(uv) || defined_in_stmt.contains(uv))
+                        {
+                            defined_in_stmt.insert(defn.var.clone());
+                            progressed = true;
+                        } else {
+                            // The definiton must be processed again.
+                            queue.push_back(defn);
+                        }
                     } else {
-                        // The definiton must be processed again.
-                        queue.push_back(defn);
+                        break;
                     }
                 }
+
                 // If no definition became defined, then there is a cycle between
                 // the definitions in this statement. The cycle cannot be broken yet.
-                if n == queue.len() {
+                if !progressed {
                     break;
                 }
             }

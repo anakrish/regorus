@@ -37,14 +37,12 @@ impl RegoVM {
             Some(params) => {
                 for arg in params.args[0..params.num_args as usize].iter() {
                     let arg_index = *arg as usize;
-                    let arg_value = self
-                        .registers
-                        .get(arg_index)
-                        .cloned()
-                        .ok_or(VmError::RegisterIndexOutOfBounds {
+                    let arg_value = self.registers.get(arg_index).cloned().ok_or(
+                        VmError::RegisterIndexOutOfBounds {
                             index: arg_index,
                             max_index: self.registers.len().saturating_sub(1),
-                        })?;
+                        },
+                    )?;
                     register_window.push(arg_value);
                 }
                 params.num_args as usize + 1
@@ -316,14 +314,12 @@ impl RegoVM {
         if let Some(params) = function_call_params {
             for &arg in params.arg_registers() {
                 let arg_index = arg as usize;
-                let arg_value = self
-                    .registers
-                    .get(arg_index)
-                    .cloned()
-                    .ok_or(VmError::RegisterIndexOutOfBounds {
+                let arg_value = self.registers.get(arg_index).cloned().ok_or(
+                    VmError::RegisterIndexOutOfBounds {
                         index: arg_index,
                         max_index: self.registers.len().saturating_sub(1),
-                    })?;
+                    },
+                )?;
                 register_window.push(arg_value);
             }
         }
@@ -386,12 +382,12 @@ impl RegoVM {
     }
 
     pub(super) fn execute_rule_init(&mut self, result_reg: u8, _rule_index: u16) -> Result<()> {
-        let current_ctx = self
-            .call_rule_stack
-            .last_mut()
-            .ok_or(VmError::ExecutionStackUnderflow {
-                context: "initializing rule frame",
-            })?;
+        let current_ctx =
+            self.call_rule_stack
+                .last_mut()
+                .ok_or(VmError::ExecutionStackUnderflow {
+                    context: "initializing rule frame",
+                })?;
         current_ctx.result_reg = result_reg;
         match current_ctx.rule_type {
             RuleType::Complete => {

@@ -306,12 +306,12 @@ impl RegoVM {
             }
 
             let frame_pc = {
-                let frame = self
-                    .execution_stack
-                    .last()
-                    .ok_or(VmError::ExecutionStackUnderflow {
-                        context: "fetching current frame pc",
-                    })?;
+                let frame =
+                    self.execution_stack
+                        .last()
+                        .ok_or(VmError::ExecutionStackUnderflow {
+                            context: "fetching current frame pc",
+                        })?;
                 frame.pc
             };
 

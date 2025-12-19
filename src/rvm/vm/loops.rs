@@ -607,7 +607,12 @@ impl RegoVM {
 
         if !self.loop_stack.is_empty() {
             let (loop_mode, loop_next_pc, loop_end, result_reg) = {
-                let loop_ctx = self.loop_stack.last().unwrap();
+                let loop_ctx = self
+                    .loop_stack
+                    .last()
+                    .ok_or(VmError::ExecutionStackUnderflow {
+                        context: "handling loop condition",
+                    })?;
                 (
                     loop_ctx.mode.clone(),
                     loop_ctx.loop_next_pc,

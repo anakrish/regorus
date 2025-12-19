@@ -3,8 +3,15 @@
 
 #![forbid(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![allow(unknown_lints)]
+#![deny(unknown_lints)]
 #![allow(clippy::doc_lazy_continuation)]
+#![deny(
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::dbg_macro
+)]
+#![warn(clippy::match_like_matches_macro)]
 // Use README.md as crate documentation.
 #![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
 // We'll default to building for no_std - use core, alloc instead of std.

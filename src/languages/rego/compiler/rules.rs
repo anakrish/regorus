@@ -428,19 +428,31 @@ impl<'a> Compiler<'a> {
                         _ => span.clone(),
                     };
 
+                    let context_span = span.clone();
+
                     let context = CompilationContext {
                         dest_register: result_register,
                         context_type: ContextType::Rule(rule_type.clone()),
                         key_expr,
                         value_expr,
-                        span,
+                        span: context_span,
                         key_value_loops_hoisted: false,
                     };
                     self.push_context(context);
                     let mut body_entry_points = Vec::new();
 
                     if bodies.is_empty() {
-                        let value_expr_opt = self.context_stack.last().unwrap().value_expr.clone();
+                        let value_expr_opt = self
+                            .context_stack
+                            .last()
+                            .map(|ctx| ctx.value_expr.clone())
+                            .ok_or_else(|| {
+                                CompilerError::General {
+                                    message: "internal: missing compilation context for rule value"
+                                        .to_string(),
+                                }
+                                .at(&span)
+                            })?;
                         if let Some(value_expr) = value_expr_opt {
                             let body_entry_point = self.program.instructions.len() as u32;
                             body_entry_points.push(body_entry_point);

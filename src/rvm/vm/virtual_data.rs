@@ -141,12 +141,12 @@ impl RegoVM {
                         let temp_reg = self.registers.len() as u8;
                         self.registers.push(Value::Undefined);
                         self.execute_call_rule_common(temp_reg, rule_index as u16, None)?;
-                        let result = self
-                            .registers
-                            .pop()
-                            .ok_or(VmError::ExecutionStackUnderflow {
-                                context: "popping temporary register after rule call",
-                            })?;
+                        let result =
+                            self.registers
+                                .pop()
+                                .ok_or(VmError::ExecutionStackUnderflow {
+                                    context: "popping temporary register after rule call",
+                                })?;
 
                         let mut cache_path = full_cache_path.clone();
                         cache_path.push(Value::Undefined);

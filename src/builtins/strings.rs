@@ -233,16 +233,17 @@ fn sprintf(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
                     let first_char = c;
                     let mut w = 0;
                     if c != '.' {
-                        w = c.to_digit(10).expect("could not get digit from char");
+                        w = c
+                            .to_digit(10)
+                            .ok_or_else(|| params[0].span().error("invalid width digit"))?;
                     }
 
                     while chars.peek().map(|c| c.is_numeric()) == Some(true) {
-                        w = w * 10
-                            + chars
-                                .next()
-                                .expect("could not get next digit")
-                                .to_digit(10)
-                                .expect("could not get digit from char");
+                        let digit_char = chars.next().unwrap(); // safe due to peek
+                        let digit = digit_char
+                            .to_digit(10)
+                            .ok_or_else(|| params[0].span().error("invalid width digit"))?;
+                        w = w * 10 + digit;
                     }
                     let width = match first_char {
                         '0' => Width::LeadingZeros(w as usize),

@@ -42,10 +42,14 @@ fn max(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Resu
     ensure_args_count(span, "max", params, args, 1)?;
 
     Ok(match &args[0] {
-        Value::Array(a) if a.is_empty() => Value::Undefined,
-        Value::Array(a) => a.iter().max().unwrap().clone(),
-        Value::Set(a) if a.is_empty() => Value::Undefined,
-        Value::Set(a) => a.iter().max().unwrap().clone(),
+        Value::Array(a) => match a.iter().max() {
+            Some(v) => v.clone(),
+            None => Value::Undefined,
+        },
+        Value::Set(a) => match a.iter().max() {
+            Some(v) => v.clone(),
+            None => Value::Undefined,
+        },
         a => {
             let span = params[0].span();
             bail!(span.error(format!("`max` requires array/set argument. Got `{a}`.").as_str()))
@@ -57,10 +61,14 @@ fn min(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Resu
     ensure_args_count(span, "min", params, args, 1)?;
 
     Ok(match &args[0] {
-        Value::Array(a) if a.is_empty() => Value::Undefined,
-        Value::Array(a) => a.iter().min().unwrap().clone(),
-        Value::Set(a) if a.is_empty() => Value::Undefined,
-        Value::Set(a) => a.iter().min().unwrap().clone(),
+        Value::Array(a) => match a.iter().min() {
+            Some(v) => v.clone(),
+            None => Value::Undefined,
+        },
+        Value::Set(a) => match a.iter().min() {
+            Some(v) => v.clone(),
+            None => Value::Undefined,
+        },
         a => {
             let span = params[0].span();
             bail!(span.error(format!("`min` requires array/set argument. Got `{a}`.").as_str()))

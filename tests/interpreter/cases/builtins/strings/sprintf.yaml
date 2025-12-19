@@ -68,6 +68,23 @@ cases:
       zero_padded: "Zero padded: 00042"
       decimal_places: "Decimal: 3.14"
 
+  - note: width parsing edge cases
+    data: {}
+    modules:
+      - |
+        package test
+
+        padded_multi := sprintf("<%10d>", [42])
+        zero_multi := sprintf("<%010d>", [42])
+        pair := sprintf("%02d-%03d", [1, 9])
+        percent := sprintf("%03d%% ready", [5])
+    query: data.test
+    want_result:
+      padded_multi: "<        42>"
+      zero_multi: "<0000000042>"
+      pair: "01-009"
+      percent: "005% ready"
+
   - note: error cases
     data: {}
     modules:
@@ -78,3 +95,13 @@ cases:
         error_case := sprintf("Value: %s %d", ["only_one"])
     query: data.test
     error: "no argument specified for format verb 1"
+
+  - note: error on missing verb after width
+    data: {}
+    modules:
+      - |
+        package test
+
+        bad := sprintf("%05", [1])
+    query: data.test
+    error: "missing format verb after `%width`"

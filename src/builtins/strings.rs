@@ -229,7 +229,7 @@ fn sprintf(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
                     s.push('%');
                     continue;
                 }
-                Some(c) if c == '.' || c.is_numeric() => {
+                Some(c) if c == '.' || c.is_ascii_digit() => {
                     let first_char = c;
                     let mut w = 0;
                     if c != '.' {
@@ -238,9 +238,8 @@ fn sprintf(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
                             .ok_or_else(|| params[0].span().error("invalid width digit"))?;
                     }
 
-                    while chars.peek().map(|c| c.is_numeric()) == Some(true) {
-                        let digit_char = chars.next().unwrap(); // safe due to peek
-                        let digit = digit_char
+                    while let Some(d) = chars.next_if(|ch| ch.is_ascii_digit()) {
+                        let digit = d
                             .to_digit(10)
                             .ok_or_else(|| params[0].span().error("invalid width digit"))?;
                         w = w * 10 + digit;

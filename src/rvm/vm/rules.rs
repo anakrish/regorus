@@ -36,7 +36,16 @@ impl RegoVM {
         let num_retained_registers = match function_call_params {
             Some(params) => {
                 for arg in params.args[0..params.num_args as usize].iter() {
-                    register_window.push(self.registers[*arg as usize].clone());
+                    let arg_index = *arg as usize;
+                    let arg_value = self
+                        .registers
+                        .get(arg_index)
+                        .cloned()
+                        .ok_or(VmError::RegisterIndexOutOfBounds {
+                            index: arg_index,
+                            max_index: self.registers.len().saturating_sub(1),
+                        })?;
+                    register_window.push(arg_value);
                 }
                 params.num_args as usize + 1
             }
@@ -190,7 +199,12 @@ impl RegoVM {
 
         self.registers[dest as usize] = Value::Undefined;
 
-        let call_context = self.call_rule_stack.pop().expect("Call stack underflow");
+        let call_context = self
+            .call_rule_stack
+            .pop()
+            .ok_or(VmError::ExecutionStackUnderflow {
+                context: "popping call_rule_stack after rule execution",
+            })?;
         self.pc = call_context.return_pc;
 
         let result_from_rule = if !rule_failed_due_to_inconsistency {
@@ -301,7 +315,16 @@ impl RegoVM {
 
         if let Some(params) = function_call_params {
             for &arg in params.arg_registers() {
-                register_window.push(self.registers[arg as usize].clone());
+                let arg_index = arg as usize;
+                let arg_value = self
+                    .registers
+                    .get(arg_index)
+                    .cloned()
+                    .ok_or(VmError::RegisterIndexOutOfBounds {
+                        index: arg_index,
+                        max_index: self.registers.len().saturating_sub(1),
+                    })?;
+                register_window.push(arg_value);
             }
         }
 
@@ -366,7 +389,9 @@ impl RegoVM {
         let current_ctx = self
             .call_rule_stack
             .last_mut()
-            .expect("Call stack underflow");
+            .ok_or(VmError::ExecutionStackUnderflow {
+                context: "initializing rule frame",
+            })?;
         current_ctx.result_reg = result_reg;
         match current_ctx.rule_type {
             RuleType::Complete => {

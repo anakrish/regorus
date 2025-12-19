@@ -149,7 +149,7 @@ impl RegoVM {
                     return Ok(value);
                 }
                 InstructionOutcome::Break => {
-                    return Ok(self.registers[0].clone());
+                    return Ok(self.registers.first().cloned().unwrap_or(Value::Undefined));
                 }
                 InstructionOutcome::Suspend { reason } => {
                     return Err(VmError::Internal(alloc::format!(
@@ -160,7 +160,7 @@ impl RegoVM {
             }
         }
 
-        Ok(self.registers[0].clone())
+        Ok(self.registers.first().cloned().unwrap_or(Value::Undefined))
     }
 
     fn execute_run_to_completion(&mut self) -> Result<Value> {
@@ -292,7 +292,12 @@ impl RegoVM {
             };
 
             if should_finalize_rule {
-                let frame = self.execution_stack.pop().expect("frame available");
+                let frame = self
+                    .execution_stack
+                    .pop()
+                    .ok_or(VmError::ExecutionStackUnderflow {
+                        context: "finalizing rule frame",
+                    })?;
                 self.finalize_rule_execution_frame(frame, last_result)?;
                 if self.execution_stack.is_empty() {
                     break;
@@ -304,7 +309,9 @@ impl RegoVM {
                 let frame = self
                     .execution_stack
                     .last()
-                    .expect("stack checked to be non-empty");
+                    .ok_or(VmError::ExecutionStackUnderflow {
+                        context: "fetching current frame pc",
+                    })?;
                 frame.pc
             };
 
@@ -322,7 +329,12 @@ impl RegoVM {
             }
 
             if frame_pc >= program.instructions.len() {
-                let frame = self.execution_stack.pop().expect("frame exists");
+                let frame = self
+                    .execution_stack
+                    .pop()
+                    .ok_or(VmError::ExecutionStackUnderflow {
+                        context: "finishing frame after pc overrun",
+                    })?;
                 self.finalize_rule_execution_frame(frame, last_result)?;
                 if self.execution_stack.is_empty() {
                     break;
@@ -350,7 +362,12 @@ impl RegoVM {
                         && !matches!(instruction, Instruction::ComprehensionEnd { .. })
                     {
                         let resume_pc = frame_pc;
-                        let _completed = self.execution_stack.pop().expect("frame exists");
+                        let _completed =
+                            self.execution_stack
+                                .pop()
+                                .ok_or(VmError::ExecutionStackUnderflow {
+                                    context: "unwinding comprehension frame",
+                                })?;
                         if let Some(parent) = self.execution_stack.last_mut() {
                             parent.pc = resume_pc;
                             self.frame_pc_overridden = true;

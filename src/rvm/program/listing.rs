@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 

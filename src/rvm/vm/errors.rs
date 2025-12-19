@@ -27,6 +27,9 @@ pub enum VmError {
     #[error("Register {register} does not contain a set")]
     RegisterNotSet { register: u8 },
 
+    #[error("Register index {index} out of bounds (max: {max_index})")]
+    RegisterIndexOutOfBounds { index: usize, max_index: usize },
+
     #[error("Rule index {index} out of bounds")]
     RuleIndexOutOfBounds { index: u16 },
 
@@ -92,6 +95,9 @@ pub enum VmError {
 
     #[error("Assertion failed")]
     AssertionFailed,
+
+    #[error("Execution stack underflow while {context}")]
+    ExecutionStackUnderflow { context: &'static str },
 
     #[error("Rule-data conflict: {0}")]
     RuleDataConflict(String),

@@ -372,7 +372,12 @@ impl RegoVM {
         match action {
             LoopAction::ExitWithSuccess => {
                 self.registers[result_reg as usize] = Value::Bool(true);
-                let completed_frame = self.execution_stack.pop().expect("loop frame exists");
+                let completed_frame =
+                    self.execution_stack
+                        .pop()
+                        .ok_or(VmError::ExecutionStackUnderflow {
+                            context: "finishing loop with success",
+                        })?;
                 if let Some(parent) = self.execution_stack.last_mut() {
                     parent.pc = resume_pc;
                     self.frame_pc_overridden = true;
@@ -382,7 +387,12 @@ impl RegoVM {
             }
             LoopAction::ExitWithFailure => {
                 self.registers[result_reg as usize] = Value::Bool(false);
-                let completed_frame = self.execution_stack.pop().expect("loop frame exists");
+                let completed_frame =
+                    self.execution_stack
+                        .pop()
+                        .ok_or(VmError::ExecutionStackUnderflow {
+                            context: "finishing loop with failure",
+                        })?;
                 if let Some(parent) = self.execution_stack.last_mut() {
                     parent.pc = resume_pc;
                     self.frame_pc_overridden = true;
@@ -453,7 +463,12 @@ impl RegoVM {
 
                     self.registers[result_reg as usize] = final_result;
 
-                    let completed_frame = self.execution_stack.pop().expect("loop frame exists");
+                    let completed_frame =
+                        self.execution_stack
+                            .pop()
+                            .ok_or(VmError::ExecutionStackUnderflow {
+                                context: "exiting loop after last iteration",
+                            })?;
                     if let Some(parent) = self.execution_stack.last_mut() {
                         parent.pc = resume_pc;
                         self.frame_pc_overridden = true;
@@ -648,7 +663,12 @@ impl RegoVM {
                 }
                 LoopMode::Every => {
                     self.registers[context.result_reg as usize] = Value::Bool(false);
-                    let completed_frame = self.execution_stack.pop().expect("loop frame exists");
+                    let completed_frame =
+                        self.execution_stack
+                            .pop()
+                            .ok_or(VmError::ExecutionStackUnderflow {
+                                context: "closing Loop::Every after failure",
+                            })?;
                     if let Some(parent) = self.execution_stack.last_mut() {
                         parent.pc = resume_pc;
                     }

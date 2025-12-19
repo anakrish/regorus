@@ -2,6 +2,8 @@
 // Licensed under the MIT License.
 
 #![cfg(debug_assertions)]
+// Panics here are acceptable in debug-only index validation.
+#![allow(clippy::panic)]
 
 use crate::ast::*;
 use alloc::collections::BTreeSet;

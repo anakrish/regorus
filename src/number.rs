@@ -72,6 +72,11 @@ impl Number {
         }
     }
 
+    fn as_bigint_exact(&self) -> Result<BigInt> {
+        self.to_bigint_owned()
+            .ok_or_else(|| anyhow!("value not representable as integer"))
+    }
+
     fn float_to_small_bigint(value: f64) -> Option<BigInt> {
         if !value.is_finite() || value.fract() != 0.0 {
             return None;
@@ -129,8 +134,8 @@ impl Number {
         }
     }
 
-    fn ints_to_bigint(a: &Number, b: &Number) -> (BigInt, BigInt) {
-        (a.to_bigint_owned().unwrap(), b.to_bigint_owned().unwrap())
+    fn ints_to_bigint(a: &Number, b: &Number) -> Result<(BigInt, BigInt)> {
+        Ok((a.as_bigint_exact()?, b.as_bigint_exact()?))
     }
 
     fn normalize_float(value: f64) -> Number {
@@ -451,7 +456,7 @@ impl Number {
             }
             (Number::BigInt(a), other) | (other, Number::BigInt(a)) => {
                 let mut sum = (**a).clone();
-                sum += other.to_bigint_owned().unwrap();
+                sum += other.as_bigint_exact()?;
                 Ok(Number::from_bigint_owned(sum))
             }
             _ => unreachable!(),
@@ -494,11 +499,11 @@ impl Number {
             }
             (Number::BigInt(a), other) => {
                 let mut diff = (**a).clone();
-                diff -= other.to_bigint_owned().unwrap();
+                diff -= other.as_bigint_exact()?;
                 Ok(Number::from_bigint_owned(diff))
             }
             (other, Number::BigInt(b)) => {
-                let mut diff = other.to_bigint_owned().unwrap();
+                let mut diff = other.as_bigint_exact()?;
                 diff -= (**b).clone();
                 Ok(Number::from_bigint_owned(diff))
             }
@@ -551,7 +556,7 @@ impl Number {
                 Ok(Number::from_bigint_owned((**a).clone() * (**b).clone()))
             }
             (Number::BigInt(a), other) | (other, Number::BigInt(a)) => {
-                let product = (**a).clone() * other.to_bigint_owned().unwrap();
+                let product = (**a).clone() * other.as_bigint_exact()?;
                 Ok(Number::from_bigint_owned(product))
             }
             _ => unreachable!(),
@@ -653,7 +658,7 @@ impl Number {
             bail!("modulo on floating-point number");
         }
 
-        let (a, b) = Number::ints_to_bigint(&self, rhs);
+        let (a, b) = Number::ints_to_bigint(&self, rhs)?;
         let rem = a % &b;
         Ok(Number::from_bigint_owned(rem))
     }
@@ -972,4 +977,41 @@ fn scientific_parts_to_bigint(mantissa: &str, exponent: i32) -> Option<BigInt> {
     }
 
     Some(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn modulo_errors_on_large_integral_float() {
+        // 1e20 is an integer in value but outside the safe exact range for f64 to bigint conversion.
+        let lhs = Number::Float(1e20);
+        let rhs = Number::Int(2);
+        let result = lhs.modulo(&rhs);
+        assert!(
+            result.is_err(),
+            "expected error instead of panic for large integral float"
+        );
+    }
+
+    #[test]
+    fn modulo_succeeds_for_safe_integer_float() {
+        let lhs = Number::Float(1e6);
+        let rhs = Number::Int(2);
+        let result = lhs
+            .modulo(&rhs)
+            .expect("modulo should work for safe integers");
+        assert_eq!(result, Number::Int(0));
+    }
+
+    #[test]
+    fn bigint_branches_handle_non_bigint_operands() {
+        let big = Number::from(BigInt::from(5));
+        let small = Number::Int(3);
+        let sum = big
+            .add(&small)
+            .expect("add should handle non-bigint operand");
+        assert_eq!(sum, Number::from(BigInt::from(8)));
+    }
 }

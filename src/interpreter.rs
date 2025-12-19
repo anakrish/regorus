@@ -2686,6 +2686,14 @@ impl Interpreter {
     ) -> Result<Value> {
         // TODO: global var check; interop with `some var`
         if extra_arg.is_some() {
+            if params.is_empty() {
+                return Err(span.source.error(
+                    span.line,
+                    span.col,
+                    "return argument missing for function call",
+                ));
+            }
+
             let value = self.eval_call_impl(span, expr, fcn, &params[..params.len() - 1])?;
             if allow_return_arg {
                 let last_param = &params[params.len() - 1];

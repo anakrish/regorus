@@ -299,7 +299,9 @@ fn order_element_pairs<T: VariableBindingContext>(
 
         for idx in 0..remaining.len() {
             let (_, _, deps, _) = &remaining[idx];
-            let deps = deps.as_ref().expect("checked above");
+            let Some(deps) = deps.as_ref() else {
+                continue;
+            };
             let ready = deps.iter().all(|var| {
                 scheduled.contains(var) || !context.is_var_unbound(var, ScopingMode::RespectParent)
             });

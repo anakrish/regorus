@@ -71,16 +71,19 @@ impl<'a> Compiler<'a> {
         loops: &[HoistedLoop],
     ) -> Result<()> {
         if loops.is_empty() {
-            if !stmts.is_empty() {
-                self.compile_single_statement(stmts[0])?;
-                return self.hoist_loops_and_compile_statements(&stmts[1..]);
-            } else {
-                self.hoist_loops_and_emit_context_yield()?;
+            if let Some((first, rest)) = stmts.split_first() {
+                self.compile_single_statement(first)?;
+                return self.hoist_loops_and_compile_statements(rest);
             }
+
+            self.hoist_loops_and_emit_context_yield()?;
+            return Ok(());
         }
 
-        let current_loop = &loops[0];
-        let remaining_loops = &loops[1..];
+        let (current_loop, remaining_loops) = match loops.split_first() {
+            Some(pair) => pair,
+            None => return Ok(()), // loops emptiness already handled above
+        };
 
         match current_loop.loop_type {
             LoopType::IndexIteration => {

@@ -129,7 +129,12 @@ impl<'a> Compiler<'a> {
 
     /// Get the current scope mutably
     fn current_scope_mut(&mut self) -> &mut Scope {
-        self.scopes.last_mut().expect("No active scope")
+        if self.scopes.is_empty() {
+            self.scopes.push(Scope::default());
+        }
+
+        let last_idx = self.scopes.len() - 1;
+        &mut self.scopes[last_idx]
     }
 
     /// Add a variable to the current scope (like interpreter's add_variable)

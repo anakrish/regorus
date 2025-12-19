@@ -144,9 +144,12 @@ impl<'a> Compiler<'a> {
         }
 
         // Build the static prefix path components for rule matching
-        let static_prefix = chain
-            .get_static_prefix()
-            .expect("data references must have variable roots");
+        let Some(static_prefix) = chain.get_static_prefix() else {
+            return Err(CompilerError::General {
+                message: "data reference root must be a variable".to_string(),
+            }
+            .at(span));
+        };
 
         // Try to find the longest matching rule prefix
         // Start from the full path and work backwards

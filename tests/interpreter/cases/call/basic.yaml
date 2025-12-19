@@ -76,6 +76,25 @@ cases:
     query: data.test
     error: expects numeric argument.
 
+  - note: zero-input-function-out-param
+    data: {}
+    modules:
+      - |
+        package test
+        import future.keywords.if
+
+        # Function with no input params returning via out param
+        make_one() := y if {
+          y := 1
+        }
+
+        ok if {
+          make_one(x)
+          x == 1
+        }
+    query: data.test.ok
+    want_result: true
+
   - note: multiline-member-access-should-error
     data: {}
     modules:

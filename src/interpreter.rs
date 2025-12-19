@@ -382,6 +382,20 @@ impl Interpreter {
     }
 
     #[inline]
+    fn require_binding_plan(&self, module_idx: u32, expr_idx: u32) -> Result<BindingPlan> {
+        self.compiled_policy
+            .loop_hoisting_table
+            .get_expr_binding_plan(module_idx, expr_idx)
+            .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?
+            .cloned()
+            .ok_or_else(|| {
+                anyhow!(
+                    "internal error: missing binding plan (module_idx={module_idx}, expr_idx={expr_idx})"
+                )
+            })
+    }
+
+    #[inline]
     fn loop_assignment_expr(loop_info: &HoistedLoop) -> &ExprRef {
         loop_info.loop_expr.as_ref().unwrap_or(&loop_info.value)
     }
@@ -410,21 +424,16 @@ impl Interpreter {
             if let Some(last_param) = params.last() {
                 let module_idx = self.current_module_index;
                 let expr_idx = last_param.as_ref().eidx();
-                let binding_plan = self
-                    .compiled_policy
-                    .loop_hoisting_table
-                    .get_expr_binding_plan(module_idx, expr_idx)
-                    .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?;
+                let binding_plan = self.require_binding_plan(module_idx, expr_idx)?;
 
-                return match binding_plan.cloned() {
-                    Some(BindingPlan::Parameter {
+                return match binding_plan {
+                    BindingPlan::Parameter {
                         destructuring_plan, ..
-                    }) => Ok(Some(destructuring_plan)),
-                    Some(other_plan) => bail!(
+                    } => Ok(Some(destructuring_plan)),
+                    other_plan => bail!(
                         "internal error: expected Parameter for walk output parameter, got {:?}",
                         other_plan
                     ),
-                    None => bail!("internal error: missing binding plan for walk output parameter"),
                 };
             }
         }
@@ -880,18 +889,13 @@ impl Interpreter {
         // Fetch the binding plan for this some..in expression
         let module_idx = self.current_module_index;
         let expr_idx = collection.as_ref().eidx();
+        let binding_plan = self.require_binding_plan(module_idx, expr_idx)?;
 
-        let binding_plan = self
-            .compiled_policy
-            .loop_hoisting_table
-            .get_expr_binding_plan(module_idx, expr_idx)
-            .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?;
-
-        let Some(BindingPlan::SomeIn {
+        let BindingPlan::SomeIn {
             key_plan,
             value_plan,
             ..
-        }) = binding_plan.cloned()
+        } = binding_plan
         else {
             bail!("internal error: missing binding plan for some..in expression");
         };
@@ -1424,21 +1428,14 @@ impl Interpreter {
             let index_plan = if let Some(index) = index_expr {
                 let module_idx = self.current_module_index;
                 let expr_idx = index.as_ref().eidx();
-                let plan = self
-                    .compiled_policy
-                    .loop_hoisting_table
-                    .get_expr_binding_plan(module_idx, expr_idx)
-                    .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?;
+                let plan = self.require_binding_plan(module_idx, expr_idx)?;
 
-                match plan.cloned() {
-                    Some(BindingPlan::LoopIndex {
+                match plan {
+                    BindingPlan::LoopIndex {
                         destructuring_plan, ..
-                    }) => destructuring_plan,
-                    Some(other_plan) => {
+                    } => destructuring_plan,
+                    other_plan => {
                         bail!("internal error: expected LoopIndex for loop index expression, got {:?}", other_plan);
-                    }
-                    None => {
-                        bail!("internal error: no binding plan found for loop index expression");
                     }
                 }
             } else {
@@ -1661,6 +1658,9 @@ impl Interpreter {
     }
 
     fn eval_output_expr_in_loop(&mut self, loops: &[HoistedLoop]) -> Result<bool> {
+        if self.contexts.is_empty() {
+            bail!("internal error: no active context for output evaluation");
+        }
         if loops.is_empty() {
             let (key_expr, output_expr) = self.get_exprs_from_context()?;
 
@@ -1940,6 +1940,9 @@ impl Interpreter {
     }
 
     fn eval_stmts(&mut self, stmts: &[&LiteralStmt]) -> Result<bool> {
+        if self.contexts.is_empty() {
+            bail!("internal error: no active context for statement evaluation");
+        }
         let mut result = true;
 
         for (idx, stmt) in stmts.iter().enumerate() {
@@ -2545,15 +2548,10 @@ impl Interpreter {
                 let module_idx = callee_module_idx;
                 let expr_idx = a.as_ref().eidx();
 
-                let binding_success = if let Some(BindingPlan::Parameter {
+                let binding_success = if let BindingPlan::Parameter {
                     destructuring_plan,
                     ..
-                }) = self
-                    .compiled_policy
-                    .loop_hoisting_table
-                    .get_expr_binding_plan(module_idx, expr_idx)
-                    .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?
-                    .cloned()
+                } = self.require_binding_plan(module_idx, expr_idx)?
                 {
                     // Execute the destructuring plan with the parameter value
                     self.execute_destructuring_plan(&destructuring_plan, &param_values[idx])?
@@ -2591,7 +2589,7 @@ impl Interpreter {
             self.set_current_module(prev_module)?;
 
             let result = match &value {
-                Value::Set(s) if s.len() == 1 => s.iter().next().unwrap().clone(),
+                Value::Set(s) if s.len() == 1 => s.iter().next().cloned().unwrap_or(Value::Undefined),
                 Value::Set(s) if !s.is_empty() => {
                     return Err(span.source.error(
                         span.line,
@@ -2692,14 +2690,9 @@ impl Interpreter {
                 let last_param = &params[params.len() - 1];
                 let module_idx = self.current_module_index;
                 let expr_idx = last_param.as_ref().eidx();
-                if let Some(BindingPlan::Parameter {
+                if let BindingPlan::Parameter {
                     destructuring_plan, ..
-                }) = self
-                    .compiled_policy
-                    .loop_hoisting_table
-                    .get_expr_binding_plan(module_idx, expr_idx)
-                    .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?
-                    .cloned()
+                } = self.require_binding_plan(module_idx, expr_idx)?
                 {
                     // Execute the destructuring plan with the return value
                     let result = self.execute_destructuring_plan(&destructuring_plan, &value)?;
@@ -2988,12 +2981,8 @@ impl Interpreter {
                 let expr_idx = expr.as_ref().eidx();
                 let expr_text = expr.span().text().to_string();
                 let binding_plan = self
-                    .compiled_policy
-                    .loop_hoisting_table
-                    .get_expr_binding_plan(module_idx, expr_idx)
-                    .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?
-                    .cloned()
-                    .ok_or_else(|| {
+                    .require_binding_plan(module_idx, expr_idx)
+                    .map_err(|_| {
                         expr.span().error(
                             format!(
                                 "binding plan missing for assignment expression (module_idx={module_idx}, expr_idx={expr_idx}, expr='{expr_text}')"

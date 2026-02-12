@@ -197,7 +197,6 @@ pub enum Access {
         args: Vec<Expr>,
     },
 }
-
 impl Qualifier {
     pub const fn span(&self) -> &Span {
         match *self {

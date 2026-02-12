@@ -389,6 +389,44 @@ impl Program {
         Ok(Program { program })
     }
 
+    /// Compile Cedar policies into an RVM program.
+    #[cfg(feature = "cedar")]
+    pub fn compileCedarPolicies(policies_json: String) -> Result<Program, JsValue> {
+        let specs: Vec<CedarPolicySpec> =
+            serde_json::from_str(&policies_json).map_err(error_to_jsvalue)?;
+        if specs.is_empty() {
+            return Err(error_to_jsvalue(
+                "policies_json must contain at least one policy",
+            ));
+        }
+
+        let mut policies = Vec::new();
+        for spec in specs {
+            let source = Source::from_contents(spec.id, spec.content).map_err(error_to_jsvalue)?;
+            let mut parser = CedarParser::new(&source).map_err(error_to_jsvalue)?;
+            let mut parsed = parser.parse().map_err(error_to_jsvalue)?;
+            policies.append(&mut parsed);
+        }
+
+        let program = cedar_compiler::compile_to_program(&policies).map_err(error_to_jsvalue)?;
+        Ok(Program {
+            program: Arc::new(program),
+        })
+    }
+
+    /// Compile a Cedar expression into an RVM program.
+    #[cfg(feature = "cedar")]
+    pub fn compileCedarExpression(expr: String) -> Result<Program, JsValue> {
+        let source =
+            Source::from_contents("<cedar-expr>".to_string(), expr).map_err(error_to_jsvalue)?;
+        let mut parser = CedarParser::new(&source).map_err(error_to_jsvalue)?;
+        let parsed = parser.parse_expression().map_err(error_to_jsvalue)?;
+        let program = cedar_compiler::compile_expr_to_program(&parsed).map_err(error_to_jsvalue)?;
+        Ok(Program {
+            program: Arc::new(program),
+        })
+    }
+
     /// Serialize a program to binary format.
     pub fn serializeBinary(&self) -> Result<Vec<u8>, JsValue> {
         self.program

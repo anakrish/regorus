@@ -1,0 +1,16 @@
+[
+  {
+    "uid": { "__entity": { "type": "User", "id": "alice" } },
+    "attrs": {
+      "tenant": "t1"
+    },
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "Doc", "id": "t1:invoice" } },
+    "attrs": {
+      "tenant": "t1"
+    },
+    "parents": []
+  }
+]

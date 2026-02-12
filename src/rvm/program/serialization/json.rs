@@ -186,6 +186,8 @@ impl Program {
             },
             rule_tree,
             resolved_builtins: Vec::new(),
+            #[cfg(feature = "cedar")]
+            resolved_context_builtins: Vec::new(),
             needs_runtime_recursion_check,
             needs_recompilation,
             rego_v0,

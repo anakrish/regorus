@@ -1,0 +1,25 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  - note: saas_multi_tenant_permit
+    policies:
+      - |
+        permit(principal, action == Action::"view", resource == Doc::"t1:invoice")
+        when { principal.tenant == resource.tenant && context.request_tenant == principal.tenant };
+    input:
+      principal: "User::alice"
+      action: "Action::view"
+      resource: "Doc::t1:invoice"
+      context:
+        request_tenant: "t1"
+      entities:
+        "User::alice":
+          parents: []
+          attrs:
+            tenant: "t1"
+        "Doc::t1:invoice":
+          parents: []
+          attrs:
+            tenant: "t1"
+    want_result: "permit"

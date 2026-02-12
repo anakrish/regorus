@@ -1,0 +1,20 @@
+{
+  "principal": "User::alice",
+  "action": "Action::view",
+  "resource": "File::budget",
+  "context": {
+    "ip": "192.168.1.5"
+  },
+  "entities": {
+    "User::alice": {
+      "parents": ["User::admins"],
+      "attrs": {
+        "department": "finance"
+      }
+    },
+    "User::admins": {
+      "parents": [],
+      "attrs": {}
+    }
+  }
+}

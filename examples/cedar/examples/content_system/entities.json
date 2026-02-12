@@ -1,0 +1,8 @@
+{
+  "Doc::draft": {
+    "parents": [],
+    "attrs": {
+      "owner": "User::alice"
+    }
+  }
+}

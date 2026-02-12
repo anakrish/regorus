@@ -59,6 +59,7 @@ impl<'a> Compiler<'a> {
         let builtin_info = BuiltinInfo {
             name: builtin_name.to_string(),
             num_args,
+            kind: crate::rvm::program::BuiltinKind::Standard,
         };
         let index = self.program.add_builtin_info(builtin_info);
 

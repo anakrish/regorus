@@ -1,0 +1,84 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  - note: entities_in_has_is
+    policies:
+      - |
+        permit(principal in User::"team", action == Action::"read", resource == Doc::"spec")
+        when { principal has "role" && principal is User };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "Doc::spec"
+      context: {}
+      entities:
+        "User::alice":
+          parents:
+            - "User::devs"
+          attrs:
+            role: "dev"
+        "User::devs":
+          parents:
+            - "User::team"
+          attrs: {}
+        "User::team":
+          parents: []
+          attrs: {}
+    want_result: "permit"
+
+  - note: entities_missing_attr
+    policies:
+      - |
+        permit(principal in User::"team", action == Action::"read", resource == Doc::"spec")
+        when { principal has "role" && principal is User };
+    input:
+      principal: "User::bob"
+      action: "Action::read"
+      resource: "Doc::spec"
+      context: {}
+      entities:
+        "User::bob":
+          parents:
+            - "User::team"
+          attrs: {}
+        "User::team":
+          parents: []
+          attrs: {}
+    want_result: "deny"
+
+  - note: entities_cycle_in
+    policies:
+      - |
+        permit(principal in User::"groupB", action == Action::"read", resource == Doc::"spec");
+    input:
+      principal: "User::groupA"
+      action: "Action::read"
+      resource: "Doc::spec"
+      context: {}
+      entities:
+        "User::groupA":
+          parents:
+            - "User::groupB"
+          attrs: {}
+        "User::groupB":
+          parents:
+            - "User::groupA"
+          attrs: {}
+    want_result: "permit"
+
+  - note: entities_resource_missing_attr
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"read", resource == Doc::"spec")
+        when { resource has "owner" };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "Doc::spec"
+      context: {}
+      entities:
+        "Doc::spec":
+          parents: []
+          attrs: {}
+    want_result: "deny"

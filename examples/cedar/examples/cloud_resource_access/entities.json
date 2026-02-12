@@ -1,0 +1,10 @@
+{
+  "User::alice": {
+    "parents": ["Group::cloud-admins"],
+    "attrs": {}
+  },
+  "Group::cloud-admins": {
+    "parents": [],
+    "attrs": {}
+  }
+}

@@ -1,0 +1,98 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  - note: scope_principal_is_in_action_list
+    policies:
+      - |
+        permit(
+          principal is User in User::"admins",
+          action in [Action::"view", Action::"edit"],
+          resource is File
+        );
+    input:
+      principal: "User::alice"
+      action: "Action::edit"
+      resource: "File::foo"
+      context: {}
+      entities:
+        "User::alice":
+          parents:
+            - "User::admins"
+          attrs: {}
+        "User::admins":
+          parents: []
+          attrs: {}
+    want_result: "permit"
+
+  - note: scope_action_not_in_list
+    policies:
+      - |
+        permit(
+          principal is User in User::"admins",
+          action in [Action::"view", Action::"edit"],
+          resource is File
+        );
+    input:
+      principal: "User::alice"
+      action: "Action::delete"
+      resource: "File::foo"
+      context: {}
+      entities:
+        "User::alice":
+          parents:
+            - "User::admins"
+          attrs: {}
+        "User::admins":
+          parents: []
+          attrs: {}
+    want_result: "deny"
+
+  - note: scope_action_in_empty_list
+    policies:
+      - |
+        permit(
+          principal is User,
+          action in [],
+          resource is File
+        );
+    input:
+      principal: "User::alice"
+      action: "Action::view"
+      resource: "File::foo"
+      context: {}
+      entities: {}
+    want_result: "deny"
+
+  - note: scope_action_in_duplicate_list
+    policies:
+      - |
+        permit(
+          principal is User,
+          action in [Action::"view", Action::"view"],
+          resource is File
+        );
+    input:
+      principal: "User::alice"
+      action: "Action::view"
+      resource: "File::foo"
+      context: {}
+      entities: {}
+    want_result: "permit"
+
+  - note: scope_action_namespaced
+    policies:
+      - |
+        permit(
+          principal is User,
+          action == Action::"doc/read",
+          resource is File
+        );
+    input:
+      principal: "User::alice"
+      action: "Action::doc/read"
+      resource: "File::foo"
+      context: {}
+      entities: {}
+    want_result: "permit"
+

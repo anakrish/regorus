@@ -1,0 +1,8 @@
+{
+  "principal": "User::\"alice\"",
+  "action": "Action::\"view\"",
+  "resource": "File::\"budget\"",
+  "context": {
+    "ip": "10.1.2.3"
+  }
+}

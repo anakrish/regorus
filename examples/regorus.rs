@@ -205,6 +205,10 @@ fn rego_ast(file: String) -> Result<()> {
     }
 }
 
+#[cfg(feature = "cedar")]
+#[path = "cedar/cli.rs"]
+mod cedar_cli;
+
 #[derive(clap::Subcommand)]
 enum RegorusCommand {
     /// Parse a Rego policy and dump AST.
@@ -267,6 +271,13 @@ enum RegorusCommand {
         #[arg(long)]
         v0: bool,
     },
+
+    /// Cedar policy tools.
+    #[cfg(feature = "cedar")]
+    Cedar {
+        #[command(subcommand)]
+        command: cedar_cli::CedarCommand,
+    },
 }
 
 #[derive(clap::Parser)]
@@ -306,5 +317,7 @@ fn main() -> Result<()> {
         RegorusCommand::Lex { file, verbose } => rego_lex(file, verbose),
         RegorusCommand::Parse { file, v0 } => rego_parse(file, v0),
         RegorusCommand::Ast { file } => rego_ast(file),
+        #[cfg(feature = "cedar")]
+        RegorusCommand::Cedar { command } => cedar_cli::run(command),
     }
 }

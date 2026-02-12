@@ -160,3 +160,38 @@ vm.execute();
 console.log(vm.getExecutionState());
 console.log(vm.resume('{"tier":"gold"}'));
 }
+
+// Cedar example
+{
+const cedarPolicy = `
+permit(principal in User::"admins", action == Action::"view", resource == File::"budget")
+when { context.ip like "10.*" };
+`;
+
+const policies = JSON.stringify([
+  { id: "policy.cedar", content: cedarPolicy }
+]);
+
+const program = regorus.Program.compileCedarPolicies(policies);
+console.log(program.generateListing());
+
+const vm = new regorus.Rvm();
+vm.loadProgram(program);
+vm.setInputJson(`
+{
+  "principal": "User::alice",
+  "action": "Action::view",
+  "resource": "File::budget",
+  "context": { "ip": "10.1.2.3" },
+  "entities": {
+    "User::alice": { "parents": ["User::admins"], "attrs": {} },
+    "User::admins": { "parents": [], "attrs": {} }
+  }
+}
+`);
+
+const decision = JSON.parse(vm.executeEntryPoint("cedar.authorize"));
+if (decision !== 1) {
+  throw new Error(`Unexpected Cedar decision: ${decision}`);
+}
+}

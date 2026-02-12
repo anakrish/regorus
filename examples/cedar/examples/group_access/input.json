@@ -1,0 +1,16 @@
+{
+  "principal": "User::alice",
+  "action": "Action::write",
+  "resource": "Doc::plan",
+  "context": {},
+  "entities": {
+    "User::alice": {
+      "parents": ["User::admins"],
+      "attrs": {}
+    },
+    "User::admins": {
+      "parents": [],
+      "attrs": {}
+    }
+  }
+}

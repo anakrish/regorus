@@ -1,0 +1,8 @@
+{
+  "principal": "User::alice",
+  "action": "Action::edit",
+  "resource": "Doc::draft",
+  "context": {
+    "channel": "internal.engineering"
+  }
+}

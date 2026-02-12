@@ -1,0 +1,16 @@
+[
+  {
+    "uid": { "__entity": { "type": "User", "id": "alice" } },
+    "attrs": {
+      "department": "finance"
+    },
+    "parents": [
+      { "__entity": { "type": "User", "id": "admins" } }
+    ]
+  },
+  {
+    "uid": { "__entity": { "type": "User", "id": "admins" } },
+    "attrs": {},
+    "parents": []
+  }
+]

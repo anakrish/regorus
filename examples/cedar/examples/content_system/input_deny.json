@@ -1,0 +1,16 @@
+{
+  "principal": "User::alice",
+  "action": "Action::edit",
+  "resource": "Doc::draft",
+  "context": {
+    "channel": "external.public"
+  },
+  "entities": {
+    "Doc::draft": {
+      "parents": [],
+      "attrs": {
+        "owner": "User::alice"
+      }
+    }
+  }
+}

@@ -1,0 +1,29 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  - note: iam_zero_trust_permit
+    policies:
+      - |
+        permit(principal in User::"admins", action == Action::"login", resource == App::"portal")
+        when { context.mfa == true && context.ip like "10.*" };
+
+        forbid(principal in User::"admins", action == Action::"login", resource == App::"portal")
+        when { context.suspended == true };
+    input:
+      principal: "User::alice"
+      action: "Action::login"
+      resource: "App::portal"
+      context:
+        mfa: true
+        ip: "10.2.3.4"
+        suspended: false
+      entities:
+        "User::alice":
+          parents:
+            - "User::admins"
+          attrs: {}
+        "User::admins":
+          parents: []
+          attrs: {}
+    want_result: "permit"

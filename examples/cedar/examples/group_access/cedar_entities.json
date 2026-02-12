@@ -1,0 +1,14 @@
+[
+  {
+    "uid": { "__entity": { "type": "User", "id": "alice" } },
+    "attrs": {},
+    "parents": [
+      { "__entity": { "type": "User", "id": "admins" } }
+    ]
+  },
+  {
+    "uid": { "__entity": { "type": "User", "id": "admins" } },
+    "attrs": {},
+    "parents": []
+  }
+]

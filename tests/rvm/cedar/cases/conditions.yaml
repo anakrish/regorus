@@ -1,0 +1,139 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  - note: conditions_when_unless_permit
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"deploy", resource == App::"svc")
+        when { context.level >= 3 && context.env == "prod" }
+        unless { context.freeze == true };
+    input:
+      principal: "User::alice"
+      action: "Action::deploy"
+      resource: "App::svc"
+      context:
+        level: 4
+        env: "prod"
+        freeze: false
+      entities: {}
+    want_result: "permit"
+
+  - note: conditions_unless_blocks
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"deploy", resource == App::"svc")
+        when { context.level >= 3 && context.env == "prod" }
+        unless { context.freeze == true };
+    input:
+      principal: "User::alice"
+      action: "Action::deploy"
+      resource: "App::svc"
+      context:
+        level: 4
+        env: "prod"
+        freeze: true
+      entities: {}
+    want_result: "deny"
+
+  - note: conditions_when_fails
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"deploy", resource == App::"svc")
+        when { context.level >= 3 && context.env == "prod" }
+        unless { context.freeze == true };
+    input:
+      principal: "User::alice"
+      action: "Action::deploy"
+      resource: "App::svc"
+      context:
+        level: 2
+        env: "dev"
+        freeze: false
+      entities: {}
+    want_result: "deny"
+
+  - note: conditions_short_circuit_and
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"read", resource == File::"foo")
+        when { false && context.level > 1 };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "File::foo"
+      context:
+        level: 2
+      entities: {}
+    want_result: "deny"
+
+  - note: conditions_short_circuit_or
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"read", resource == File::"foo")
+        when { true || context.level > 1 };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "File::foo"
+      context:
+        level: 2
+      entities: {}
+    want_result: "permit"
+
+  - note: conditions_nested_context_access
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"deploy", resource == App::"svc")
+        when { context.meta.owner == "alice" && context.meta.level >= 2 };
+    input:
+      principal: "User::alice"
+      action: "Action::deploy"
+      resource: "App::svc"
+      context:
+        meta:
+          owner: "alice"
+          level: 3
+      entities: {}
+    want_result: "permit"
+
+  - note: conditions_type_mismatch
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"read", resource == File::"foo")
+        when { context.age > "30" };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "File::foo"
+      context:
+        age: 30
+      entities: {}
+    error: "cannot compare values of different types"
+
+  - note: conditions_optional_field_missing
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"read", resource == File::"foo")
+        when { context has "optional" };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "File::foo"
+      context: {}
+      entities: {}
+    want_result: "deny"
+
+  - note: conditions_missing_field_error
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"read", resource == File::"foo")
+        when { context.missing.value == 1 };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "File::foo"
+      context: {}
+      entities: {}
+    error: "Assertion failed"
+

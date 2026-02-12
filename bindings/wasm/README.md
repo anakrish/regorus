@@ -21,3 +21,6 @@ Run `cargo xtask build-wasm` to invoke wasm-pack with sensible defaults, or `car
 ## Usage
 
 See [test.js](https://github.com/microsoft/regorus/blob/main/bindings/wasm/test.js) for example usage.
+
+The test script includes a Cedar example that compiles a Cedar policy set and
+executes the `cedar.authorize` entry point via the RVM API.

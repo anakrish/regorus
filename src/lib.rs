@@ -130,6 +130,9 @@ pub mod languages {
     #[cfg(feature = "azure-rbac")]
     pub mod azure_rbac;
 
+    #[cfg(feature = "cedar")]
+    pub mod cedar;
+
     #[cfg(feature = "rvm")]
     pub mod rego;
 }

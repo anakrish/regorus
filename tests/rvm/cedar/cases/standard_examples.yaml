@@ -1,0 +1,63 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  - note: standard_photo_sharing
+    policies:
+      - |
+        permit(principal in User::"friends", action == Action::"view", resource in Photo::"album1")
+        when { resource has "public" };
+    input:
+      principal: "User::alice"
+      action: "Action::view"
+      resource: "Photo::p1"
+      context: {}
+      entities:
+        "User::alice":
+          parents:
+            - "User::friends"
+          attrs: {}
+        "User::friends":
+          parents: []
+          attrs: {}
+        "Photo::p1":
+          parents:
+            - "Photo::album1"
+          attrs:
+            public: true
+        "Photo::album1":
+          parents: []
+          attrs: {}
+    want_result: "permit"
+
+  - note: standard_bank_transfer
+    policies:
+      - |
+        permit(principal == User::"teller", action == Action::"transfer", resource == Account::"acct1")
+        when { context.amount <= 5000 };
+        forbid(principal == User::"teller", action == Action::"transfer", resource == Account::"acct1")
+        when { context.amount > 5000 };
+    input:
+      principal: "User::teller"
+      action: "Action::transfer"
+      resource: "Account::acct1"
+      context:
+        amount: 2500
+      entities: {}
+    want_result: "permit"
+
+  - note: standard_bank_transfer_denied
+    policies:
+      - |
+        permit(principal == User::"teller", action == Action::"transfer", resource == Account::"acct1")
+        when { context.amount <= 5000 };
+        forbid(principal == User::"teller", action == Action::"transfer", resource == Account::"acct1")
+        when { context.amount > 5000 };
+    input:
+      principal: "User::teller"
+      action: "Action::transfer"
+      resource: "Account::acct1"
+      context:
+        amount: 9000
+      entities: {}
+    want_result: "deny"

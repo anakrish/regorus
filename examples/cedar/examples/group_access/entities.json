@@ -1,0 +1,10 @@
+{
+  "User::alice": {
+    "parents": ["User::admins"],
+    "attrs": {}
+  },
+  "User::admins": {
+    "parents": [],
+    "attrs": {}
+  }
+}

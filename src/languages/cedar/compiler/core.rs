@@ -5,11 +5,12 @@
 
 use super::error::{CompilerError, Result};
 use crate::languages::cedar::ast::{Effect, Policy};
+use crate::lexer::{Source, Span};
 use crate::rvm::program::Program;
 use crate::rvm::Instruction;
 use alloc::collections::BTreeMap;
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString as _};
 use alloc::vec::Vec;
 
 #[derive(Debug)]
@@ -17,6 +18,8 @@ pub struct Compiler {
     pub(super) program: Program,
     pub(super) next_reg: u8,
     pub(super) builtin_index_map: BTreeMap<String, u16>,
+    pub(super) source_to_index: BTreeMap<String, usize>,
+    pub(super) current_span: Option<Span>,
     pub(super) input_reg: Option<u8>,
     pub(super) principal_reg: Option<u8>,
     pub(super) action_reg: Option<u8>,
@@ -37,6 +40,8 @@ impl Compiler {
             program: Program::new(),
             next_reg: 0,
             builtin_index_map: BTreeMap::new(),
+            source_to_index: BTreeMap::new(),
+            current_span: None,
             input_reg: None,
             principal_reg: None,
             action_reg: None,
@@ -51,9 +56,11 @@ impl Compiler {
         let mut deny_regs = Vec::new();
 
         for policy in policies {
-            let scope_reg = self.compile_scope(&policy.scope)?;
-            let conditions_reg = self.compile_conditions(&policy.conditions)?;
-            let match_reg = self.emit_and(scope_reg, conditions_reg)?;
+            let match_reg = self.with_span(&policy.span, |this| {
+                let scope_reg = this.compile_scope(&policy.scope)?;
+                let conditions_reg = this.compile_conditions(&policy.conditions)?;
+                this.emit_and(scope_reg, conditions_reg)
+            })?;
 
             match policy.effect {
                 Effect::Permit => permit_regs.push(match_reg),
@@ -61,6 +68,7 @@ impl Compiler {
             }
         }
 
+        self.current_span = None;
         let permit_any = self.fold_or(permit_regs)?;
         let deny_any = self.fold_or(deny_regs)?;
         let deny_not = self.emit_not(deny_any)?;
@@ -127,5 +135,29 @@ impl Compiler {
         let reg = self.next_reg;
         self.next_reg = self.next_reg.saturating_add(1);
         Ok(reg)
+    }
+
+    pub(super) fn with_span<T, F>(&mut self, span: &Span, f: F) -> Result<T>
+    where
+        F: FnOnce(&mut Self) -> Result<T>,
+    {
+        let previous = self.current_span.clone();
+        self.current_span = Some(span.clone());
+        let result = f(self);
+        self.current_span = previous;
+        result
+    }
+
+    pub(super) fn get_or_create_source_index(&mut self, source: &Source) -> usize {
+        let source_path = source.get_path().to_string();
+        if let Some(&index) = self.source_to_index.get(&source_path) {
+            return index;
+        }
+
+        let index = self
+            .program
+            .add_source(source_path.clone(), source.get_contents().to_string());
+        self.source_to_index.insert(source_path, index);
+        index
     }
 }

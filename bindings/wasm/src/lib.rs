@@ -15,6 +15,7 @@ use regorus::rvm::vm::{ExecutionMode, RegoVM};
 use regorus::Source;
 use regorus::{compile_policy_with_entrypoint, PolicyModule, Rc, Value};
 use serde::Deserialize;
+use serde::Serialize;
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
@@ -67,6 +68,13 @@ impl ProgramDeserializationResult {
 #[wasm_bindgen]
 pub struct Rvm {
     vm: RegoVM,
+}
+
+#[derive(Serialize)]
+struct ExecutionStateInfo {
+    state: String,
+    reason: Option<String>,
+    pc: Option<usize>,
 }
 
 fn error_to_jsvalue<E: std::fmt::Display>(e: E) -> JsValue {
@@ -360,6 +368,53 @@ impl Program {
             &AssemblyListingConfig::default(),
         ))
     }
+
+    /// Return the total number of instructions in the program.
+    pub fn getInstructionCount(&self) -> usize {
+        self.program.instructions.len()
+    }
+
+    /// Get the instruction text at a given program counter.
+    pub fn getInstructionText(&self, pc: usize) -> Result<String, JsValue> {
+        let instruction = self
+            .program
+            .instructions
+            .get(pc)
+            .ok_or_else(|| error_to_jsvalue("instruction pc out of range"))?;
+        Ok(self.program.display_instruction_with_params(instruction))
+    }
+
+    /// Get span information for an instruction, or null if not available.
+    pub fn getInstructionSpanJson(&self, pc: usize) -> Result<String, JsValue> {
+        let span = match self.program.get_instruction_span(pc) {
+            Some(span) => span,
+            None => return Ok("null".to_string()),
+        };
+
+        #[derive(Serialize)]
+        struct SpanInfoJson {
+            source_index: usize,
+            line: usize,
+            column: usize,
+            length: usize,
+            source_name: Option<String>,
+        }
+
+        let source_name = self
+            .program
+            .get_source_name(span.source_index)
+            .map(|name| name.to_string());
+
+        let payload = SpanInfoJson {
+            source_index: span.source_index,
+            line: span.line,
+            column: span.column,
+            length: span.length,
+            source_name,
+        };
+
+        serde_json::to_string(&payload).map_err(error_to_jsvalue)
+    }
 }
 
 #[wasm_bindgen]
@@ -398,6 +453,11 @@ impl Rvm {
         Ok(())
     }
 
+    /// Enable or disable step mode (suspend after each instruction).
+    pub fn setStepMode(&mut self, enabled: bool) {
+        self.vm.set_step_mode(enabled);
+    }
+
     /// Execute the program and return the JSON result.
     pub fn execute(&mut self) -> Result<String, JsValue> {
         let value = self.vm.execute().map_err(error_to_jsvalue)?;
@@ -427,6 +487,41 @@ impl Rvm {
     /// Get the execution state as a string.
     pub fn getExecutionState(&self) -> String {
         format!("{:?}", self.vm.execution_state())
+    }
+
+    /// Get the execution state as a JSON string.
+    pub fn getExecutionStateJson(&self) -> Result<String, JsValue> {
+        use regorus::rvm::vm::ExecutionState;
+
+        let info = match self.vm.execution_state().clone() {
+            ExecutionState::Ready => ExecutionStateInfo {
+                state: "Ready".to_string(),
+                reason: None,
+                pc: None,
+            },
+            ExecutionState::Running => ExecutionStateInfo {
+                state: "Running".to_string(),
+                reason: None,
+                pc: None,
+            },
+            ExecutionState::Completed { .. } => ExecutionStateInfo {
+                state: "Completed".to_string(),
+                reason: None,
+                pc: None,
+            },
+            ExecutionState::Error { error } => ExecutionStateInfo {
+                state: "Error".to_string(),
+                reason: Some(error.to_string()),
+                pc: None,
+            },
+            ExecutionState::Suspended { reason, pc, .. } => ExecutionStateInfo {
+                state: "Suspended".to_string(),
+                reason: Some(format!("{:?}", reason)),
+                pc: Some(pc),
+            },
+        };
+
+        serde_json::to_string(&info).map_err(error_to_jsvalue)
     }
 }
 

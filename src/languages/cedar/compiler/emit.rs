@@ -317,7 +317,12 @@ impl Compiler {
     }
 
     pub(super) fn emit_instruction(&mut self, instruction: Instruction) {
-        self.program
-            .add_instruction(instruction, Some(SpanInfo::new(0, 0, 0, 0)));
+        let span_info = if let Some(span) = self.current_span.clone() {
+            let source_index = self.get_or_create_source_index(&span.source);
+            Some(SpanInfo::from_lexer_span(&span, source_index))
+        } else {
+            None
+        };
+        self.program.add_instruction(instruction, span_info);
     }
 }

@@ -12,35 +12,35 @@ use super::Compiler;
 
 impl Compiler {
     pub(super) fn compile_expr(&mut self, expr: &Expr) -> Result<u8> {
-        match *expr {
-            Expr::Bool { ref value, .. } => Ok(self.emit_load_literal(value.clone())?),
-            Expr::Str { ref value, .. } => Ok(self.emit_load_literal(value.clone())?),
-            Expr::Number { ref value, .. } => Ok(self.emit_load_literal(value.clone())?),
-            Expr::Ident { ref name, .. } => Ok(self.emit_load_literal(name.clone())?),
+        self.with_span(expr.span(), |this| match *expr {
+            Expr::Bool { ref value, .. } => Ok(this.emit_load_literal(value.clone())?),
+            Expr::Str { ref value, .. } => Ok(this.emit_load_literal(value.clone())?),
+            Expr::Number { ref value, .. } => Ok(this.emit_load_literal(value.clone())?),
+            Expr::Ident { ref name, .. } => Ok(this.emit_load_literal(name.clone())?),
             Expr::Var { ref name, .. } => name.as_string().map_or_else(
                 |_| Err(CompilerError::InvalidVariable.into()),
                 |name| match name.as_ref() {
-                    "principal" => self.get_principal_register(),
-                    "action" => self.get_action_register(),
-                    "resource" => self.get_resource_register(),
-                    "context" => self.get_context_register(),
+                    "principal" => this.get_principal_register(),
+                    "action" => this.get_action_register(),
+                    "resource" => this.get_resource_register(),
+                    "context" => this.get_context_register(),
                     _ => Err(CompilerError::UnsupportedVariable {
                         name: String::from(name.as_ref()),
                     }
                     .into()),
                 },
             ),
-            Expr::Entity { ref path, .. } => Ok(self.emit_load_literal(path_to_string(path)?)?),
-            Expr::List { ref exprs, .. } => self.compile_list(exprs),
+            Expr::Entity { ref path, .. } => Ok(this.emit_load_literal(path_to_string(path)?)?),
+            Expr::List { ref exprs, .. } => this.compile_list(exprs),
             Expr::Unary {
                 ref expr, ref op, ..
             } => {
-                let inner = self.compile_expr(expr)?;
+                let inner = this.compile_expr(expr)?;
                 match *op {
-                    UnaryOp::Not => Ok(self.emit_not(inner)?),
+                    UnaryOp::Not => Ok(this.emit_not(inner)?),
                     UnaryOp::Minus => {
-                        let zero = self.emit_load_literal(Value::from(0_u64))?;
-                        Ok(self.emit_sub(zero, inner)?)
+                        let zero = this.emit_load_literal(Value::from(0_u64))?;
+                        Ok(this.emit_sub(zero, inner)?)
                     }
                 }
             }
@@ -50,28 +50,28 @@ impl Compiler {
                 ref op,
                 ..
             } => {
-                let left_reg = self.compile_expr(left)?;
+                let left_reg = this.compile_expr(left)?;
                 let right_is_list = matches!(**right, Expr::List { .. });
-                let right_reg = self.compile_expr(right)?;
+                let right_reg = this.compile_expr(right)?;
                 match *op {
-                    BinOp::Or => Ok(self.emit_or(left_reg, right_reg)?),
-                    BinOp::And => Ok(self.emit_and(left_reg, right_reg)?),
-                    BinOp::Less => Ok(self.emit_lt(left_reg, right_reg)?),
-                    BinOp::LessEqual => Ok(self.emit_le(left_reg, right_reg)?),
-                    BinOp::Greater => Ok(self.emit_gt(left_reg, right_reg)?),
-                    BinOp::GreaterEqual => Ok(self.emit_ge(left_reg, right_reg)?),
-                    BinOp::NotEqual => Ok(self.emit_ne(left_reg, right_reg)?),
-                    BinOp::Equal => Ok(self.emit_eq(left_reg, right_reg)?),
-                    BinOp::Add => Ok(self.emit_add(left_reg, right_reg)?),
-                    BinOp::Sub => Ok(self.emit_sub(left_reg, right_reg)?),
-                    BinOp::Mul => Ok(self.emit_mul(left_reg, right_reg)?),
-                    BinOp::Has => self.emit_cedar_has(left_reg, right_reg),
-                    BinOp::Like => self.emit_cedar_like(left_reg, right_reg),
+                    BinOp::Or => Ok(this.emit_or(left_reg, right_reg)?),
+                    BinOp::And => Ok(this.emit_and(left_reg, right_reg)?),
+                    BinOp::Less => Ok(this.emit_lt(left_reg, right_reg)?),
+                    BinOp::LessEqual => Ok(this.emit_le(left_reg, right_reg)?),
+                    BinOp::Greater => Ok(this.emit_gt(left_reg, right_reg)?),
+                    BinOp::GreaterEqual => Ok(this.emit_ge(left_reg, right_reg)?),
+                    BinOp::NotEqual => Ok(this.emit_ne(left_reg, right_reg)?),
+                    BinOp::Equal => Ok(this.emit_eq(left_reg, right_reg)?),
+                    BinOp::Add => Ok(this.emit_add(left_reg, right_reg)?),
+                    BinOp::Sub => Ok(this.emit_sub(left_reg, right_reg)?),
+                    BinOp::Mul => Ok(this.emit_mul(left_reg, right_reg)?),
+                    BinOp::Has => this.emit_cedar_has(left_reg, right_reg),
+                    BinOp::Like => this.emit_cedar_like(left_reg, right_reg),
                     BinOp::In => {
                         if right_is_list {
-                            self.emit_cedar_in_set(left_reg, right_reg)
+                            this.emit_cedar_in_set(left_reg, right_reg)
                         } else {
-                            self.emit_cedar_in(left_reg, right_reg)
+                            this.emit_cedar_in(left_reg, right_reg)
                         }
                     }
                 }
@@ -82,13 +82,13 @@ impl Compiler {
                 ref in_expr,
                 ..
             } => {
-                let left_reg = self.compile_expr(left)?;
-                let type_reg = self.emit_load_literal(path_to_string(path)?)?;
-                let is_reg = self.emit_cedar_is(left_reg, type_reg)?;
+                let left_reg = this.compile_expr(left)?;
+                let type_reg = this.emit_load_literal(path_to_string(path)?)?;
+                let is_reg = this.emit_cedar_is(left_reg, type_reg)?;
                 if let Some(in_expr) = in_expr.as_ref() {
-                    let in_value_reg = self.compile_expr(in_expr)?;
-                    let in_check = self.emit_cedar_in(left_reg, in_value_reg)?;
-                    Ok(self.emit_and(is_reg, in_check)?)
+                    let in_value_reg = this.compile_expr(in_expr)?;
+                    let in_check = this.emit_cedar_in(left_reg, in_value_reg)?;
+                    Ok(this.emit_and(is_reg, in_check)?)
                 } else {
                     Ok(is_reg)
                 }
@@ -98,7 +98,7 @@ impl Compiler {
                 ref access,
                 ..
             } => {
-                let mut current = self.compile_expr(expr)?;
+                let mut current = this.compile_expr(expr)?;
                 if access.is_empty() {
                     return Ok(current);
                 }
@@ -110,8 +110,8 @@ impl Compiler {
 
                 match *first {
                     Access::Field { ref field, .. } => {
-                        let field_reg = self.emit_load_literal(field.clone())?;
-                        current = self.emit_cedar_attr(current, field_reg)?;
+                        let field_reg = this.emit_load_literal(field.clone())?;
+                        current = this.emit_cedar_attr(current, field_reg)?;
                     }
                     Access::Call { .. } => {
                         return Err(CompilerError::MemberCallUnsupported.into());
@@ -121,7 +121,7 @@ impl Compiler {
                 for access_item in access_iter {
                     match *access_item {
                         Access::Field { ref field, .. } => {
-                            current = self.emit_index_literal(current, field.clone())?;
+                            current = this.emit_index_literal(current, field.clone())?;
                         }
                         Access::Call { .. } => {
                             return Err(CompilerError::MemberCallUnsupported.into());
@@ -129,7 +129,7 @@ impl Compiler {
                     }
                 }
 
-                self.emit_assert_not_undefined(current);
+                this.emit_assert_not_undefined(current);
                 Ok(current)
             }
             Expr::ExtFcnCall {
@@ -138,16 +138,16 @@ impl Compiler {
                 let name = path_to_name(path)?;
                 let mut arg_regs = Vec::new();
                 for arg in args {
-                    arg_regs.push(self.compile_expr(arg)?);
+                    arg_regs.push(this.compile_expr(arg)?);
                 }
                 let builtin_index =
-                    self.get_builtin_index(&name, crate::rvm::program::BuiltinKind::Standard)?;
-                let dest = self.alloc_register()?;
-                self.emit_builtin_call(dest, builtin_index, &arg_regs);
+                    this.get_builtin_index(&name, crate::rvm::program::BuiltinKind::Standard)?;
+                let dest = this.alloc_register()?;
+                this.emit_builtin_call(dest, builtin_index, &arg_regs);
                 Ok(dest)
             }
             Expr::If { .. } => Err(CompilerError::IfUnsupported.into()),
-        }
+        })
     }
 
     fn compile_list(&mut self, exprs: &[Expr]) -> Result<u8> {

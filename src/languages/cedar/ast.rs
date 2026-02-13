@@ -197,3 +197,33 @@ pub enum Access {
         args: Vec<Expr>,
     },
 }
+
+impl Qualifier {
+    pub const fn span(&self) -> &Span {
+        match *self {
+            Qualifier::IsIn { ref span, .. } => span,
+            Qualifier::In { ref span, .. } => span,
+            Qualifier::Equals { ref span, .. } => span,
+        }
+    }
+}
+
+impl Expr {
+    pub const fn span(&self) -> &Span {
+        match *self {
+            Expr::If { ref span, .. } => span,
+            Expr::Bin { ref span, .. } => span,
+            Expr::IsIn { ref span, .. } => span,
+            Expr::Unary { ref span, .. } => span,
+            Expr::Member { ref span, .. } => span,
+            Expr::ExtFcnCall { ref span, .. } => span,
+            Expr::List { ref span, .. } => span,
+            Expr::Entity { ref span, .. } => span,
+            Expr::Ident { ref span, .. } => span,
+            Expr::Var { ref span, .. } => span,
+            Expr::Str { ref span, .. } => span,
+            Expr::Number { ref span, .. } => span,
+            Expr::Bool { ref span, .. } => span,
+        }
+    }
+}

@@ -11,8 +11,12 @@ use regorus::rvm::program::{
 use regorus::rvm::vm::{ExecutionMode, RegoVM};
 use regorus::{compile_policy_with_entrypoint, PolicyModule, Rc, Value};
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
+
+#[cfg(feature = "azure_policy")]
+use regorus::languages::azure_policy::{compiler as ap_compiler, parser as ap_parser};
 
 #[wasm_bindgen]
 /// WASM wrapper for [`regorus::Engine`]
@@ -60,6 +64,16 @@ pub struct Rvm {
 
 fn error_to_jsvalue<E: std::fmt::Display>(e: E) -> JsValue {
     JsValue::from_str(&format!("{e}"))
+}
+
+#[cfg(feature = "azure_policy")]
+fn parse_alias_map_json(
+    alias_map_json: Option<String>,
+) -> Result<BTreeMap<String, String>, JsValue> {
+    match alias_map_json {
+        Some(json) => serde_json::from_str(&json).map_err(error_to_jsvalue),
+        None => Ok(BTreeMap::new()),
+    }
 }
 
 impl Default for Engine {
@@ -273,6 +287,48 @@ impl Program {
                 .map_err(error_to_jsvalue)?;
         let program = Compiler::compile_from_policy(&compiled, &entry_points_ref)
             .map_err(error_to_jsvalue)?;
+        Ok(Program { program })
+    }
+
+    /// Compile an Azure Policy rule JSON object into an RVM program.
+    ///
+    /// `policy_rule_json` must be the JSON for a `policyRule` object.
+    /// `alias_map_json` is an optional JSON object mapping lowercase FQ aliases
+    /// to short names, typically produced from `AliasRegistry::alias_map()`.
+    #[cfg(feature = "azure_policy")]
+    pub fn compileAzurePolicyRule(
+        policy_rule_json: String,
+        alias_map_json: Option<String>,
+    ) -> Result<Program, JsValue> {
+        let source = regorus::Source::from_contents("policyRule.json".into(), policy_rule_json)
+            .map_err(error_to_jsvalue)?;
+        let rule = ap_parser::parse_policy_rule(&source).map_err(error_to_jsvalue)?;
+        let alias_map = parse_alias_map_json(alias_map_json)?;
+        let program = ap_compiler::compile_policy_rule_with_aliases(&rule, alias_map)
+            .map_err(error_to_jsvalue)?;
+
+        Ok(Program { program })
+    }
+
+    /// Compile a full Azure Policy definition JSON object into an RVM program.
+    ///
+    /// `policy_definition_json` can be wrapped (`{ "properties": ... }`) or
+    /// unwrapped; parameter defaults are included in the compiled program.
+    /// `alias_map_json` is an optional JSON object mapping lowercase FQ aliases
+    /// to short names, typically produced from `AliasRegistry::alias_map()`.
+    #[cfg(feature = "azure_policy")]
+    pub fn compileAzurePolicyDefinition(
+        policy_definition_json: String,
+        alias_map_json: Option<String>,
+    ) -> Result<Program, JsValue> {
+        let source =
+            regorus::Source::from_contents("policyDefinition.json".into(), policy_definition_json)
+                .map_err(error_to_jsvalue)?;
+        let definition = ap_parser::parse_policy_definition(&source).map_err(error_to_jsvalue)?;
+        let alias_map = parse_alias_map_json(alias_map_json)?;
+        let program = ap_compiler::compile_policy_definition_with_aliases(&definition, alias_map)
+            .map_err(error_to_jsvalue)?;
+
         Ok(Program { program })
     }
 

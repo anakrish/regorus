@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 
 use std::collections::HashMap;
 
-use z3::ast::{Ast, Bool as Z3Bool, Int as Z3Int, Real as Z3Real, String as Z3String};
+use z3::ast::{Ast, Bool as Z3Bool, Int as Z3Int, Real as Z3Real, String as Z3String, BV as Z3BV};
 
 use crate::rvm::instructions::{Instruction, LiteralOrRegister};
 use crate::rvm::program::{Program, RuleType};
@@ -331,22 +331,76 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             SetCreate { params_index } => {
                 self.translate_set_create(params_index)
             }
-            ObjectSet { obj: _, key: _, value: _ } => {
-                // Stub: treat as opaque mutation.
+            ObjectSet { obj, key, value } => {
+                // Mutate the object in place: insert key→value.
+                let key_reg = self.get_register(key).clone();
+                let val_reg = self.get_register(value).clone();
+                let obj_reg = self.get_register(obj).clone();
+
+                // If the object is a concrete object and the key is concrete,
+                // insert the value (even if value is symbolic, record what we can).
+                if let SymValue::Concrete(Value::Object(ref o)) = obj_reg.value {
+                    if let SymValue::Concrete(ref k) = key_reg.value {
+                        if key_reg.source_path.is_none() {
+                            let mut new_obj = (**o).clone();
+                            if let SymValue::Concrete(ref v) = val_reg.value {
+                                if val_reg.source_path.is_none() {
+                                    new_obj.insert(k.clone(), v.clone());
+                                } else {
+                                    // Symbolic value — insert Undefined placeholder.
+                                    new_obj.insert(k.clone(), Value::Undefined);
+                                }
+                            } else {
+                                new_obj.insert(k.clone(), Value::Undefined);
+                            }
+                            self.set_register_concrete(
+                                obj,
+                                Value::Object(crate::Rc::new(new_obj)),
+                            );
+                            return Ok(InstructionAction::Continue);
+                        }
+                    }
+                }
+                // Fallback: can't track symbolic key mutations.
                 self.warnings.push(format!(
-                    "PC {}: ObjectSet modeled as no-op (incomplete)",
+                    "PC {}: ObjectSet with symbolic key/object — limited precision",
                     self.pc
                 ));
                 Ok(InstructionAction::Continue)
             }
-            ArrayPush { arr: _, value: _ } => {
-                self.warnings.push(format!(
-                    "PC {}: ArrayPush modeled as no-op (incomplete)",
-                    self.pc
-                ));
+            ArrayPush { arr, value } => {
+                // Mutate the array in place: push the value.
+                let val_reg = self.get_register(value).clone();
+                let arr_reg = self.get_register(arr).clone();
+
+                if let SymValue::Concrete(Value::Array(ref a)) = arr_reg.value {
+                    if let SymValue::Concrete(ref v) = val_reg.value {
+                        if val_reg.source_path.is_none() {
+                            let mut new_arr = (**a).clone();
+                            new_arr.push(v.clone());
+                            self.set_register_concrete(
+                                arr,
+                                Value::Array(crate::Rc::new(new_arr)),
+                            );
+                            return Ok(InstructionAction::Continue);
+                        }
+                    }
+                    // Symbolic value — push Undefined placeholder to preserve length.
+                    let mut new_arr = (**a).clone();
+                    new_arr.push(Value::Undefined);
+                    self.set_register_concrete(
+                        arr,
+                        Value::Array(crate::Rc::new(new_arr)),
+                    );
+                } else {
+                    self.warnings.push(format!(
+                        "PC {}: ArrayPush on non-concrete array — limited precision",
+                        self.pc
+                    ));
+                }
                 Ok(InstructionAction::Continue)
             }
-            SetAdd { set: _, value } => {
+            SetAdd { set, value } => {
                 if self.is_in_partial_set_body {
                     // Determine the key_path from the actual SetAdd value
                     // register (e.g., r12 = server.id) and the element_path
@@ -392,8 +446,25 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                         ));
                     }
                 } else {
+                    // Outside partial set body — mutate the set register directly.
+                    let val_reg = self.get_register(value).clone();
+                    let set_reg = self.get_register(set).clone();
+
+                    if let SymValue::Concrete(Value::Set(ref s)) = set_reg.value {
+                        if let SymValue::Concrete(ref v) = val_reg.value {
+                            if val_reg.source_path.is_none() {
+                                let mut new_set = (**s).clone();
+                                new_set.insert(v.clone());
+                                self.set_register_concrete(
+                                    set,
+                                    Value::Set(crate::Rc::new(new_set)),
+                                );
+                                return Ok(InstructionAction::Continue);
+                            }
+                        }
+                    }
                     self.warnings.push(format!(
-                        "PC {}: SetAdd modeled as no-op (incomplete)",
+                        "PC {}: SetAdd with symbolic value/set — limited precision",
                         self.pc
                     ));
                 }
@@ -1460,12 +1531,72 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 None,
             );
         } else {
-            // Build concrete object if all values are concrete.
-            let template = self.program.literals.get(params.template_literal_idx as usize)
-                .cloned()
-                .unwrap_or_else(Value::new_object);
-            // For now, pass through the template (simplified).
-            self.set_register_concrete(params.dest, template);
+            // Check if all values (and keys for non-literal fields) are concrete.
+            let all_concrete = params.literal_key_field_pairs().iter().all(|&(_, vr)| {
+                let reg = self.get_register(vr);
+                reg.value.is_concrete() && reg.source_path.is_none()
+            }) && params.field_pairs().iter().all(|&(kr, vr)| {
+                let k = self.get_register(kr);
+                let v = self.get_register(vr);
+                k.value.is_concrete() && k.source_path.is_none()
+                    && v.value.is_concrete() && v.source_path.is_none()
+            });
+
+            if all_concrete {
+                // Build a concrete object with actual values from registers.
+                let mut obj = alloc::collections::BTreeMap::new();
+
+                // Literal key fields: look up the key from the program's literals table.
+                for &(lit_key_idx, value_reg) in params.literal_key_field_pairs() {
+                    if let Some(key) = self.program.literals.get(lit_key_idx as usize) {
+                        if let SymValue::Concrete(v) = &self.get_register(value_reg).value {
+                            obj.insert(key.clone(), v.clone());
+                        }
+                    }
+                }
+
+                // Non-literal key fields.
+                for &(key_reg, value_reg) in params.field_pairs() {
+                    if let (SymValue::Concrete(k), SymValue::Concrete(v)) =
+                        (&self.get_register(key_reg).value, &self.get_register(value_reg).value)
+                    {
+                        obj.insert(k.clone(), v.clone());
+                    }
+                }
+
+                self.set_register_concrete(
+                    params.dest,
+                    Value::Object(crate::Rc::new(obj)),
+                );
+            } else {
+                // Some values are symbolic — fall back to template but populate
+                // the concrete fields we can.
+                let template = self.program.literals.get(params.template_literal_idx as usize)
+                    .cloned()
+                    .unwrap_or_else(Value::new_object);
+
+                let mut obj = match template {
+                    Value::Object(o) => (*o).clone(),
+                    _ => alloc::collections::BTreeMap::new(),
+                };
+
+                for &(lit_key_idx, value_reg) in params.literal_key_field_pairs() {
+                    if let Some(key) = self.program.literals.get(lit_key_idx as usize) {
+                        let reg = self.get_register(value_reg);
+                        if reg.value.is_concrete() && reg.source_path.is_none() {
+                            if let SymValue::Concrete(v) = &reg.value {
+                                obj.insert(key.clone(), v.clone());
+                            }
+                        }
+                        // Symbolic values left as Undefined in template for now.
+                    }
+                }
+
+                self.set_register_concrete(
+                    params.dest,
+                    Value::Object(crate::Rc::new(obj)),
+                );
+            }
         }
         Ok(InstructionAction::Continue)
     }
@@ -1494,28 +1625,65 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 None,
             );
         } else {
-            // Build concrete array if all elements are concrete.
-            let mut elements = Vec::new();
-            let mut all_concrete = true;
-            for &reg in params.element_registers() {
-                if let SymValue::Concrete(v) = &self.get_register(reg).value {
-                    elements.push(v.clone());
-                } else {
-                    all_concrete = false;
-                    break;
-                }
-            }
+            // Check if all elements are truly concrete (not path placeholders).
+            let all_concrete = params.element_registers().iter().all(|&r| {
+                let reg = self.get_register(r);
+                reg.value.is_concrete() && reg.source_path.is_none()
+            });
+
             if all_concrete {
+                let mut elements = Vec::new();
+                for &reg in params.element_registers() {
+                    if let SymValue::Concrete(v) = &self.get_register(reg).value {
+                        elements.push(v.clone());
+                    }
+                }
                 self.set_register_concrete(
                     params.dest,
                     Value::from_array(elements),
                 );
             } else {
-                self.warnings.push(format!(
-                    "PC {}: ArrayCreate with symbolic elements not fully modeled",
-                    self.pc
-                ));
-                self.set_register_concrete(params.dest, Value::new_array());
+                // Build a SymbolicSet so Contains and Count work on arrays
+                // with symbolic elements.
+                let mut sym_elements = Vec::new();
+                for (i, &reg) in params.element_registers().iter().enumerate() {
+                    let r = self.get_register(reg);
+                    let elem_path = r.source_path.clone()
+                        .unwrap_or_else(|| format!("arr_create_{}_{}", self.pc, i));
+                    let elem_sort = if r.source_path.is_some() {
+                        self.registry
+                            .get(elem_path.as_str())
+                            .map(|e| e.sort)
+                            .unwrap_or(r.value.sort())
+                    } else {
+                        r.value.sort()
+                    };
+                    let cond = r.defined.to_z3_bool(self.ctx);
+                    sym_elements.push(SymSetElement {
+                        condition: cond,
+                        element_path: elem_path.clone(),
+                        key_path: elem_path,
+                        element_sort: elem_sort,
+                    });
+                }
+
+                let zero = Z3Int::from_i64(self.ctx, 0);
+                let one = Z3Int::from_i64(self.ctx, 1);
+                let mut sum = Z3Int::from_i64(self.ctx, 0);
+                for elem in &sym_elements {
+                    let contrib = elem.condition.ite(&one, &zero);
+                    sum = Z3Int::add(self.ctx, &[&sum, &contrib]);
+                }
+
+                self.set_register_sym(
+                    params.dest,
+                    SymValue::SymbolicSet {
+                        cardinality: sum,
+                        elements: sym_elements,
+                    },
+                    Definedness::Defined,
+                    None,
+                );
             }
         }
         Ok(InstructionAction::Continue)
@@ -1545,7 +1713,65 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 None,
             );
         } else {
-            self.set_register_concrete(params.dest, Value::new_set());
+            // Check if all elements are truly concrete (not path placeholders).
+            let all_concrete = params.element_registers().iter().all(|&r| {
+                let reg = self.get_register(r);
+                reg.value.is_concrete() && reg.source_path.is_none()
+            });
+
+            if all_concrete {
+                let mut set = alloc::collections::BTreeSet::new();
+                for &reg in params.element_registers() {
+                    if let SymValue::Concrete(v) = &self.get_register(reg).value {
+                        set.insert(v.clone());
+                    }
+                }
+                self.set_register_concrete(
+                    params.dest,
+                    Value::Set(crate::Rc::new(set)),
+                );
+            } else {
+                // Build a SymbolicSet so Contains and Count work.
+                let mut sym_elements = Vec::new();
+                for (i, &reg) in params.element_registers().iter().enumerate() {
+                    let r = self.get_register(reg);
+                    let elem_path = r.source_path.clone()
+                        .unwrap_or_else(|| format!("set_create_{}_{}", self.pc, i));
+                    let elem_sort = if r.source_path.is_some() {
+                        self.registry
+                            .get(elem_path.as_str())
+                            .map(|e| e.sort)
+                            .unwrap_or(r.value.sort())
+                    } else {
+                        r.value.sort()
+                    };
+                    let cond = r.defined.to_z3_bool(self.ctx);
+                    sym_elements.push(SymSetElement {
+                        condition: cond,
+                        element_path: elem_path.clone(),
+                        key_path: elem_path,
+                        element_sort: elem_sort,
+                    });
+                }
+
+                let zero = Z3Int::from_i64(self.ctx, 0);
+                let one = Z3Int::from_i64(self.ctx, 1);
+                let mut sum = Z3Int::from_i64(self.ctx, 0);
+                for elem in &sym_elements {
+                    let contrib = elem.condition.ite(&one, &zero);
+                    sum = Z3Int::add(self.ctx, &[&sum, &contrib]);
+                }
+
+                self.set_register_sym(
+                    params.dest,
+                    SymValue::SymbolicSet {
+                        cardinality: sum,
+                        elements: sym_elements,
+                    },
+                    Definedness::Defined,
+                    None,
+                );
+            }
         }
         Ok(InstructionAction::Continue)
     }
@@ -2479,58 +2705,115 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
 
         let builtin_name = builtin_info.name.as_str();
 
-        // Handle well-known builtins with proper return types.
+        // Handle well-known builtins with proper Z3 semantics.
         match builtin_name {
+            // ---------------------------------------------------------------
+            // count — special handling (SetCardinality, concrete, string len)
+            // ---------------------------------------------------------------
             "count" => {
-                // count() always returns a non-negative integer.
-                // If the argument is a SetCardinality, extract the symbolic Int.
-                if params.arg_count() >= 1 {
-                    let arg_reg = params.args[0];
-                    let arg = self.get_register(arg_reg).clone();
-
-                    if let Some(card) = arg.value.as_set_cardinality() {
-                        self.set_register_sym(
-                            params.dest,
-                            SymValue::Int(card.clone()),
-                            Definedness::Defined,
-                            None,
-                        );
-                        return Ok(InstructionAction::Continue);
-                    }
-
-                    if let SymValue::Concrete(cv) = &arg.value {
-                        let count = match cv {
-                            Value::Array(a) => Some(a.len()),
-                            Value::Object(o) => Some(o.len()),
-                            Value::Set(s) => Some(s.len()),
-                            Value::String(s) => Some(s.len()),
-                            _ => None,
-                        };
-                        if let Some(c) = count {
-                            self.set_register_concrete(params.dest, Value::from(c));
-                            return Ok(InstructionAction::Continue);
-                        }
-                    }
-                }
-                // Symbolic: return a fresh non-negative Int.
-                self.warnings.push(format!(
-                    "PC {}: Builtin 'count' on symbolic collection → unconstrained Int",
-                    self.pc
-                ));
-                let name = format!("builtin_count_{}", self.pc);
-                let var = Z3Int::new_const(self.ctx, name.as_str());
-                let zero = Z3Int::from_i64(self.ctx, 0);
-                self.constraints.push(var.ge(&zero));
-                self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
+                self.translate_builtin_count(&params)?;
             }
 
-            // Boolean-returning builtins.
-            "regex.match" | "startswith" | "endswith" | "contains"
+            // ---------------------------------------------------------------
+            // trace — always returns true
+            // ---------------------------------------------------------------
+            "trace" => {
+                self.set_register_concrete(params.dest, Value::Bool(true));
+            }
+
+            // ---------------------------------------------------------------
+            // String builtins with Z3 string theory semantics
+            // ---------------------------------------------------------------
+            "startswith" => {
+                self.translate_builtin_string_bool(&params, builtin_name, |s, arg| {
+                    // Z3: arg.prefix(&s) checks if arg is a prefix of s
+                    // OPA: startswith(s, prefix) → prefix.prefix(&s)
+                    arg.prefix(&s)
+                })?;
+            }
+            "endswith" => {
+                self.translate_builtin_string_bool(&params, builtin_name, |s, arg| {
+                    // OPA: endswith(s, suffix) → suffix.suffix(&s)
+                    arg.suffix(&s)
+                })?;
+            }
+            "contains" => {
+                self.translate_builtin_string_bool(&params, builtin_name, |s, arg| {
+                    // OPA: contains(s, substr) → s.contains(&substr)
+                    s.contains(&arg)
+                })?;
+            }
+            "indexof" => {
+                self.translate_builtin_indexof(&params)?;
+            }
+            "replace" => {
+                self.translate_builtin_replace(&params)?;
+            }
+            "substring" => {
+                self.translate_builtin_substring(&params)?;
+            }
+            "trim_prefix" => {
+                self.translate_builtin_trim_prefix(&params)?;
+            }
+            "trim_suffix" => {
+                self.translate_builtin_trim_suffix(&params)?;
+            }
+
+            // ---------------------------------------------------------------
+            // abs — ite(x >= 0, x, -x)
+            // ---------------------------------------------------------------
+            "abs" => {
+                self.translate_builtin_abs(&params)?;
+            }
+
+            // ---------------------------------------------------------------
+            // is_* type checks — resolve from sort when possible
+            // ---------------------------------------------------------------
+            "is_string" => {
+                self.translate_builtin_is_type(&params, builtin_name, ValueSort::String)?;
+            }
+            "is_number" => {
+                // Numbers can be Int or Real.
+                self.translate_builtin_is_number(&params)?;
+            }
+            "is_boolean" => {
+                self.translate_builtin_is_type(&params, builtin_name, ValueSort::Bool)?;
+            }
+            "is_array" | "is_set" | "is_object" | "is_null" => {
+                // These types don't have a corresponding ValueSort in our model.
+                // For concrete values, we can check directly; otherwise unconstrained.
+                self.translate_builtin_is_collection_type(&params, builtin_name)?;
+            }
+
+            // ---------------------------------------------------------------
+            // bits.* — Z3 bitvector theory (64-bit)
+            // ---------------------------------------------------------------
+            "bits.and" => {
+                self.translate_builtin_bitwise_binop(&params, builtin_name, |a, b| a.bvand(&b))?;
+            }
+            "bits.or" => {
+                self.translate_builtin_bitwise_binop(&params, builtin_name, |a, b| a.bvor(&b))?;
+            }
+            "bits.xor" => {
+                self.translate_builtin_bitwise_binop(&params, builtin_name, |a, b| a.bvxor(&b))?;
+            }
+            "bits.negate" => {
+                self.translate_builtin_bitwise_unop(&params, builtin_name, |a| a.bvnot())?;
+            }
+            "bits.lsh" => {
+                self.translate_builtin_bitwise_binop(&params, builtin_name, |a, b| a.bvshl(&b))?;
+            }
+            "bits.rsh" => {
+                self.translate_builtin_bitwise_binop(&params, builtin_name, |a, b| a.bvlshr(&b))?;
+            }
+
+            // ---------------------------------------------------------------
+            // Boolean-returning builtins (unconstrained)
+            // ---------------------------------------------------------------
+            "regex.match"
             | "io.jwt.verify_rs256" | "io.jwt.verify_rs384" | "io.jwt.verify_rs512"
             | "io.jwt.verify_es256" | "io.jwt.verify_es384" | "io.jwt.verify_es512"
-            | "io.jwt.verify_hs256" | "io.jwt.verify_hs384" | "io.jwt.verify_hs512"
-            | "is_string" | "is_number" | "is_boolean" | "is_array" | "is_set" | "is_object"
-            | "is_null" => {
+            | "io.jwt.verify_hs256" | "io.jwt.verify_hs384" | "io.jwt.verify_hs512" => {
                 self.warnings.push(format!(
                     "PC {}: Builtin '{}' modeled as unconstrained Bool",
                     self.pc, builtin_name
@@ -2540,10 +2823,11 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
             }
 
-            // Numeric-returning builtins.
-            "sum" | "product" | "min" | "max" | "abs" | "ceil" | "floor" | "round"
-            | "to_number" | "bits.and" | "bits.or" | "bits.negate" | "bits.xor"
-            | "bits.lsh" | "bits.rsh" | "indexof" => {
+            // ---------------------------------------------------------------
+            // Numeric-returning builtins (unconstrained)
+            // ---------------------------------------------------------------
+            "sum" | "product" | "min" | "max" | "ceil" | "floor" | "round"
+            | "to_number" => {
                 self.warnings.push(format!(
                     "PC {}: Builtin '{}' modeled as unconstrained Int",
                     self.pc, builtin_name
@@ -2553,7 +2837,9 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
             }
 
-            // Default: string return (most builtins return strings or complex values).
+            // ---------------------------------------------------------------
+            // Default: string return (most builtins return strings or complex values)
+            // ---------------------------------------------------------------
             _ => {
                 self.warnings.push(format!(
                     "PC {}: Builtin '{}' modeled as uninterpreted (String)",
@@ -2565,6 +2851,796 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             }
         }
         Ok(InstructionAction::Continue)
+    }
+
+    // ===================================================================
+    // Builtin implementation helpers
+    // ===================================================================
+
+    /// `count(x)` — returns the cardinality/length of a collection or string.
+    fn translate_builtin_count(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() >= 1 {
+            let arg_reg = params.args[0];
+            let arg = self.get_register(arg_reg).clone();
+
+            // SymbolicSet / SetCardinality → extract the Z3 Int directly.
+            if let Some(card) = arg.value.as_set_cardinality() {
+                self.set_register_sym(
+                    params.dest,
+                    SymValue::Int(card.clone()),
+                    Definedness::Defined,
+                    None,
+                );
+                return Ok(());
+            }
+
+            // Concrete collection → concrete count.
+            if let SymValue::Concrete(cv) = &arg.value {
+                let count = match cv {
+                    Value::Array(a) => Some(a.len()),
+                    Value::Object(o) => Some(o.len()),
+                    Value::Set(s) => Some(s.len()),
+                    Value::String(s) => Some(s.len()),
+                    _ => None,
+                };
+                if let Some(c) = count {
+                    self.set_register_concrete(params.dest, Value::from(c));
+                    return Ok(());
+                }
+            }
+
+            // Symbolic string → Z3 str.len via z3-sys FFI.
+            if let Ok(z3_str) = arg.value.to_z3_string(self.ctx) {
+                let str_len = self.z3_string_length(&z3_str);
+                self.set_register_sym(
+                    params.dest,
+                    SymValue::Int(str_len),
+                    Definedness::Defined,
+                    None,
+                );
+                return Ok(());
+            }
+
+            // Path placeholder for a string → look up in registry.
+            if let Some(path) = &arg.source_path {
+                let sort = self.registry.get_sort(path);
+                if sort == Some(ValueSort::String) {
+                    let z3_str = self.registry.get_string(path);
+                    let str_len = self.z3_string_length(&z3_str);
+                    self.set_register_sym(
+                        params.dest,
+                        SymValue::Int(str_len),
+                        Definedness::Defined,
+                        None,
+                    );
+                    return Ok(());
+                }
+            }
+        }
+        // Fallback: fresh non-negative Int.
+        self.warnings.push(format!(
+            "PC {}: Builtin 'count' on symbolic collection → unconstrained Int",
+            self.pc
+        ));
+        let name = format!("builtin_count_{}", self.pc);
+        let var = Z3Int::new_const(self.ctx, name.as_str());
+        let zero = Z3Int::from_i64(self.ctx, 0);
+        self.constraints.push(var.ge(&zero));
+        self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    /// Resolve a builtin argument to a Z3 String, handling concrete values,
+    /// symbolic strings, and path-placeholder registers.
+    fn resolve_arg_as_z3_string(
+        &mut self,
+        reg: u8,
+    ) -> Option<Z3String<'ctx>> {
+        let r = self.get_register(reg).clone();
+        // Direct Z3 string or concrete string.
+        if let Ok(s) = r.value.to_z3_string(self.ctx) {
+            return Some(s);
+        }
+        // Path placeholder → look up in registry.
+        if let Some(path) = &r.source_path {
+            let sort = self.registry.get_sort(path);
+            if sort == Some(ValueSort::String) || sort.is_none() || sort == Some(ValueSort::Unknown) {
+                // Get or create as String (reasonable default for string builtins).
+                return Some(self.registry.get_string(path));
+            }
+        }
+        None
+    }
+
+    /// Resolve a builtin argument to a Z3 Int, handling concrete values,
+    /// symbolic ints, and path-placeholder registers.
+    fn resolve_arg_as_z3_int(
+        &mut self,
+        reg: u8,
+    ) -> Option<Z3Int<'ctx>> {
+        let r = self.get_register(reg).clone();
+        if let Ok(i) = r.value.to_z3_int(self.ctx) {
+            return Some(i);
+        }
+        if let Some(path) = &r.source_path {
+            let sort = self.registry.get_sort(path);
+            if sort == Some(ValueSort::Int) || sort.is_none() || sort == Some(ValueSort::Unknown) {
+                return Some(self.registry.get_int(path));
+            }
+        }
+        None
+    }
+
+    /// Helper for 2-arg string→bool builtins (startswith, endswith, contains).
+    ///
+    /// If both args can be promoted to Z3 strings, applies `f(arg0, arg1)` to
+    /// produce a Z3 Bool. If either concrete string is involved and the other
+    /// is also concrete, evaluates directly. Falls back to unconstrained Bool.
+    fn translate_builtin_string_bool(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+        name: &str,
+        f: impl FnOnce(Z3String<'ctx>, Z3String<'ctx>) -> Z3Bool<'ctx>,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() >= 2 {
+            // Try concrete evaluation first.
+            let a0 = self.get_register(params.args[0]).clone();
+            let a1 = self.get_register(params.args[1]).clone();
+            if let (SymValue::Concrete(Value::String(s0)), SymValue::Concrete(Value::String(s1))) =
+                (&a0.value, &a1.value)
+            {
+                let result = match name {
+                    "startswith" => s0.starts_with(s1.as_ref()),
+                    "endswith" => s0.ends_with(s1.as_ref()),
+                    "contains" => s0.contains(s1.as_ref()),
+                    _ => false,
+                };
+                self.set_register_concrete(params.dest, Value::Bool(result));
+                return Ok(());
+            }
+
+            // Try Z3 string theory.
+            let z0 = self.resolve_arg_as_z3_string(params.args[0]);
+            let z1 = self.resolve_arg_as_z3_string(params.args[1]);
+            if let (Some(s0), Some(s1)) = (z0, z1) {
+                let result = f(s0, s1);
+                self.set_register_sym(
+                    params.dest,
+                    SymValue::Bool(result),
+                    Definedness::Defined,
+                    None,
+                );
+                return Ok(());
+            }
+        }
+        // Fallback: unconstrained Bool.
+        self.warnings.push(format!(
+            "PC {}: Builtin '{}' — cannot resolve args, unconstrained Bool",
+            self.pc, name
+        ));
+        let vname = format!("builtin_{}_{}", name, self.pc);
+        let var = Z3Bool::new_const(self.ctx, vname.as_str());
+        self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    /// `indexof(s, substr)` → Z3 `str.indexof(s, substr, 0)`.
+    /// Returns Int; -1 if not found.
+    fn translate_builtin_indexof(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() >= 2 {
+            // Concrete evaluation.
+            let a0 = self.get_register(params.args[0]).clone();
+            let a1 = self.get_register(params.args[1]).clone();
+            if let (SymValue::Concrete(Value::String(s0)), SymValue::Concrete(Value::String(s1))) =
+                (&a0.value, &a1.value)
+            {
+                let idx = s0.find(s1.as_ref()).map(|i| i as i64).unwrap_or(-1);
+                self.set_register_concrete(params.dest, Value::from(idx));
+                return Ok(());
+            }
+
+            let z0 = self.resolve_arg_as_z3_string(params.args[0]);
+            let z1 = self.resolve_arg_as_z3_string(params.args[1]);
+            if let (Some(s0), Some(s1)) = (z0, z1) {
+                let zero = Z3Int::from_i64(self.ctx, 0);
+                let result = self.z3_string_indexof(&s0, &s1, &zero);
+                self.set_register_sym(
+                    params.dest,
+                    SymValue::Int(result),
+                    Definedness::Defined,
+                    None,
+                );
+                return Ok(());
+            }
+        }
+        // Fallback: unconstrained Int.
+        self.warnings.push(format!(
+            "PC {}: Builtin 'indexof' — cannot resolve args, unconstrained Int",
+            self.pc
+        ));
+        let name = format!("builtin_indexof_{}", self.pc);
+        let var = Z3Int::new_const(self.ctx, name.as_str());
+        self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    /// `replace(s, old, new)` → Z3 `str.replace(s, old, new)`.
+    /// Replaces first occurrence.
+    fn translate_builtin_replace(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() >= 3 {
+            // Concrete evaluation.
+            let a0 = self.get_register(params.args[0]).clone();
+            let a1 = self.get_register(params.args[1]).clone();
+            let a2 = self.get_register(params.args[2]).clone();
+            if let (
+                SymValue::Concrete(Value::String(s0)),
+                SymValue::Concrete(Value::String(s1)),
+                SymValue::Concrete(Value::String(s2)),
+            ) = (&a0.value, &a1.value, &a2.value)
+            {
+                let result = s0.replacen(s1.as_ref(), s2.as_ref(), 1);
+                self.set_register_concrete(params.dest, Value::String(result.into()));
+                return Ok(());
+            }
+
+            let z0 = self.resolve_arg_as_z3_string(params.args[0]);
+            let z1 = self.resolve_arg_as_z3_string(params.args[1]);
+            let z2 = self.resolve_arg_as_z3_string(params.args[2]);
+            if let (Some(s0), Some(s1), Some(s2)) = (z0, z1, z2) {
+                let result = self.z3_string_replace(&s0, &s1, &s2);
+                self.set_register_sym(
+                    params.dest,
+                    SymValue::Str(result),
+                    Definedness::Defined,
+                    None,
+                );
+                return Ok(());
+            }
+        }
+        // Fallback: unconstrained String.
+        self.warnings.push(format!(
+            "PC {}: Builtin 'replace' — cannot resolve args, unconstrained String",
+            self.pc
+        ));
+        let name = format!("builtin_replace_{}", self.pc);
+        let var = Z3String::new_const(self.ctx, name.as_str());
+        self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    /// `substring(s, offset, length)` → Z3 `str.substr(s, offset, length)`.
+    /// OPA semantics: if length < 0, take to end of string.
+    fn translate_builtin_substring(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() >= 3 {
+            // Concrete evaluation.
+            let a0 = self.get_register(params.args[0]).clone();
+            let a1 = self.get_register(params.args[1]).clone();
+            let a2 = self.get_register(params.args[2]).clone();
+            if let (
+                SymValue::Concrete(Value::String(s0)),
+                SymValue::Concrete(Value::Number(n1)),
+                SymValue::Concrete(Value::Number(n2)),
+            ) = (&a0.value, &a1.value, &a2.value)
+            {
+                let offset = n1.as_i64().unwrap_or(0) as usize;
+                let length = n2.as_i64().unwrap_or(-1);
+                let s = s0.as_ref();
+                let result = if offset >= s.len() {
+                    ""
+                } else if length < 0 {
+                    &s[offset..]
+                } else {
+                    let end = (offset + length as usize).min(s.len());
+                    &s[offset..end]
+                };
+                self.set_register_concrete(params.dest, Value::String(result.into()));
+                return Ok(());
+            }
+
+            let z0 = self.resolve_arg_as_z3_string(params.args[0]);
+            let z1 = self.resolve_arg_as_z3_int(params.args[1]);
+            let z2 = self.resolve_arg_as_z3_int(params.args[2]);
+            if let (Some(s0), Some(i_offset), Some(i_length)) = (z0, z1, z2) {
+                // For negative length, use str.len(s) - offset as the length.
+                // We use ite: if length < 0 then str.len(s) - offset else length
+                let zero = Z3Int::from_i64(self.ctx, 0);
+                let str_len = self.z3_string_length(&s0);
+                let effective_len = i_length.lt(&zero).ite(
+                    &Z3Int::sub(self.ctx, &[&str_len, &i_offset]),
+                    &i_length,
+                );
+                let result = self.z3_string_extract(&s0, &i_offset, &effective_len);
+                self.set_register_sym(
+                    params.dest,
+                    SymValue::Str(result),
+                    Definedness::Defined,
+                    None,
+                );
+                return Ok(());
+            }
+        }
+        // Fallback: unconstrained String.
+        self.warnings.push(format!(
+            "PC {}: Builtin 'substring' — cannot resolve args, unconstrained String",
+            self.pc
+        ));
+        let name = format!("builtin_substring_{}", self.pc);
+        let var = Z3String::new_const(self.ctx, name.as_str());
+        self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    /// `trim_prefix(s, prefix)` → if startswith(s, prefix): substr(s, len(prefix), len(s)-len(prefix)) else s
+    fn translate_builtin_trim_prefix(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() >= 2 {
+            // Concrete evaluation.
+            let a0 = self.get_register(params.args[0]).clone();
+            let a1 = self.get_register(params.args[1]).clone();
+            if let (SymValue::Concrete(Value::String(s0)), SymValue::Concrete(Value::String(s1))) =
+                (&a0.value, &a1.value)
+            {
+                let result = s0.strip_prefix(s1.as_ref()).unwrap_or(s0.as_ref());
+                self.set_register_concrete(params.dest, Value::String(result.into()));
+                return Ok(());
+            }
+
+            let z0 = self.resolve_arg_as_z3_string(params.args[0]);
+            let z1 = self.resolve_arg_as_z3_string(params.args[1]);
+            if let (Some(s0), Some(prefix)) = (z0, z1) {
+                let has_prefix = prefix.prefix(&s0);
+                let s_len = self.z3_string_length(&s0);
+                let p_len = self.z3_string_length(&prefix);
+                let remaining_len = Z3Int::sub(self.ctx, &[&s_len, &p_len]);
+                let trimmed = self.z3_string_extract(&s0, &p_len, &remaining_len);
+                // ite(startswith(s, prefix), substr(s, len(prefix), ...), s)
+                let result = has_prefix.ite(&trimmed, &s0);
+                self.set_register_sym(
+                    params.dest,
+                    SymValue::Str(result),
+                    Definedness::Defined,
+                    None,
+                );
+                return Ok(());
+            }
+        }
+        self.warnings.push(format!(
+            "PC {}: Builtin 'trim_prefix' — cannot resolve args, unconstrained String",
+            self.pc
+        ));
+        let name = format!("builtin_trim_prefix_{}", self.pc);
+        let var = Z3String::new_const(self.ctx, name.as_str());
+        self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    /// `trim_suffix(s, suffix)` → if endswith(s, suffix): substr(s, 0, len(s)-len(suffix)) else s
+    fn translate_builtin_trim_suffix(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() >= 2 {
+            // Concrete evaluation.
+            let a0 = self.get_register(params.args[0]).clone();
+            let a1 = self.get_register(params.args[1]).clone();
+            if let (SymValue::Concrete(Value::String(s0)), SymValue::Concrete(Value::String(s1))) =
+                (&a0.value, &a1.value)
+            {
+                let result = s0.strip_suffix(s1.as_ref()).unwrap_or(s0.as_ref());
+                self.set_register_concrete(params.dest, Value::String(result.into()));
+                return Ok(());
+            }
+
+            let z0 = self.resolve_arg_as_z3_string(params.args[0]);
+            let z1 = self.resolve_arg_as_z3_string(params.args[1]);
+            if let (Some(s0), Some(suffix)) = (z0, z1) {
+                let has_suffix = suffix.suffix(&s0);
+                let s_len = self.z3_string_length(&s0);
+                let sfx_len = self.z3_string_length(&suffix);
+                let prefix_len = Z3Int::sub(self.ctx, &[&s_len, &sfx_len]);
+                let zero = Z3Int::from_i64(self.ctx, 0);
+                let trimmed = self.z3_string_extract(&s0, &zero, &prefix_len);
+                let result = has_suffix.ite(&trimmed, &s0);
+                self.set_register_sym(
+                    params.dest,
+                    SymValue::Str(result),
+                    Definedness::Defined,
+                    None,
+                );
+                return Ok(());
+            }
+        }
+        self.warnings.push(format!(
+            "PC {}: Builtin 'trim_suffix' — cannot resolve args, unconstrained String",
+            self.pc
+        ));
+        let name = format!("builtin_trim_suffix_{}", self.pc);
+        let var = Z3String::new_const(self.ctx, name.as_str());
+        self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    /// `abs(x)` → ite(x >= 0, x, -x)
+    fn translate_builtin_abs(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() >= 1 {
+            // Concrete evaluation.
+            let a0 = self.get_register(params.args[0]).clone();
+            if let SymValue::Concrete(Value::Number(n)) = &a0.value {
+                if let Some(i) = n.as_i64() {
+                    self.set_register_concrete(params.dest, Value::from(i.abs()));
+                    return Ok(());
+                }
+            }
+
+            if let Some(z) = self.resolve_arg_as_z3_int(params.args[0]) {
+                let zero = Z3Int::from_i64(self.ctx, 0);
+                let neg = z.unary_minus();
+                let result = z.ge(&zero).ite(&z, &neg);
+                self.set_register_sym(
+                    params.dest,
+                    SymValue::Int(result),
+                    Definedness::Defined,
+                    None,
+                );
+                return Ok(());
+            }
+        }
+        // Fallback: fresh non-negative Int (abs always ≥ 0).
+        self.warnings.push(format!(
+            "PC {}: Builtin 'abs' — cannot resolve arg, unconstrained non-negative Int",
+            self.pc
+        ));
+        let name = format!("builtin_abs_{}", self.pc);
+        let var = Z3Int::new_const(self.ctx, name.as_str());
+        let zero = Z3Int::from_i64(self.ctx, 0);
+        self.constraints.push(var.ge(&zero));
+        self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    /// `is_string`, `is_boolean` — resolves from concrete type or known sort.
+    fn translate_builtin_is_type(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+        name: &str,
+        expected_sort: ValueSort,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() >= 1 {
+            let arg = self.get_register(params.args[0]).clone();
+
+            // Concrete value → check directly.
+            if let SymValue::Concrete(v) = &arg.value {
+                let result = match (name, v) {
+                    ("is_string", Value::String(_)) => true,
+                    ("is_boolean", Value::Bool(_)) => true,
+                    _ => false,
+                };
+                self.set_register_concrete(params.dest, Value::Bool(result));
+                return Ok(());
+            }
+
+            // Symbolic value with known sort.
+            let known_sort = arg.value.sort();
+            if known_sort != ValueSort::Unknown {
+                let result = known_sort == expected_sort;
+                self.set_register_concrete(params.dest, Value::Bool(result));
+                return Ok(());
+            }
+
+            // Path placeholder → check sort from registry.
+            if let Some(path) = &arg.source_path {
+                if let Some(sort) = self.registry.get_sort(path) {
+                    if sort != ValueSort::Unknown {
+                        let result = sort == expected_sort;
+                        self.set_register_concrete(params.dest, Value::Bool(result));
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        // Fallback: unconstrained Bool.
+        self.warnings.push(format!(
+            "PC {}: Builtin '{}' — unknown sort, unconstrained Bool",
+            self.pc, name
+        ));
+        let vname = format!("builtin_{}_{}", name, self.pc);
+        let var = Z3Bool::new_const(self.ctx, vname.as_str());
+        self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    /// `is_number` — true for both Int and Real sorts.
+    fn translate_builtin_is_number(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() >= 1 {
+            let arg = self.get_register(params.args[0]).clone();
+
+            if let SymValue::Concrete(v) = &arg.value {
+                let result = matches!(v, Value::Number(_));
+                self.set_register_concrete(params.dest, Value::Bool(result));
+                return Ok(());
+            }
+
+            let known_sort = arg.value.sort();
+            if known_sort == ValueSort::Int || known_sort == ValueSort::Real {
+                self.set_register_concrete(params.dest, Value::Bool(true));
+                return Ok(());
+            }
+            if known_sort == ValueSort::Bool || known_sort == ValueSort::String {
+                self.set_register_concrete(params.dest, Value::Bool(false));
+                return Ok(());
+            }
+
+            if let Some(path) = &arg.source_path {
+                if let Some(sort) = self.registry.get_sort(path) {
+                    if sort == ValueSort::Int || sort == ValueSort::Real {
+                        self.set_register_concrete(params.dest, Value::Bool(true));
+                        return Ok(());
+                    }
+                    if sort == ValueSort::Bool || sort == ValueSort::String {
+                        self.set_register_concrete(params.dest, Value::Bool(false));
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        self.warnings.push(format!(
+            "PC {}: Builtin 'is_number' — unknown sort, unconstrained Bool",
+            self.pc
+        ));
+        let name = format!("builtin_is_number_{}", self.pc);
+        let var = Z3Bool::new_const(self.ctx, name.as_str());
+        self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    /// `is_array`, `is_set`, `is_object`, `is_null` — concrete value checks.
+    /// These types don't map to Z3 sorts, so we can only resolve concrete values.
+    fn translate_builtin_is_collection_type(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+        name: &str,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() >= 1 {
+            let arg = self.get_register(params.args[0]).clone();
+
+            if let SymValue::Concrete(v) = &arg.value {
+                let result = match name {
+                    "is_array" => matches!(v, Value::Array(_)),
+                    "is_set" => matches!(v, Value::Set(_)),
+                    "is_object" => matches!(v, Value::Object(_)),
+                    "is_null" => matches!(v, Value::Null),
+                    _ => false,
+                };
+                self.set_register_concrete(params.dest, Value::Bool(result));
+                return Ok(());
+            }
+
+            // For symbolic values with known sorts: if the sort is String/Bool/Int/Real,
+            // then is_array/is_set/is_object/is_null are all false.
+            let known_sort = arg.value.sort();
+            if known_sort == ValueSort::String || known_sort == ValueSort::Bool
+                || known_sort == ValueSort::Int || known_sort == ValueSort::Real
+            {
+                self.set_register_concrete(params.dest, Value::Bool(false));
+                return Ok(());
+            }
+
+            if let Some(path) = &arg.source_path {
+                if let Some(sort) = self.registry.get_sort(path) {
+                    if sort == ValueSort::String || sort == ValueSort::Bool
+                        || sort == ValueSort::Int || sort == ValueSort::Real
+                    {
+                        self.set_register_concrete(params.dest, Value::Bool(false));
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        self.warnings.push(format!(
+            "PC {}: Builtin '{}' — unknown type, unconstrained Bool",
+            self.pc, name
+        ));
+        let vname = format!("builtin_{}_{}", name, self.pc);
+        let var = Z3Bool::new_const(self.ctx, vname.as_str());
+        self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    /// Binary bitwise operation: `bits.and`, `bits.or`, `bits.xor`, `bits.lsh`, `bits.rsh`.
+    /// Uses 64-bit BV theory with Int↔BV conversion.
+    fn translate_builtin_bitwise_binop(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+        name: &str,
+        op: impl FnOnce(Z3BV<'ctx>, Z3BV<'ctx>) -> Z3BV<'ctx>,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() >= 2 {
+            // Concrete evaluation.
+            let a0 = self.get_register(params.args[0]).clone();
+            let a1 = self.get_register(params.args[1]).clone();
+            if let (SymValue::Concrete(Value::Number(n0)), SymValue::Concrete(Value::Number(n1))) =
+                (&a0.value, &a1.value)
+            {
+                if let (Some(i0), Some(i1)) = (n0.as_i64(), n1.as_i64()) {
+                    let result = match name {
+                        "bits.and" => i0 & i1,
+                        "bits.or" => i0 | i1,
+                        "bits.xor" => i0 ^ i1,
+                        "bits.lsh" => i0.wrapping_shl(i1 as u32),
+                        "bits.rsh" => i0.wrapping_shr(i1 as u32),
+                        _ => i0,
+                    };
+                    self.set_register_concrete(params.dest, Value::from(result));
+                    return Ok(());
+                }
+            }
+
+            let z0 = self.resolve_arg_as_z3_int(params.args[0]);
+            let z1 = self.resolve_arg_as_z3_int(params.args[1]);
+            if let (Some(i0), Some(i1)) = (z0, z1) {
+                let bv0 = Z3BV::from_int(&i0, 64);
+                let bv1 = Z3BV::from_int(&i1, 64);
+                let bv_result = op(bv0, bv1);
+                let int_result = bv_result.to_int(true); // signed
+                self.set_register_sym(
+                    params.dest,
+                    SymValue::Int(int_result),
+                    Definedness::Defined,
+                    None,
+                );
+                return Ok(());
+            }
+        }
+        // Fallback: unconstrained Int.
+        self.warnings.push(format!(
+            "PC {}: Builtin '{}' — cannot resolve args, unconstrained Int",
+            self.pc, name
+        ));
+        let vname = format!("builtin_{}_{}", name.replace('.', "_"), self.pc);
+        let var = Z3Int::new_const(self.ctx, vname.as_str());
+        self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    /// Unary bitwise operation: `bits.negate`.
+    fn translate_builtin_bitwise_unop(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+        name: &str,
+        op: impl FnOnce(Z3BV<'ctx>) -> Z3BV<'ctx>,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() >= 1 {
+            // Concrete evaluation.
+            let a0 = self.get_register(params.args[0]).clone();
+            if let SymValue::Concrete(Value::Number(n)) = &a0.value {
+                if let Some(i) = n.as_i64() {
+                    self.set_register_concrete(params.dest, Value::from(!i));
+                    return Ok(());
+                }
+            }
+
+            if let Some(z) = self.resolve_arg_as_z3_int(params.args[0]) {
+                let bv = Z3BV::from_int(&z, 64);
+                let bv_result = op(bv);
+                let int_result = bv_result.to_int(true);
+                self.set_register_sym(
+                    params.dest,
+                    SymValue::Int(int_result),
+                    Definedness::Defined,
+                    None,
+                );
+                return Ok(());
+            }
+        }
+        self.warnings.push(format!(
+            "PC {}: Builtin '{}' — cannot resolve arg, unconstrained Int",
+            self.pc, name
+        ));
+        let vname = format!("builtin_{}_{}", name.replace('.', "_"), self.pc);
+        let var = Z3Int::new_const(self.ctx, vname.as_str());
+        self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    // ===================================================================
+    // Z3 string theory FFI helpers
+    // ===================================================================
+
+    /// Z3 `str.len(s)` — returns a Z3 Int representing the length of a Z3 String.
+    fn z3_string_length(&self, s: &Z3String<'ctx>) -> Z3Int<'ctx> {
+        #[allow(unsafe_code)]
+        unsafe {
+            let ctx_ptr: *const z3::Context = self.ctx;
+            let raw_ctx: z3_sys::Z3_context = *(ctx_ptr as *const z3_sys::Z3_context);
+            let len_ast = z3_sys::Z3_mk_seq_length(raw_ctx, s.get_z3_ast());
+            Z3Int::wrap(self.ctx, len_ast)
+        }
+    }
+
+    /// Z3 `str.indexof(s, substr, offset)` — returns Int (-1 if not found).
+    fn z3_string_indexof(
+        &self,
+        s: &Z3String<'ctx>,
+        substr: &Z3String<'ctx>,
+        offset: &Z3Int<'ctx>,
+    ) -> Z3Int<'ctx> {
+        #[allow(unsafe_code)]
+        unsafe {
+            let ctx_ptr: *const z3::Context = self.ctx;
+            let raw_ctx: z3_sys::Z3_context = *(ctx_ptr as *const z3_sys::Z3_context);
+            let ast = z3_sys::Z3_mk_seq_index(
+                raw_ctx,
+                s.get_z3_ast(),
+                substr.get_z3_ast(),
+                offset.get_z3_ast(),
+            );
+            Z3Int::wrap(self.ctx, ast)
+        }
+    }
+
+    /// Z3 `str.replace(s, src, dst)` — replaces first occurrence.
+    fn z3_string_replace(
+        &self,
+        s: &Z3String<'ctx>,
+        src: &Z3String<'ctx>,
+        dst: &Z3String<'ctx>,
+    ) -> Z3String<'ctx> {
+        #[allow(unsafe_code)]
+        unsafe {
+            let ctx_ptr: *const z3::Context = self.ctx;
+            let raw_ctx: z3_sys::Z3_context = *(ctx_ptr as *const z3_sys::Z3_context);
+            let ast = z3_sys::Z3_mk_seq_replace(
+                raw_ctx,
+                s.get_z3_ast(),
+                src.get_z3_ast(),
+                dst.get_z3_ast(),
+            );
+            Z3String::wrap(self.ctx, ast)
+        }
+    }
+
+    /// Z3 `str.substr(s, offset, length)` — extracts a substring.
+    fn z3_string_extract(
+        &self,
+        s: &Z3String<'ctx>,
+        offset: &Z3Int<'ctx>,
+        length: &Z3Int<'ctx>,
+    ) -> Z3String<'ctx> {
+        #[allow(unsafe_code)]
+        unsafe {
+            let ctx_ptr: *const z3::Context = self.ctx;
+            let raw_ctx: z3_sys::Z3_context = *(ctx_ptr as *const z3_sys::Z3_context);
+            let ast = z3_sys::Z3_mk_seq_extract(
+                raw_ctx,
+                s.get_z3_ast(),
+                offset.get_z3_ast(),
+                length.get_z3_ast(),
+            );
+            Z3String::wrap(self.ctx, ast)
+        }
     }
 
     // -----------------------------------------------------------------------

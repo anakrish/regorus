@@ -22,7 +22,8 @@ use crate::rvm::program::{Program, RuleType};
 use crate::value::Value;
 
 use super::path_registry::PathRegistry;
-use super::types::{Definedness, SymRegister, SymSetElement, SymValue, ValueSort};
+use super::types::{Definedness, SymRegister, SymSetElement, SymValue, ValueSort,
+                   ComprehensionAccumulator, ComprehensionYieldEntry};
 use super::AnalysisConfig;
 
 /// Result of translating a block (sequence of instructions until termination).
@@ -91,6 +92,10 @@ pub struct Translator<'ctx, 'a> {
 
     /// Accumulated set element witnesses for the current partial-set rule.
     partial_set_elements: Vec<SymSetElement<'ctx>>,
+
+    /// Stack of active comprehension accumulators.
+    /// Pushed at ComprehensionBegin, popped after the body completes.
+    comprehension_stack: Vec<ComprehensionAccumulator<'ctx>>,
 }
 
 impl<'ctx, 'a> Translator<'ctx, 'a> {
@@ -126,6 +131,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             is_in_partial_set_body: false,
             partial_set_main_value_reg: None,
             partial_set_elements: Vec::new(),
+            comprehension_stack: Vec::new(),
         }
     }
 
@@ -425,25 +431,34 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 self.translate_virtual_data_lookup(params_index)
             }
 
-            // -- Comprehensions (Phase 3 stubs) --
+            // -- Comprehensions --
             ComprehensionBegin { params_index } => {
-                self.warnings.push(format!(
-                    "PC {}: ComprehensionBegin not yet modeled",
-                    self.pc
-                ));
-                // Skip to comprehension end
-                let params = self
-                    .program
-                    .instruction_data
-                    .get_comprehension_begin_params(params_index)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("Invalid comprehension params index {}", params_index)
-                    })?;
-                let end_pc = params.comprehension_end as usize;
-                Ok(InstructionAction::Jump(end_pc))
+                self.translate_comprehension(params_index)
             }
-            ComprehensionYield { .. } => Ok(InstructionAction::Continue),
-            ComprehensionEnd {} => Ok(InstructionAction::Continue),
+            ComprehensionYield { value_reg, key_reg } => {
+                if !self.comprehension_stack.is_empty() {
+                    let value = self.get_register(value_reg).clone();
+                    let key = key_reg.map(|kr| self.get_register(kr).clone());
+                    let condition = self.path_condition.clone();
+                    let acc = self.comprehension_stack.last_mut().unwrap();
+                    acc.yields.push(ComprehensionYieldEntry {
+                        value,
+                        key,
+                        condition,
+                    });
+                }
+                Ok(InstructionAction::Continue)
+            }
+            ComprehensionEnd {} => {
+                // When inside a comprehension body, return to signal the
+                // body is done.  The actual result-building happens in
+                // translate_comprehension after translate_block returns.
+                if !self.comprehension_stack.is_empty() {
+                    Ok(InstructionAction::Return(SymValue::Concrete(Value::Undefined)))
+                } else {
+                    Ok(InstructionAction::Continue)
+                }
+            }
 
             // -- Host await (external I/O) --
             HostAwait { dest, .. } => {
@@ -2145,6 +2160,297 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             None,
         );
         Ok(InstructionAction::Jump(loop_end))
+    }
+
+    // -----------------------------------------------------------------------
+    // Comprehensions
+    // -----------------------------------------------------------------------
+
+    fn translate_comprehension(
+        &mut self,
+        params_index: u16,
+    ) -> anyhow::Result<InstructionAction<'ctx>> {
+        use crate::rvm::instructions::ComprehensionMode;
+
+        let params = self
+            .program
+            .instruction_data
+            .get_comprehension_begin_params(params_index)
+            .ok_or_else(|| anyhow::anyhow!("Invalid comprehension params index {}", params_index))?
+            .clone();
+
+        let body_start = params.body_start as usize;
+        let compr_end = params.comprehension_end as usize;
+        let mode = params.mode.clone();
+        let result_reg = params.result_reg;
+
+        // Push an accumulator for this comprehension.
+        self.comprehension_stack.push(ComprehensionAccumulator {
+            mode: mode.clone(),
+            result_reg,
+            yields: Vec::new(),
+        });
+
+        // Save outer state.
+        let saved_path_cond = self.path_condition.clone();
+
+        // Translate the body. The body contains LoopStart (which unrolls
+        // iterations) and ComprehensionYield (which records elements).
+        // ComprehensionEnd returns Return to stop the block cleanly.
+        let _result = self.translate_block(body_start);
+
+        // Pop the accumulator with all recorded yields.
+        let acc = self.comprehension_stack.pop()
+            .expect("comprehension stack underflow");
+
+        // Restore path condition — comprehensions always produce a result
+        // (possibly empty), so they don't narrow the path condition.
+        self.path_condition = saved_path_cond;
+
+        // Build the result based on mode and yields.
+        match mode {
+            ComprehensionMode::Set => {
+                self.build_set_comprehension_result(result_reg, &acc)?;
+            }
+            ComprehensionMode::Array => {
+                self.build_array_comprehension_result(result_reg, &acc)?;
+            }
+            ComprehensionMode::Object => {
+                self.build_object_comprehension_result(result_reg, &acc)?;
+            }
+        }
+
+        self.warnings.push(format!(
+            "PC {}: Comprehension ({:?}) with {} yield(s)",
+            self.pc, acc.mode, acc.yields.len()
+        ));
+
+        Ok(InstructionAction::Jump(compr_end))
+    }
+
+    /// Build a SymbolicSet from set-comprehension yields.
+    fn build_set_comprehension_result(
+        &mut self,
+        result_reg: u8,
+        acc: &ComprehensionAccumulator<'ctx>,
+    ) -> anyhow::Result<()> {
+        if acc.yields.is_empty() {
+            // Empty comprehension → empty set.
+            self.set_register_concrete(result_reg, Value::new_set());
+            return Ok(());
+        }
+
+        // Check if all yields are truly concrete (not path placeholders).
+        let all_concrete = acc.yields.iter().all(|y| {
+            y.value.value.is_concrete() && y.value.source_path.is_none()
+        });
+        if all_concrete {
+            // Build a concrete set.
+            let mut set = alloc::collections::BTreeSet::new();
+            for entry in &acc.yields {
+                if let SymValue::Concrete(v) = &entry.value.value {
+                    if *v != Value::Undefined {
+                        set.insert(v.clone());
+                    }
+                }
+            }
+            self.set_register_concrete(result_reg, Value::Set(crate::Rc::new(set)));
+            return Ok(());
+        }
+
+        // Build a SymbolicSet from symbolic yields.
+        let mut elements = Vec::new();
+        for entry in &acc.yields {
+            let elem_path = entry.value.source_path.clone()
+                .unwrap_or_else(|| format!("compr_set_{}_{}", self.pc, elements.len()));
+            // Get sort from the registry if the value is a path placeholder.
+            let elem_sort = if entry.value.source_path.is_some() {
+                self.registry
+                    .get(elem_path.as_str())
+                    .map(|e| e.sort)
+                    .unwrap_or(entry.value.value.sort())
+            } else {
+                entry.value.value.sort()
+            };
+            elements.push(SymSetElement {
+                condition: entry.condition.clone(),
+                element_path: elem_path.clone(),
+                key_path: elem_path,
+                element_sort: elem_sort,
+            });
+        }
+
+        // Compute cardinality: count of elements whose condition is true.
+        // For set semantics, group by key_path and count distinct groups.
+        let zero = Z3Int::from_i64(self.ctx, 0);
+        let one = Z3Int::from_i64(self.ctx, 1);
+        let mut sum = Z3Int::from_i64(self.ctx, 0);
+        for elem in &elements {
+            let contrib = elem.condition.ite(&one, &zero);
+            sum = Z3Int::add(self.ctx, &[&sum, &contrib]);
+        }
+
+        self.set_register_sym(
+            result_reg,
+            SymValue::SymbolicSet {
+                cardinality: sum,
+                elements,
+            },
+            Definedness::Defined,
+            None,
+        );
+        Ok(())
+    }
+
+    /// Build a concrete or symbolic array from array-comprehension yields.
+    fn build_array_comprehension_result(
+        &mut self,
+        result_reg: u8,
+        acc: &ComprehensionAccumulator<'ctx>,
+    ) -> anyhow::Result<()> {
+        if acc.yields.is_empty() {
+            self.set_register_concrete(result_reg, Value::new_array());
+            return Ok(());
+        }
+
+        // Check if all yields are truly concrete (not path placeholders).
+        let all_concrete = acc.yields.iter().all(|y| {
+            y.value.value.is_concrete() && y.value.source_path.is_none()
+        });
+        if all_concrete {
+            let mut arr = Vec::new();
+            for entry in &acc.yields {
+                if let SymValue::Concrete(v) = &entry.value.value {
+                    if *v != Value::Undefined {
+                        arr.push(v.clone());
+                    }
+                }
+            }
+            self.set_register_concrete(result_reg, Value::Array(crate::Rc::new(arr)));
+            return Ok(());
+        }
+
+        // For symbolic arrays, model as a SymbolicSet (supports Contains
+        // and count). Array ordering is not tracked symbolically.
+        let mut elements = Vec::new();
+        for (i, entry) in acc.yields.iter().enumerate() {
+            let elem_path = entry.value.source_path.clone()
+                .unwrap_or_else(|| format!("compr_arr_{}_{}", self.pc, i));
+            let elem_sort = if entry.value.source_path.is_some() {
+                self.registry
+                    .get(elem_path.as_str())
+                    .map(|e| e.sort)
+                    .unwrap_or(entry.value.value.sort())
+            } else {
+                entry.value.value.sort()
+            };
+            elements.push(SymSetElement {
+                condition: entry.condition.clone(),
+                element_path: elem_path.clone(),
+                key_path: elem_path,
+                element_sort: elem_sort,
+            });
+        }
+
+        let zero = Z3Int::from_i64(self.ctx, 0);
+        let one = Z3Int::from_i64(self.ctx, 1);
+        let mut sum = Z3Int::from_i64(self.ctx, 0);
+        for elem in &elements {
+            let contrib = elem.condition.ite(&one, &zero);
+            sum = Z3Int::add(self.ctx, &[&sum, &contrib]);
+        }
+
+        self.set_register_sym(
+            result_reg,
+            SymValue::SymbolicSet {
+                cardinality: sum,
+                elements,
+            },
+            Definedness::Defined,
+            None,
+        );
+        Ok(())
+    }
+
+    /// Build a concrete or symbolic object from object-comprehension yields.
+    fn build_object_comprehension_result(
+        &mut self,
+        result_reg: u8,
+        acc: &ComprehensionAccumulator<'ctx>,
+    ) -> anyhow::Result<()> {
+        if acc.yields.is_empty() {
+            self.set_register_concrete(
+                result_reg,
+                Value::Object(crate::Rc::new(alloc::collections::BTreeMap::new())),
+            );
+            return Ok(());
+        }
+
+        // Check if all yields (keys and values) are truly concrete (not path placeholders).
+        let all_concrete = acc.yields.iter().all(|y| {
+            y.value.value.is_concrete()
+                && y.value.source_path.is_none()
+                && y.key.as_ref().map_or(true, |k| k.value.is_concrete() && k.source_path.is_none())
+        });
+        if all_concrete {
+            let mut obj = alloc::collections::BTreeMap::new();
+            for entry in &acc.yields {
+                if let (SymValue::Concrete(v), Some(k_reg)) = (&entry.value.value, &entry.key) {
+                    if let SymValue::Concrete(k) = &k_reg.value {
+                        if *k != Value::Undefined && *v != Value::Undefined {
+                            obj.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+            }
+            self.set_register_concrete(
+                result_reg,
+                Value::Object(crate::Rc::new(obj)),
+            );
+            return Ok(());
+        }
+
+        // For symbolic objects, model similarly to a SymbolicSet.
+        // The elements represent key-value pairs; consumers can iterate or
+        // check membership based on keys.
+        let mut elements = Vec::new();
+        for (i, entry) in acc.yields.iter().enumerate() {
+            let elem_path = entry.value.source_path.clone()
+                .unwrap_or_else(|| format!("compr_obj_{}_{}", self.pc, i));
+            let elem_sort = if entry.value.source_path.is_some() {
+                self.registry
+                    .get(elem_path.as_str())
+                    .map(|e| e.sort)
+                    .unwrap_or(entry.value.value.sort())
+            } else {
+                entry.value.value.sort()
+            };
+            elements.push(SymSetElement {
+                condition: entry.condition.clone(),
+                element_path: elem_path.clone(),
+                key_path: elem_path,
+                element_sort: elem_sort,
+            });
+        }
+
+        let zero = Z3Int::from_i64(self.ctx, 0);
+        let one = Z3Int::from_i64(self.ctx, 1);
+        let mut sum = Z3Int::from_i64(self.ctx, 0);
+        for elem in &elements {
+            let contrib = elem.condition.ite(&one, &zero);
+            sum = Z3Int::add(self.ctx, &[&sum, &contrib]);
+        }
+
+        self.set_register_sym(
+            result_reg,
+            SymValue::SymbolicSet {
+                cardinality: sum,
+                elements,
+            },
+            Definedness::Defined,
+            None,
+        );
+        Ok(())
     }
 
     // -----------------------------------------------------------------------

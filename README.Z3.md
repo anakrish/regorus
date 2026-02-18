@@ -282,9 +282,10 @@ regorus analyze \
   --max-loops 3
 ```
 
-Z3 synthesises servers, ports, and networks with coordinated IDs such that
-a server ends up using `"http"` on a public-facing network — a multi-way join
-across three collections:
+The policy has two denial rules: (1) a server using `"http"` that is reachable
+on a public network (a multi-way join across servers → ports → networks), and
+(2) any server using `"telnet"` regardless of network.  Z3 finds the easiest
+path — in this case, the `"telnet"` rule:
 
 ```json
 {
@@ -309,8 +310,8 @@ across three collections:
 }
 ```
 
-Notice how Z3 chose `"telnet"` for the `db` server — one of the banned
-protocols — causing `deny` to be non-empty and `allow` to become `false`.
+Z3 assigned `"telnet"` to the `db` server, which triggers the second denial
+rule (telnet is banned everywhere) and makes `allow = false`.
 
 #### Find a compliant configuration (`allow = true`)
 
@@ -598,7 +599,7 @@ The symbolic engine is under active development.  Current limitations include:
 
 | Area | Status |
 |---|---|
-| **Comprehensions** | Set/array/object comprehensions are stubbed (warnings emitted) |
+| **Comprehensions** | Set/array/object comprehensions are symbolically unrolled; results support `in` and `count` |
 | **String builtins** | `startswith`, `endswith`, `regex.match`, etc. are modeled as unconstrained Bools |
 | **Numeric builtins** | `sum`, `max`, `min`, etc. are modeled as unconstrained Ints |
 | **Aggregations** | `count` on symbolic collections uses cardinality tracking; other aggregations are approximate |

@@ -94,6 +94,29 @@ pub struct SymRegister<'ctx> {
     pub source_path: Option<std::string::String>,
 }
 
+/// One yielded element during comprehension translation.
+#[derive(Debug, Clone)]
+pub struct ComprehensionYieldEntry<'ctx> {
+    /// The symbolic value being yielded.
+    pub value: SymRegister<'ctx>,
+    /// Optional key register (for object comprehensions).
+    pub key: Option<SymRegister<'ctx>>,
+    /// Path condition under which this yield is reached.
+    pub condition: Z3Bool<'ctx>,
+}
+
+/// Accumulator for a comprehension being translated.
+#[derive(Debug, Clone)]
+pub struct ComprehensionAccumulator<'ctx> {
+    /// Comprehension mode (Set, Array, Object).
+    pub mode: crate::rvm::instructions::ComprehensionMode,
+    /// Register that holds the comprehension result.
+    #[allow(dead_code)]
+    pub result_reg: u8,
+    /// Accumulated yield entries from the comprehension body.
+    pub yields: Vec<ComprehensionYieldEntry<'ctx>>,
+}
+
 // ---------------------------------------------------------------------------
 // SymValue helpers
 // ---------------------------------------------------------------------------

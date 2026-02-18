@@ -253,6 +253,23 @@ pub enum Instruction {
         register: u8,
     },
 
+    /// Return undefined immediately when condition is false or undefined.
+    ///
+    /// This is used by Azure Policy compilation to model "condition does not match"
+    /// without treating it as a VM assertion failure.
+    ReturnUndefinedIfNotTrue {
+        condition: u8,
+    },
+
+    /// Replace Undefined with Null in a register.
+    ///
+    /// Azure Policy treats missing fields as null rather than undefined.
+    /// This instruction prevents the RVM's undefined-propagation from
+    /// short-circuiting subsequent builtin calls.
+    CoalesceUndefinedToNull {
+        register: u8,
+    },
+
     /// Start a loop over a collection with specified semantics - uses parameter table
     LoopStart {
         /// Index into program's instruction_data.loop_params table

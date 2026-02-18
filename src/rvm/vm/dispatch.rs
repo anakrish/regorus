@@ -358,6 +358,21 @@ impl RegoVM {
                 self.handle_condition(!is_undefined)?;
                 Ok(InstructionOutcome::Continue)
             }
+            ReturnUndefinedIfNotTrue { condition } => {
+                let value = self.get_register(condition)?;
+                if matches!(value, Value::Bool(true)) {
+                    Ok(InstructionOutcome::Continue)
+                } else {
+                    Ok(InstructionOutcome::Return(Value::Undefined))
+                }
+            }
+            CoalesceUndefinedToNull { register } => {
+                let value = self.get_register(register)?;
+                if matches!(value, Value::Undefined) {
+                    self.set_register(register, Value::Null)?;
+                }
+                Ok(InstructionOutcome::Continue)
+            }
             other => self.execute_call_instruction(program, other),
         }
     }

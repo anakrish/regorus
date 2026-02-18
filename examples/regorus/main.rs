@@ -205,8 +205,73 @@ fn rego_ast(file: String) -> Result<()> {
     }
 }
 
+#[cfg(feature = "z3-analysis")]
+mod analyze;
+
 #[derive(clap::Subcommand)]
 enum RegorusCommand {
+    /// Symbolically analyze a Rego policy using Z3.
+    ///
+    /// Translates the policy into SMT constraints and uses the Z3 solver to
+    /// generate a concrete input that satisfies the given goal (expected output,
+    /// line coverage, or both).
+    #[cfg(feature = "z3-analysis")]
+    Analyze {
+        /// Directories containing Rego files.
+        #[arg(long, short, value_name = "bundle")]
+        bundles: Vec<String>,
+
+        /// Policy or data files. Rego, json or yaml.
+        #[arg(long, short, value_name = "policy.rego|data.json")]
+        data: Vec<String>,
+
+        /// Entry point to analyze (e.g. "data.example.allow").
+        #[arg(long, short, value_name = "RULE")]
+        entrypoint: String,
+
+        /// Expected output value (JSON literal, e.g. "true", "false", "42", "\"admin\"").
+        /// When omitted, the solver only requires the result to be defined.
+        #[arg(long, short, value_name = "JSON")]
+        output: Option<String>,
+
+        /// Source lines to cover, as "file:line" pairs (e.g. "policy.rego:10").
+        /// Multiple lines can be specified.
+        #[arg(long, short = 'l', value_name = "FILE:LINE")]
+        cover_line: Vec<String>,
+
+        /// Source lines to avoid, as "file:line" pairs (e.g. "policy.rego:10").
+        /// The generated input must NOT execute these lines.
+        #[arg(long, value_name = "FILE:LINE")]
+        avoid_line: Vec<String>,
+
+        /// Dump SMT-LIB2 assertions to the given file.
+        #[arg(long, value_name = "FILE")]
+        dump_smt: Option<String>,
+
+        /// Dump Z3 model (variable assignments) to the given file.
+        #[arg(long, value_name = "FILE")]
+        dump_model: Option<String>,
+
+        /// Z3 solver timeout in milliseconds (default: 30000).
+        #[arg(long, default_value = "30000")]
+        timeout: u32,
+
+        /// Maximum loop unrolling depth (default: 5).
+        #[arg(long, default_value = "5")]
+        max_loops: usize,
+
+        /// Example input file (JSON). Used to infer types for symbolic
+        /// input fields so that comparisons are properly constrained.
+        #[arg(long, short, value_name = "input.json")]
+        input: Option<String>,
+
+        /// JSON Schema file for input constraints. When provided, Z3
+        /// constraints are generated to enforce types, required fields,
+        /// minimum lengths, enums, and field uniqueness (`x-unique`).
+        #[arg(long, short, value_name = "schema.json")]
+        schema: Option<String>,
+    },
+
     /// Parse a Rego policy and dump AST.
     Ast {
         /// Rego policy file.
@@ -306,5 +371,33 @@ fn main() -> Result<()> {
         RegorusCommand::Lex { file, verbose } => rego_lex(file, verbose),
         RegorusCommand::Parse { file, v0 } => rego_parse(file, v0),
         RegorusCommand::Ast { file } => rego_ast(file),
+        #[cfg(feature = "z3-analysis")]
+        RegorusCommand::Analyze {
+            bundles,
+            data,
+            entrypoint,
+            output,
+            cover_line,
+            avoid_line,
+            dump_smt,
+            dump_model,
+            timeout,
+            max_loops,
+            input,
+            schema,
+        } => analyze::rego_analyze(
+            &bundles,
+            &data,
+            entrypoint,
+            output,
+            cover_line,
+            avoid_line,
+            dump_smt,
+            dump_model,
+            timeout,
+            max_loops,
+            input,
+            schema,
+        ),
     }
 }

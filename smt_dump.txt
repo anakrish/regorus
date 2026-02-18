@@ -1,0 +1,1744 @@
+warning: unused import: `alloc::string::String`
+ --> src/rvm/analysis/model_extract.rs:7:5
+  |
+7 | use alloc::string::String;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `z3::ast::Ast`
+  --> src/rvm/analysis/model_extract.rs:11:5
+   |
+11 | use z3::ast::Ast;
+   |     ^^^^^^^^^^^^
+
+warning: unused import: `Ast`
+  --> src/rvm/analysis/path_registry.rs:18:15
+   |
+18 | use z3::ast::{Ast, Bool as Z3Bool, Int as Z3Int, Real as Z3Real, String as Z3String};
+   |               ^^^
+
+warning: unused import: `alloc::string::String`
+ --> src/rvm/analysis/types.rs:6:5
+  |
+6 | use alloc::string::String;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `alloc::vec`
+  --> src/rvm/analysis/mod.rs:25:5
+   |
+25 | use alloc::vec;
+   |     ^^^^^^^^^^
+
+warning: unused variable: `id`
+  --> src/rvm/analysis/path_registry.rs:81:21
+   |
+81 |                 let id = *next_id;
+   |                     ^^ help: if this is intentional, prefix it with an underscore: `_id`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `obj`
+   --> src/rvm/analysis/translator.rs:319:25
+    |
+319 |             ObjectSet { obj, key, value } => {
+    |                         ^^^ help: try ignoring the field: `obj: _`
+
+warning: unused variable: `key`
+   --> src/rvm/analysis/translator.rs:319:30
+    |
+319 |             ObjectSet { obj, key, value } => {
+    |                              ^^^ help: try ignoring the field: `key: _`
+
+warning: unused variable: `value`
+   --> src/rvm/analysis/translator.rs:319:35
+    |
+319 |             ObjectSet { obj, key, value } => {
+    |                                   ^^^^^ help: try ignoring the field: `value: _`
+
+warning: unused variable: `arr`
+   --> src/rvm/analysis/translator.rs:327:25
+    |
+327 |             ArrayPush { arr, value } => {
+    |                         ^^^ help: try ignoring the field: `arr: _`
+
+warning: unused variable: `value`
+   --> src/rvm/analysis/translator.rs:327:30
+    |
+327 |             ArrayPush { arr, value } => {
+    |                              ^^^^^ help: try ignoring the field: `value: _`
+
+warning: unused variable: `set`
+   --> src/rvm/analysis/translator.rs:334:22
+    |
+334 |             SetAdd { set, value } => {
+    |                      ^^^ help: try ignoring the field: `set: _`
+
+warning: unused variable: `value`
+   --> src/rvm/analysis/translator.rs:334:27
+    |
+334 |             SetAdd { set, value } => {
+    |                           ^^^^^ help: try ignoring the field: `value: _`
+
+warning: unused variable: `body_start`
+   --> src/rvm/analysis/translator.rs:380:24
+    |
+380 |             LoopNext { body_start, loop_end } => {
+    |                        ^^^^^^^^^^ help: try ignoring the field: `body_start: _`
+
+warning: unused variable: `loop_end`
+   --> src/rvm/analysis/translator.rs:380:36
+    |
+380 |             LoopNext { body_start, loop_end } => {
+    |                                    ^^^^^^^^ help: try ignoring the field: `loop_end: _`
+
+warning: variable `all_literal` is assigned to, but never used
+   --> src/rvm/analysis/translator.rs:881:13
+    |
+881 |         let mut all_literal = true;
+    |             ^^^^^^^^^^^^^^^
+    |
+    = note: consider using `_all_literal` instead
+
+warning: value assigned to `all_literal` is never read
+   --> src/rvm/analysis/translator.rs:909:25
+    |
+909 |                         all_literal = false;
+    |                         ^^^^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `rule_index`
+    --> src/rvm/analysis/translator.rs:1272:9
+     |
+1272 |         rule_index: u16,
+     |         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_rule_index`
+
+warning: unused variable: `ctx`
+   --> src/rvm/analysis/mod.rs:405:5
+    |
+405 |     ctx: &'ctx z3::Context,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: `regorus` (lib) generated 19 warnings (run `cargo fix --lib -p regorus` to apply 17 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running `target/debug/examples/regorus analyze -d examples/server/allowed_server.rego -e data.example.allow -o false --dump-smt`
+--- SMT-LIB2 assertions ---
+(declare-fun |defined_input.servers[4]| () Bool)
+(declare-fun |defined_input.servers[3]| () Bool)
+(declare-fun |defined_input.servers[2]| () Bool)
+(declare-fun |defined_input.servers[1]| () Bool)
+(declare-fun |defined_input.servers[0]| () Bool)
+(declare-fun |input.servers[4].protocols[4]| () String)
+(declare-fun |defined_input.servers[4].protocols[4]| () Bool)
+(declare-fun |input.servers[4].protocols[3]| () String)
+(declare-fun |defined_input.servers[4].protocols[3]| () Bool)
+(declare-fun |input.servers[4].protocols[2]| () String)
+(declare-fun |defined_input.servers[4].protocols[2]| () Bool)
+(declare-fun |input.servers[4].protocols[1]| () String)
+(declare-fun |defined_input.servers[4].protocols[1]| () Bool)
+(declare-fun |input.servers[4].protocols[0]| () String)
+(declare-fun |defined_input.servers[4].protocols[0]| () Bool)
+(declare-fun |input.servers[3].protocols[4]| () String)
+(declare-fun |defined_input.servers[3].protocols[4]| () Bool)
+(declare-fun |input.servers[3].protocols[3]| () String)
+(declare-fun |defined_input.servers[3].protocols[3]| () Bool)
+(declare-fun |input.servers[3].protocols[2]| () String)
+(declare-fun |defined_input.servers[3].protocols[2]| () Bool)
+(declare-fun |input.servers[3].protocols[1]| () String)
+(declare-fun |defined_input.servers[3].protocols[1]| () Bool)
+(declare-fun |input.servers[3].protocols[0]| () String)
+(declare-fun |defined_input.servers[3].protocols[0]| () Bool)
+(declare-fun |input.servers[2].protocols[4]| () String)
+(declare-fun |defined_input.servers[2].protocols[4]| () Bool)
+(declare-fun |input.servers[2].protocols[3]| () String)
+(declare-fun |defined_input.servers[2].protocols[3]| () Bool)
+(declare-fun |input.servers[2].protocols[2]| () String)
+(declare-fun |defined_input.servers[2].protocols[2]| () Bool)
+(declare-fun |input.servers[2].protocols[1]| () String)
+(declare-fun |defined_input.servers[2].protocols[1]| () Bool)
+(declare-fun |input.servers[2].protocols[0]| () String)
+(declare-fun |defined_input.servers[2].protocols[0]| () Bool)
+(declare-fun |input.servers[1].protocols[4]| () String)
+(declare-fun |defined_input.servers[1].protocols[4]| () Bool)
+(declare-fun |input.servers[1].protocols[3]| () String)
+(declare-fun |defined_input.servers[1].protocols[3]| () Bool)
+(declare-fun |input.servers[1].protocols[2]| () String)
+(declare-fun |defined_input.servers[1].protocols[2]| () Bool)
+(declare-fun |input.servers[1].protocols[1]| () String)
+(declare-fun |defined_input.servers[1].protocols[1]| () Bool)
+(declare-fun |input.servers[1].protocols[0]| () String)
+(declare-fun |defined_input.servers[1].protocols[0]| () Bool)
+(declare-fun |input.servers[0].protocols[4]| () String)
+(declare-fun |defined_input.servers[0].protocols[4]| () Bool)
+(declare-fun |input.servers[0].protocols[3]| () String)
+(declare-fun |defined_input.servers[0].protocols[3]| () Bool)
+(declare-fun |input.servers[0].protocols[2]| () String)
+(declare-fun |defined_input.servers[0].protocols[2]| () Bool)
+(declare-fun |input.servers[0].protocols[1]| () String)
+(declare-fun |defined_input.servers[0].protocols[1]| () Bool)
+(declare-fun |input.servers[0].protocols[0]| () String)
+(declare-fun |defined_input.servers[0].protocols[0]| () Bool)
+(assert (let ((a!1 (and (and (and true |defined_input.servers[0]|) true true)
+                true
+                true
+                false))
+      (a!4 (and (and (and true |defined_input.servers[1]|) true true)
+                true
+                true
+                false))
+      (a!7 (and (and (and true |defined_input.servers[2]|) true true)
+                true
+                true
+                false))
+      (a!10 (and (and (and true |defined_input.servers[3]|) true true)
+                 true
+                 true
+                 false))
+      (a!13 (and (and (and true |defined_input.servers[4]|) true true)
+                 true
+                 true
+                 false)))
+(let ((a!2 (and (and (and true |defined_input.servers[0]|) true true)
+                (or a!1 a!1 a!1 a!1 a!1)))
+      (a!5 (and (and (and true |defined_input.servers[1]|) true true)
+                (or a!4 a!4 a!4 a!4 a!4)))
+      (a!8 (and (and (and true |defined_input.servers[2]|) true true)
+                (or a!7 a!7 a!7 a!7 a!7)))
+      (a!11 (and (and (and true |defined_input.servers[3]|) true true)
+                 (or a!10 a!10 a!10 a!10 a!10)))
+      (a!14 (and (and (and true |defined_input.servers[4]|) true true)
+                 (or a!13 a!13 a!13 a!13 a!13))))
+(let ((a!3 (and (and true |defined_input.servers[0]|) (or a!2 a!2 a!2 a!2 a!2)))
+      (a!6 (and (and true |defined_input.servers[1]|) (or a!5 a!5 a!5 a!5 a!5)))
+      (a!9 (and (and true |defined_input.servers[2]|) (or a!8 a!8 a!8 a!8 a!8)))
+      (a!12 (and (and true |defined_input.servers[3]|)
+                 (or a!11 a!11 a!11 a!11 a!11)))
+      (a!15 (and (and true |defined_input.servers[4]|)
+                 (or a!14 a!14 a!14 a!14 a!14))))
+(let ((a!16 (and true
+                 (or (and (and true |defined_input.servers[0]|)
+                          (or a!3 a!3 a!3 a!3 a!3))
+                     (and (and true |defined_input.servers[1]|)
+                          (or a!6 a!6 a!6 a!6 a!6))
+                     (and (and true |defined_input.servers[2]|)
+                          (or a!9 a!9 a!9 a!9 a!9))
+                     (and (and true |defined_input.servers[3]|)
+                          (or a!12 a!12 a!12 a!12 a!12))
+                     (and (and true |defined_input.servers[4]|)
+                          (or a!15 a!15 a!15 a!15 a!15))))))
+  (>= (+ 0 (ite a!16 1 0)) 0))))))
+(assert (let ((a!1 (and true
+                true
+                |defined_input.servers[0]|
+                true
+                true
+                true
+                true
+                false
+                |defined_input.servers[0]|))
+      (a!3 (and true
+                true
+                |defined_input.servers[1]|
+                true
+                true
+                true
+                true
+                false
+                |defined_input.servers[1]|))
+      (a!5 (and true
+                true
+                |defined_input.servers[2]|
+                true
+                true
+                true
+                true
+                false
+                |defined_input.servers[2]|))
+      (a!7 (and true
+                true
+                |defined_input.servers[3]|
+                true
+                true
+                true
+                true
+                false
+                |defined_input.servers[3]|))
+      (a!9 (and true
+                true
+                |defined_input.servers[4]|
+                true
+                true
+                true
+                true
+                false
+                |defined_input.servers[4]|)))
+(let ((a!2 (and a!1
+                (or (and a!1
+                         |defined_input.servers[0].protocols[0]|
+                         (= |input.servers[0].protocols[0]| "http"))
+                    (and a!1
+                         |defined_input.servers[0].protocols[1]|
+                         (= |input.servers[0].protocols[1]| "http"))
+                    (and a!1
+                         |defined_input.servers[0].protocols[2]|
+                         (= |input.servers[0].protocols[2]| "http"))
+                    (and a!1
+                         |defined_input.servers[0].protocols[3]|
+                         (= |input.servers[0].protocols[3]| "http"))
+                    (and a!1
+                         |defined_input.servers[0].protocols[4]|
+                         (= |input.servers[0].protocols[4]| "http")))))
+      (a!4 (and a!3
+                (or (and a!3
+                         |defined_input.servers[1].protocols[0]|
+                         (= |input.servers[1].protocols[0]| "http"))
+                    (and a!3
+                         |defined_input.servers[1].protocols[1]|
+                         (= |input.servers[1].protocols[1]| "http"))
+                    (and a!3
+                         |defined_input.servers[1].protocols[2]|
+                         (= |input.servers[1].protocols[2]| "http"))
+                    (and a!3
+                         |defined_input.servers[1].protocols[3]|
+                         (= |input.servers[1].protocols[3]| "http"))
+                    (and a!3
+                         |defined_input.servers[1].protocols[4]|
+                         (= |input.servers[1].protocols[4]| "http")))))
+      (a!6 (and a!5
+                (or (and a!5
+                         |defined_input.servers[2].protocols[0]|
+                         (= |input.servers[2].protocols[0]| "http"))
+                    (and a!5
+                         |defined_input.servers[2].protocols[1]|
+                         (= |input.servers[2].protocols[1]| "http"))
+                    (and a!5
+                         |defined_input.servers[2].protocols[2]|
+                         (= |input.servers[2].protocols[2]| "http"))
+                    (and a!5
+                         |defined_input.servers[2].protocols[3]|
+                         (= |input.servers[2].protocols[3]| "http"))
+                    (and a!5
+                         |defined_input.servers[2].protocols[4]|
+                         (= |input.servers[2].protocols[4]| "http")))))
+      (a!8 (and a!7
+                (or (and a!7
+                         |defined_input.servers[3].protocols[0]|
+                         (= |input.servers[3].protocols[0]| "http"))
+                    (and a!7
+                         |defined_input.servers[3].protocols[1]|
+                         (= |input.servers[3].protocols[1]| "http"))
+                    (and a!7
+                         |defined_input.servers[3].protocols[2]|
+                         (= |input.servers[3].protocols[2]| "http"))
+                    (and a!7
+                         |defined_input.servers[3].protocols[3]|
+                         (= |input.servers[3].protocols[3]| "http"))
+                    (and a!7
+                         |defined_input.servers[3].protocols[4]|
+                         (= |input.servers[3].protocols[4]| "http")))))
+      (a!10 (and a!9
+                 (or (and a!9
+                          |defined_input.servers[4].protocols[0]|
+                          (= |input.servers[4].protocols[0]| "http"))
+                     (and a!9
+                          |defined_input.servers[4].protocols[1]|
+                          (= |input.servers[4].protocols[1]| "http"))
+                     (and a!9
+                          |defined_input.servers[4].protocols[2]|
+                          (= |input.servers[4].protocols[2]| "http"))
+                     (and a!9
+                          |defined_input.servers[4].protocols[3]|
+                          (= |input.servers[4].protocols[3]| "http"))
+                     (and a!9
+                          |defined_input.servers[4].protocols[4]|
+                          (= |input.servers[4].protocols[4]| "http"))))))
+(let ((a!11 (+ 0
+               (ite (and true
+                         (or a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10))
+                    1
+                    0))))
+  (>= a!11 0)))))
+(assert true)
+(assert (let ((a!1 (and true
+                true
+                |defined_input.servers[0]|
+                true
+                true
+                true
+                true
+                false
+                |defined_input.servers[0]|))
+      (a!3 (and true
+                true
+                |defined_input.servers[1]|
+                true
+                true
+                true
+                true
+                false
+                |defined_input.servers[1]|))
+      (a!5 (and true
+                true
+                |defined_input.servers[2]|
+                true
+                true
+                true
+                true
+                false
+                |defined_input.servers[2]|))
+      (a!7 (and true
+                true
+                |defined_input.servers[3]|
+                true
+                true
+                true
+                true
+                false
+                |defined_input.servers[3]|))
+      (a!9 (and true
+                true
+                |defined_input.servers[4]|
+                true
+                true
+                true
+                true
+                false
+                |defined_input.servers[4]|)))
+(let ((a!2 (and a!1
+                (or (and a!1
+                         |defined_input.servers[0].protocols[0]|
+                         (= |input.servers[0].protocols[0]| "http"))
+                    (and a!1
+                         |defined_input.servers[0].protocols[1]|
+                         (= |input.servers[0].protocols[1]| "http"))
+                    (and a!1
+                         |defined_input.servers[0].protocols[2]|
+                         (= |input.servers[0].protocols[2]| "http"))
+                    (and a!1
+                         |defined_input.servers[0].protocols[3]|
+                         (= |input.servers[0].protocols[3]| "http"))
+                    (and a!1
+                         |defined_input.servers[0].protocols[4]|
+                         (= |input.servers[0].protocols[4]| "http")))))
+      (a!4 (and a!3
+                (or (and a!3
+                         |defined_input.servers[1].protocols[0]|
+                         (= |input.servers[1].protocols[0]| "http"))
+                    (and a!3
+                         |defined_input.servers[1].protocols[1]|
+                         (= |input.servers[1].protocols[1]| "http"))
+                    (and a!3
+                         |defined_input.servers[1].protocols[2]|
+                         (= |input.servers[1].protocols[2]| "http"))
+                    (and a!3
+                         |defined_input.servers[1].protocols[3]|
+                         (= |input.servers[1].protocols[3]| "http"))
+                    (and a!3
+                         |defined_input.servers[1].protocols[4]|
+                         (= |input.servers[1].protocols[4]| "http")))))
+      (a!6 (and a!5
+                (or (and a!5
+                         |defined_input.servers[2].protocols[0]|
+                         (= |input.servers[2].protocols[0]| "http"))
+                    (and a!5
+                         |defined_input.servers[2].protocols[1]|
+                         (= |input.servers[2].protocols[1]| "http"))
+                    (and a!5
+                         |defined_input.servers[2].protocols[2]|
+                         (= |input.servers[2].protocols[2]| "http"))
+                    (and a!5
+                         |defined_input.servers[2].protocols[3]|
+                         (= |input.servers[2].protocols[3]| "http"))
+                    (and a!5
+                         |defined_input.servers[2].protocols[4]|
+                         (= |input.servers[2].protocols[4]| "http")))))
+      (a!8 (and a!7
+                (or (and a!7
+                         |defined_input.servers[3].protocols[0]|
+                         (= |input.servers[3].protocols[0]| "http"))
+                    (and a!7
+                         |defined_input.servers[3].protocols[1]|
+                         (= |input.servers[3].protocols[1]| "http"))
+                    (and a!7
+                         |defined_input.servers[3].protocols[2]|
+                         (= |input.servers[3].protocols[2]| "http"))
+                    (and a!7
+                         |defined_input.servers[3].protocols[3]|
+                         (= |input.servers[3].protocols[3]| "http"))
+                    (and a!7
+                         |defined_input.servers[3].protocols[4]|
+                         (= |input.servers[3].protocols[4]| "http")))))
+      (a!10 (and a!9
+                 (or (and a!9
+                          |defined_input.servers[4].protocols[0]|
+                          (= |input.servers[4].protocols[0]| "http"))
+                     (and a!9
+                          |defined_input.servers[4].protocols[1]|
+                          (= |input.servers[4].protocols[1]| "http"))
+                     (and a!9
+                          |defined_input.servers[4].protocols[2]|
+                          (= |input.servers[4].protocols[2]| "http"))
+                     (and a!9
+                          |defined_input.servers[4].protocols[3]|
+                          (= |input.servers[4].protocols[3]| "http"))
+                     (and a!9
+                          |defined_input.servers[4].protocols[4]|
+                          (= |input.servers[4].protocols[4]| "http"))))))
+(let ((a!11 (+ 0
+               (ite (and true
+                         (or a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!2
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!4
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!6
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!8
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10
+                             a!10))
+                    1
+                    0))))
+  (= (ite (and true (= a!11 0) true) true false) false)))))
+
+--- end SMT ---

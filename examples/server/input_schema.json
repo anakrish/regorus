@@ -1,0 +1,61 @@
+{
+    "type": "object",
+    "required": ["servers", "networks", "ports"],
+    "properties": {
+        "servers": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 5,
+            "x-unique": ["id"],
+            "items": {
+                "type": "object",
+                "required": ["id", "protocols", "ports"],
+                "properties": {
+                    "id": { "type": "string", "enum": ["web", "db", "cache", "ci", "busybox"] },
+                    "protocols": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 3,
+                        "uniqueItems": true,
+                        "items": { "type": "string", "enum": ["https", "http", "ssh", "mysql", "memcache", "telnet"] }
+                    },
+                    "ports": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 3,
+                        "uniqueItems": true,
+                        "items": { "type": "string", "enum": ["p1", "p2", "p3"] }
+                    }
+                }
+            }
+        },
+        "networks": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "x-unique": ["id"],
+            "items": {
+                "type": "object",
+                "required": ["id", "public"],
+                "properties": {
+                    "id": { "type": "string", "enum": ["net1", "net2", "net3", "net4"] },
+                    "public": { "type": "boolean" }
+                }
+            }
+        },
+        "ports": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "x-unique": ["id"],
+            "items": {
+                "type": "object",
+                "required": ["id", "network"],
+                "properties": {
+                    "id": { "type": "string", "enum": ["p1", "p2", "p3"] },
+                    "network": { "type": "string", "enum": ["net1", "net2", "net3", "net4"] }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,63 @@
+{
+    "type": "object",
+    "required": ["services", "zones", "connections", "databases"],
+    "properties": {
+        "services": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "x-unique": ["name"],
+            "items": {
+                "type": "object",
+                "required": ["name", "zone_id", "handles_pii"],
+                "properties": {
+                    "name":        { "type": "string",  "enum": ["frontend", "payment", "inventory"] },
+                    "zone_id":     { "type": "string",  "enum": ["dmz", "internal", "restricted"] },
+                    "handles_pii": { "type": "boolean" }
+                }
+            }
+        },
+        "zones": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "x-unique": ["id"],
+            "items": {
+                "type": "object",
+                "required": ["id", "dmz"],
+                "properties": {
+                    "id":  { "type": "string",  "enum": ["dmz", "internal", "restricted"] },
+                    "dmz": { "type": "boolean" }
+                }
+            }
+        },
+        "connections": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "items": {
+                "type": "object",
+                "required": ["source", "target", "encrypted"],
+                "properties": {
+                    "source":    { "type": "string",  "enum": ["frontend", "payment", "inventory"] },
+                    "target":    { "type": "string",  "enum": ["frontend", "payment", "inventory", "userdb", "orderdb"] },
+                    "encrypted": { "type": "boolean" }
+                }
+            }
+        },
+        "databases": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 2,
+            "x-unique": ["name"],
+            "items": {
+                "type": "object",
+                "required": ["name", "internal"],
+                "properties": {
+                    "name":     { "type": "string",  "enum": ["userdb", "orderdb"] },
+                    "internal": { "type": "boolean" }
+                }
+            }
+        }
+    }
+}

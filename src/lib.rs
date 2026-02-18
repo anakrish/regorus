@@ -3,7 +3,8 @@
 
 // Unsafe code should not be used.
 // Hard to reason about correctness, and maintainability.
-#![forbid(unsafe_code)]
+// (deny instead of forbid so that z3-analysis can locally allow for FFI calls)
+#![deny(unsafe_code)]
 // Ensure that all lint names are valid.
 #![deny(unknown_lints)]
 // Fail-fast lints: correctness, safety, and API surface

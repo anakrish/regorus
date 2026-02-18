@@ -40,6 +40,8 @@ no_std = ["lazy_static/spin_no_std"]
 opa-runtime = []
 regex = ["dep:regex"]
 rvm = ["dep:bincode", "dep:indexmap"]
+z3-analysis = ["dep:z3", "dep:z3-sys", "std", "rvm"]
+z3-static = ["z3-analysis", "z3/static-link-z3"]
 semver = ["dep:semver"]
 allocator-memory-limits = ["std", "mimalloc", "mimalloc/allocator-memory-limits"]
 std = ["rand/std", "rand/std_rng", "serde_json/std", "msvc_spectre_libs" ]
@@ -129,6 +131,10 @@ mimalloc = { package = "regorus-mimalloc", path = "mimalloc", version = "2.2.6",
 # rvm related deps
 indexmap = { version = "2.12.1", default-features = false, features = ["serde"], optional = true }
 bincode = { version = "2.0.1", default-features = false, features = ["alloc", "serde"], optional = true }
+
+# z3 analysis
+z3 = { version = "0.12", optional = true }
+z3-sys = { version = "0.8", optional = true }
 
 [dev-dependencies]
 anyhow = "1.0.45"

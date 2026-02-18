@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+const assert = require('node:assert/strict');
 var regorus = require('./pkg/regorusjs');
 
 // Create an engine.
@@ -195,3 +196,91 @@ if (decision !== 1) {
   throw new Error(`Unexpected Cedar decision: ${decision}`);
 }
 }
+// Azure Policy rule compilation API example
+{
+const policyRule = JSON.stringify({
+  if: {
+    field: "type",
+    equals: "Microsoft.Compute/virtualMachines"
+  },
+  then: {
+    effect: "deny"
+  }
+});
+
+const azureProgram = regorus.Program.compileAzurePolicyRule(policyRule, undefined);
+const listing = azureProgram.generateListing();
+assert.ok(listing.length > 0, 'azure rule listing should not be empty');
+
+const binary = azureProgram.serializeBinary();
+const rehydrated = regorus.Program.deserializeBinary(binary).program();
+
+const vm = new regorus.Rvm();
+vm.loadProgram(rehydrated);
+vm.setInputJson(JSON.stringify({
+  resource: {
+    type: "Microsoft.Compute/virtualMachines"
+  },
+  context: {},
+  parameters: {}
+}));
+
+const result = JSON.parse(vm.execute());
+assert.equal(result, 'deny', 'matching resource should evaluate to deny');
+}
+
+// Azure Policy definition compilation API example (parameter defaults)
+{
+const policyDefinition = JSON.stringify({
+  properties: {
+    parameters: {
+      effect: {
+        type: "String",
+        defaultValue: "deny",
+        allowedValues: ["deny", "audit"]
+      }
+    },
+    policyRule: {
+      if: {
+        field: "type",
+        equals: "Microsoft.Compute/virtualMachines"
+      },
+      then: {
+        effect: "[parameters('effect')]"
+      }
+    }
+  }
+});
+
+const azureProgram = regorus.Program.compileAzurePolicyDefinition(policyDefinition, undefined);
+const listing = azureProgram.generateListing();
+assert.ok(listing.length > 0, 'azure definition listing should not be empty');
+
+const vm = new regorus.Rvm();
+vm.loadProgram(azureProgram);
+vm.setInputJson(JSON.stringify({
+  resource: {
+    type: "Microsoft.Compute/virtualMachines"
+  },
+  context: {},
+  parameters: {}
+}));
+
+const defaultResult = JSON.parse(vm.execute());
+assert.equal(defaultResult, 'deny', 'default parameter value should be used when missing');
+
+vm.setInputJson(JSON.stringify({
+  resource: {
+    type: "Microsoft.Compute/virtualMachines"
+  },
+  context: {},
+  parameters: {
+    effect: "audit"
+  }
+}));
+
+const overrideResult = JSON.parse(vm.execute());
+assert.equal(overrideResult, 'audit', 'provided parameter value should override default');
+}
+
+console.log('WASM JS tests completed successfully.');

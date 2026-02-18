@@ -17,6 +17,7 @@ crate-type = ["cdylib"]
 default = [
 	"cedar",
 	"ast",
+	"azure_policy",
 	"coverage",
 	"regorus/std",
 	"regorus/base64",
@@ -37,6 +38,7 @@ default = [
 ]
 cedar = ["regorus/cedar"]
 ast = ["regorus/ast"]
+azure_policy = ["regorus/azure_policy"]
 coverage = ["regorus/coverage"]
 
 [dependencies]

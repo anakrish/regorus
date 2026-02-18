@@ -1,0 +1,18 @@
+{
+  "principal": "User::alice",
+  "action": "Action::write",
+  "resource": "Vm::prod-1",
+  "context": {
+    "region": "us-west"
+  },
+  "entities": {
+    "User::alice": {
+      "parents": ["Group::cloud-admins"],
+      "attrs": {}
+    },
+    "Group::cloud-admins": {
+      "parents": [],
+      "attrs": {}
+    }
+  }
+}

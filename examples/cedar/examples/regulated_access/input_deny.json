@@ -1,0 +1,20 @@
+{
+  "principal": "User::bob",
+  "action": "Action::read",
+  "resource": "Record::r1",
+  "context": {
+    "purpose": "audit",
+    "retention_ok": true,
+    "break_glass": true
+  },
+  "entities": {
+    "User::bob": {
+      "parents": ["Role::auditors"],
+      "attrs": {}
+    },
+    "Role::auditors": {
+      "parents": [],
+      "attrs": {}
+    }
+  }
+}

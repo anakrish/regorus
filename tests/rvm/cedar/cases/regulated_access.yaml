@@ -1,0 +1,29 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  - note: regulated_access_permit
+    policies:
+      - |
+        permit(principal in Role::"auditors", action == Action::"read", resource == Record::"r1")
+        when { context.purpose == "audit" && context.retention_ok == true };
+
+        forbid(principal in Role::"auditors", action == Action::"read", resource == Record::"r1")
+        when { context.break_glass == true };
+    input:
+      principal: "User::bob"
+      action: "Action::read"
+      resource: "Record::r1"
+      context:
+        purpose: "audit"
+        retention_ok: true
+        break_glass: false
+      entities:
+        "User::bob":
+          parents:
+            - "Role::auditors"
+          attrs: {}
+        "Role::auditors":
+          parents: []
+          attrs: {}
+    want_result: "permit"

@@ -208,6 +208,10 @@ fn rego_ast(file: String) -> Result<()> {
 #[cfg(feature = "z3-analysis")]
 mod analyze;
 
+#[cfg(feature = "cedar")]
+#[path = "cedar/cli.rs"]
+mod cedar_cli;
+
 #[derive(clap::Subcommand)]
 enum RegorusCommand {
     /// Symbolically analyze a Rego policy using Z3.
@@ -332,6 +336,13 @@ enum RegorusCommand {
         #[arg(long)]
         v0: bool,
     },
+
+    /// Cedar policy tools.
+    #[cfg(feature = "cedar")]
+    Cedar {
+        #[command(subcommand)]
+        command: cedar_cli::CedarCommand,
+    },
 }
 
 #[derive(clap::Parser)]
@@ -399,5 +410,7 @@ fn main() -> Result<()> {
             input,
             schema,
         ),
+        #[cfg(feature = "cedar")]
+        RegorusCommand::Cedar { command } => cedar_cli::run(command),
     }
 }

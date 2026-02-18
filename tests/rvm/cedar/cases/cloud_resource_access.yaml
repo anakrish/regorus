@@ -1,0 +1,24 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  - note: cloud_resource_access_permit
+    policies:
+      - |
+        permit(principal in Group::"cloud-admins", action in [Action::"read", Action::"write"], resource == Vm::"prod-1")
+        when { context.region == "us-east" };
+    input:
+      principal: "User::alice"
+      action: "Action::write"
+      resource: "Vm::prod-1"
+      context:
+        region: "us-east"
+      entities:
+        "User::alice":
+          parents:
+            - "Group::cloud-admins"
+          attrs: {}
+        "Group::cloud-admins":
+          parents: []
+          attrs: {}
+    want_result: "permit"

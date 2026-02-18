@@ -1,0 +1,59 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  - note: like_wildcards
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"read", resource == File::"notes")
+        when { context.path like "/home/*" && context.path like "/home/?lice/*" };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "File::notes"
+      context:
+        path: "/home/alice/docs"
+      entities: {}
+    want_result: "permit"
+
+  - note: like_no_match
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"read", resource == File::"notes")
+        when { context.path like "/home/*" && context.path like "/home/?lice/*" };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "File::notes"
+      context:
+        path: "/var/alice"
+      entities: {}
+    want_result: "deny"
+
+  - note: like_star_matches_any
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"read", resource == File::"notes")
+        when { context.path like "*" };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "File::notes"
+      context:
+        path: "docs/readme"
+      entities: {}
+    want_result: "permit"
+
+  - note: like_exact_match
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"read", resource == File::"notes")
+        when { context.path like "/home/alice" };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "File::notes"
+      context:
+        path: "/home/alice"
+      entities: {}
+    want_result: "permit"

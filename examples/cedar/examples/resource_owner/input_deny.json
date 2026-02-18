@@ -1,0 +1,14 @@
+{
+  "principal": "User::alice",
+  "action": "Action::edit",
+  "resource": "Doc::draft",
+  "context": {},
+  "entities": {
+    "Doc::draft": {
+      "parents": [],
+      "attrs": {
+        "owner": "User::bob"
+      }
+    }
+  }
+}

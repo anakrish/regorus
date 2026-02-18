@@ -1334,6 +1334,7 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "num_cpus",
+ "parking_lot",
  "prettydiff",
  "rand",
  "regex",

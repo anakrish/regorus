@@ -1,0 +1,20 @@
+{
+  "principal": "User::alice",
+  "action": "Action::login",
+  "resource": "App::portal",
+  "context": {
+    "mfa": true,
+    "ip": "10.2.3.4",
+    "suspended": false
+  },
+  "entities": {
+    "User::alice": {
+      "parents": ["User::admins"],
+      "attrs": {}
+    },
+    "User::admins": {
+      "parents": [],
+      "attrs": {}
+    }
+  }
+}

@@ -62,10 +62,16 @@ pub struct Program {
     #[serde(skip, default = "Value::new_object")]
     pub rule_tree: Value,
 
-    /// Resolved builtins - actual builtin function values fetched from interpreter's builtin map
+    /// Resolved builtins aligned with builtin_info_table indices
     /// This field is skipped during serialization and reinitialized after deserialization
     #[serde(skip)]
-    pub resolved_builtins: Vec<BuiltinFcn>,
+    pub resolved_builtins: Vec<Option<BuiltinFcn>>,
+
+    /// Resolved contexted builtins aligned with builtin_info_table indices
+    /// This field is skipped during serialization and reinitialized after deserialization
+    #[serde(skip)]
+    #[cfg(feature = "cedar")]
+    pub resolved_context_builtins: Vec<Option<crate::builtins::BuiltinCtxFcn>>,
 
     /// Flag indicating that VirtualDataDocumentLookup instruction was used and runtime recursion checking is needed
     pub needs_runtime_recursion_check: bool,
@@ -125,6 +131,8 @@ impl Program {
             },
             rule_tree: Value::new_object(),
             resolved_builtins: Vec::new(),
+            #[cfg(feature = "cedar")]
+            resolved_context_builtins: Vec::new(),
             needs_runtime_recursion_check: false,
             needs_recompilation: false,
             rego_v0: false, // Default to Rego v1
@@ -351,18 +359,56 @@ impl Program {
     /// This should be called after deserialization to populate the skipped field
     /// Returns an error if any required builtin is missing
     pub fn initialize_resolved_builtins(&mut self) -> AnyResult<()> {
+        let builtin_count = self.builtin_info_table.len();
         self.resolved_builtins.clear();
-        self.resolved_builtins
-            .reserve(self.builtin_info_table.len());
+        self.resolved_builtins.resize(builtin_count, None);
+        #[cfg(feature = "cedar")]
+        {
+            self.resolved_context_builtins.clear();
+            self.resolved_context_builtins.resize(builtin_count, None);
+        }
 
-        for builtin_info in &self.builtin_info_table {
-            if let Some(&builtin_fcn) = crate::builtins::BUILTINS.get(builtin_info.name.as_str()) {
-                self.resolved_builtins.push(builtin_fcn);
-            } else {
-                return Err(anyhow::anyhow!(
-                    "Missing builtin function: {}",
-                    builtin_info.name
-                ));
+        for (index, builtin_info) in self.builtin_info_table.iter().enumerate() {
+            match builtin_info.kind {
+                crate::rvm::program::BuiltinKind::Standard => {
+                    if let Some(&builtin_fcn) =
+                        crate::builtins::BUILTINS.get(builtin_info.name.as_str())
+                    {
+                        if let Some(slot) = self.resolved_builtins.get_mut(index) {
+                            *slot = Some(builtin_fcn);
+                        }
+                    } else {
+                        return Err(anyhow::anyhow!(
+                            "Missing builtin function: {}",
+                            builtin_info.name
+                        ));
+                    }
+                }
+                crate::rvm::program::BuiltinKind::Contexted => {
+                    #[cfg(feature = "cedar")]
+                    {
+                        if let Some(&builtin_fcn) =
+                            crate::builtins::BUILTINS_CTX.get(builtin_info.name.as_str())
+                        {
+                            if let Some(slot) = self.resolved_context_builtins.get_mut(index) {
+                                *slot = Some(builtin_fcn);
+                            }
+                        } else {
+                            return Err(anyhow::anyhow!(
+                                "Missing contexted builtin function: {}",
+                                builtin_info.name
+                            ));
+                        }
+                    }
+
+                    #[cfg(not(feature = "cedar"))]
+                    {
+                        return Err(anyhow::anyhow!(
+                            "Contexted builtin requires cedar feature: {}",
+                            builtin_info.name
+                        ));
+                    }
+                }
             }
         }
 
@@ -371,12 +417,38 @@ impl Program {
 
     /// Get resolved builtin function by index
     pub fn get_resolved_builtin(&self, index: u16) -> Option<&BuiltinFcn> {
-        self.resolved_builtins.get(usize::from(index))
+        self.resolved_builtins
+            .get(usize::from(index))
+            .and_then(|entry| entry.as_ref())
+    }
+
+    /// Get resolved contexted builtin function by index
+    #[cfg(feature = "cedar")]
+    pub fn get_resolved_context_builtin(
+        &self,
+        index: u16,
+    ) -> Option<&crate::builtins::BuiltinCtxFcn> {
+        self.resolved_context_builtins
+            .get(usize::from(index))
+            .and_then(|entry| entry.as_ref())
     }
 
     /// Check if resolved builtins are initialized
     pub fn has_resolved_builtins(&self) -> bool {
-        !self.resolved_builtins.is_empty()
+        if self.builtin_info_table.is_empty() {
+            return true;
+        }
+
+        if self.resolved_builtins.len() != self.builtin_info_table.len() {
+            return false;
+        }
+
+        #[cfg(feature = "cedar")]
+        if self.resolved_context_builtins.len() != self.builtin_info_table.len() {
+            return false;
+        }
+
+        true
     }
 
     /// Add an entry point mapping from path to rule index

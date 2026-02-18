@@ -78,59 +78,103 @@ impl RegoVM {
             return Ok(());
         }
 
-        if let Some(builtin_fcn) = self.program.get_resolved_builtin(params.builtin_index) {
-            let dummy_source = crate::lexer::Source::from_contents("arg".into(), String::new())?;
-            let dummy_span = crate::lexer::Span {
-                source: dummy_source,
-                line: 1,
-                col: 1,
-                start: 0,
-                end: 3,
+        let dummy_source = crate::lexer::Source::from_contents("arg".into(), String::new())?;
+        let dummy_span = crate::lexer::Span {
+            source: dummy_source,
+            line: 1,
+            col: 1,
+            start: 0,
+            end: 3,
+        };
+
+        let mut dummy_exprs: Vec<crate::ast::Ref<crate::ast::Expr>> = Vec::new();
+        for _ in 0..args.len() {
+            let dummy_expr = crate::ast::Expr::Null {
+                span: dummy_span.clone(),
+                value: Value::Null,
+                eidx: 0,
             };
+            dummy_exprs.push(crate::ast::Ref::new(dummy_expr));
+        }
 
-            let mut dummy_exprs: Vec<crate::ast::Ref<crate::ast::Expr>> = Vec::new();
-            for _ in 0..args.len() {
-                let dummy_expr = crate::ast::Expr::Null {
-                    span: dummy_span.clone(),
-                    value: Value::Null,
-                    eidx: 0,
-                };
-                dummy_exprs.push(crate::ast::Ref::new(dummy_expr));
+        let cache_name = builtins::must_cache(builtin_info.name.as_str());
+        if let Some(name) = cache_name {
+            if let Some(value) = self.builtins_cache.get(&(name, args.clone())) {
+                self.set_register(params.dest, value.clone())?;
+                return Ok(());
             }
+        }
 
-            let cache_name = builtins::must_cache(builtin_info.name.as_str());
-            if let Some(name) = cache_name {
-                if let Some(value) = self.builtins_cache.get(&(name, args.clone())) {
-                    self.set_register(params.dest, value.clone())?;
-                    return Ok(());
+        let result = match builtin_info.kind {
+            crate::rvm::program::BuiltinKind::Standard => {
+                if let Some(builtin_fcn) = self.program.get_resolved_builtin(params.builtin_index) {
+                    match (builtin_fcn.0)(
+                        &dummy_span,
+                        &dummy_exprs,
+                        &args,
+                        self.strict_builtin_errors,
+                    ) {
+                        Ok(value) => value,
+                        Err(_) if !self.strict_builtin_errors => Value::Undefined,
+                        Err(err) => return Err(err.into()),
+                    }
+                } else {
+                    return Err(VmError::BuiltinNotResolved {
+                        name: builtin_info.name.clone(),
+                        pc: self.pc,
+                    });
                 }
             }
-
-            let result =
-                match (builtin_fcn.0)(&dummy_span, &dummy_exprs, &args, self.strict_builtin_errors)
+            crate::rvm::program::BuiltinKind::Contexted => {
+                #[cfg(feature = "cedar")]
                 {
-                    Ok(value) => value,
-                    Err(_) if !self.strict_builtin_errors => Value::Undefined,
-                    Err(err) => return Err(err.into()),
-                };
+                    let context = builtins::BuiltinContext {
+                        cedar_cache: self.cedar_cache.clone(),
+                    };
+                    if let Some(builtin_fcn) = self
+                        .program
+                        .get_resolved_context_builtin(params.builtin_index)
+                    {
+                        match (builtin_fcn.0)(
+                            &context,
+                            &dummy_span,
+                            &dummy_exprs,
+                            &args,
+                            self.strict_builtin_errors,
+                        ) {
+                            Ok(value) => value,
+                            Err(_) if !self.strict_builtin_errors => Value::Undefined,
+                            Err(err) => return Err(err.into()),
+                        }
+                    } else {
+                        return Err(VmError::BuiltinNotResolved {
+                            name: builtin_info.name.clone(),
+                            pc: self.pc,
+                        });
+                    }
+                }
 
-            if result == Value::Undefined {
-                self.set_register(params.dest, Value::Undefined)?;
-            } else {
-                self.set_register(params.dest, result.clone())?;
+                #[cfg(not(feature = "cedar"))]
+                {
+                    return Err(VmError::BuiltinNotResolved {
+                        name: builtin_info.name.clone(),
+                        pc: self.pc,
+                    });
+                }
             }
+        };
 
-            if let Some(name) = cache_name {
-                self.builtins_cache.insert((name, args), result);
-            }
-
-            self.memory_check()?;
+        if result == Value::Undefined {
+            self.set_register(params.dest, Value::Undefined)?;
         } else {
-            return Err(VmError::BuiltinNotResolved {
-                name: builtin_info.name.clone(),
-                pc: self.pc,
-            });
+            self.set_register(params.dest, result.clone())?;
         }
+
+        if let Some(name) = cache_name {
+            self.builtins_cache.insert((name, args), result);
+        }
+
+        self.memory_check()?;
 
         Ok(())
     }

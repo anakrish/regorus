@@ -1,0 +1,8 @@
+{
+  "principal": "User::\"alice\"",
+  "action": "Action::\"view\"",
+  "resource": "File::\"report\"",
+  "context": {
+    "suspended": true
+  }
+}

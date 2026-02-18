@@ -1,0 +1,8 @@
+{
+  "principal": "User::\"alice\"",
+  "action": "Action::\"write\"",
+  "resource": "Vm::\"prod-1\"",
+  "context": {
+    "region": "us-east"
+  }
+}

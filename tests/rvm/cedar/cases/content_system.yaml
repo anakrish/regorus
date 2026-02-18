@@ -1,0 +1,21 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  - note: content_system_permit
+    policies:
+      - |
+        permit(principal == resource.owner, action in [Action::"edit", Action::"comment"], resource == Doc::"draft")
+        when { context.channel like "internal.*" };
+    input:
+      principal: "User::alice"
+      action: "Action::edit"
+      resource: "Doc::draft"
+      context:
+        channel: "internal.engineering"
+      entities:
+        "Doc::draft":
+          parents: []
+          attrs:
+            owner: "User::alice"
+    want_result: "permit"

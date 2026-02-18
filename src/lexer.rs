@@ -374,6 +374,7 @@ pub struct Lexer<'source> {
     allow_slash_star_escape: bool,
     comment_starts_with_double_slash: bool,
     double_colon_token: bool,
+    enable_logical_tokens: bool,
     #[cfg(feature = "azure-rbac")]
     enable_rbac_tokens: bool,
     #[cfg(feature = "azure-rbac")]
@@ -397,6 +398,7 @@ impl<'source> Lexer<'source> {
             allow_slash_star_escape: false,
             comment_starts_with_double_slash: false,
             double_colon_token: false,
+            enable_logical_tokens: false,
             #[cfg(feature = "azure-rbac")]
             enable_rbac_tokens: false,
             #[cfg(feature = "azure-rbac")]
@@ -418,6 +420,10 @@ impl<'source> Lexer<'source> {
 
     pub const fn set_double_colon_token(&mut self, b: bool) {
         self.double_colon_token = b;
+    }
+
+    pub const fn set_enable_logical_tokens(&mut self, b: bool) {
+        self.enable_logical_tokens = b;
     }
 
     #[cfg(feature = "azure-rbac")]
@@ -910,6 +916,31 @@ impl<'source> Lexer<'source> {
                 self.iter.next();
                 self.iter.next();
                 Token(TokenKind::AzureRbac(AzureRbacTokenKind::LogicalOr), Span {
+                    source: self.source.clone(),
+                    line: self.line,
+                    col,
+                    start: start_u32,
+                    end: start_u32.saturating_add(2),
+                })
+            }
+            // Logical operators (&&, ||) when explicitly enabled
+            '&' if self.enable_logical_tokens && self.peekahead(1).1 == '&' => {
+                self.advance_col(2)?;
+                self.iter.next();
+                self.iter.next();
+                Token(TokenKind::Symbol, Span {
+                    source: self.source.clone(),
+                    line: self.line,
+                    col,
+                    start: start_u32,
+                    end: start_u32.saturating_add(2),
+                })
+            }
+            '|' if self.enable_logical_tokens && self.peekahead(1).1 == '|' => {
+                self.advance_col(2)?;
+                self.iter.next();
+                self.iter.next();
+                Token(TokenKind::Symbol, Span {
                     source: self.source.clone(),
                     line: self.line,
                     col,

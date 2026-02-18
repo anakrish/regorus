@@ -112,6 +112,10 @@ pub struct RegoVM {
     /// Cache for builtin calls that must stay deterministic across a single evaluation
     pub(super) builtins_cache: BTreeMap<(&'static str, Vec<Value>), Value>,
 
+    /// Optional shared cache for Cedar builtins
+    #[cfg(feature = "cedar")]
+    pub(super) cedar_cache: Option<crate::Rc<crate::languages::cedar::cache::CedarCache>>,
+
     /// Optional override for the execution timer configuration
     pub(super) execution_timer_config: Option<ExecutionTimerConfig>,
 
@@ -160,6 +164,8 @@ impl RegoVM {
             frame_pc_overridden: false,
             strict_builtin_errors: false,
             builtins_cache: BTreeMap::new(),
+            #[cfg(feature = "cedar")]
+            cedar_cache: None,
             execution_timer_config: None,
             execution_timer: ExecutionTimer::new(fallback_timer),
             execution_timer_elapsed_at_suspend: None,
@@ -270,6 +276,15 @@ impl RegoVM {
     /// Configure whether builtin operations should raise errors strictly
     pub const fn set_strict_builtin_errors(&mut self, strict: bool) {
         self.strict_builtin_errors = strict;
+    }
+
+    /// Provide a shared cache for Cedar builtins
+    #[cfg(feature = "cedar")]
+    pub fn set_cedar_cache(
+        &mut self,
+        cache: Option<crate::Rc<crate::languages::cedar::cache::CedarCache>>,
+    ) {
+        self.cedar_cache = cache;
     }
 
     /// Returns whether builtin operations raise errors strictly

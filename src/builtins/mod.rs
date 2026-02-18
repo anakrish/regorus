@@ -17,6 +17,8 @@
 mod aggregates;
 mod arrays;
 mod bitwise;
+#[cfg(feature = "cedar")]
+mod cedar;
 pub mod comparison;
 mod conversions;
 
@@ -63,9 +65,21 @@ use lazy_static::lazy_static;
 
 pub type BuiltinFcn = (fn(&Span, &[Ref<Expr>], &[Value], bool) -> Result<Value>, u8);
 
+#[cfg(feature = "cedar")]
+#[derive(Debug, Default, Clone)]
+pub struct BuiltinContext {
+    pub cedar_cache: Option<crate::Rc<crate::languages::cedar::cache::CedarCache>>,
+}
+
+#[cfg(feature = "cedar")]
+pub type BuiltinCtxFcn = (
+    fn(&BuiltinContext, &Span, &[Ref<Expr>], &[Value], bool) -> Result<Value>,
+    u8,
+);
+
 #[rustfmt::skip]
 lazy_static! {
-    pub static ref BUILTINS: BuiltinsMap<&'static str, BuiltinFcn> = {
+	pub static ref BUILTINS: BuiltinsMap<&'static str, BuiltinFcn> = {
 	let mut m : BuiltinsMap<&'static str, BuiltinFcn>  = BuiltinsMap::new();
 
 	// comparison functions are directly called.
@@ -111,6 +125,18 @@ lazy_static! {
 
 	#[cfg(feature = "opa-testutil")]
 	test::register(&mut m);
+
+	m
+    };
+}
+
+#[cfg(feature = "cedar")]
+#[rustfmt::skip]
+lazy_static! {
+    pub static ref BUILTINS_CTX: BuiltinsMap<&'static str, BuiltinCtxFcn> = {
+	let mut m : BuiltinsMap<&'static str, BuiltinCtxFcn>  = BuiltinsMap::new();
+
+	cedar::register(&mut m);
 
 	m
     };

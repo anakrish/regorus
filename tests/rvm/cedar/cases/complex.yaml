@@ -1,0 +1,160 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  - note: complex_editor_permit
+    policies:
+      - |
+        permit(principal in User::"editors", action == Action::"update", resource == Doc::"plan");
+        permit(principal == User::"owner", action == Action::"update", resource == Doc::"plan")
+        when { context.risk <= 5 };
+        forbid(principal in User::"suspended", action == Action::"update", resource == Doc::"plan");
+        forbid(principal == User::"owner", action == Action::"update", resource == Doc::"plan")
+        when { context.risk > 5 };
+    input:
+      principal: "User::alice"
+      action: "Action::update"
+      resource: "Doc::plan"
+      context:
+        risk: 3
+      entities:
+        "User::alice":
+          parents:
+            - "User::editors"
+          attrs: {}
+        "User::editors":
+          parents: []
+          attrs: {}
+        "User::suspended":
+          parents: []
+          attrs: {}
+    want_result: "permit"
+
+  - note: complex_owner_high_risk_deny
+    policies:
+      - |
+        permit(principal in User::"editors", action == Action::"update", resource == Doc::"plan");
+        permit(principal == User::"owner", action == Action::"update", resource == Doc::"plan")
+        when { context.risk <= 5 };
+        forbid(principal in User::"suspended", action == Action::"update", resource == Doc::"plan");
+        forbid(principal == User::"owner", action == Action::"update", resource == Doc::"plan")
+        when { context.risk > 5 };
+    input:
+      principal: "User::owner"
+      action: "Action::update"
+      resource: "Doc::plan"
+      context:
+        risk: 7
+      entities:
+        "User::owner":
+          parents: []
+          attrs: {}
+        "User::editors":
+          parents: []
+          attrs: {}
+        "User::suspended":
+          parents: []
+          attrs: {}
+    want_result: "deny"
+
+  - note: complex_suspended_overrides
+    policies:
+      - |
+        permit(principal in User::"editors", action == Action::"update", resource == Doc::"plan");
+        permit(principal == User::"owner", action == Action::"update", resource == Doc::"plan")
+        when { context.risk <= 5 };
+        forbid(principal in User::"suspended", action == Action::"update", resource == Doc::"plan");
+        forbid(principal == User::"owner", action == Action::"update", resource == Doc::"plan")
+        when { context.risk > 5 };
+    input:
+      principal: "User::bob"
+      action: "Action::update"
+      resource: "Doc::plan"
+      context:
+        risk: 2
+      entities:
+        "User::bob":
+          parents:
+            - "User::editors"
+            - "User::suspended"
+          attrs: {}
+        "User::editors":
+          parents: []
+          attrs: {}
+        "User::suspended":
+          parents: []
+          attrs: {}
+    want_result: "deny"
+
+  - note: complex_no_match
+    policies:
+      - |
+        permit(principal in User::"editors", action == Action::"update", resource == Doc::"plan");
+        permit(principal == User::"owner", action == Action::"update", resource == Doc::"plan")
+        when { context.risk <= 5 };
+        forbid(principal in User::"suspended", action == Action::"update", resource == Doc::"plan");
+        forbid(principal == User::"owner", action == Action::"update", resource == Doc::"plan")
+        when { context.risk > 5 };
+    input:
+      principal: "User::charlie"
+      action: "Action::update"
+      resource: "Doc::plan"
+      context:
+        risk: 1
+      entities:
+        "User::charlie":
+          parents: []
+          attrs: {}
+        "User::editors":
+          parents: []
+          attrs: {}
+        "User::suspended":
+          parents: []
+          attrs: {}
+    want_result: "deny"
+
+  - note: complex_deny_overrides_permit
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"read", resource == Doc::"plan")
+        when { context.stage == "release" };
+        forbid(principal == User::"alice", action == Action::"read", resource == Doc::"plan")
+        when { context.stage == "release" };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "Doc::plan"
+      context:
+        stage: "release"
+      entities: {}
+    want_result: "deny"
+
+  - note: complex_full_eval_permit_still_errors
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"read", resource == Doc::"plan");
+        permit(principal == User::"alice", action == Action::"read", resource == Doc::"plan")
+        when { context.age > "30" };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "Doc::plan"
+      context:
+        age: 30
+      entities: {}
+    error: "cannot compare values of different types"
+
+  - note: complex_full_eval_forbid_still_errors
+    policies:
+      - |
+        forbid(principal == User::"alice", action == Action::"read", resource == Doc::"plan");
+        permit(principal == User::"alice", action == Action::"read", resource == Doc::"plan")
+        when { context.age > "30" };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "Doc::plan"
+      context:
+        age: 30
+      entities: {}
+    error: "cannot compare values of different types"

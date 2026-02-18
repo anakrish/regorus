@@ -1,0 +1,61 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  - note: permit_basic
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"view", resource == File::"foo");
+    input:
+      principal: "User::alice"
+      action: "Action::view"
+      resource: "File::foo"
+      context: {}
+      entities: {}
+    want_result: "permit"
+
+  - note: deny_basic
+    policies:
+      - |
+        forbid(principal == User::"alice", action == Action::"delete", resource == File::"foo");
+    input:
+      principal: "User::alice"
+      action: "Action::delete"
+      resource: "File::foo"
+      context: {}
+      entities: {}
+    want_result: "deny"
+
+  - note: deny
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"view", resource == File::"foo");
+    input:
+      principal: "User::bob"
+      action: "Action::view"
+      resource: "File::foo"
+      context: {}
+      entities: {}
+    want_result: "deny"
+
+  - note: conditions_and_entities
+    policies:
+      - |
+        permit(principal in User::"admins", action == Action::"view", resource == File::"foo")
+        when { context.ip like "10.*" && principal has "department" };
+    input:
+      principal: "User::alice"
+      action: "Action::view"
+      resource: "File::foo"
+      context:
+        ip: "10.0.5.2"
+      entities:
+        "User::alice":
+          parents:
+            - "User::admins"
+          attrs:
+            department: "eng"
+        "User::admins":
+          parents: []
+          attrs: {}
+    want_result: "permit"

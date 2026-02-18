@@ -4,6 +4,15 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
+/// Builtin function execution kind
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum BuiltinKind {
+    #[default]
+    Standard,
+    Contexted,
+}
+
 /// Builtin function information stored in program's builtin info table
 #[repr(C)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,6 +21,9 @@ pub struct BuiltinInfo {
     pub name: String,
     /// Exact number of arguments required
     pub num_args: u16,
+    /// Builtin execution kind
+    #[serde(default)]
+    pub kind: BuiltinKind,
 }
 
 /// Span information for debugging and error reporting

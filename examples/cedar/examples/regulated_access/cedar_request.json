@@ -1,0 +1,10 @@
+{
+  "principal": "User::\"bob\"",
+  "action": "Action::\"read\"",
+  "resource": "Record::\"r1\"",
+  "context": {
+    "purpose": "audit",
+    "retention_ok": true,
+    "break_glass": false
+  }
+}

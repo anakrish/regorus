@@ -1,0 +1,105 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  - note: unsupported_record_literal
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"read", resource == File::"foo")
+        when { {"foo": 1}.foo == 1 };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "File::foo"
+      context: {}
+      entities: {}
+    error: "expecting primary expression"
+
+  - note: unsupported_if_expression
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"read", resource == File::"foo")
+        when { if true then 1 else 2 };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "File::foo"
+      context: {}
+      entities: {}
+    error: "if expressions are not supported"
+
+  - note: unsupported_set_is_empty
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"read", resource == File::"foo")
+        when { context.tags.isEmpty() };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "File::foo"
+      context:
+        tags: ["a", "b"]
+      entities: {}
+    error: "member call not supported"
+
+  - note: unsupported_set_contains_any
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"read", resource == File::"foo")
+        when { context.tags.containsAny(["a"]) };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "File::foo"
+      context:
+        tags: ["a", "b"]
+      entities: {}
+    error: "member call not supported"
+
+  - note: unsupported_set_contains_all
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"read", resource == File::"foo")
+        when { context.tags.containsAll(["a", "b"]) };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "File::foo"
+      context:
+        tags: ["a", "b"]
+      entities: {}
+    error: "member call not supported"
+
+  - note: unsupported_get_tag
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"read", resource == File::"foo")
+        when { resource.getTag("team") == "blue" };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "File::foo"
+      context: {}
+      entities:
+        "File::foo":
+          parents: []
+          attrs:
+            team: "blue"
+    error: "member call not supported"
+
+  - note: unsupported_has_tag
+    policies:
+      - |
+        permit(principal == User::"alice", action == Action::"read", resource == File::"foo")
+        when { resource.hasTag("team") };
+    input:
+      principal: "User::alice"
+      action: "Action::read"
+      resource: "File::foo"
+      context: {}
+      entities:
+        "File::foo":
+          parents: []
+          attrs:
+            team: "blue"
+    error: "member call not supported"

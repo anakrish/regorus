@@ -1,0 +1,22 @@
+{
+  "principal": "User::alice",
+  "action": "Action::view",
+  "resource": "Doc::t1:invoice",
+  "context": {
+    "request_tenant": "t2"
+  },
+  "entities": {
+    "User::alice": {
+      "parents": [],
+      "attrs": {
+        "tenant": "t1"
+      }
+    },
+    "Doc::t1:invoice": {
+      "parents": [],
+      "attrs": {
+        "tenant": "t1"
+      }
+    }
+  }
+}

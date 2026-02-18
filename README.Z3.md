@@ -27,6 +27,7 @@ concrete satisfying input or proves that none exists.
   - [Network Segmentation](#example-3--network-segmentation-compliance)
 - [Running the Demo Suite](#running-the-demo-suite)
 - [Inspecting Z3 Internals](#inspecting-z3-internals)
+- [Pre-generated SMT2 Files](#pre-generated-smt2-files)
 - [Limitations](#limitations)
 
 ---
@@ -313,6 +314,8 @@ path — in this case, the `"telnet"` rule:
 Z3 assigned `"telnet"` to the `db` server, which triggers the second denial
 rule (telnet is banned everywhere) and makes `allow = false`.
 
+> **SMT2 encoding:** [`examples/smt2/server_allow_false.smt2`](examples/smt2/server_allow_false.smt2)
+
 #### Find a compliant configuration (`allow = true`)
 
 ```bash
@@ -349,6 +352,8 @@ regorus analyze \
 
 All servers use only `"https"` and no network is public — every denial path
 is blocked.
+
+> **SMT2 encoding:** [`examples/smt2/server_allow_true.smt2`](examples/smt2/server_allow_true.smt2)
 
 ### Example 2 — Container Admission Controller
 
@@ -396,6 +401,8 @@ Z3 placed all three containers on `host1` (public), gave `vol1` `encrypted: fals
 and put `vol1` in `worker`'s `volume_ids` — a 3-way join across containers, hosts,
 and volumes that triggers the "sensitive container on public host" rule.
 
+> **SMT2 encoding:** [`examples/smt2/container_admission_allow_false.smt2`](examples/smt2/container_admission_allow_false.smt2)
+
 #### Targeted path exploration
 
 Find a violation that triggers *only* the complex path (sensitive container on
@@ -438,6 +445,8 @@ regorus analyze \
 All `privileged` fields are `false` (the privileged rule is avoided), yet Z3
 still found a violation: `web` is on `host3` (public) and mounts `vol1`
 (unencrypted) — precisely the 3-way join path.
+
+> **SMT2 encoding:** [`examples/smt2/container_admission_targeted.smt2`](examples/smt2/container_admission_targeted.smt2)
 
 ### Example 3 — Network Segmentation Compliance
 
@@ -488,6 +497,8 @@ regorus analyze \
 Z3 found a PII violation: `frontend` handles PII and has an unencrypted
 connection (`encrypted: false`).
 
+> **SMT2 encoding:** [`examples/smt2/network_segmentation_compliant_false.smt2`](examples/smt2/network_segmentation_compliant_false.smt2)
+
 #### Targeted: isolate the DMZ rule (line 93) without the PII rule (line 121)
 
 ```bash
@@ -533,6 +544,8 @@ Z3 built a **4-way ID chain**: `inventory` is in zone `restricted` (which is
 DMZ), has a connection targeting `frontend`, and `frontend` is an internal
 database.  All connections are encrypted and no service handles PII, so the
 PII rule (line 121) is never triggered.
+
+> **SMT2 encoding:** [`examples/smt2/network_segmentation_targeted.smt2`](examples/smt2/network_segmentation_targeted.smt2)
 
 ---
 
@@ -593,6 +606,26 @@ input.containers[0].name -> "worker"
 
 ---
 
+## Pre-generated SMT2 Files
+
+The [`examples/smt2/`](examples/smt2/) directory contains pre-generated SMT-LIB2
+encodings for every demo walkthrough above.  You can feed them directly to a
+standalone Z3 binary (`z3 file.smt2`) without building Regorus.
+
+| File | Demo | Goal |
+|---|---|---|
+| [`server_allow_false.smt2`](examples/smt2/server_allow_false.smt2) | Server Infrastructure | Find a violation (`allow = false`) |
+| [`server_allow_true.smt2`](examples/smt2/server_allow_true.smt2) | Server Infrastructure | Find a compliant config (`allow = true`) |
+| [`container_admission_allow_false.smt2`](examples/smt2/container_admission_allow_false.smt2) | Container Admission | Find a violation (`allow = false`) |
+| [`container_admission_targeted.smt2`](examples/smt2/container_admission_targeted.smt2) | Container Admission | Targeted: cover line 97, avoid line 73 |
+| [`network_segmentation_compliant_false.smt2`](examples/smt2/network_segmentation_compliant_false.smt2) | Network Segmentation | Find non-compliant topology |
+| [`network_segmentation_targeted.smt2`](examples/smt2/network_segmentation_targeted.smt2) | Network Segmentation | Targeted: DMZ rule only (line 93, avoid 121) |
+
+To regenerate these files, run the corresponding `regorus analyze` command with
+`--dump-smt <path>`.
+
+---
+
 ## Limitations
 
 The symbolic engine is under active development.  Current limitations include:
@@ -600,8 +633,8 @@ The symbolic engine is under active development.  Current limitations include:
 | Area | Status |
 |---|---|
 | **Comprehensions** | Set/array/object comprehensions are symbolically unrolled; results support `in` and `count` |
-| **String builtins** | `startswith`, `endswith`, `regex.match`, etc. are modeled as unconstrained Bools |
-| **Numeric builtins** | `sum`, `max`, `min`, etc. are modeled as unconstrained Ints |
+| **String builtins** | `startswith`, `endswith`, `contains`, `indexof`, `replace`, `substring`, `trim_prefix`, `trim_suffix` use Z3 string theory; `regex.match` etc. are unconstrained Bools |
+| **Numeric builtins** | `abs` uses `ite(x>=0, x, -x)`; `bits.*` use Z3 bitvector theory; `sum`, `max`, `min` are unconstrained Ints |
 | **Aggregations** | `count` on symbolic collections uses cardinality tracking; other aggregations are approximate |
 | **Recursion** | Bounded by `--max-rule-depth` (default 3) |
 | **Loop depth** | Bounded by `--max-loops` (default 5); iterations beyond the bound are not explored |

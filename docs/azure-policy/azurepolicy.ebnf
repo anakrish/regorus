@@ -1,0 +1,49 @@
+policy ::= '{' '"if"' ":" constraint '}'
+constraint ::= logicalOperator | condition
+logicalOperator ::= anyOf | allOf | not
+anyof ::= '{' '"anyof"' ':' '[' constraint ( ',' constraint )* ']' '}'
+allof ::= '{' '"allof"' ':' '[' constraint ( ',' constraint )* ']' '}'
+not ::= '{' '"not"' ':' constraint '}'
+condition ::= '{' lhs ',' operation '}'
+lhs ::= field | value | count
+field ::= '"field"' ':' string-value
+value ::= '"value"' ':' json-or-string-value
+string-value ::= STRING | '"[' string-expr ']"'
+json-or-string-value ::= BOOL | NUMBER | string-value // can you specify array or objects?
+operation  ::=  operator ':' json-or-string-value
+
+operator ::=
+           | '"contains"'
+           | '"containskey"' 
+           |'"equals"'
+           | '"greater"'
+           | '"greaterorequals"'
+           | '"exists"'
+           | '"in"'
+           | '"less"'
+           | '"lessequals"'
+           | '"like"'
+           | '"match"'
+           | '"matchinsensitively"'
+           | '"notcontains"'
+           | '"notcontainskey"'
+           | '"notin"'
+           | '"notmatch"'
+           | '"notmatchinsensitively"'
+
+count ::= count-field 
+        | count-value
+        
+count-field ::= '"count"' ':' '{' field ("," where)? '}'
+count-value ::= '"count"' ':' '{' value ',' '"name"'  ':' STRING  ("," where)? '}'
+where ::= '"where"' ':' constraint
+
+string-expr ::= NUMBER 
+              | STRING
+              | complex-expr
+
+complex-expr ::= IDENT
+               | complex-expr '.' IDENT 
+               | complex-expr '(' ( string-expr ( ',' string-expr )* )? ')'
+               | complex-expr '[' string-expr ']'
+               

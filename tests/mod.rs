@@ -11,3 +11,6 @@ mod value;
 
 #[cfg(feature = "rvm")]
 mod rvm;
+
+#[cfg(feature = "azure_policy")]
+mod azure_policy;

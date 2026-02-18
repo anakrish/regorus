@@ -127,6 +127,9 @@ mod indexchecker;
 mod interpreter;
 
 pub mod languages {
+    #[cfg(feature = "azure_policy")]
+    pub mod azure_policy;
+
     #[cfg(feature = "azure-rbac")]
     pub mod azure_rbac;
 

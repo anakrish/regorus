@@ -588,6 +588,25 @@ fn format_instruction_readable(
             let comment = format!("Assert r{} is not undefined (exit if undefined)", register);
             align_comment(&base, &comment, config.comment_column)
         }
+        Instruction::ReturnUndefinedIfNotTrue { condition } => {
+            let base = format!(
+                "{}ReturnUndefinedIfNotTrue if r{} != true return undefined",
+                indent, condition
+            );
+            let comment = format!(
+                "Return undefined unless r{} is exactly boolean true",
+                condition
+            );
+            align_comment(&base, &comment, config.comment_column)
+        }
+        Instruction::CoalesceUndefinedToNull { register } => {
+            let base = format!(
+                "{}CoalesceUndefinedToNull r{} = null if undefined",
+                indent, register
+            );
+            let comment = format!("Azure Policy: absent field → null (r{})", register);
+            align_comment(&base, &comment, config.comment_column)
+        }
         Instruction::LoopStart { params_index } => {
             if let Some(params) = instruction_data.get_loop_params(params_index) {
                 let mode_str = match params.mode {
@@ -901,6 +920,8 @@ const fn get_instruction_name(instruction: &Instruction) -> &'static str {
         Instruction::Count { .. } => "COUNT",
         Instruction::AssertCondition { .. } => "ASSERT",
         Instruction::AssertNotUndefined { .. } => "ASSERT_NOT_UNDEF",
+        Instruction::ReturnUndefinedIfNotTrue { .. } => "RET_UNDEF_IF_NOT_TRUE",
+        Instruction::CoalesceUndefinedToNull { .. } => "COALESCE_NULL",
         Instruction::LoopStart { .. } => "LOOP_START",
         Instruction::LoopNext { .. } => "LOOP_NEXT",
         Instruction::CallRule { .. } => "CALL_RULE",

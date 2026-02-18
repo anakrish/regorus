@@ -248,6 +248,12 @@ impl core::fmt::Display for Instruction {
             Instruction::AssertNotUndefined { register } => {
                 format!("ASSERT_NOT_UNDEFINED R({})", register)
             }
+            Instruction::ReturnUndefinedIfNotTrue { condition } => {
+                format!("RETURN_UNDEFINED_IF_NOT_TRUE R({})", condition)
+            }
+            Instruction::CoalesceUndefinedToNull { register } => {
+                format!("COALESCE_UNDEF_TO_NULL R({})", register)
+            }
             Instruction::LoopStart { params_index } => {
                 format!("LOOP_START P({})", params_index)
             }

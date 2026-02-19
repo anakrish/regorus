@@ -24,6 +24,7 @@ impl Program {
                 "optimization_level": self.metadata.optimization_level,
                 "rego_v0": self.rego_v0,
                 "needs_runtime_recursion_check": self.needs_runtime_recursion_check,
+                "has_host_await": self.has_host_await,
                 "needs_recompilation": self.needs_recompilation
             },
             "program_structure": {
@@ -90,6 +91,10 @@ impl Program {
             .unwrap_or(false);
         let needs_runtime_recursion_check = metadata
             .get("needs_runtime_recursion_check")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let has_host_await = metadata
+            .get("has_host_await")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let needs_recompilation = metadata
@@ -187,9 +192,12 @@ impl Program {
             rule_tree,
             resolved_builtins: Vec::new(),
             needs_runtime_recursion_check,
+            has_host_await,
             needs_recompilation,
             rego_v0,
         };
+
+        program.recompute_host_await_presence();
 
         if !program.builtin_info_table.is_empty() {
             let _ = program.initialize_resolved_builtins();

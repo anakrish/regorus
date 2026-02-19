@@ -70,6 +70,11 @@ pub struct Program {
     /// Flag indicating that VirtualDataDocumentLookup instruction was used and runtime recursion checking is needed
     pub needs_runtime_recursion_check: bool,
 
+    /// Flag indicating whether this program contains any HostAwait instruction.
+    /// Clients can use this to decide whether suspendable execution mode is required.
+    #[serde(default)]
+    pub has_host_await: bool,
+
     /// Flag indicating that recompilation is needed due to partial deserialization failure
     /// This is set to true when the artifact section was successfully read but the extensible
     /// section failed to deserialize (e.g., due to version incompatibility)
@@ -126,6 +131,7 @@ impl Program {
             rule_tree: Value::new_object(),
             resolved_builtins: Vec::new(),
             needs_runtime_recursion_check: false,
+            has_host_await: false,
             needs_recompilation: false,
             rego_v0: false, // Default to Rego v1
         }
@@ -330,8 +336,19 @@ impl Program {
 
     /// Add instruction with optional span
     pub fn add_instruction(&mut self, instruction: Instruction, span: Option<SpanInfo>) {
+        if matches!(instruction, Instruction::HostAwait { .. }) {
+            self.has_host_await = true;
+        }
         self.instructions.push(instruction);
         self.instruction_spans.push(span);
+    }
+
+    /// Recompute whether HostAwait is present by scanning instructions.
+    pub fn recompute_host_await_presence(&mut self) {
+        self.has_host_await = self
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Instruction::HostAwait { .. }));
     }
 
     /// Add literal value and return its index
@@ -407,6 +424,11 @@ impl Program {
     /// Check if the program is fully functional (not needing recompilation)
     pub const fn is_fully_functional(&self) -> bool {
         !self.needs_recompilation
+    }
+
+    /// Check whether HostAwait instructions are present in this program.
+    pub const fn has_host_await(&self) -> bool {
+        self.has_host_await
     }
 }
 

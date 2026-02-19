@@ -48,6 +48,15 @@ body {
     height: 100vh;
 }
 
+body.azure-mode .entry-points-section {
+    display: none;
+}
+
+body.azure-mode .tab-button[data-tab="data"],
+body.azure-mode #data-tab {
+    display: none;
+}
+
 /* Header */
 .header {
     height: var(--header-height);
@@ -195,6 +204,44 @@ body {
     padding: 4px 8px;
     font-size: 0.8rem;
     border-radius: 4px;
+}
+
+.result-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    border: 1px solid transparent;
+}
+
+.result-badge.effect-deny {
+    background: rgba(220, 53, 69, 0.15);
+    color: #b4232c;
+    border-color: rgba(220, 53, 69, 0.35);
+}
+
+.result-badge.effect-audit {
+    background: rgba(244, 162, 97, 0.18);
+    color: #a35a0c;
+    border-color: rgba(244, 162, 97, 0.4);
+}
+
+.result-badge.effect-append {
+    background: rgba(56, 189, 248, 0.18);
+    color: #0b65a5;
+    border-color: rgba(56, 189, 248, 0.4);
+}
+
+.result-badge.effect-deployifnotexists,
+.result-badge.effect-modify {
+    background: rgba(42, 157, 143, 0.18);
+    color: #1d6e63;
+    border-color: rgba(42, 157, 143, 0.4);
 }
 
 .select-small {

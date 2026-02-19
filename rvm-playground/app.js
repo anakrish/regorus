@@ -39,8 +39,34 @@ class RVMPlayground {
                 input: '{}',
                 entities: '{}',
                 policyTitle: ''
+                        },
+                        azure: {
+                                policy: '',
+                                input: `{
+    "resource": {
+        "name": "example-vm",
+        "type": "Microsoft.Compute/virtualMachines",
+        "location": "westus2",
+        "sku": {
+            "name": "Standard_D2s_v3"
+        },
+        "tags": {
+            "costCenter": "cc-100"
+        },
+        "properties": {}
+    },
+    "context": {},
+    "parameters": {}
+}`,
+                                policyTitle: ''
             }
         };
+
+                this.azureAliases = {
+                        catalog: null,
+                        aliasMap: {},
+                        aliasesByType: {}
+                };
 
         this.lastComparativeExampleName = localStorage.getItem('rvmPlaygroundLastComparative') || null;
 
@@ -803,7 +829,739 @@ when { principal == resource.owner };`,
             }
         };
 
+                this.azureExamples = {
+                        categories: {
+                                'Azure Policy': [
+                                        {
+                                                name: "Require Cost Center Tag",
+                                                description: "Deny resources missing a costCenter tag",
+                                                policy: `{
+    "properties": {
+        "displayName": "Require costCenter tag",
+        "policyType": "Custom",
+        "mode": "Indexed",
+        "description": "Require a costCenter tag on resources.",
+        "metadata": {
+            "version": "1.0.0",
+            "category": "Tags"
+        },
+        "version": "1.0.0",
+        "parameters": {
+            "effect": {
+                "type": "String",
+                "metadata": {
+                    "displayName": "Effect",
+                    "description": "Enable or disable the execution of the policy"
+                },
+                "allowedValues": ["deny", "audit", "disabled"],
+                "defaultValue": "deny"
+            }
+        },
+        "policyRule": {
+            "if": {
+                "field": "tags.costCenter",
+                "exists": "false"
+            },
+            "then": {
+                "effect": "[parameters('effect')]"
+            }
+        },
+        "versions": ["1.0.0"]
+    },
+    "id": "/providers/Microsoft.Authorization/policyDefinitions/require-costcenter-tag",
+    "name": "require-costcenter-tag",
+    "type": "Microsoft.Authorization/policyDefinitions"
+}`,
+                                                input: `{
+    "resource": {
+        "name": "storage-dev",
+        "type": "Microsoft.Storage/storageAccounts",
+        "location": "westus2",
+        "tags": {
+            "owner": "team-a"
+        },
+        "properties": {
+            "supportsHttpsTrafficOnly": true
+        }
+    },
+    "context": {},
+    "parameters": {}
+}`,
+                                                language: 'azure'
+                                        },
+                                        {
+                                                name: "Allowed Locations",
+                                                description: "Restrict deployments to approved regions",
+                                                policy: `{
+    "properties": {
+        "displayName": "Allowed locations",
+        "policyType": "Custom",
+        "mode": "Indexed",
+        "description": "Restrict deployments to approved regions.",
+        "metadata": {
+            "version": "1.0.0",
+            "category": "General"
+        },
+        "version": "1.0.0",
+        "parameters": {
+            "allowedLocations": {
+                "type": "Array",
+                "metadata": {
+                    "displayName": "Allowed locations",
+                    "description": "The list of permitted locations"
+                },
+                "defaultValue": ["westus2", "eastus"]
+            },
+            "effect": {
+                "type": "String",
+                "metadata": {
+                    "displayName": "Effect",
+                    "description": "Enable or disable the execution of the policy"
+                },
+                "allowedValues": ["deny", "audit", "disabled"],
+                "defaultValue": "deny"
+            }
+        },
+        "policyRule": {
+            "if": {
+                "field": "location",
+                "notIn": "[parameters('allowedLocations')]"
+            },
+            "then": {
+                "effect": "[parameters('effect')]"
+            }
+        },
+        "versions": ["1.0.0"]
+    },
+    "id": "/providers/Microsoft.Authorization/policyDefinitions/allowed-locations",
+    "name": "allowed-locations",
+    "type": "Microsoft.Authorization/policyDefinitions"
+}`,
+                                                input: `{
+    "resource": {
+        "name": "vm-east",
+        "type": "Microsoft.Compute/virtualMachines",
+        "location": "centralus",
+        "sku": {
+            "name": "Standard_D2s_v3"
+        },
+        "properties": {}
+    },
+    "context": {},
+    "parameters": {}
+}`,
+                                                language: 'azure'
+                                        },
+                                        {
+                                                name: "VM SKU Allowlist",
+                                                description: "Deny disallowed VM SKUs",
+                                                policy: `{
+    "properties": {
+        "displayName": "Allowed VM SKUs",
+        "policyType": "Custom",
+        "mode": "All",
+        "description": "Restrict virtual machine sizes to approved SKUs.",
+        "metadata": {
+            "version": "1.0.0",
+            "category": "Compute"
+        },
+        "version": "1.0.0",
+        "parameters": {
+            "allowedSkus": {
+                "type": "Array",
+                "metadata": {
+                    "displayName": "Allowed VM SKUs",
+                    "description": "List of approved virtual machine sizes"
+                },
+                "defaultValue": ["Standard_D2s_v3", "Standard_D4s_v3"]
+            },
+            "effect": {
+                "type": "String",
+                "metadata": {
+                    "displayName": "Effect",
+                    "description": "Enable or disable the execution of the policy"
+                },
+                "allowedValues": ["deny", "audit", "disabled"],
+                "defaultValue": "deny"
+            }
+        },
+        "policyRule": {
+            "if": {
+                "field": "Microsoft.Compute/virtualMachines/sku.name",
+                "notIn": "[parameters('allowedSkus')]"
+            },
+            "then": {
+                "effect": "[parameters('effect')]"
+            }
+        },
+        "versions": ["1.0.0"]
+    },
+    "id": "/providers/Microsoft.Authorization/policyDefinitions/allowed-vm-skus",
+    "name": "allowed-vm-skus",
+    "type": "Microsoft.Authorization/policyDefinitions"
+}`,
+                                                input: `{
+    "resource": {
+        "name": "vm-sku-test",
+        "type": "Microsoft.Compute/virtualMachines",
+        "location": "westus2",
+        "sku": {
+            "name": "Standard_B1s"
+        },
+        "properties": {}
+    },
+    "context": {},
+    "parameters": {}
+}`,
+                                                language: 'azure'
+                                        },
+                                        {
+                                                name: "Storage IP Allowlist (count/where)",
+                                                description: "Deny storage accounts with unapproved allowed IPs",
+                                                policy: `{
+    "properties": {
+        "displayName": "Storage IP allowlist",
+        "policyType": "Custom",
+        "mode": "Indexed",
+        "description": "Only allow IP rules that match an approved allowlist.",
+        "metadata": {
+            "version": "1.0.0",
+            "category": "Network"
+        },
+        "version": "1.0.0",
+        "parameters": {
+            "allowedIps": {
+                "type": "Array",
+                "metadata": {
+                    "displayName": "Allowed IPs",
+                    "description": "IP addresses permitted in IP rules"
+                },
+                "defaultValue": ["10.0.0.0/24", "192.168.10.10"]
+            },
+            "effect": {
+                "type": "String",
+                "metadata": {
+                    "displayName": "Effect",
+                    "description": "Enable or disable the execution of the policy"
+                },
+                "allowedValues": ["deny", "audit", "disabled"],
+                "defaultValue": "deny"
+            }
+        },
+        "policyRule": {
+            "if": {
+                "count": {
+                    "field": "Microsoft.Storage/storageAccounts/networkAcls.ipRules[*]",
+                    "where": {
+                        "allOf": [
+                            {
+                                "field": "Microsoft.Storage/storageAccounts/networkAcls.ipRules[*].action",
+                                "equals": "Allow"
+                            },
+                            {
+                                "field": "Microsoft.Storage/storageAccounts/networkAcls.ipRules[*].value",
+                                "notIn": "[parameters('allowedIps')]"
+                            }
+                        ]
+                    }
+                },
+                "greater": 0
+            },
+            "then": {
+                "effect": "[parameters('effect')]"
+            }
+        },
+        "versions": ["1.0.0"]
+    },
+    "id": "/providers/Microsoft.Authorization/policyDefinitions/storage-ip-allowlist",
+    "name": "storage-ip-allowlist",
+    "type": "Microsoft.Authorization/policyDefinitions"
+}`,
+                                                input: `{
+    "resource": {
+        "name": "storage-dev",
+        "type": "Microsoft.Storage/storageAccounts",
+        "location": "westus2",
+        "properties": {
+            "networkAcls": {
+                "ipRules": [
+                    {"value": "10.0.0.0/24", "action": "Allow"},
+                    {"value": "203.0.113.5", "action": "Allow"}
+                ]
+            }
+        }
+    },
+    "context": {},
+    "parameters": {}
+}`,
+                                                language: 'azure'
+                                        },
+                                        {
+                                                name: "Tag + Location + SKU Guard",
+                                                description: "AnyOf with tag, location, and SKU constraints",
+                                                policy: `{
+    "properties": {
+        "displayName": "Tag, location, and SKU guard",
+        "policyType": "Custom",
+        "mode": "All",
+        "description": "Require environment tag, allowed location, and approved VM SKU family.",
+        "metadata": {
+            "version": "1.0.0",
+            "category": "General"
+        },
+        "version": "1.0.0",
+        "parameters": {
+            "allowedLocations": {
+                "type": "Array",
+                "metadata": {
+                    "displayName": "Allowed locations",
+                    "description": "Locations permitted for deployment"
+                },
+                "defaultValue": ["westus2", "eastus"]
+            },
+            "allowedSkuPattern": {
+                "type": "String",
+                "metadata": {
+                    "displayName": "Allowed SKU pattern",
+                    "description": "VM SKU pattern that is permitted"
+                },
+                "defaultValue": "Standard_D*"
+            },
+            "effect": {
+                "type": "String",
+                "metadata": {
+                    "displayName": "Effect",
+                    "description": "Enable or disable the execution of the policy"
+                },
+                "allowedValues": ["deny", "audit", "disabled"],
+                "defaultValue": "deny"
+            }
+        },
+        "policyRule": {
+            "if": {
+                "anyOf": [
+                    {
+                        "not": {
+                            "field": "tags",
+                            "containsKey": "environment"
+                        }
+                    },
+                    {
+                        "field": "location",
+                        "notIn": "[parameters('allowedLocations')]"
+                    },
+                    {
+                        "allOf": [
+                            {
+                                "field": "type",
+                                "equals": "Microsoft.Compute/virtualMachines"
+                            },
+                            {
+                                "field": "Microsoft.Compute/virtualMachines/sku.name",
+                                "notLike": "[parameters('allowedSkuPattern')]"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "then": {
+                "effect": "[parameters('effect')]"
+            }
+        },
+        "versions": ["1.0.0"]
+    },
+    "id": "/providers/Microsoft.Authorization/policyDefinitions/tag-location-sku-guard",
+    "name": "tag-location-sku-guard",
+    "type": "Microsoft.Authorization/policyDefinitions"
+}`,
+                                                input: `{
+    "resource": {
+        "name": "vm-legacy",
+        "type": "Microsoft.Compute/virtualMachines",
+        "location": "centralus",
+        "sku": {
+            "name": "Standard_B1s"
+        },
+        "tags": {
+            "owner": "team-a"
+        },
+        "properties": {}
+    },
+    "context": {},
+    "parameters": {}
+}`,
+                                                language: 'azure'
+                                        },
+                                        {
+                                                name: "Naming Convention Prefix",
+                                                description: "Enforce a name prefix using template expressions",
+                                                policy: `{
+    "properties": {
+        "displayName": "Naming convention prefix",
+        "policyType": "Custom",
+        "mode": "All",
+        "description": "Require resource names to start with a configurable prefix.",
+        "metadata": {
+            "version": "1.0.0",
+            "category": "General"
+        },
+        "version": "1.0.0",
+        "parameters": {
+            "namePrefix": {
+                "type": "String",
+                "metadata": {
+                    "displayName": "Name prefix",
+                    "description": "Prefix that resource names must start with"
+                },
+                "defaultValue": "prod"
+            },
+            "effect": {
+                "type": "String",
+                "metadata": {
+                    "displayName": "Effect",
+                    "description": "Enable or disable the execution of the policy"
+                },
+                "allowedValues": ["deny", "audit", "disabled"],
+                "defaultValue": "deny"
+            }
+        },
+        "policyRule": {
+            "if": {
+                "value": "[substring(tolower(field('name')), 0, 4)]",
+                "notEquals": "[tolower(parameters('namePrefix'))]"
+            },
+            "then": {
+                "effect": "[parameters('effect')]"
+            }
+        },
+        "versions": ["1.0.0"]
+    },
+    "id": "/providers/Microsoft.Authorization/policyDefinitions/name-prefix",
+    "name": "name-prefix",
+    "type": "Microsoft.Authorization/policyDefinitions"
+}`,
+                                                input: `{
+    "resource": {
+        "name": "dev-app-01",
+        "type": "Microsoft.Web/sites",
+        "location": "eastus",
+        "properties": {}
+    },
+    "context": {},
+    "parameters": {}
+}`,
+                                                language: 'azure'
+                                        }
+                                ]
+                        }
+                };
+
         this.comparativeExamples = [
+                        {
+                                name: "Required Tag",
+                            description: "Deny resources missing a costCenter tag",
+                                variants: {
+                                        rego: {
+                                                policy: `package tags
+
+import rego.v1
+
+default allow := false
+
+allow if {
+        input.resource.tags.costCenter
+}`,
+                                                input: `{
+        "resource": {
+        "tags": {
+            "owner": "team-a"
+        }
+        }
+}`,
+                                                data: '{}',
+                                                entryPoints: ["data.tags.allow"],
+                                                language: 'rego'
+                                        },
+                                        cedar: {
+                        policy: `// Permit when the resource has a costCenter
+permit(principal, action == Action::"use", resource == Resource::"demo")
+when { resource.costCenter != "" };`,
+                                                input: `{
+        "principal": "User::alice",
+        "action": "Action::use",
+        "resource": "Resource::demo",
+        "context": {}
+}`,
+                                                entities: `{
+        "Resource::demo": {
+                "parents": [],
+        "attrs": {"owner": "team-a"}
+        }
+}`,
+                                                language: 'cedar'
+                                        },
+                                        azure: {
+                                                policy: `{
+    "properties": {
+        "displayName": "Require costCenter tag",
+        "policyType": "Custom",
+        "mode": "Indexed",
+        "description": "Require a costCenter tag on resources.",
+        "metadata": {
+            "version": "1.0.0",
+            "category": "Tags"
+        },
+        "version": "1.0.0",
+        "parameters": {
+            "effect": {
+                "type": "String",
+                "metadata": {
+                    "displayName": "Effect",
+                    "description": "Enable or disable the execution of the policy"
+                },
+                "allowedValues": ["deny", "audit", "disabled"],
+                "defaultValue": "deny"
+            }
+        },
+        "policyRule": {
+            "if": {
+                "field": "tags.costCenter",
+                "exists": "false"
+            },
+            "then": {
+                "effect": "[parameters('effect')]"
+            }
+        },
+        "versions": ["1.0.0"]
+    },
+    "id": "/providers/Microsoft.Authorization/policyDefinitions/require-costcenter-tag",
+    "name": "require-costcenter-tag",
+    "type": "Microsoft.Authorization/policyDefinitions"
+}`,
+                                                input: `{
+    "resource": {
+        "name": "storage-dev",
+        "type": "Microsoft.Storage/storageAccounts",
+        "location": "westus2",
+        "tags": {
+            "owner": "team-a"
+        },
+        "properties": {
+            "supportsHttpsTrafficOnly": true
+        }
+    },
+    "context": {},
+    "parameters": {}
+}`,
+                                                language: 'azure'
+                                        }
+                                }
+                        },
+                        {
+                                name: "Allowed Locations",
+                                description: "Deny locations outside the approved list",
+                                variants: {
+                                        rego: {
+                                                policy: `package locations
+
+import rego.v1
+
+default allow := false
+
+allow if {
+        input.resource.location in ["westus2", "eastus"]
+}`,
+                                                input: `{
+        "resource": {
+        "location": "centralus"
+        }
+}`,
+                                                data: '{}',
+                                                entryPoints: ["data.locations.allow"],
+                                                language: 'rego'
+                                        },
+                                        cedar: {
+                        policy: `// Permit when location is approved
+permit(principal, action == Action::"deploy", resource == Resource::"demo")
+when { context.allowedLocations.contains(resource.location) };`,
+                                                input: `{
+        "principal": "User::alice",
+        "action": "Action::deploy",
+        "resource": "Resource::demo",
+        "context": {"allowedLocations": ["westus2", "eastus"]}
+}`,
+                                                entities: `{
+        "Resource::demo": {
+                "parents": [],
+        "attrs": {"location": "centralus"}
+        }
+}`,
+                                                language: 'cedar'
+                                        },
+                                        azure: {
+                                                policy: `{
+    "properties": {
+        "displayName": "Allowed locations",
+        "policyType": "Custom",
+        "mode": "Indexed",
+        "description": "Restrict deployments to approved regions.",
+        "metadata": {
+            "version": "1.0.0",
+            "category": "General"
+        },
+        "version": "1.0.0",
+        "parameters": {
+            "allowedLocations": {
+                "type": "Array",
+                "metadata": {
+                    "displayName": "Allowed locations",
+                    "description": "The list of permitted locations"
+                },
+                "defaultValue": ["westus2", "eastus"]
+            },
+            "effect": {
+                "type": "String",
+                "metadata": {
+                    "displayName": "Effect",
+                    "description": "Enable or disable the execution of the policy"
+                },
+                "allowedValues": ["deny", "audit", "disabled"],
+                "defaultValue": "deny"
+            }
+        },
+        "policyRule": {
+            "if": {
+                "field": "location",
+                "notIn": "[parameters('allowedLocations')]"
+            },
+            "then": {
+                "effect": "[parameters('effect')]"
+            }
+        },
+        "versions": ["1.0.0"]
+    },
+    "id": "/providers/Microsoft.Authorization/policyDefinitions/allowed-locations",
+    "name": "allowed-locations",
+    "type": "Microsoft.Authorization/policyDefinitions"
+}`,
+                                                input: `{
+    "resource": {
+        "name": "vm-east",
+        "type": "Microsoft.Compute/virtualMachines",
+        "location": "centralus",
+        "properties": {}
+    },
+    "context": {},
+    "parameters": {}
+}`,
+                                                language: 'azure'
+                                        }
+                                }
+                        },
+                        {
+                                name: "VM SKU Allowlist",
+                                description: "Deny disallowed VM SKUs",
+                                variants: {
+                                        rego: {
+                                                policy: `package vm.sku
+
+import rego.v1
+
+default allow := false
+
+allow if {
+        input.resource.sku in ["Standard_D2s_v3", "Standard_D4s_v3"]
+}`,
+                                                input: `{
+        "resource": {
+        "sku": "Standard_B1s"
+        }
+}`,
+                                                data: '{}',
+                                                entryPoints: ["data.vm.sku.allow"],
+                                                language: 'rego'
+                                        },
+                                        cedar: {
+                        policy: `// Permit when SKU is allowed
+permit(principal, action == Action::"deploy", resource == Resource::"demo")
+when { context.allowedSkus.contains(resource.sku) };`,
+                                                input: `{
+        "principal": "User::alice",
+        "action": "Action::deploy",
+        "resource": "Resource::demo",
+        "context": {"allowedSkus": ["Standard_D2s_v3", "Standard_D4s_v3"]}
+}`,
+                                                entities: `{
+        "Resource::demo": {
+                "parents": [],
+        "attrs": {"sku": "Standard_B1s"}
+        }
+}`,
+                                                language: 'cedar'
+                                        },
+                                        azure: {
+                                                policy: `{
+    "properties": {
+        "displayName": "Allowed VM SKUs",
+        "policyType": "Custom",
+        "mode": "All",
+        "description": "Restrict virtual machine sizes to approved SKUs.",
+        "metadata": {
+            "version": "1.0.0",
+            "category": "Compute"
+        },
+        "version": "1.0.0",
+        "parameters": {
+            "allowedSkus": {
+                "type": "Array",
+                "metadata": {
+                    "displayName": "Allowed VM SKUs",
+                    "description": "List of approved virtual machine sizes"
+                },
+                "defaultValue": ["Standard_D2s_v3", "Standard_D4s_v3"]
+            },
+            "effect": {
+                "type": "String",
+                "metadata": {
+                    "displayName": "Effect",
+                    "description": "Enable or disable the execution of the policy"
+                },
+                "allowedValues": ["deny", "audit", "disabled"],
+                "defaultValue": "deny"
+            }
+        },
+        "policyRule": {
+            "if": {
+                "field": "Microsoft.Compute/virtualMachines/sku.name",
+                "notIn": "[parameters('allowedSkus')]"
+            },
+            "then": {
+                "effect": "[parameters('effect')]"
+            }
+        },
+        "versions": ["1.0.0"]
+    },
+    "id": "/providers/Microsoft.Authorization/policyDefinitions/allowed-vm-skus",
+    "name": "allowed-vm-skus",
+    "type": "Microsoft.Authorization/policyDefinitions"
+}`,
+                                                input: `{
+    "resource": {
+        "name": "vm-sku-test",
+        "type": "Microsoft.Compute/virtualMachines",
+        "location": "westus2",
+        "sku": {
+            "name": "Standard_B1s"
+        },
+        "properties": {}
+    },
+    "context": {},
+    "parameters": {}
+}`,
+                                                language: 'azure'
+                                        }
+                                }
+                        },
             {
                 name: "Owner Edit",
                 description: "Same owner check expressed in two languages",
@@ -1178,18 +1936,26 @@ when { principal in resource.delegates && resource.project == "alpha" };`,
     async init() {
         this.updateStatus('Initializing Monaco Editor...');
         await this.initMonaco();
-        
-        this.updateStatus('Loading WASM module...');
-        await this.loadWASM();
-        
+
         this.setupEventListeners();
         this.loadSettings();
         this.loadLanguagePreference();
-        
+
+        this.updateStatus('Loading WASM module...');
+        try {
+            await this.loadWASM();
+        } catch (error) {
+            this.updateStatus('WASM module failed to load (UI available)');
+        }
+
+        await this.loadAzureAliases();
+
         // Load last-selected example (or default) for the active language
         this.loadInitialExampleForLanguage();
-        
-        this.updateStatus('Ready');
+
+        if (this.isWasmLoaded) {
+            this.updateStatus('Ready');
+        }
     }
 
     async initMonaco() {
@@ -1258,7 +2024,7 @@ when { principal in resource.delegates && resource.project == "alpha" };`,
         // Setup policy editor
         this.editors.policy = monaco.editor.create(document.getElementById('policy-editor'), {
             value: '',
-            language: this.language === 'cedar' ? 'cedar' : 'rego',
+            language: this.getPolicyEditorLanguageId(),
             theme: this.settings.theme,
             wordWrap: this.settings.wordWrap ? 'on' : 'off',
             minimap: { enabled: this.settings.minimap },
@@ -1342,6 +2108,24 @@ when { principal in resource.delegates && resource.project == "alpha" };`,
         }
     }
 
+    async loadAzureAliases() {
+        try {
+            const response = await fetch('./azure-policy-aliases.json', { cache: 'force-cache' });
+            if (!response.ok) {
+                throw new Error(`alias catalog fetch failed (${response.status})`);
+            }
+            const catalog = await response.json();
+            this.azureAliases.catalog = catalog;
+            this.azureAliases.aliasMap = this.buildAzureAliasMap(catalog);
+            this.azureAliases.aliasesByType = this.buildAzureAliasIndex(catalog);
+        } catch (error) {
+            console.warn('Azure alias catalog unavailable:', error);
+            this.azureAliases.catalog = null;
+            this.azureAliases.aliasMap = {};
+            this.azureAliases.aliasesByType = {};
+        }
+    }
+
     setupEventListeners() {
         // Header buttons
         document.getElementById('compile-btn').addEventListener('click', () => this.compile());
@@ -1402,6 +2186,8 @@ when { principal in resource.delegates && resource.project == "alpha" };`,
         }
         if (this.language === 'cedar') {
             await this.compileCedar();
+        } else if (this.language === 'azure') {
+            await this.compileAzurePolicyDefinition();
         } else {
             await this.compileRego();
         }
@@ -1468,6 +2254,55 @@ when { principal in resource.delegates && resource.project == "alpha" };`,
             const specs = [{ id: 'policy.cedar', content: policy }];
             this.currentProgram = this.wasmModule.Program.compileCedarPolicies(
                 JSON.stringify(specs)
+            );
+
+            const format = document.getElementById('assembly-format').value || 'readable';
+            const assembly = format === 'tabular'
+                ? this.currentProgram.generateTabularListing()
+                : this.currentProgram.generateListing();
+
+            const endTime = performance.now();
+            const compilationTime = (endTime - startTime).toFixed(2);
+
+            this.showAssembly(assembly);
+            if (typeof this.currentProgram.getInstructionCount === 'function') {
+                this.updateInstructionCount(this.currentProgram.getInstructionCount());
+            } else {
+                this.updateInstructionCount(this.countInstructions(assembly));
+            }
+            this.updateStatus(`Compiled successfully (${compilationTime}ms)`);
+        } catch (error) {
+            console.error('Compilation error:', error);
+            const errorMessage = error.message || error.toString() || 'Unknown compilation error';
+            this.updateStatus(`Compilation failed: ${errorMessage}`);
+            this.showAssembly(`; Compilation Error:\n; ${errorMessage}`);
+            this.currentProgram = null;
+        }
+    }
+
+    async compileAzurePolicyDefinition() {
+        const policy = this.editors.policy.getValue().trim();
+        if (!policy) {
+            this.showAssembly('');
+            this.currentProgram = null;
+            return;
+        }
+
+        if (!this.wasmModule?.Program?.compileAzurePolicyDefinition) {
+            this.updateStatus('Azure Policy support missing - rebuild WASM');
+            this.showAssembly('; Error: Azure Policy support missing in WASM');
+            this.currentProgram = null;
+            return;
+        }
+
+        try {
+            this.updateStatus('Compiling Azure Policy definition...');
+            const startTime = performance.now();
+
+            const aliasMapJson = this.getAzureAliasMapJson();
+            this.currentProgram = this.wasmModule.Program.compileAzurePolicyDefinition(
+                policy,
+                aliasMapJson
             );
 
             const format = document.getElementById('assembly-format').value || 'readable';
@@ -1601,6 +2436,8 @@ when { principal in resource.delegates && resource.project == "alpha" };`,
     async evaluate() {
         if (this.language === 'cedar') {
             await this.evaluateCedar();
+        } else if (this.language === 'azure') {
+            await this.evaluateAzurePolicy();
         } else {
             await this.evaluateRego();
         }
@@ -1765,6 +2602,11 @@ when { principal in resource.delegates && resource.project == "alpha" };`,
             const inputPayload = this.buildCedarInput(requestJson, entitiesJson);
             vm.setInputJson(JSON.stringify(inputPayload));
             this.debugSession.entryPoint = 'cedar.authorize';
+        } else if (this.language === 'azure') {
+            const inputJson = this.editors.input.getValue().trim() || '{}';
+            const inputPayload = this.buildAzureInputEnvelope(inputJson);
+            vm.setInputJson(JSON.stringify(inputPayload));
+            this.debugSession.entryPoint = null;
         } else {
             const input = this.editors.input.getValue().trim() || '{}';
             const data = this.editors.data.getValue().trim() || '{}';
@@ -1919,6 +2761,56 @@ when { principal in resource.delegates && resource.project == "alpha" };`,
         }
     }
 
+    async evaluateAzurePolicy() {
+        const policy = this.editors.policy.getValue().trim();
+        const inputJson = this.editors.input.getValue().trim() || '{}';
+
+        if (!policy) {
+            this.showResults('No policy to evaluate', 'error');
+            return;
+        }
+
+        if (!this.wasmModule?.Program?.compileAzurePolicyDefinition) {
+            this.showResults('Azure Policy support missing - rebuild WASM', 'error');
+            return;
+        }
+
+        if (!this.currentProgram) {
+            await this.compile();
+            if (!this.currentProgram) {
+                this.showResults('Compilation failed - cannot evaluate', 'error');
+                return;
+            }
+        }
+
+        try {
+            this.updateStatus('Evaluating Azure Policy...');
+            const startTime = performance.now();
+
+            const inputPayload = this.buildAzureInputEnvelope(inputJson);
+            const vm = new this.wasmModule.Rvm();
+            vm.loadProgram(this.currentProgram);
+            vm.setInputJson(JSON.stringify(inputPayload));
+
+            const resultJson = vm.execute();
+            const resultValue = JSON.parse(resultJson);
+
+            const endTime = performance.now();
+            const evaluationTime = (endTime - startTime).toFixed(2);
+            const formattedResult = this.formatAzureEvaluationResult(
+                resultValue,
+                inputPayload,
+                evaluationTime
+            );
+            this.showResults(formattedResult, 'success');
+            this.updateStatus(`Evaluation completed (${evaluationTime}ms)`);
+        } catch (error) {
+            console.error('Evaluation error:', error);
+            this.updateStatus(`Evaluation failed: ${error.message}`);
+            this.showResults(`Error: ${error.message}`, 'error');
+        }
+    }
+
     formatEvaluationResult(result, input, data, policy, evaluationTime = null) {
         let output = '# Evaluation Results\n\n';
         
@@ -2026,12 +2918,217 @@ when { principal in resource.delegates && resource.project == "alpha" };`,
         return output;
     }
 
+    formatAzureEvaluationResult(resultValue, inputPayload, evaluationTime = null) {
+        const effect = this.extractAzureEffect(resultValue);
+        const badge = effect
+            ? `<span class="result-badge effect-${effect.toLowerCase()}">${effect.toUpperCase()}</span>`
+            : '<span class="result-badge">UNKNOWN</span>';
+
+        let output = '# Azure Policy Evaluation\n\n';
+        output += '## Effect\n';
+        output += `<div class="json-result-box">${badge}</div>\n\n`;
+        output += '## Result\n';
+        output += '```json\n';
+        output += JSON.stringify(resultValue, null, 2);
+        output += '\n```\n\n';
+
+        return output;
+    }
+
+    extractAzureEffect(resultValue) {
+        if (typeof resultValue === 'string') {
+            return resultValue;
+        }
+        if (resultValue && typeof resultValue.effect === 'string') {
+            return resultValue.effect;
+        }
+        if (resultValue && typeof resultValue.value === 'string') {
+            return resultValue.value;
+        }
+        return null;
+    }
+
     safeParseJson(value, label) {
         try {
             return JSON.parse(value || '{}');
         } catch (error) {
             throw new Error(`Invalid ${label} JSON: ${error.message}`);
         }
+    }
+
+    buildAzureAliasMap(catalog) {
+        const map = {};
+        if (!Array.isArray(catalog)) {
+            return map;
+        }
+        catalog.forEach(provider => {
+            const namespace = provider.namespace;
+            const resourceTypes = provider.resourceTypes || [];
+            resourceTypes.forEach(resourceType => {
+                const fqType = `${namespace}/${resourceType.resourceType}`;
+                const prefix = `${fqType}/`;
+                (resourceType.aliases || []).forEach(alias => {
+                    const name = alias.name || '';
+                    if (name.length > prefix.length && name.toLowerCase().startsWith(prefix.toLowerCase())) {
+                        const shortName = name.slice(prefix.length);
+                        map[name.toLowerCase()] = shortName;
+                    }
+                });
+            });
+        });
+        return map;
+    }
+
+    buildAzureAliasIndex(catalog) {
+        const index = {};
+        if (!Array.isArray(catalog)) {
+            return index;
+        }
+        catalog.forEach(provider => {
+            const namespace = provider.namespace;
+            const resourceTypes = provider.resourceTypes || [];
+            resourceTypes.forEach(resourceType => {
+                const fqType = `${namespace}/${resourceType.resourceType}`;
+                index[fqType.toLowerCase()] = resourceType.aliases || [];
+            });
+        });
+        return index;
+    }
+
+    getAzureAliasMapJson() {
+        const entries = Object.keys(this.azureAliases.aliasMap || {});
+        if (entries.length === 0) {
+            return undefined;
+        }
+        return JSON.stringify(this.azureAliases.aliasMap);
+    }
+
+    buildAzureInputEnvelope(inputJson) {
+        const input = this.safeParseJson(inputJson, 'input');
+        if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+            throw new Error('Azure Policy input must be a JSON object');
+        }
+
+        const resource = input.resource || input;
+        const context = input.context || {};
+        const parameters = input.parameters || {};
+
+        if (typeof resource !== 'object' || resource === null || Array.isArray(resource)) {
+            throw new Error('Azure Policy resource must be a JSON object');
+        }
+
+        return {
+            resource: this.normalizeAzureResource(resource),
+            context,
+            parameters
+        };
+    }
+
+    normalizeAzureResource(resource) {
+        const rootFields = [
+            'name',
+            'type',
+            'location',
+            'kind',
+            'id',
+            'tags',
+            'identity',
+            'sku',
+            'plan',
+            'zones',
+            'managedBy',
+            'etag',
+            'apiVersion',
+            'fullName'
+        ];
+
+        const normalized = {};
+        rootFields.forEach(field => {
+            if (Object.prototype.hasOwnProperty.call(resource, field)) {
+                normalized[field] = resource[field];
+            }
+        });
+
+        if (resource.properties && typeof resource.properties === 'object') {
+            Object.entries(resource.properties).forEach(([key, value]) => {
+                if (!Object.prototype.hasOwnProperty.call(normalized, key)) {
+                    normalized[key] = value;
+                }
+            });
+        }
+
+        const aliases = this.getAzureAliasesForType(resource.type);
+        if (aliases) {
+            this.applyAzureAliasEntries(normalized, resource, aliases, resource.type);
+        }
+
+        return normalized;
+    }
+
+    getAzureAliasesForType(resourceType) {
+        if (!resourceType || !this.azureAliases.aliasesByType) {
+            return null;
+        }
+        return this.azureAliases.aliasesByType[String(resourceType).toLowerCase()] || null;
+    }
+
+    applyAzureAliasEntries(target, resource, aliases, resourceType) {
+        const prefix = resourceType ? `${resourceType}/` : '';
+        aliases.forEach(alias => {
+            const name = alias.name || '';
+            const defaultPath = alias.defaultPath || alias.default_path;
+            if (!defaultPath) {
+                return;
+            }
+            if (defaultPath.includes('[*]')) {
+                return;
+            }
+            let shortName = name;
+            if (prefix && name.length > prefix.length && name.toLowerCase().startsWith(prefix.toLowerCase())) {
+                shortName = name.slice(prefix.length);
+            }
+            if (shortName.includes('[*]')) {
+                return;
+            }
+            const value = this.readAzurePath(resource, defaultPath);
+            if (value === undefined) {
+                return;
+            }
+            this.setNestedValue(target, shortName, value);
+        });
+    }
+
+    readAzurePath(resource, path) {
+        if (!path || typeof path !== 'string') {
+            return undefined;
+        }
+        if (path.includes('[*]')) {
+            return undefined;
+        }
+        const segments = path.split('.');
+        let current = resource;
+        for (const segment of segments) {
+            if (!current || typeof current !== 'object') {
+                return undefined;
+            }
+            current = current[segment];
+        }
+        return current;
+    }
+
+    setNestedValue(target, path, value) {
+        const segments = path.split('.');
+        if (segments.length === 0) {
+            return;
+        }
+        let current = target;
+        segments.slice(0, -1).forEach(segment => {
+            if (!current[segment] || typeof current[segment] !== 'object') {
+                current[segment] = {};
+            }
+            current = current[segment];
+        });
+        current[segments[segments.length - 1]] = value;
     }
 
     generateMockEvaluation(policy, input, data) {
@@ -2197,9 +3294,12 @@ when { principal in resource.delegates && resource.project == "alpha" };`,
             };
 
             const renderLanguageExamples = (language) => {
-                const examplesByCategory = language === 'cedar'
-                    ? this.cedarExamples.categories
-                    : this.examples.categories;
+                let examplesByCategory = this.examples.categories;
+                if (language === 'cedar') {
+                    examplesByCategory = this.cedarExamples.categories;
+                } else if (language === 'azure') {
+                    examplesByCategory = this.azureExamples.categories;
+                }
 
                 Object.entries(examplesByCategory).forEach(([categoryName, examples]) => {
                     const categoryHeader = document.createElement('div');
@@ -2233,6 +3333,8 @@ when { principal in resource.delegates && resource.project == "alpha" };`,
                     renderComparative();
                 } else if (tab === 'rego') {
                     renderLanguageExamples('rego');
+                } else if (tab === 'azure') {
+                    renderLanguageExamples('azure');
                 } else {
                     renderLanguageExamples('cedar');
                 }
@@ -2241,7 +3343,8 @@ when { principal in resource.delegates && resource.project == "alpha" };`,
             const tabsConfig = [
                 { id: 'comparative', label: 'Comparative' },
                 { id: 'rego', label: 'Rego' },
-                { id: 'cedar', label: 'Cedar' }
+                { id: 'cedar', label: 'Cedar' },
+                { id: 'azure', label: 'Azure Policy' }
             ];
 
             const activeTab = localStorage.getItem('rvmPlaygroundExamplesTab') || 'comparative';
@@ -2289,6 +3392,8 @@ when { principal in resource.delegates && resource.project == "alpha" };`,
         this.editors.input.setValue(example.input || '{}');
         if (exampleLanguage === 'cedar') {
             this.editors.data.setValue(example.entities || '{}');
+        } else if (exampleLanguage === 'azure') {
+            this.editors.data.setValue('{}');
         } else {
             this.editors.data.setValue(example.data || '{}');
         }
@@ -2416,6 +3521,10 @@ when { principal in resource.delegates && resource.project == "alpha" };`,
             this.languageState.cedar.input = this.editors.input.getValue();
             this.languageState.cedar.entities = this.editors.data.getValue();
             this.languageState.cedar.policyTitle = policyTitle;
+        } else if (this.language === 'azure') {
+            this.languageState.azure.policy = this.editors.policy.getValue();
+            this.languageState.azure.input = this.editors.input.getValue();
+            this.languageState.azure.policyTitle = policyTitle;
         } else {
             this.languageState.rego.policy = this.editors.policy.getValue();
             this.languageState.rego.input = this.editors.input.getValue();
@@ -2424,8 +3533,18 @@ when { principal in resource.delegates && resource.project == "alpha" };`,
         }
     }
 
+    getPolicyEditorLanguageId() {
+        if (this.language === 'cedar') {
+            return 'cedar';
+        }
+        if (this.language === 'azure') {
+            return 'json';
+        }
+        return 'rego';
+    }
+
     setLanguage(language) {
-        if (language !== 'rego' && language !== 'cedar') {
+        if (language !== 'rego' && language !== 'cedar' && language !== 'azure') {
             return;
         }
         if (this.language === language) {
@@ -2444,8 +3563,7 @@ when { principal in resource.delegates && resource.project == "alpha" };`,
 
         const policyModel = this.editors.policy?.getModel();
         if (policyModel && typeof monaco !== 'undefined') {
-            const languageId = this.language === 'cedar' ? 'cedar' : 'rego';
-            monaco.editor.setModelLanguage(policyModel, languageId);
+            monaco.editor.setModelLanguage(policyModel, this.getPolicyEditorLanguageId());
         }
 
         const state = this.languageState[this.language];
@@ -2461,6 +3579,8 @@ when { principal in resource.delegates && resource.project == "alpha" };`,
             this.editors.input?.setValue(state.input || '{}');
             if (this.language === 'cedar') {
                 this.editors.data?.setValue(state.entities || '{}');
+            } else if (this.language === 'azure') {
+                this.editors.data?.setValue('{}');
             } else {
                 this.editors.data?.setValue(state.data || '{}');
                 this.updateEntryPointsUI();
@@ -2483,23 +3603,45 @@ when { principal in resource.delegates && resource.project == "alpha" };`,
 
     updateLanguageUI() {
         document.body.classList.toggle('cedar-mode', this.language === 'cedar');
+        document.body.classList.toggle('azure-mode', this.language === 'azure');
 
         const dataTab = document.querySelector('.tab-button[data-tab="data"]');
         if (dataTab) {
-            dataTab.textContent = this.language === 'cedar' ? 'Entities' : 'Data';
+            if (this.language === 'cedar') {
+                dataTab.textContent = 'Entities';
+            } else {
+                dataTab.textContent = 'Data';
+            }
         }
 
         const dataHeader = document.getElementById('data-panel-title');
         if (dataHeader) {
-            dataHeader.textContent = this.language === 'cedar' ? 'Input & Entities' : 'Data & Results';
+            if (this.language === 'cedar') {
+                dataHeader.textContent = 'Input & Entities';
+            } else if (this.language === 'azure') {
+                dataHeader.textContent = 'Input & Results';
+            } else {
+                dataHeader.textContent = 'Data & Results';
+            }
+        }
+
+        if (this.language === 'azure') {
+            const activeTab = document.querySelector('.tab-button.active');
+            if (activeTab && activeTab.dataset.tab === 'data') {
+                this.switchTab('input');
+            }
         }
 
     }
 
     getExamplesForLanguage() {
-        return this.language === 'cedar'
-            ? this.cedarExamples.categories
-            : this.examples.categories;
+        if (this.language === 'cedar') {
+            return this.cedarExamples.categories;
+        }
+        if (this.language === 'azure') {
+            return this.azureExamples.categories;
+        }
+        return this.examples.categories;
     }
 
     setPolicyTitle(title) {

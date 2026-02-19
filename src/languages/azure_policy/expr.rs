@@ -121,7 +121,11 @@ impl<'source> ExprParser<'source> {
 
         // Create the parser locally to keep the borrow of `source` scoped
         // to this function.
-        parse_expr_from_source(&source, outer_span)
+        let mut expr = parse_expr_from_source(&source, outer_span)?;
+        let base_offset = outer_span.start.saturating_add(1);
+        let base_col = outer_span.col.saturating_add(1);
+        rebase_expr_spans(&mut expr, outer_span, base_offset, base_col);
+        Ok(expr)
     }
 
     /// Parse a single expression (handles left-recursive postfix operators).
@@ -292,4 +296,44 @@ fn parse_expr_from_source(source: &Source, outer_span: &Span) -> Result<Expr, Ex
     }
 
     Ok(expr)
+}
+
+fn rebase_expr_spans(expr: &mut Expr, outer_span: &Span, base_offset: u32, base_col: u32) {
+    match expr {
+        Expr::Literal { span, .. } | Expr::Ident { span, .. } => {
+            *span = rebase_span(span, outer_span, base_offset, base_col);
+        }
+        Expr::Call { span, func, args } => {
+            *span = rebase_span(span, outer_span, base_offset, base_col);
+            rebase_expr_spans(func, outer_span, base_offset, base_col);
+            for arg in args {
+                rebase_expr_spans(arg, outer_span, base_offset, base_col);
+            }
+        }
+        Expr::Dot {
+            span,
+            object,
+            field_span,
+            ..
+        } => {
+            *span = rebase_span(span, outer_span, base_offset, base_col);
+            *field_span = rebase_span(field_span, outer_span, base_offset, base_col);
+            rebase_expr_spans(object, outer_span, base_offset, base_col);
+        }
+        Expr::Index { span, object, index } => {
+            *span = rebase_span(span, outer_span, base_offset, base_col);
+            rebase_expr_spans(object, outer_span, base_offset, base_col);
+            rebase_expr_spans(index, outer_span, base_offset, base_col);
+        }
+    }
+}
+
+fn rebase_span(span: &Span, outer_span: &Span, base_offset: u32, base_col: u32) -> Span {
+    Span {
+        source: outer_span.source.clone(),
+        line: outer_span.line,
+        col: base_col.saturating_add(span.start),
+        start: base_offset.saturating_add(span.start),
+        end: base_offset.saturating_add(span.end),
+    }
 }

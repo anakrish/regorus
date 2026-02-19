@@ -7,17 +7,21 @@
 //! fields (`displayName`, `description`, `mode`, `parameters`, `policyRule`)
 //! and collecting everything else into `extra`.
 
-use alloc::string::{String, ToString as _};
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::lexer::Span;
 
 use crate::languages::azure_policy::ast::{
-    JsonValue, ObjectEntry, ParameterDefinition, PolicyDefinition, PolicyRule,
+    Condition, Constraint, EffectKind, EffectNode, JsonValue, Lhs, ObjectEntry, OperatorNode,
+    ParameterDefinition, PolicyDefinition, PolicyRule, ThenBlock,
 };
 
-use super::core::Parser;
+use super::core::{CountInner, Parser};
 use super::error::ParseError;
+use super::parse_operator_kind;
 
 impl<'source> Parser<'source> {
     /// Parse a full Azure Policy definition JSON.
@@ -274,89 +278,298 @@ fn parse_single_parameter(entry: ObjectEntry) -> Result<ParameterDefinition, Par
 
 /// Re-parse a `JsonValue` that represents a `policyRule` into a [`PolicyRule`].
 ///
-/// We need to serialize the JSON value back to a string and re-parse it through
-/// the policy rule parser, since the policy rule parser expects to drive the lexer
-/// itself.
+/// This preserves spans by converting from the already-parsed `JsonValue` tree.
 fn reparse_policy_rule(jv: JsonValue, fallback_span: &Span) -> Result<PolicyRule, ParseError> {
-    // Serialize the JsonValue to a JSON string.
-    let json_str = json_value_to_string(&jv);
-    let source = crate::lexer::Source::from_contents("policyRule".into(), json_str)
-        .map_err(|e| ParseError::Lexer(e.to_string()))?;
-    let mut parser = Parser::new(&source)?;
-    let rule = parser.parse_policy_rule()?;
-
-    if parser.tok.0 != crate::lexer::TokenKind::Eof {
-        return Err(ParseError::UnexpectedToken {
-            span: fallback_span.clone(),
-            expected: "end of policyRule",
-        });
-    }
-
-    Ok(rule)
+    policy_rule_from_json_value(jv, fallback_span)
 }
 
-/// Serialize a `JsonValue` back to a JSON string.
-fn json_value_to_string(jv: &JsonValue) -> String {
-    let mut out = String::new();
-    write_json_value(&mut out, jv);
-    out
-}
+fn policy_rule_from_json_value(
+    jv: JsonValue,
+    fallback_span: &Span,
+) -> Result<PolicyRule, ParseError> {
+    let (span, entries) = match jv {
+        JsonValue::Object(span, entries) => (span, entries),
+        other => {
+            return Err(ParseError::UnexpectedToken {
+                span: other.span().clone(),
+                expected: "object for policyRule",
+            })
+        }
+    };
 
-fn write_json_value(out: &mut String, jv: &JsonValue) {
-    match jv {
-        JsonValue::Null(_) => out.push_str("null"),
-        JsonValue::Bool(_, b) => {
-            if *b {
-                out.push_str("true");
-            } else {
-                out.push_str("false");
+    let mut condition: Option<Constraint> = None;
+    let mut then_block: Option<ThenBlock> = None;
+    let mut condition_span: Option<Span> = None;
+    let mut then_span: Option<Span> = None;
+
+    for entry in entries {
+        match entry.key.to_ascii_lowercase().as_str() {
+            "if" => {
+                condition_span = Some(entry.key_span.clone());
+                condition = Some(constraint_from_json_value(entry.value)?);
             }
-        }
-        JsonValue::Number(_, s) => out.push_str(s),
-        JsonValue::Str(_, s) => {
-            out.push('"');
-            // Escape special characters.
-            for ch in s.chars() {
-                match ch {
-                    '"' => out.push_str("\\\""),
-                    '\\' => out.push_str("\\\\"),
-                    '\n' => out.push_str("\\n"),
-                    '\r' => out.push_str("\\r"),
-                    '\t' => out.push_str("\\t"),
-                    c => out.push(c),
-                }
+            "then" => {
+                then_span = Some(entry.key_span.clone());
+                then_block = Some(then_block_from_json_value(entry.value)?);
             }
-            out.push('"');
-        }
-        JsonValue::Array(_, items) => {
-            out.push('[');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                write_json_value(out, item);
-            }
-            out.push(']');
-        }
-        JsonValue::Object(_, entries) => {
-            out.push('{');
-            for (i, entry) in entries.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                out.push('"');
-                for ch in entry.key.chars() {
-                    match ch {
-                        '"' => out.push_str("\\\""),
-                        '\\' => out.push_str("\\\\"),
-                        c => out.push(c),
-                    }
-                }
-                out.push('"');
-                out.push(':');
-                write_json_value(out, &entry.value);
-            }
-            out.push('}');
+            _ => {}
         }
     }
+
+    let condition = condition.ok_or_else(|| ParseError::MissingKey {
+        span: condition_span.unwrap_or_else(|| fallback_span.clone()),
+        key: "if",
+    })?;
+    let then_block = then_block.ok_or_else(|| ParseError::MissingKey {
+        span: then_span.unwrap_or_else(|| fallback_span.clone()),
+        key: "then",
+    })?;
+
+    Ok(PolicyRule {
+        span,
+        condition,
+        then_block,
+    })
+}
+
+fn then_block_from_json_value(jv: JsonValue) -> Result<ThenBlock, ParseError> {
+    let (span, entries) = match jv {
+        JsonValue::Object(span, entries) => (span, entries),
+        other => {
+            return Err(ParseError::UnexpectedToken {
+                span: other.span().clone(),
+                expected: "object for then block",
+            })
+        }
+    };
+
+    let mut effect: Option<EffectNode> = None;
+    let mut details: Option<JsonValue> = None;
+
+    for entry in entries {
+        match entry.key.to_ascii_lowercase().as_str() {
+            "effect" => match entry.value {
+                JsonValue::Str(val_span, val_text) => {
+                    let kind = match val_text.to_ascii_lowercase().as_str() {
+                        "deny" => EffectKind::Deny,
+                        "audit" => EffectKind::Audit,
+                        "append" => EffectKind::Append,
+                        "auditifnotexists" => EffectKind::AuditIfNotExists,
+                        "deployifnotexists" => EffectKind::DeployIfNotExists,
+                        "disabled" => EffectKind::Disabled,
+                        "modify" => EffectKind::Modify,
+                        "denyaction" => EffectKind::DenyAction,
+                        "manual" => EffectKind::Manual,
+                        _ => EffectKind::Other(val_text.clone()),
+                    };
+                    effect = Some(EffectNode {
+                        span: val_span,
+                        kind,
+                        raw: val_text,
+                    });
+                }
+                other => {
+                    return Err(ParseError::UnexpectedToken {
+                        span: other.span().clone(),
+                        expected: "string for 'effect' value",
+                    })
+                }
+            },
+            "details" => {
+                details = Some(entry.value);
+            }
+            _ => {}
+        }
+    }
+
+    let effect = effect.ok_or_else(|| ParseError::MissingKey {
+        span: span.clone(),
+        key: "effect",
+    })?;
+
+    Ok(ThenBlock {
+        span,
+        effect,
+        details,
+    })
+}
+
+fn constraint_from_json_value(jv: JsonValue) -> Result<Constraint, ParseError> {
+    let (span, entries) = match jv {
+        JsonValue::Object(span, entries) => (span, entries),
+        other => {
+            return Err(ParseError::UnexpectedToken {
+                span: other.span().clone(),
+                expected: "object for constraint",
+            })
+        }
+    };
+
+    for entry in entries.iter() {
+        let key_lower = entry.key.to_ascii_lowercase();
+        if matches!(key_lower.as_str(), "allof" | "anyof" | "not") && entries.len() > 1 {
+            return Err(ParseError::ExtraKeysInLogical {
+                span: entry.key_span.clone(),
+                operator: key_lower,
+            });
+        }
+    }
+
+    if entries.len() == 1 {
+        let entry = entries.into_iter().next().expect("entry missing");
+        let key_lower = entry.key.to_ascii_lowercase();
+        match key_lower.as_str() {
+            "allof" => {
+                let JsonValue::Array(_, items) = entry.value else {
+                    return Err(ParseError::LogicalOperatorNotArray {
+                        span: entry.key_span,
+                        operator: key_lower,
+                    });
+                };
+                let mut constraints = Vec::with_capacity(items.len());
+                for item in items {
+                    constraints.push(constraint_from_json_value(item)?);
+                }
+                return Ok(Constraint::AllOf { span, constraints });
+            }
+            "anyof" => {
+                let JsonValue::Array(_, items) = entry.value else {
+                    return Err(ParseError::LogicalOperatorNotArray {
+                        span: entry.key_span,
+                        operator: key_lower,
+                    });
+                };
+                let mut constraints = Vec::with_capacity(items.len());
+                for item in items {
+                    constraints.push(constraint_from_json_value(item)?);
+                }
+                return Ok(Constraint::AnyOf { span, constraints });
+            }
+            "not" => {
+                let inner = constraint_from_json_value(entry.value)?;
+                return Ok(Constraint::Not {
+                    span,
+                    constraint: Box::new(inner),
+                });
+            }
+            _ => {
+                return condition_from_entries(span, vec![entry]);
+            }
+        }
+    }
+
+    condition_from_entries(span, entries)
+}
+
+fn condition_from_entries(span: Span, entries: Vec<ObjectEntry>) -> Result<Constraint, ParseError> {
+    let mut field: Option<(Span, JsonValue)> = None;
+    let mut value: Option<(Span, JsonValue)> = None;
+    let mut count: Option<(Span, CountInner)> = None;
+    let mut operator: Option<OperatorNode> = None;
+    let mut rhs: Option<JsonValue> = None;
+
+    for entry in entries {
+        let key_lower = entry.key.to_ascii_lowercase();
+        match key_lower.as_str() {
+            "field" => {
+                field = Some((entry.key_span, entry.value));
+            }
+            "value" => {
+                value = Some((entry.key_span, entry.value));
+            }
+            "count" => {
+                let count_inner = count_inner_from_json_value(entry.value)?;
+                count = Some((entry.key_span, count_inner));
+            }
+            _ => {
+                if let Some(op_kind) = parse_operator_kind(&key_lower) {
+                    operator = Some(OperatorNode {
+                        span: entry.key_span,
+                        kind: op_kind,
+                    });
+                    rhs = Some(entry.value);
+                } else {
+                    return Err(ParseError::UnrecognizedKey {
+                        span: entry.key_span,
+                        key: key_lower,
+                    });
+                }
+            }
+        }
+    }
+
+    let operator = operator.ok_or_else(|| ParseError::MissingOperator { span: span.clone() })?;
+    let rhs_json = rhs.ok_or_else(|| ParseError::MissingOperator { span: span.clone() })?;
+    let rhs_value = Parser::json_to_value_or_expr(rhs_json)?;
+
+    let lhs = match (field, value, count) {
+        (Some((_, fv)), None, None) => Lhs::Field(Parser::json_to_field(fv)?),
+        (None, Some((key_span, vv)), None) => Lhs::Value {
+            key_span,
+            value: Parser::json_to_value_or_expr(vv)?,
+        },
+        (None, None, Some((_, ci))) => Lhs::Count(Parser::finalize_count(ci)?),
+        (None, None, None) => {
+            return Err(ParseError::MissingLhsOperand { span: span.clone() })
+        }
+        _ => {
+            return Err(ParseError::MultipleLhsOperands { span: span.clone() })
+        }
+    };
+
+    Ok(Constraint::Condition(Box::new(Condition {
+        span,
+        lhs,
+        operator,
+        rhs: rhs_value,
+    })))
+}
+
+fn count_inner_from_json_value(jv: JsonValue) -> Result<CountInner, ParseError> {
+    let (span, entries) = match jv {
+        JsonValue::Object(span, entries) => (span, entries),
+        other => {
+            return Err(ParseError::UnexpectedToken {
+                span: other.span().clone(),
+                expected: "object for 'count'",
+            })
+        }
+    };
+
+    let mut field: Option<(Span, JsonValue)> = None;
+    let mut value: Option<(Span, JsonValue)> = None;
+    let mut name: Option<(Span, JsonValue)> = None;
+    let mut where_: Option<Constraint> = None;
+
+    for entry in entries {
+        let key_lower = entry.key.to_ascii_lowercase();
+        match key_lower.as_str() {
+            "field" => {
+                field = Some((entry.key_span, entry.value));
+            }
+            "value" => {
+                value = Some((entry.key_span, entry.value));
+            }
+            "name" => {
+                name = Some((entry.key_span, entry.value));
+            }
+            "where" => {
+                where_ = Some(constraint_from_json_value(entry.value)?);
+            }
+            _ => {
+                return Err(ParseError::UnrecognizedKey {
+                    span: entry.key_span,
+                    key: key_lower,
+                })
+            }
+        }
+    }
+
+    Ok(CountInner {
+        span,
+        field,
+        value,
+        name,
+        where_,
+    })
 }

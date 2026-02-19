@@ -172,6 +172,7 @@ impl Compiler {
             .add_builtin_info(crate::rvm::program::BuiltinInfo {
                 name: name.to_string(),
                 num_args,
+                kind: crate::rvm::program::BuiltinKind::Standard,
             });
         self.builtin_index.insert(key, index);
         index

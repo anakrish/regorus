@@ -136,10 +136,6 @@ impl Compiler {
         self.next_reg = self.next_reg.saturating_add(1);
         Ok(reg)
     }
-<<<<<<< HEAD
-=======
-
->>>>>>> e8698c5 (update the playground to show case multilang support)
     pub(super) fn with_span<T, F>(&mut self, span: &Span, f: F) -> Result<T>
     where
         F: FnOnce(&mut Self) -> Result<T>,

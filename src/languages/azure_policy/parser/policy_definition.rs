@@ -416,7 +416,10 @@ fn constraint_from_json_value(jv: JsonValue) -> Result<Constraint, ParseError> {
     }
 
     if entries.len() == 1 {
-        let entry = entries.into_iter().next().expect("entry missing");
+        let entry = match entries.into_iter().next() {
+            Some(entry) => entry,
+            None => return Err(ParseError::MissingLhsOperand { span: span.clone() }),
+        };
         let key_lower = entry.key.to_ascii_lowercase();
         match key_lower.as_str() {
             "allof" => {
@@ -509,12 +512,8 @@ fn condition_from_entries(span: Span, entries: Vec<ObjectEntry>) -> Result<Const
             value: Parser::json_to_value_or_expr(vv)?,
         },
         (None, None, Some((_, ci))) => Lhs::Count(Parser::finalize_count(ci)?),
-        (None, None, None) => {
-            return Err(ParseError::MissingLhsOperand { span: span.clone() })
-        }
-        _ => {
-            return Err(ParseError::MultipleLhsOperands { span: span.clone() })
-        }
+        (None, None, None) => return Err(ParseError::MissingLhsOperand { span: span.clone() }),
+        _ => return Err(ParseError::MultipleLhsOperands { span: span.clone() }),
     };
 
     Ok(Constraint::Condition(Box::new(Condition {

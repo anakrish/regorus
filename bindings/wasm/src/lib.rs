@@ -388,19 +388,6 @@ impl Program {
         Ok(Program { program })
     }
 
-    /// Compile a Cedar expression into an RVM program.
-    #[cfg(feature = "cedar")]
-    pub fn compileCedarExpression(expr: String) -> Result<Program, JsValue> {
-        let source =
-            Source::from_contents("<cedar-expr>".to_string(), expr).map_err(error_to_jsvalue)?;
-        let mut parser = CedarParser::new(&source).map_err(error_to_jsvalue)?;
-        let parsed = parser.parse_expression().map_err(error_to_jsvalue)?;
-        let program = cedar_compiler::compile_expr_to_program(&parsed).map_err(error_to_jsvalue)?;
-        Ok(Program {
-            program: Arc::new(program),
-        })
-    }
-
     /// Serialize a program to binary format.
     pub fn serializeBinary(&self) -> Result<Vec<u8>, JsValue> {
         self.program

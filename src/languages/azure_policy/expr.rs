@@ -320,7 +320,11 @@ fn rebase_expr_spans(expr: &mut Expr, outer_span: &Span, base_offset: u32, base_
             *field_span = rebase_span(field_span, outer_span, base_offset, base_col);
             rebase_expr_spans(object, outer_span, base_offset, base_col);
         }
-        Expr::Index { span, object, index } => {
+        Expr::Index {
+            span,
+            object,
+            index,
+        } => {
             *span = rebase_span(span, outer_span, base_offset, base_col);
             rebase_expr_spans(object, outer_span, base_offset, base_col);
             rebase_expr_spans(index, outer_span, base_offset, base_col);

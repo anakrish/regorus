@@ -1317,7 +1317,7 @@ when {
                                                 entities: `{
         "Resource::demo": {
                 "parents": [],
-        "attrs": {"owner": "team-a"}
+        "attrs": {"owner": "team-a", "costCenter": ""}
         }
 }`,
                                                 language: 'cedar'
@@ -1411,15 +1411,14 @@ permit(
     resource == Resource::"demo"
 )
 when {
-    context has allowedLocations &&
     resource has location &&
-    context.allowedLocations.contains(resource.location)
+    resource.location in ["westus2", "eastus"]
 };`,
                                                 input: `{
         "principal": "User::alice",
         "action": "Action::deploy",
         "resource": "Resource::demo",
-        "context": {"allowedLocations": ["westus2", "eastus"]}
+        "context": {}
 }`,
                                                 entities: `{
         "Resource::demo": {
@@ -1521,15 +1520,14 @@ permit(
     resource == Resource::"demo"
 )
 when {
-    context has allowedSkus &&
     resource has sku &&
-    context.allowedSkus.contains(resource.sku)
+    resource.sku in ["Standard_D2s_v3", "Standard_D4s_v3"]
 };`,
                                                 input: `{
         "principal": "User::alice",
         "action": "Action::deploy",
         "resource": "Resource::demo",
-        "context": {"allowedSkus": ["Standard_D2s_v3", "Standard_D4s_v3"]}
+        "context": {}
 }`,
                                                 entities: `{
         "Resource::demo": {
@@ -1911,8 +1909,8 @@ permit(
 )
 when {
     context has approvals &&
-    context.approvals.contains("manager") &&
-    context.approvals.contains("security")
+    "manager" in context.approvals &&
+    "security" in context.approvals
 };`,
                         input: `{
     "principal": "User::release-bot",

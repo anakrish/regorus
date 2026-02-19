@@ -33,6 +33,25 @@ fn cedar_in(
     let name = "cedar.in";
     ensure_args_count(span, name, params, args, 3)?;
 
+    if let Ok(targets) = args[1].as_array() {
+        let entity_value = match &args[0] {
+            Value::Object(_) => entity_key_from_value(name, &params[0], &args[0])?,
+            _ => args[0].clone(),
+        };
+
+        for target in targets {
+            let target_value = match target {
+                Value::Object(_) => entity_key_from_value(name, &params[1], target)?,
+                _ => target.clone(),
+            };
+            if target_value == entity_value {
+                return Ok(Value::Bool(true));
+            }
+        }
+
+        return Ok(Value::Bool(false));
+    }
+
     let entity = entity_key_from_value(name, &params[0], &args[0])?;
     let target = entity_key_from_value(name, &params[1], &args[1])?;
     let entities = expect_object(name, &params[2], &args[2])?;

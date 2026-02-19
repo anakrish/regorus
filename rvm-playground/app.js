@@ -785,8 +785,15 @@ decision_metadata := {
                         name: "Budget View",
                         description: "Permit admins from internal IPs",
                         policy: `// Permit admins from internal IPs to view the budget file
-permit(principal in User::"admins", action == Action::"view", resource == File::"budget")
-when { context.ip like "10.*" };`,
+permit(
+    principal in User::"admins",
+    action == Action::"view",
+    resource == File::"budget"
+)
+when {
+    context has ip &&
+    context.ip like "10.*"
+};`,
                         input: `{
     "principal": "User::alice",
     "action": "Action::view",
@@ -809,8 +816,15 @@ when { context.ip like "10.*" };`,
                         name: "Owner Edit",
                         description: "Allow resource owners to edit",
                         policy: `// Allow owners to edit their own draft
-permit(principal, action == Action::"edit", resource == Doc::"draft")
-when { principal == resource.owner };`,
+permit(
+    principal,
+    action == Action::"edit",
+    resource == Doc::"draft"
+)
+when {
+    resource has owner &&
+    principal == resource.owner
+};`,
                         input: `{
     "principal": "User::alice",
     "action": "Action::edit",
@@ -1284,8 +1298,16 @@ allow if {
                                         },
                                         cedar: {
                         policy: `// Permit when the resource has a costCenter
-permit(principal, action == Action::"use", resource == Resource::"demo")
-when { resource.costCenter != "" };`,
+
+permit(
+    principal,
+    action == Action::"use",
+    resource == Resource::"demo"
+)
+when {
+    resource has costCenter &&
+    resource.costCenter != ""
+};`,
                                                 input: `{
         "principal": "User::alice",
         "action": "Action::use",
@@ -1382,8 +1404,17 @@ allow if {
                                         },
                                         cedar: {
                         policy: `// Permit when location is approved
-permit(principal, action == Action::"deploy", resource == Resource::"demo")
-when { context.allowedLocations.contains(resource.location) };`,
+
+permit(
+    principal,
+    action == Action::"deploy",
+    resource == Resource::"demo"
+)
+when {
+    context has allowedLocations &&
+    resource has location &&
+    context.allowedLocations.contains(resource.location)
+};`,
                                                 input: `{
         "principal": "User::alice",
         "action": "Action::deploy",
@@ -1483,8 +1514,17 @@ allow if {
                                         },
                                         cedar: {
                         policy: `// Permit when SKU is allowed
-permit(principal, action == Action::"deploy", resource == Resource::"demo")
-when { context.allowedSkus.contains(resource.sku) };`,
+
+permit(
+    principal,
+    action == Action::"deploy",
+    resource == Resource::"demo"
+)
+when {
+    context has allowedSkus &&
+    resource has sku &&
+    context.allowedSkus.contains(resource.sku)
+};`,
                                                 input: `{
         "principal": "User::alice",
         "action": "Action::deploy",
@@ -1590,8 +1630,16 @@ allow if {
                     },
                     cedar: {
                         policy: `// Allow only when the caller owns the document
-permit(principal, action == Action::"edit", resource == Doc::"draft")
-when { principal == resource.owner };`,
+
+permit(
+    principal,
+    action == Action::"edit",
+    resource == Doc::"draft"
+)
+when {
+    resource has owner &&
+    principal == resource.owner
+};`,
                         input: `{
     "principal": "User::alice",
     "action": "Action::edit",
@@ -1640,8 +1688,17 @@ allow if {
                     },
                     cedar: {
                         policy: `// Allow get-object in the bucket for approved principals
-permit(principal, action == Action::"s3:GetObject", resource == Resource::"my-bucket")
-when { principal in User::"allowed" && context.object_key like "data/*" };`,
+
+permit(
+    principal,
+    action == Action::"s3:GetObject",
+    resource == Resource::"my-bucket"
+)
+when {
+    principal in User::"allowed" &&
+    context has object_key &&
+    context.object_key like "data/*"
+};`,
                         input: `{
     "principal": "User::alice",
     "action": "Action::s3:GetObject",
@@ -1694,8 +1751,16 @@ allow if {
                     },
                     cedar: {
                         policy: `// Admit pod only when it is not privileged
-permit(principal, action == Action::"create", resource == Pod::"web")
-when { !resource.privileged };`,
+
+permit(
+    principal,
+    action == Action::"create",
+    resource == Pod::"web"
+)
+when {
+    resource has privileged &&
+    !resource.privileged
+};`,
                         input: `{
     "principal": "User::admission",
     "action": "Action::create",
@@ -1739,8 +1804,17 @@ allow if {
                     },
                     cedar: {
                         policy: `// Permit access only during a time window in context
-permit(principal, action == Action::"access", resource == Door::"lab")
-when { context.hour >= 9 && context.hour < 18 };`,
+
+permit(
+    principal,
+    action == Action::"access",
+    resource == Door::"lab"
+)
+when {
+    context has hour &&
+    context.hour >= 9 &&
+    context.hour < 18
+};`,
                         input: `{
     "principal": "User::alice",
     "action": "Action::access",
@@ -1778,8 +1852,17 @@ allow if {
                     },
                     cedar: {
                         policy: `// Allow read when request country matches resource region
-permit(principal, action == Action::"read", resource == Database::"db-1")
-when { context.country == resource.region };`,
+
+permit(
+    principal,
+    action == Action::"read",
+    resource == Database::"db-1"
+)
+when {
+    context has country &&
+    resource has region &&
+    context.country == resource.region
+};`,
                         input: `{
     "principal": "User::alice",
     "action": "Action::read",
@@ -1820,8 +1903,17 @@ allow if {
                     },
                     cedar: {
                         policy: `// Permit release only when both approvals are present
-permit(principal, action == Action::"release", resource == Build::"candidate")
-when { context.approvals.contains("manager") && context.approvals.contains("security") };`,
+
+permit(
+    principal,
+    action == Action::"release",
+    resource == Build::"candidate"
+)
+when {
+    context has approvals &&
+    context.approvals.contains("manager") &&
+    context.approvals.contains("security")
+};`,
                         input: `{
     "principal": "User::release-bot",
     "action": "Action::release",
@@ -1860,8 +1952,18 @@ allow if {
                     },
                     cedar: {
                         policy: `// Permit purchase when spend stays within the budget limit
-permit(principal, action == Action::"purchase", resource == Budget::"team")
-when { context.monthly_spend + context.request_cost <= resource.limit };`,
+
+permit(
+    principal,
+    action == Action::"purchase",
+    resource == Budget::"team"
+)
+when {
+    resource has limit &&
+    context has monthly_spend &&
+    context has request_cost &&
+    context.monthly_spend + context.request_cost <= resource.limit
+};`,
                         input: `{
     "principal": "User::alice",
     "action": "Action::purchase",
@@ -1907,11 +2009,28 @@ allow if {
                     },
                     cedar: {
                         policy: `// Permit owner or delegate for project alpha
-permit(principal, action == Action::"edit", resource == Doc::"doc-7")
-when { principal == resource.owner };
 
-permit(principal, action == Action::"edit", resource == Doc::"doc-7")
-when { principal in resource.delegates && resource.project == "alpha" };`,
+permit(
+    principal,
+    action == Action::"edit",
+    resource == Doc::"doc-7"
+)
+when {
+    resource has owner &&
+    principal == resource.owner
+};
+
+permit(
+    principal,
+    action == Action::"edit",
+    resource == Doc::"doc-7"
+)
+when {
+    resource has delegates &&
+    resource has project &&
+    principal in resource.delegates &&
+    resource.project == "alpha"
+};`,
                         input: `{
     "principal": "User::bob",
     "action": "Action::edit",
@@ -2390,6 +2509,11 @@ when { principal in resource.delegates && resource.project == "alpha" };`,
         const display = document.getElementById('assembly-display');
         this.assemblyText = assembly;
         this.renderAssembly(display, assembly);
+    }
+
+    clearAssembly() {
+        this.showAssembly('');
+        this.updateInstructionCount(0);
     }
 
     renderAssembly(element, assembly) {
@@ -3597,7 +3721,7 @@ when { principal in resource.delegates && resource.project == "alpha" };`,
         }
 
         this.currentProgram = null;
-        this.showAssembly('');
+        this.clearAssembly();
         this.updateStatus(`Switched to ${this.language.toUpperCase()} mode`);
     }
 

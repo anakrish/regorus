@@ -118,7 +118,7 @@ extern crate std;
 mimalloc::assign_global!();
 
 mod ast;
-mod builtins;
+pub(crate) mod builtins;
 mod compile;
 mod compiled_policy;
 mod compiler;

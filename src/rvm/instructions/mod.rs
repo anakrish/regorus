@@ -55,6 +55,16 @@ pub enum Instruction {
         dest: u8,
     },
 
+    /// Load evaluation context object into register
+    LoadContext {
+        dest: u8,
+    },
+
+    /// Load program metadata object into register
+    LoadMetadata {
+        dest: u8,
+    },
+
     /// Move value from one register to another
     Move {
         dest: u8,
@@ -332,6 +342,196 @@ pub enum Instruction {
 
     /// End a comprehension block
     ComprehensionEnd {},
+
+    // ── Azure Policy condition operators ──────────────────────────────
+    /// Azure Policy case-insensitive equality with type coercion.
+    PolicyEquals {
+        dest: u8,
+        left: u8,
+        right: u8,
+    },
+
+    /// Azure Policy not-equals: undefined field → true, else negated CI equality.
+    PolicyNotEquals {
+        dest: u8,
+        left: u8,
+        right: u8,
+    },
+
+    /// Azure Policy greater-than with CI string comparison and type coercion.
+    PolicyGreater {
+        dest: u8,
+        left: u8,
+        right: u8,
+    },
+
+    /// Azure Policy greater-or-equals with CI string comparison and type coercion.
+    PolicyGreaterOrEquals {
+        dest: u8,
+        left: u8,
+        right: u8,
+    },
+
+    /// Azure Policy less-than with CI string comparison and type coercion.
+    PolicyLess {
+        dest: u8,
+        left: u8,
+        right: u8,
+    },
+
+    /// Azure Policy less-or-equals with CI string comparison and type coercion.
+    PolicyLessOrEquals {
+        dest: u8,
+        left: u8,
+        right: u8,
+    },
+
+    /// Azure Policy CI membership test: left ∈ right (array/set).
+    PolicyIn {
+        dest: u8,
+        left: u8,
+        right: u8,
+    },
+
+    /// Azure Policy negated CI membership: undefined field → true.
+    PolicyNotIn {
+        dest: u8,
+        left: u8,
+        right: u8,
+    },
+
+    /// Azure Policy CI substring or CI array-element containment.
+    PolicyContains {
+        dest: u8,
+        left: u8,
+        right: u8,
+    },
+
+    /// Azure Policy negated contains: undefined field → true.
+    PolicyNotContains {
+        dest: u8,
+        left: u8,
+        right: u8,
+    },
+
+    /// Azure Policy CI object-key containment.
+    PolicyContainsKey {
+        dest: u8,
+        left: u8,
+        right: u8,
+    },
+
+    /// Azure Policy negated contains-key: undefined field → true.
+    PolicyNotContainsKey {
+        dest: u8,
+        left: u8,
+        right: u8,
+    },
+
+    /// Azure Policy CI wildcard-glob pattern match (*, ?).
+    PolicyLike {
+        dest: u8,
+        left: u8,
+        right: u8,
+    },
+
+    /// Azure Policy negated like: undefined field → true.
+    PolicyNotLike {
+        dest: u8,
+        left: u8,
+        right: u8,
+    },
+
+    /// Azure Policy case-sensitive pattern match (?, #).
+    PolicyMatch {
+        dest: u8,
+        left: u8,
+        right: u8,
+    },
+
+    /// Azure Policy negated match: undefined field → true.
+    PolicyNotMatch {
+        dest: u8,
+        left: u8,
+        right: u8,
+    },
+
+    /// Azure Policy case-insensitive pattern match (?, #).
+    PolicyMatchInsensitively {
+        dest: u8,
+        left: u8,
+        right: u8,
+    },
+
+    /// Azure Policy negated match-insensitively: undefined field → true.
+    PolicyNotMatchInsensitively {
+        dest: u8,
+        left: u8,
+        right: u8,
+    },
+
+    /// Azure Policy exists: checks `(defined && !null) == as_boolish(right)`.
+    PolicyExists {
+        dest: u8,
+        left: u8,
+        right: u8,
+    },
+
+    /// Azure Policy logic not: `!is_true(operand)`.
+    PolicyNot {
+        dest: u8,
+        operand: u8,
+    },
+
+    // ── AllOf / AnyOf structured short-circuit instructions ───────────
+    /// Initialize allOf: set result register to false (pessimistic).
+    /// If there are zero children, jumps to end_pc.
+    AllOfStart {
+        /// Register that accumulates the allOf result.
+        result: u8,
+        /// PC of the AllOfEnd instruction (jump target on short-circuit).
+        end_pc: u16,
+    },
+
+    /// Check one allOf child: if not true, short-circuit (result stays false),
+    /// jump to end_pc.
+    AllOfNext {
+        /// Register holding the child condition result.
+        check: u8,
+        /// Register that accumulates the allOf result (set to false on fail).
+        result: u8,
+        /// PC of the AllOfEnd instruction.
+        end_pc: u16,
+    },
+
+    /// Finalize allOf: all children passed, set result to true.
+    AllOfEnd {
+        /// Register that accumulates the allOf result.
+        result: u8,
+    },
+
+    /// Initialize anyOf: set result register to false.
+    /// If there are zero children, jumps to end_pc.
+    AnyOfStart {
+        /// Register that accumulates the anyOf result.
+        result: u8,
+        /// PC of the AnyOfEnd instruction.
+        end_pc: u16,
+    },
+
+    /// Check one anyOf child: if true, short-circuit (set result to true),
+    /// jump to end_pc.
+    AnyOfNext {
+        /// Register holding the child condition result.
+        check: u8,
+        /// Register that accumulates the anyOf result.
+        result: u8,
+        /// PC of the AnyOfEnd instruction.
+        end_pc: u16,
+    },
+
+    /// Finalize anyOf: no child matched, result stays false.
+    AnyOfEnd {},
 }
 
 impl Instruction {

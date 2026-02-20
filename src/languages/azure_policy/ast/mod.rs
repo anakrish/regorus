@@ -191,6 +191,8 @@ pub enum FieldKind {
     Tags,
     /// `"identity.type"`
     IdentityType,
+    /// `"apiVersion"`
+    ApiVersion,
     /// `"tags.tagName"` or `"tags['tagName']"`
     Tag(String),
     /// An alias string (e.g., `"Microsoft.Compute/virtualMachines/imagePublisher"`)

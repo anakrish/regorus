@@ -1,0 +1,93 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# E2E Test: Service Bus/AuditDiagnosticLog_Audit
+# Features: AuditIfNotExists with HostAwait lookup-only request,
+# while policy still carries padLeft() in details.existenceCondition.
+
+policy_definition: |
+  {
+    "properties": {
+      "displayName": "Resource logs in Service Bus should be enabled",
+      "policyType": "BuiltIn",
+      "mode": "Indexed",
+      "parameters": {
+        "effect": {
+          "type": "string",
+          "defaultValue": "AuditIfNotExists",
+          "allowedValues": ["AuditIfNotExists", "Disabled"]
+        },
+        "requiredRetentionDays": {
+          "type": "String",
+          "defaultValue": "365"
+        }
+      },
+      "policyRule": {
+        "if": {
+          "field": "type",
+          "equals": "Microsoft.ServiceBus/namespaces"
+        },
+        "then": {
+          "effect": "AuditIfNotExists",
+          "details": {
+            "type": "Microsoft.Insights/diagnosticSettings",
+            "existenceCondition": {
+              "count": {
+                "field": "Microsoft.Insights/diagnosticSettings/logs[*]",
+                "where": {
+                  "anyOf": [
+                    {
+                      "allOf": [
+                        {
+                          "field": "Microsoft.Insights/diagnosticSettings/logs[*].retentionPolicy.enabled",
+                          "equals": "true"
+                        },
+                        {
+                          "anyOf": [
+                            {
+                              "field": "Microsoft.Insights/diagnosticSettings/logs[*].retentionPolicy.days",
+                              "equals": "0"
+                            },
+                            {
+                              "value": "[padLeft(current('Microsoft.Insights/diagnosticSettings/logs[*].retentionPolicy.days'), 3, '0')]",
+                              "greaterOrEquals": "[padLeft(parameters('requiredRetentionDays'), 3, '0')]"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              "greaterOrEquals": 1
+            }
+          }
+        }
+      }
+    }
+  }
+
+cases:
+  - note: audit_if_not_exists_when_host_reports_missing
+    resource:
+      type: "Microsoft.ServiceBus/namespaces"
+      name: "sb-a"
+      properties: {}
+    host_await:
+      - key:
+          operation: "lookup_related_resources"
+          type: "Microsoft.Insights/diagnosticSettings"
+        response: true
+    want_effect: "AuditIfNotExists"
+
+  - note: pass_when_host_reports_exists_and_compliant
+    resource:
+      type: "Microsoft.ServiceBus/namespaces"
+      name: "sb-b"
+      properties: {}
+    host_await:
+      - key:
+          operation: "lookup_related_resources"
+          type: "Microsoft.Insights/diagnosticSettings"
+        response: false
+    want_undefined: true

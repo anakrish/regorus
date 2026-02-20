@@ -345,7 +345,6 @@ impl Program {
             program: Arc::new(program),
         })
     }
-
     /// Compile an Azure Policy rule JSON object into an RVM program.
     ///
     /// `policy_rule_json` must be the JSON for a `policyRule` object.
@@ -388,6 +387,13 @@ impl Program {
         Ok(Program { program })
     }
 
+    /// Whether this compiled program contains any HostAwait instruction.
+    ///
+    /// Clients can use this to decide whether to run the VM in suspendable mode.
+    #[wasm_bindgen(getter)]
+    pub fn hasHostAwait(&self) -> bool {
+        self.program.has_host_await()
+    }
     /// Serialize a program to binary format.
     pub fn serializeBinary(&self) -> Result<Vec<u8>, JsValue> {
         self.program

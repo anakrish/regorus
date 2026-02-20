@@ -24,6 +24,7 @@ use regorus::rvm::RegoVM;
 use regorus::Source;
 use regorus::Value;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use test_generator::test_resources;
@@ -74,9 +75,37 @@ struct TestCase {
     #[serde(default)]
     pub context: Option<serde_yaml::Value>,
 
+    /// Host-await response entries for policies that use `auditIfNotExists`.
+    ///
+    /// Each entry maps a request key (describing the lookup) to a response
+    /// value.  These are injected into the VM as run-to-completion host
+    /// await responses keyed by `"azure.policy.audit_if_not_exists"`.
+    #[serde(default)]
+    pub host_await: Vec<HostAwaitEntry>,
+
     /// If true, skip this test case.
     #[serde(default)]
     pub skip: Option<bool>,
+}
+
+/// A single host-await response entry.
+///
+/// ```yaml
+/// host_await:
+///   - key:
+///       operation: "lookup_related_resources"
+///       type: "Microsoft.Insights/diagnosticSettings"
+///     response: true
+/// ```
+#[derive(Serialize, Deserialize, Debug)]
+struct HostAwaitEntry {
+    /// Descriptive key identifying the request (not used at runtime;
+    /// serves as documentation in YAML tests).
+    #[serde(default)]
+    pub key: Option<serde_yaml::Value>,
+
+    /// The value the VM receives as the host-await response.
+    pub response: serde_yaml::Value,
 }
 
 /// Top-level YAML test file structure.
@@ -252,6 +281,23 @@ fn yaml_test_impl(file: &str) -> Result<()> {
         let mut vm = RegoVM::new();
         vm.load_program(program);
         vm.set_input(make_input(case, alias_registry.as_ref())?);
+        vm.set_context(make_context(case)?);
+
+        // Load host-await responses (for auditIfNotExists policies).
+        if !case.host_await.is_empty() {
+            let mut responses: BTreeMap<Value, Vec<Value>> = BTreeMap::new();
+            for entry in &case.host_await {
+                let response_json = serde_json::to_string(&entry.response)
+                    .expect("host_await response YAML→JSON failed");
+                let response_value = Value::from_json_str(&response_json)
+                    .expect("host_await response JSON→Value failed");
+                responses
+                    .entry(Value::from("azure.policy.audit_if_not_exists"))
+                    .or_default()
+                    .push(response_value);
+            }
+            vm.set_host_await_responses(responses);
+        }
 
         let value = vm.execute_entry_point_by_name("main")?;
 
@@ -292,23 +338,6 @@ fn make_input(case: &TestCase, alias_registry: Option<&AliasRegistry>) -> Result
     let parameters =
         yaml_to_regorus_value(case.parameters.as_ref())?.unwrap_or_else(Value::new_object);
 
-    // Use custom context if provided, otherwise default.
-    let context = if let Some(ref ctx) = case.context {
-        yaml_to_regorus_value(Some(ctx))?.unwrap_or_else(Value::new_object)
-    } else {
-        Value::from_json_str(
-            r#"{
-                "resourceGroup": {
-                    "name": "myResourceGroup",
-                    "location": "eastus"
-                },
-                "subscription": {
-                    "subscriptionId": "00000000-0000-0000-0000-000000000000"
-                }
-            }"#,
-        )?
-    };
-
     let mut resource = if let Some(registry) = alias_registry {
         // Convert YAML resource → serde_json, resolve aliases for the resource
         // type, run normalizer with sub-resource info, convert to regorus Value.
@@ -337,9 +366,26 @@ fn make_input(case: &TestCase, alias_registry: Option<&AliasRegistry>) -> Result
     let map = input.as_object_mut()?;
     map.insert(Value::from("resource"), resource);
     map.insert(Value::from("parameters"), parameters);
-    map.insert(Value::from("context"), context);
 
     Ok(input)
+}
+
+fn make_context(case: &TestCase) -> Result<Value> {
+    if let Some(ref ctx) = case.context {
+        Ok(yaml_to_regorus_value(Some(ctx))?.unwrap_or_else(Value::new_object))
+    } else {
+        Value::from_json_str(
+            r#"{
+                "resourceGroup": {
+                    "name": "myResourceGroup",
+                    "location": "eastus"
+                },
+                "subscription": {
+                    "subscriptionId": "00000000-0000-0000-0000-000000000000"
+                }
+            }"#,
+        )
+    }
 }
 
 fn yaml_to_regorus_value(value: Option<&serde_yaml::Value>) -> Result<Option<Value>> {

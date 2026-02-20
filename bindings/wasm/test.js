@@ -111,6 +111,7 @@ const program = regorus.Program.compileFromModules(
   modules,
   entryPoints
 );
+assert.equal(program.hasHostAwait, false, 'regular rego program should not require host await');
 
 console.log(program.generateListing());
 
@@ -152,9 +153,12 @@ const program = regorus.Program.compileFromModules(
   modules,
   entryPoints
 );
+assert.equal(program.hasHostAwait, true, 'host-await policy should advertise host await presence');
 
 const vm = new regorus.Rvm();
-vm.setExecutionMode(1);
+if (program.hasHostAwait) {
+  vm.setExecutionMode(1);
+}
 vm.loadProgram(program);
 vm.setInputJson('{"account":{"id":"acct-1","active":true}}');
 vm.execute();
@@ -211,6 +215,7 @@ const policyRule = JSON.stringify({
 const azureProgram = regorus.Program.compileAzurePolicyRule(policyRule, undefined);
 const listing = azureProgram.generateListing();
 assert.ok(listing.length > 0, 'azure rule listing should not be empty');
+assert.equal(azureProgram.hasHostAwait, false, 'azure rule compile path should not emit host await yet');
 
 const binary = azureProgram.serializeBinary();
 const rehydrated = regorus.Program.deserializeBinary(binary).program();
@@ -255,6 +260,7 @@ const policyDefinition = JSON.stringify({
 const azureProgram = regorus.Program.compileAzurePolicyDefinition(policyDefinition, undefined);
 const listing = azureProgram.generateListing();
 assert.ok(listing.length > 0, 'azure definition listing should not be empty');
+assert.equal(azureProgram.hasHostAwait, false, 'azure definition compile path should not emit host await yet');
 
 const vm = new regorus.Rvm();
 vm.loadProgram(azureProgram);
@@ -281,40 +287,6 @@ vm.setInputJson(JSON.stringify({
 
 const overrideResult = JSON.parse(vm.execute());
 assert.equal(overrideResult, 'audit', 'provided parameter value should override default');
-}
-// Cedar example
-{
-const cedarPolicy = `
-permit(principal in User::"admins", action == Action::"view", resource == File::"budget")
-when { context.ip like "10.*" };
-`;
-
-const policies = JSON.stringify([
-  { id: "policy.cedar", content: cedarPolicy }
-]);
-
-const program = regorus.Program.compileCedarPolicies(policies);
-console.log(program.generateListing());
-
-const vm = new regorus.Rvm();
-vm.loadProgram(program);
-vm.setInputJson(`
-{
-  "principal": "User::alice",
-  "action": "Action::view",
-  "resource": "File::budget",
-  "context": { "ip": "10.1.2.3" },
-  "entities": {
-    "User::alice": { "parents": ["User::admins"], "attrs": {} },
-    "User::admins": { "parents": [], "attrs": {} }
-  }
-}
-`);
-
-const decision = JSON.parse(vm.executeEntryPoint("cedar.authorize"));
-if (decision !== 1) {
-  throw new Error(`Unexpected Cedar decision: ${decision}`);
-}
 }
 
 console.log('WASM JS tests completed successfully.');

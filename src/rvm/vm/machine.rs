@@ -49,6 +49,9 @@ pub struct RegoVM {
     /// Global input object
     pub(super) input: Value,
 
+    /// Evaluation context: host-supplied ambient data available via LoadContext
+    pub(super) context: Value,
+
     /// Loop execution stack
     /// Note: Loops are either at the outermost level (rule body) or within the topmost comprehension.
     /// Loops never contain comprehensions - it's always the other way around.
@@ -145,6 +148,7 @@ impl RegoVM {
             rule_cache: Vec::new(),
             data: Value::Null,
             input: Value::Null,
+            context: Value::Undefined,
             loop_stack: Vec::new(),
             call_rule_stack: Vec::new(),
             register_stack: Vec::new(),
@@ -231,6 +235,11 @@ impl RegoVM {
     /// Set the global input object
     pub fn set_input(&mut self, input: Value) {
         self.input = input;
+    }
+
+    /// Set the evaluation context (host-supplied ambient data)
+    pub fn set_context(&mut self, context: Value) {
+        self.context = context;
     }
 
     /// Get the number of entry points available

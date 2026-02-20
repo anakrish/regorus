@@ -18,54 +18,133 @@ use super::Compiler;
 impl Compiler {
     pub(super) fn compile_constraint(&mut self, constraint: &Constraint) -> Result<u8> {
         match constraint {
-            Constraint::AllOf { span, constraints } => {
-                let mut regs = Vec::with_capacity(constraints.len());
-                for child in constraints {
-                    regs.push(self.compile_constraint(child)?);
-                }
-                self.emit_builtin_call("azure.policy.logic_all", &regs, span)
-            }
-            Constraint::AnyOf { span, constraints } => {
-                let mut regs = Vec::with_capacity(constraints.len());
-                for child in constraints {
-                    regs.push(self.compile_constraint(child)?);
-                }
-                self.emit_builtin_call("azure.policy.logic_any", &regs, span)
-            }
+            Constraint::AllOf { span, constraints } => self.compile_allof(constraints, span),
+            Constraint::AnyOf { span, constraints } => self.compile_anyof(constraints, span),
             Constraint::Not { span, constraint } => {
                 let inner = self.compile_constraint(constraint)?;
-                self.emit_builtin_call("azure.policy.logic_not", &[inner], span)
+                self.emit_coalesce_undefined_to_null(inner, span);
+                let dest = self.alloc_register()?;
+                self.emit(
+                    Instruction::PolicyNot {
+                        dest,
+                        operand: inner,
+                    },
+                    span,
+                );
+                Ok(dest)
             }
             Constraint::Condition(condition) => self.compile_condition(condition),
         }
     }
 
+    // -- allOf with short-circuit ------------------------------------------
+
+    fn compile_allof(
+        &mut self,
+        constraints: &[Constraint],
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        let result_reg = self.alloc_register()?;
+
+        // Track which instruction indices need end_pc patching.
+        let mut patch_pcs = Vec::with_capacity(constraints.len().saturating_add(1));
+
+        // Emit AllOfStart — end_pc is a placeholder, patched after all children.
+        patch_pcs.push(self.current_pc()?);
+        self.emit(
+            Instruction::AllOfStart {
+                result: result_reg,
+                end_pc: 0,
+            },
+            span,
+        );
+
+        for child in constraints {
+            let child_reg = self.compile_constraint(child)?;
+            self.emit_coalesce_undefined_to_null(child_reg, span);
+            // AllOfNext — end_pc is a placeholder.
+            patch_pcs.push(self.current_pc()?);
+            self.emit(
+                Instruction::AllOfNext {
+                    check: child_reg,
+                    result: result_reg,
+                    end_pc: 0,
+                },
+                span,
+            );
+        }
+
+        // AllOfEnd — all children passed → set result to true.
+        let end_pc = self.current_pc()?;
+        self.emit(Instruction::AllOfEnd { result: result_reg }, span);
+
+        // Patch AllOfStart and AllOfNext instructions with the final end_pc.
+        self.patch_end_pc(&patch_pcs, end_pc);
+
+        Ok(result_reg)
+    }
+
+    // -- anyOf with short-circuit ------------------------------------------
+
+    fn compile_anyof(
+        &mut self,
+        constraints: &[Constraint],
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        let result_reg = self.alloc_register()?;
+
+        // Track which instruction indices need end_pc patching.
+        let mut patch_pcs = Vec::with_capacity(constraints.len().saturating_add(1));
+
+        // Emit AnyOfStart — end_pc is a placeholder, patched after all children.
+        patch_pcs.push(self.current_pc()?);
+        self.emit(
+            Instruction::AnyOfStart {
+                result: result_reg,
+                end_pc: 0,
+            },
+            span,
+        );
+
+        for child in constraints {
+            let child_reg = self.compile_constraint(child)?;
+            self.emit_coalesce_undefined_to_null(child_reg, span);
+            // AnyOfNext — end_pc is a placeholder.
+            patch_pcs.push(self.current_pc()?);
+            self.emit(
+                Instruction::AnyOfNext {
+                    check: child_reg,
+                    result: result_reg,
+                    end_pc: 0,
+                },
+                span,
+            );
+        }
+
+        // AnyOfEnd — no child matched → result stays false.
+        let end_pc = self.current_pc()?;
+        self.emit(Instruction::AnyOfEnd {}, span);
+
+        // Patch AnyOfStart and AnyOfNext instructions with the final end_pc.
+        self.patch_end_pc(&patch_pcs, end_pc);
+
+        Ok(result_reg)
+    }
+
+    // -- operator condition compilation ------------------------------------
+
     pub(super) fn compile_condition(&mut self, condition: &Condition) -> Result<u8> {
+        // Record resource type hints from `{ "field": "type", "equals"/"in": ... }` patterns.
+        self.record_resource_type_from_condition(condition);
+
         // Implicit allOf: field with [*] outside count → every element must match.
         if let Some(field_path) = self.has_unbound_wildcard_field(&condition.lhs)? {
             return self.compile_condition_wildcard_allof(&field_path, condition);
         }
 
-        if condition.operator.kind == OperatorKind::Exists {
-            return self.compile_exists_condition(condition);
-        }
-
         let lhs = self.compile_lhs(&condition.lhs, &condition.span)?;
         let rhs = self.compile_value_or_expr(&condition.rhs, &condition.span)?;
-        let builtin = Self::operator_builtin_name(&condition.operator.kind);
-
-        self.emit_builtin_call(builtin, &[lhs, rhs], &condition.operator.span)
-    }
-
-    fn compile_exists_condition(&mut self, condition: &Condition) -> Result<u8> {
-        let lhs = self.compile_lhs(&condition.lhs, &condition.span)?;
-        let rhs = self.compile_value_or_expr(&condition.rhs, &condition.span)?;
-
-        self.emit_builtin_call(
-            "azure.policy.op.exists",
-            &[lhs, rhs],
-            &condition.operator.span,
-        )
+        self.emit_policy_operator(&condition.operator.kind, lhs, rhs, &condition.operator.span)
     }
 
     pub(super) fn compile_lhs(&mut self, lhs: &Lhs, span: &crate::lexer::Span) -> Result<u8> {
@@ -76,32 +155,48 @@ impl Compiler {
         }
     }
 
-    // -- implicit allOf for [*] fields outside count -----------------------
-
-    /// Map an [`OperatorKind`] to its RVM builtin function name.
-    fn operator_builtin_name(kind: &OperatorKind) -> &'static str {
-        match kind {
-            OperatorKind::Equals => "azure.policy.op.equals",
-            OperatorKind::NotEquals => "azure.policy.op.not_equals",
-            OperatorKind::Greater => "azure.policy.op.greater",
-            OperatorKind::GreaterOrEquals => "azure.policy.op.greater_or_equals",
-            OperatorKind::Less => "azure.policy.op.less",
-            OperatorKind::LessOrEquals => "azure.policy.op.less_or_equals",
-            OperatorKind::In => "azure.policy.op.in",
-            OperatorKind::NotIn => "azure.policy.op.not_in",
-            OperatorKind::Contains => "azure.policy.op.contains",
-            OperatorKind::NotContains => "azure.policy.op.not_contains",
-            OperatorKind::ContainsKey => "azure.policy.op.contains_key",
-            OperatorKind::NotContainsKey => "azure.policy.op.not_contains_key",
-            OperatorKind::Like => "azure.policy.op.like",
-            OperatorKind::NotLike => "azure.policy.op.not_like",
-            OperatorKind::Match => "azure.policy.op.match",
-            OperatorKind::NotMatch => "azure.policy.op.not_match",
-            OperatorKind::MatchInsensitively => "azure.policy.op.match_insensitively",
-            OperatorKind::NotMatchInsensitively => "azure.policy.op.not_match_insensitively",
-            OperatorKind::Exists => "azure.policy.op.exists",
-        }
+    /// Emit a native policy operator instruction for the given operator kind.
+    fn emit_policy_operator(
+        &mut self,
+        kind: &OperatorKind,
+        left: u8,
+        right: u8,
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        self.record_operator(kind);
+        let dest = self.alloc_register()?;
+        let instruction = match kind {
+            OperatorKind::Equals => Instruction::PolicyEquals { dest, left, right },
+            OperatorKind::NotEquals => Instruction::PolicyNotEquals { dest, left, right },
+            OperatorKind::Greater => Instruction::PolicyGreater { dest, left, right },
+            OperatorKind::GreaterOrEquals => {
+                Instruction::PolicyGreaterOrEquals { dest, left, right }
+            }
+            OperatorKind::Less => Instruction::PolicyLess { dest, left, right },
+            OperatorKind::LessOrEquals => Instruction::PolicyLessOrEquals { dest, left, right },
+            OperatorKind::In => Instruction::PolicyIn { dest, left, right },
+            OperatorKind::NotIn => Instruction::PolicyNotIn { dest, left, right },
+            OperatorKind::Contains => Instruction::PolicyContains { dest, left, right },
+            OperatorKind::NotContains => Instruction::PolicyNotContains { dest, left, right },
+            OperatorKind::ContainsKey => Instruction::PolicyContainsKey { dest, left, right },
+            OperatorKind::NotContainsKey => Instruction::PolicyNotContainsKey { dest, left, right },
+            OperatorKind::Like => Instruction::PolicyLike { dest, left, right },
+            OperatorKind::NotLike => Instruction::PolicyNotLike { dest, left, right },
+            OperatorKind::Match => Instruction::PolicyMatch { dest, left, right },
+            OperatorKind::NotMatch => Instruction::PolicyNotMatch { dest, left, right },
+            OperatorKind::MatchInsensitively => {
+                Instruction::PolicyMatchInsensitively { dest, left, right }
+            }
+            OperatorKind::NotMatchInsensitively => {
+                Instruction::PolicyNotMatchInsensitively { dest, left, right }
+            }
+            OperatorKind::Exists => Instruction::PolicyExists { dest, left, right },
+        };
+        self.emit(instruction, span);
+        Ok(dest)
     }
+
+    // -- implicit allOf for [*] fields outside count -----------------------
 
     /// Check whether a condition's LHS is a field with an unbound `[*]`
     /// wildcard (i.e., not inside a count loop that covers this path).
@@ -113,10 +208,7 @@ impl Compiler {
         };
 
         let path = match &field.kind {
-            FieldKind::Alias(alias) => match self.alias_map.get(&alias.to_lowercase()) {
-                Some(s) => s.clone(),
-                None => alias.clone(),
-            },
+            FieldKind::Alias(alias) => self.resolve_alias_path(alias)?,
             _ => return Ok(None),
         };
 
@@ -149,9 +241,8 @@ impl Compiler {
 
         // Compile RHS once, outside the loop.
         let rhs_reg = self.compile_value_or_expr(&condition.rhs, span)?;
-        let builtin = Self::operator_builtin_name(&condition.operator.kind);
 
-        self.compile_allof_loop_inner(None, field_path, builtin, rhs_reg, condition)
+        self.compile_allof_loop_inner(None, field_path, rhs_reg, condition)
     }
 
     /// Recursive helper: emit one `Every` loop per `[*]` in the path.
@@ -160,13 +251,11 @@ impl Compiler {
     ///   inside a loop body); if `None`, index from `input.resource`.
     /// * `remaining_path` — portion of the field path still to process
     ///   (must contain at least one `[*]`).
-    /// * `operator_builtin` — the RVM builtin name for the operator.
     /// * `rhs_reg` — the pre-compiled right-hand operand register.
     fn compile_allof_loop_inner(
         &mut self,
         base_reg: Option<u8>,
         remaining_path: &str,
-        operator_builtin: &str,
         rhs_reg: u8,
         condition: &Condition,
     ) -> Result<u8> {
@@ -208,13 +297,8 @@ impl Compiler {
         match suffix {
             Some(ref s) if s.contains("[*]") => {
                 // Nested wildcard — recurse for an inner Every loop.
-                let inner_result = self.compile_allof_loop_inner(
-                    Some(current_reg),
-                    s,
-                    operator_builtin,
-                    rhs_reg,
-                    condition,
-                )?;
+                let inner_result =
+                    self.compile_allof_loop_inner(Some(current_reg), s, rhs_reg, condition)?;
                 self.emit(
                     Instruction::AssertCondition {
                         condition: inner_result,
@@ -236,9 +320,10 @@ impl Compiler {
                 // Missing sub-field → null (same as compile_field_kind).
                 self.emit_coalesce_undefined_to_null(element_reg, span);
 
-                let cmp_reg = self.emit_builtin_call(
-                    operator_builtin,
-                    &[element_reg, rhs_reg],
+                let cmp_reg = self.emit_policy_operator(
+                    &condition.operator.kind,
+                    element_reg,
+                    rhs_reg,
                     &condition.operator.span,
                 )?;
 

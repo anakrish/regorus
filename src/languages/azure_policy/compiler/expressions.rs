@@ -169,153 +169,39 @@ impl Compiler {
                 }
             }
             "resourcegroup" => {
-                let input_reg = self.load_input(span)?;
-                self.emit_chained_index_literal_path(input_reg, &["context", "resourceGroup"], span)
+                let ctx_reg = self.load_context(span)?;
+                self.emit_chained_index_literal_path(ctx_reg, &["resourceGroup"], span)
             }
             "subscription" => {
-                let input_reg = self.load_input(span)?;
-                self.emit_chained_index_literal_path(input_reg, &["context", "subscription"], span)
+                let ctx_reg = self.load_context(span)?;
+                self.emit_chained_index_literal_path(ctx_reg, &["subscription"], span)
             }
-            "concat" => {
-                let mut element_regs = Vec::with_capacity(args.len());
-                for arg in args {
-                    element_regs.push(self.compile_expr(arg)?);
-                }
+            "requestcontext" => {
+                let ctx_reg = self.load_context(span)?;
+                self.emit_chained_index_literal_path(ctx_reg, &["requestContext"], span)
+            }
+            "policy" => {
+                let ctx_reg = self.load_context(span)?;
+                self.emit_chained_index_literal_path(ctx_reg, &["policy"], span)
+            }
+            "utcnow" => {
+                // utcNow() returns the current UTC timestamp from context.
+                // Optional format parameter is ignored — we always use ISO 8601.
+                let ctx_reg = self.load_context(span)?;
+                self.emit_chained_index_literal_path(ctx_reg, &["utcNow"], span)
+            }
+            "concat" | "if" | "and" | "not" | "tolower" | "toupper" | "replace" | "substring"
+            | "length" | "add" | "equals" | "greaterorequals" | "lessorequals" | "contains" => self
+                .compile_arm_template_function(&function_name, span, args)?
+                .ok_or_else(|| anyhow!("{}", span.error("unreachable"))),
 
-                let array_dest = self.alloc_register()?;
-                let array_params = self.program.instruction_data.add_array_create_params(
-                    crate::rvm::instructions::ArrayCreateParams {
-                        dest: array_dest,
-                        elements: element_regs,
-                    },
-                );
-                self.emit(
-                    Instruction::ArrayCreate {
-                        params_index: array_params,
-                    },
-                    span,
-                );
-
-                let delimiter_reg = self.load_literal(Value::from(""), span)?;
-                self.emit_builtin_call("concat", &[delimiter_reg, array_dest], span)
-            }
-            "if" => {
-                if args.len() != 3 {
-                    bail!(span.error("if() requires three arguments"));
-                }
-                let cond = self.compile_expr(&args[0])?;
-                let when_true = self.compile_expr(&args[1])?;
-                let when_false = self.compile_expr(&args[2])?;
-                self.emit_builtin_call("azure.policy.if", &[cond, when_true, when_false], span)
-            }
-            "tolower" => {
-                let regs = self.compile_call_args(args)?;
-                self.emit_builtin_call("lower", &regs, span)
-            }
-            "toupper" => {
-                let regs = self.compile_call_args(args)?;
-                self.emit_builtin_call("upper", &regs, span)
-            }
-            "replace" => {
-                let regs = self.compile_call_args(args)?;
-                self.emit_builtin_call("replace", &regs, span)
-            }
-            "substring" => {
-                let regs = self.compile_call_args(args)?;
-                self.emit_builtin_call("substring", &regs, span)
-            }
-            "length" => {
-                let regs = self.compile_call_args(args)?;
-                self.emit_builtin_call("count", &regs, span)
-            }
-            "add" => {
-                if args.len() != 2 {
-                    bail!(span.error("add() requires two arguments"));
-                }
-                let left = self.compile_expr(&args[0])?;
-                let right = self.compile_expr(&args[1])?;
-                let dest = self.alloc_register()?;
-                self.emit(Instruction::Add { dest, left, right }, span);
-                Ok(dest)
-            }
-            "equals" => {
-                if args.len() != 2 {
-                    bail!(span.error("equals() requires two arguments"));
-                }
-                let left = self.compile_expr(&args[0])?;
-                let right = self.compile_expr(&args[1])?;
-                self.emit_builtin_call("azure.policy.op.equals", &[left, right], span)
-            }
-            "contains" => {
-                if args.len() != 2 {
-                    bail!(span.error("contains() requires two arguments"));
-                }
-                let left = self.compile_expr(&args[0])?;
-                let right = self.compile_expr(&args[1])?;
-                self.emit_builtin_call("azure.policy.op.contains", &[left, right], span)
-            }
-
-            // ── ARM template functions ────────────────────────────────
-            "split" => {
-                let regs = self.compile_call_args(args)?;
-                self.emit_builtin_call("azure.policy.fn.split", &regs, span)
-            }
-            "empty" => {
-                let regs = self.compile_call_args(args)?;
-                self.emit_builtin_call("azure.policy.fn.empty", &regs, span)
-            }
-            "first" => {
-                let regs = self.compile_call_args(args)?;
-                self.emit_builtin_call("azure.policy.fn.first", &regs, span)
-            }
-            "last" => {
-                let regs = self.compile_call_args(args)?;
-                self.emit_builtin_call("azure.policy.fn.last", &regs, span)
-            }
-            "createarray" => {
-                // Variadic: pack all arguments into an array.
-                let mut element_regs = Vec::with_capacity(args.len());
-                for arg in args {
-                    element_regs.push(self.compile_expr(arg)?);
-                }
-
-                let array_dest = self.alloc_register()?;
-                let array_params = self.program.instruction_data.add_array_create_params(
-                    crate::rvm::instructions::ArrayCreateParams {
-                        dest: array_dest,
-                        elements: element_regs,
-                    },
-                );
-                self.emit(
-                    Instruction::ArrayCreate {
-                        params_index: array_params,
-                    },
-                    span,
-                );
-                Ok(array_dest)
-            }
-            "startswith" => {
-                let regs = self.compile_call_args(args)?;
-                self.emit_builtin_call("azure.policy.fn.starts_with", &regs, span)
-            }
-            "endswith" => {
-                let regs = self.compile_call_args(args)?;
-                self.emit_builtin_call("azure.policy.fn.ends_with", &regs, span)
-            }
-            "int" => {
-                let regs = self.compile_call_args(args)?;
-                self.emit_builtin_call("azure.policy.fn.int", &regs, span)
-            }
-            "string" => {
-                let regs = self.compile_call_args(args)?;
-                self.emit_builtin_call("azure.policy.fn.string", &regs, span)
-            }
-            "bool" => {
-                let regs = self.compile_call_args(args)?;
-                self.emit_builtin_call("azure.policy.fn.bool", &regs, span)
-            }
+            // ── ARM template functions (dispatched to template_dispatch.rs) ──
             other => {
-                bail!(span.error(&alloc::format!("unsupported template function '{}'", other)))
+                if let Some(dest) = self.compile_arm_template_function(other, span, args)? {
+                    Ok(dest)
+                } else {
+                    bail!(span.error(&alloc::format!("unsupported template function '{}'", other)))
+                }
             }
         }
     }

@@ -4,8 +4,9 @@
 # Azure Policy Scenarios with ARM-shaped resources
 #
 # These tests model real-world Azure Policy rules that enterprise customers
-# commonly deploy. Resources use raw ARM shapes with `properties` wrappers;
-# the normalizer flattens them before evaluation.
+# commonly deploy. Policy rules use fully-qualified alias names as required by
+# the Azure Policy language. Resources use raw ARM shapes with `properties`
+# wrappers; the normalizer flattens them before evaluation.
 
 aliases: test_aliases.json
 
@@ -22,7 +23,7 @@ cases:
             { "field": "type", "equals": "Microsoft.Compute/virtualMachines" },
             {
               "not": {
-                "field": "sku.name",
+                "field": "Microsoft.Compute/virtualMachines/sku.name",
                 "in": "[parameters('allowedSKUs')]"
               }
             }
@@ -39,9 +40,9 @@ cases:
       type: "Microsoft.Compute/virtualMachines"
       name: "myVM"
       location: "eastus"
-      sku:
-        name: "Standard_E64i_v3"
-        tier: "Standard"
+      properties:
+        hardwareProfile:
+          vmSize: "Standard_E64i_v3"
     want_effect: "deny"
 
   - note: vm_sku_restriction_allowed
@@ -52,7 +53,7 @@ cases:
             { "field": "type", "equals": "Microsoft.Compute/virtualMachines" },
             {
               "not": {
-                "field": "sku.name",
+                "field": "Microsoft.Compute/virtualMachines/sku.name",
                 "in": "[parameters('allowedSKUs')]"
               }
             }
@@ -68,9 +69,9 @@ cases:
       type: "Microsoft.Compute/virtualMachines"
       name: "myVM"
       location: "eastus"
-      sku:
-        name: "Standard_D2s_v3"
-        tier: "Standard"
+      properties:
+        hardwareProfile:
+          vmSize: "Standard_D2s_v3"
     want_effect: ~
 
   # =========================================================================
@@ -84,7 +85,7 @@ cases:
           "allOf": [
             { "field": "type", "equals": "Microsoft.Storage/storageAccounts" },
             {
-              "field": "encryption.services.blob.enabled",
+              "field": "Microsoft.Storage/storageAccounts/enableBlobEncryption",
               "notEquals": true
             }
           ]
@@ -111,7 +112,7 @@ cases:
           "allOf": [
             { "field": "type", "equals": "Microsoft.Storage/storageAccounts" },
             {
-              "field": "encryption.services.blob.enabled",
+              "field": "Microsoft.Storage/storageAccounts/enableBlobEncryption",
               "notEquals": true
             }
           ]
@@ -141,7 +142,7 @@ cases:
         "if": {
           "allOf": [
             { "field": "type", "equals": "Microsoft.KeyVault/vaults" },
-            { "field": "enableSoftDelete", "notEquals": true }
+            { "field": "Microsoft.KeyVault/vaults/enableSoftDelete", "notEquals": true }
           ]
         },
         "then": { "effect": "deny" }
@@ -161,7 +162,7 @@ cases:
         "if": {
           "allOf": [
             { "field": "type", "equals": "Microsoft.KeyVault/vaults" },
-            { "field": "enableSoftDelete", "notEquals": true }
+            { "field": "Microsoft.KeyVault/vaults/enableSoftDelete", "notEquals": true }
           ]
         },
         "then": { "effect": "deny" }
@@ -186,7 +187,7 @@ cases:
           "allOf": [
             { "field": "type", "equals": "Microsoft.Web/sites" },
             {
-              "field": "siteConfig.minTlsVersion",
+              "field": "Microsoft.Web/sites/siteConfig.minTlsVersion",
               "less": "1.2"
             }
           ]
@@ -211,7 +212,7 @@ cases:
           "allOf": [
             { "field": "type", "equals": "Microsoft.Web/sites" },
             {
-              "field": "siteConfig.minTlsVersion",
+              "field": "Microsoft.Web/sites/siteConfig.minTlsVersion",
               "less": "1.2"
             }
           ]
@@ -239,7 +240,7 @@ cases:
         "if": {
           "allOf": [
             { "field": "type", "equals": "Microsoft.ContainerService/managedClusters" },
-            { "field": "enableRBAC", "notEquals": true }
+            { "field": "Microsoft.ContainerService/managedClusters/enableRBAC", "notEquals": true }
           ]
         },
         "then": { "effect": "deny" }
@@ -259,7 +260,7 @@ cases:
         "if": {
           "allOf": [
             { "field": "type", "equals": "Microsoft.ContainerService/managedClusters" },
-            { "field": "enableRBAC", "notEquals": true }
+            { "field": "Microsoft.ContainerService/managedClusters/enableRBAC", "notEquals": true }
           ]
         },
         "then": { "effect": "deny" }
@@ -284,7 +285,7 @@ cases:
           "allOf": [
             { "field": "type", "equals": "Microsoft.Compute/disks" },
             {
-              "field": "encryptionSettingsCollection.enabled",
+              "field": "Microsoft.Compute/disks/encryptionSettingsCollection.enabled",
               "notEquals": true
             }
           ]
@@ -310,7 +311,7 @@ cases:
           "allOf": [
             { "field": "type", "equals": "Microsoft.Compute/disks" },
             {
-              "field": "encryptionSettingsCollection.enabled",
+              "field": "Microsoft.Compute/disks/encryptionSettingsCollection.enabled",
               "notEquals": true
             }
           ]
@@ -339,7 +340,7 @@ cases:
         "if": {
           "allOf": [
             { "field": "type", "equals": "Microsoft.Storage/storageAccounts" },
-            { "field": "networkAcls.defaultAction", "notEquals": "Deny" }
+            { "field": "Microsoft.Storage/storageAccounts/networkAcls.defaultAction", "notEquals": "Deny" }
           ]
         },
         "then": { "effect": "audit" }
@@ -365,7 +366,7 @@ cases:
         "if": {
           "allOf": [
             { "field": "type", "equals": "Microsoft.Storage/storageAccounts" },
-            { "field": "networkAcls.defaultAction", "notEquals": "Deny" }
+            { "field": "Microsoft.Storage/storageAccounts/networkAcls.defaultAction", "notEquals": "Deny" }
           ]
         },
         "then": { "effect": "audit" }
@@ -398,22 +399,22 @@ cases:
             { "field": "type", "equals": "Microsoft.Network/networkSecurityGroups" },
             {
               "count": {
-                "field": "securityRules[*]",
+                "field": "Microsoft.Network/networkSecurityGroups/securityRules[*]",
                 "where": {
                   "allOf": [
-                    { "field": "securityRules[*].access", "equals": "Allow" },
-                    { "field": "securityRules[*].direction", "equals": "Inbound" },
+                    { "field": "Microsoft.Network/networkSecurityGroups/securityRules[*].access", "equals": "Allow" },
+                    { "field": "Microsoft.Network/networkSecurityGroups/securityRules[*].direction", "equals": "Inbound" },
                     {
                       "anyOf": [
-                        { "field": "securityRules[*].destinationPortRange", "equals": "22" },
-                        { "field": "securityRules[*].destinationPortRange", "equals": "*" }
+                        { "field": "Microsoft.Network/networkSecurityGroups/securityRules[*].destinationPortRange", "equals": "22" },
+                        { "field": "Microsoft.Network/networkSecurityGroups/securityRules[*].destinationPortRange", "equals": "*" }
                       ]
                     },
                     {
                       "anyOf": [
-                        { "field": "securityRules[*].sourceAddressPrefix", "equals": "*" },
-                        { "field": "securityRules[*].sourceAddressPrefix", "equals": "Internet" },
-                        { "field": "securityRules[*].sourceAddressPrefix", "equals": "0.0.0.0/0" }
+                        { "field": "Microsoft.Network/networkSecurityGroups/securityRules[*].sourceAddressPrefix", "equals": "*" },
+                        { "field": "Microsoft.Network/networkSecurityGroups/securityRules[*].sourceAddressPrefix", "equals": "Internet" },
+                        { "field": "Microsoft.Network/networkSecurityGroups/securityRules[*].sourceAddressPrefix", "equals": "0.0.0.0/0" }
                       ]
                     }
                   ]
@@ -457,21 +458,21 @@ cases:
             { "field": "type", "equals": "Microsoft.Network/networkSecurityGroups" },
             {
               "count": {
-                "field": "securityRules[*]",
+                "field": "Microsoft.Network/networkSecurityGroups/securityRules[*]",
                 "where": {
                   "allOf": [
-                    { "field": "securityRules[*].access", "equals": "Allow" },
-                    { "field": "securityRules[*].direction", "equals": "Inbound" },
+                    { "field": "Microsoft.Network/networkSecurityGroups/securityRules[*].access", "equals": "Allow" },
+                    { "field": "Microsoft.Network/networkSecurityGroups/securityRules[*].direction", "equals": "Inbound" },
                     {
                       "anyOf": [
-                        { "field": "securityRules[*].destinationPortRange", "equals": "22" },
-                        { "field": "securityRules[*].destinationPortRange", "equals": "*" }
+                        { "field": "Microsoft.Network/networkSecurityGroups/securityRules[*].destinationPortRange", "equals": "22" },
+                        { "field": "Microsoft.Network/networkSecurityGroups/securityRules[*].destinationPortRange", "equals": "*" }
                       ]
                     },
                     {
                       "anyOf": [
-                        { "field": "securityRules[*].sourceAddressPrefix", "equals": "*" },
-                        { "field": "securityRules[*].sourceAddressPrefix", "equals": "Internet" }
+                        { "field": "Microsoft.Network/networkSecurityGroups/securityRules[*].sourceAddressPrefix", "equals": "*" },
+                        { "field": "Microsoft.Network/networkSecurityGroups/securityRules[*].sourceAddressPrefix", "equals": "Internet" }
                       ]
                     }
                   ]
@@ -519,9 +520,9 @@ cases:
             { "field": "type", "equals": "Microsoft.Compute/virtualMachines" },
             {
               "count": {
-                "field": "storageProfile.dataDisks[*]",
+                "field": "Microsoft.Compute/virtualMachines/storageProfile.dataDisks[*]",
                 "where": {
-                  "field": "storageProfile.dataDisks[*].managedDisk.id",
+                  "field": "Microsoft.Compute/virtualMachines/storageProfile.dataDisks[*].managedDisk.id",
                   "exists": false
                 }
               },
@@ -563,9 +564,9 @@ cases:
             { "field": "type", "equals": "Microsoft.Compute/virtualMachines" },
             {
               "count": {
-                "field": "storageProfile.dataDisks[*]",
+                "field": "Microsoft.Compute/virtualMachines/storageProfile.dataDisks[*]",
                 "where": {
-                  "field": "storageProfile.dataDisks[*].managedDisk.id",
+                  "field": "Microsoft.Compute/virtualMachines/storageProfile.dataDisks[*].managedDisk.id",
                   "exists": false
                 }
               },
@@ -727,8 +728,8 @@ cases:
             { "field": "type", "equals": "Microsoft.Storage/storageAccounts" },
             {
               "anyOf": [
-                { "field": "minimumTlsVersion", "exists": false },
-                { "field": "minimumTlsVersion", "less": "TLS1_2" }
+                { "field": "Microsoft.Storage/storageAccounts/minimumTlsVersion", "exists": false },
+                { "field": "Microsoft.Storage/storageAccounts/minimumTlsVersion", "less": "TLS1_2" }
               ]
             }
           ]
@@ -754,8 +755,8 @@ cases:
             { "field": "type", "equals": "Microsoft.Storage/storageAccounts" },
             {
               "anyOf": [
-                { "field": "minimumTlsVersion", "exists": false },
-                { "field": "minimumTlsVersion", "less": "TLS1_2" }
+                { "field": "Microsoft.Storage/storageAccounts/minimumTlsVersion", "exists": false },
+                { "field": "Microsoft.Storage/storageAccounts/minimumTlsVersion", "less": "TLS1_2" }
               ]
             }
           ]
@@ -783,7 +784,7 @@ cases:
         "if": {
           "allOf": [
             { "field": "type", "equals": "Microsoft.Sql/servers" },
-            { "field": "minimalTlsVersion", "less": "1.2" }
+            { "field": "Microsoft.Sql/servers/minimalTlsVersion", "less": "1.2" }
           ]
         },
         "then": { "effect": "audit" }
@@ -804,7 +805,7 @@ cases:
         "if": {
           "allOf": [
             { "field": "type", "equals": "Microsoft.Sql/servers" },
-            { "field": "minimalTlsVersion", "less": "1.2" }
+            { "field": "Microsoft.Sql/servers/minimalTlsVersion", "less": "1.2" }
           ]
         },
         "then": { "effect": "audit" }
@@ -884,9 +885,9 @@ cases:
             { "field": "type", "equals": "Microsoft.Network/networkInterfaces" },
             {
               "count": {
-                "field": "ipConfigurations[*]",
+                "field": "Microsoft.Network/networkInterfaces/ipConfigurations[*]",
                 "where": {
-                  "field": "ipConfigurations[*].publicIPAddress.id",
+                  "field": "Microsoft.Network/networkInterfaces/ipConfigurations[*].publicIPAddress.id",
                   "exists": true
                 }
               },
@@ -920,9 +921,9 @@ cases:
             { "field": "type", "equals": "Microsoft.Network/networkInterfaces" },
             {
               "count": {
-                "field": "ipConfigurations[*]",
+                "field": "Microsoft.Network/networkInterfaces/ipConfigurations[*]",
                 "where": {
-                  "field": "ipConfigurations[*].publicIPAddress.id",
+                  "field": "Microsoft.Network/networkInterfaces/ipConfigurations[*].publicIPAddress.id",
                   "exists": true
                 }
               },
@@ -1048,7 +1049,7 @@ cases:
             { "field": "type", "equals": "Microsoft.Compute/virtualMachines" },
             { "field": "apiVersion", "less": "2020-06-01" },
             {
-              "field": "storageProfile.osDisk.managedDisk.storageAccountType",
+              "field": "Microsoft.Compute/virtualMachines/storageProfile.osDisk.managedDisk.storageAccountType",
               "notEquals": "Premium_LRS"
             }
           ]
@@ -1078,7 +1079,7 @@ cases:
             { "field": "type", "equals": "Microsoft.Compute/virtualMachines" },
             { "field": "apiVersion", "less": "2020-06-01" },
             {
-              "field": "storageProfile.osDisk.managedDisk.storageAccountType",
+              "field": "Microsoft.Compute/virtualMachines/storageProfile.osDisk.managedDisk.storageAccountType",
               "notEquals": "Premium_LRS"
             }
           ]
@@ -1168,7 +1169,7 @@ cases:
             { "field": "type", "equals": "Microsoft.Web/sites" },
             { "field": "apiVersion", "lessOrEquals": "2018-11-01" },
             {
-              "field": "siteConfig.minTlsVersion",
+              "field": "Microsoft.Web/sites/siteConfig.minTlsVersion",
               "less": "1.2"
             }
           ]
@@ -1194,7 +1195,7 @@ cases:
             { "field": "type", "equals": "Microsoft.Web/sites" },
             { "field": "apiVersion", "lessOrEquals": "2018-11-01" },
             {
-              "field": "siteConfig.minTlsVersion",
+              "field": "Microsoft.Web/sites/siteConfig.minTlsVersion",
               "less": "1.2"
             }
           ]

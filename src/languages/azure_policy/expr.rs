@@ -297,7 +297,6 @@ fn parse_expr_from_source(source: &Source, outer_span: &Span) -> Result<Expr, Ex
 
     Ok(expr)
 }
-
 fn rebase_expr_spans(expr: &mut Expr, outer_span: &Span, base_offset: u32, base_col: u32) {
     match expr {
         Expr::Literal { span, .. } | Expr::Ident { span, .. } => {

@@ -1,7 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Azure Policy condition operators and logic builtins.
+//! Azure Policy utility builtins: parameter resolution, field resolution,
+//! logic_all (for ARM `and()`), and if().
+//!
+//! The 20 condition operators (equals, notEquals, greater, …, exists) and
+//! the logic_not / logic_any combinators are now compiled as first-class
+//! RVM instructions (`PolicyEquals`, `PolicyNot`, `AllOfStart`/`AnyOfStart`,
+//! etc.) and no longer go through the builtin dispatch path.
 
 use crate::ast::{Expr, Ref};
 use crate::lexer::Span;
@@ -9,10 +15,7 @@ use crate::value::Value;
 
 use anyhow::Result;
 
-use super::helpers::{
-    as_boolish, as_string, as_string_ci, case_insensitive_equals, compare_values, is_true,
-    is_undefined, match_like_pattern_ci, match_pattern, resolve_path,
-};
+use super::helpers::{as_string, is_true, is_undefined, resolve_path};
 
 // ── Parameter resolution ──────────────────────────────────────────────
 
@@ -67,6 +70,10 @@ pub(super) fn resolve_field(
 
 // ── Logic functions ───────────────────────────────────────────────────
 
+/// `azure.policy.logic_all(a, b, ...)`
+///
+/// Used by the ARM template `and()` function.  Returns true iff every
+/// argument is `Bool(true)`.
 pub(super) fn logic_all(
     _span: &Span,
     _params: &[Ref<Expr>],
@@ -76,25 +83,7 @@ pub(super) fn logic_all(
     Ok(Value::Bool(args.iter().all(is_true)))
 }
 
-pub(super) fn logic_any(
-    _span: &Span,
-    _params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
-    Ok(Value::Bool(args.iter().any(is_true)))
-}
-
-pub(super) fn logic_not(
-    _span: &Span,
-    _params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
-    let value = args.first().cloned().unwrap_or(Value::Undefined);
-    Ok(Value::Bool(!is_true(&value)))
-}
-
+/// `azure.policy.if(cond, when_true, when_false)`
 pub(super) fn if_fn(
     _span: &Span,
     _params: &[Ref<Expr>],
@@ -109,295 +98,4 @@ pub(super) fn if_fn(
     } else {
         Ok(args[2].clone())
     }
-}
-
-// ── Equality ──────────────────────────────────────────────────────────
-
-pub(super) fn op_equals(
-    _span: &Span,
-    _params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
-    if args.len() != 2 {
-        return Ok(Value::Bool(false));
-    }
-    Ok(Value::Bool(case_insensitive_equals(&args[0], &args[1])))
-}
-
-pub(super) fn op_not_equals(
-    _span: &Span,
-    _params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
-    if args.len() != 2 {
-        return Ok(Value::Bool(false));
-    }
-    if is_undefined(&args[0]) {
-        return Ok(Value::Bool(true));
-    }
-    Ok(Value::Bool(!case_insensitive_equals(&args[0], &args[1])))
-}
-
-// ── Comparison ────────────────────────────────────────────────────────
-
-pub(super) fn op_greater(
-    _span: &Span,
-    _params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
-    Ok(Value::Bool(compare_values(args).is_some_and(|c| c > 0)))
-}
-
-pub(super) fn op_greater_or_equals(
-    _span: &Span,
-    _params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
-    Ok(Value::Bool(compare_values(args).is_some_and(|c| c >= 0)))
-}
-
-pub(super) fn op_less(
-    _span: &Span,
-    _params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
-    Ok(Value::Bool(compare_values(args).is_some_and(|c| c < 0)))
-}
-
-pub(super) fn op_less_or_equals(
-    _span: &Span,
-    _params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
-    Ok(Value::Bool(compare_values(args).is_some_and(|c| c <= 0)))
-}
-
-// ── Set membership ────────────────────────────────────────────────────
-
-pub(super) fn op_in(
-    _span: &Span,
-    _params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
-    if args.len() != 2 || is_undefined(&args[0]) || is_undefined(&args[1]) {
-        return Ok(Value::Bool(false));
-    }
-
-    match &args[1] {
-        Value::Array(items) => Ok(Value::Bool(
-            items
-                .iter()
-                .any(|item| case_insensitive_equals(item, &args[0])),
-        )),
-        Value::Set(items) => Ok(Value::Bool(
-            items
-                .iter()
-                .any(|item| case_insensitive_equals(item, &args[0])),
-        )),
-        _ => Ok(Value::Bool(false)),
-    }
-}
-
-pub(super) fn op_not_in(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    strict: bool,
-) -> Result<Value> {
-    if args.len() != 2 {
-        return Ok(Value::Bool(false));
-    }
-    if is_undefined(&args[0]) {
-        return Ok(Value::Bool(true));
-    }
-    let in_result = op_in(span, params, args, strict)?;
-    Ok(Value::Bool(!is_true(&in_result)))
-}
-
-// ── Contains ──────────────────────────────────────────────────────────
-
-pub(super) fn op_contains(
-    _span: &Span,
-    _params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
-    if args.len() != 2 || is_undefined(&args[0]) || is_undefined(&args[1]) {
-        return Ok(Value::Bool(false));
-    }
-
-    match (&args[0], &args[1]) {
-        (Value::String(haystack), Value::String(needle)) => Ok(Value::Bool(
-            haystack
-                .to_ascii_lowercase()
-                .contains(&needle.to_ascii_lowercase()),
-        )),
-        (Value::Array(items), value) => Ok(Value::Bool(
-            items
-                .iter()
-                .any(|item| case_insensitive_equals(item, value)),
-        )),
-        (Value::Set(items), value) => Ok(Value::Bool(
-            items
-                .iter()
-                .any(|item| case_insensitive_equals(item, value)),
-        )),
-        _ => Ok(Value::Bool(false)),
-    }
-}
-
-pub(super) fn op_not_contains(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    strict: bool,
-) -> Result<Value> {
-    if args.len() != 2 {
-        return Ok(Value::Bool(false));
-    }
-    if is_undefined(&args[0]) {
-        return Ok(Value::Bool(true));
-    }
-    let contains_result = op_contains(span, params, args, strict)?;
-    Ok(Value::Bool(!is_true(&contains_result)))
-}
-
-pub(super) fn op_contains_key(
-    _span: &Span,
-    _params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
-    if args.len() != 2 || is_undefined(&args[0]) || is_undefined(&args[1]) {
-        return Ok(Value::Bool(false));
-    }
-
-    match &args[0] {
-        Value::Object(map) => Ok(Value::Bool(
-            map.keys().any(|key| case_insensitive_equals(key, &args[1])),
-        )),
-        _ => Ok(Value::Bool(false)),
-    }
-}
-
-pub(super) fn op_not_contains_key(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    strict: bool,
-) -> Result<Value> {
-    if args.len() != 2 {
-        return Ok(Value::Bool(false));
-    }
-    if is_undefined(&args[0]) {
-        return Ok(Value::Bool(true));
-    }
-    let result = op_contains_key(span, params, args, strict)?;
-    Ok(Value::Bool(!is_true(&result)))
-}
-
-// ── Pattern matching ──────────────────────────────────────────────────
-
-pub(super) fn op_like(
-    _span: &Span,
-    _params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
-    if args.len() != 2 {
-        return Ok(Value::Bool(false));
-    }
-    let (Some(input), Some(pattern)) = (as_string_ci(&args[0]), as_string_ci(&args[1])) else {
-        return Ok(Value::Bool(false));
-    };
-
-    Ok(Value::Bool(match_like_pattern_ci(&input, &pattern)))
-}
-
-pub(super) fn op_not_like(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    strict: bool,
-) -> Result<Value> {
-    if args.len() != 2 {
-        return Ok(Value::Bool(false));
-    }
-    if is_undefined(&args[0]) {
-        return Ok(Value::Bool(true));
-    }
-    let result = op_like(span, params, args, strict)?;
-    Ok(Value::Bool(!is_true(&result)))
-}
-
-pub(super) fn op_match(
-    _span: &Span,
-    _params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
-    Ok(Value::Bool(match_pattern(args, false)))
-}
-
-pub(super) fn op_not_match(
-    _span: &Span,
-    _params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
-    if args.len() != 2 {
-        return Ok(Value::Bool(false));
-    }
-    if is_undefined(&args[0]) {
-        return Ok(Value::Bool(true));
-    }
-    Ok(Value::Bool(!match_pattern(args, false)))
-}
-
-pub(super) fn op_match_insensitively(
-    _span: &Span,
-    _params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
-    Ok(Value::Bool(match_pattern(args, true)))
-}
-
-pub(super) fn op_not_match_insensitively(
-    _span: &Span,
-    _params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
-    if args.len() != 2 {
-        return Ok(Value::Bool(false));
-    }
-    if is_undefined(&args[0]) {
-        return Ok(Value::Bool(true));
-    }
-    Ok(Value::Bool(!match_pattern(args, true)))
-}
-
-// ── Exists ────────────────────────────────────────────────────────────
-
-pub(super) fn op_exists(
-    _span: &Span,
-    _params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
-    if args.len() != 2 {
-        return Ok(Value::Bool(false));
-    }
-
-    let expected = as_boolish(&args[1]).unwrap_or(false);
-    let is_defined = !is_undefined(&args[0]) && !matches!(&args[0], Value::Null);
-    Ok(Value::Bool(is_defined == expected))
 }

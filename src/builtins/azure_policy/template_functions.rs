@@ -3,16 +3,18 @@
 
 //! ARM template function builtins for Azure Policy expressions.
 //!
-//! Implements: split, empty, first, last, createArray, startsWith,
-//! endsWith, int, string, bool.
+//! Implements: split, empty, first, last, startsWith,
+//! endsWith, int, string, bool, padLeft, ipRangeContains.
 
 use crate::ast::{Expr, Ref};
 use crate::builtins;
 use crate::lexer::Span;
 use crate::value::Value;
 
-use alloc::string::ToString as _;
+use alloc::string::{String, ToString as _};
 use anyhow::Result;
+use core::net::IpAddr;
+use ipnet::IpNet;
 
 use super::helpers::{as_string, try_coerce_to_number};
 
@@ -21,12 +23,16 @@ pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::Bui
     m.insert("azure.policy.fn.empty", (fn_empty, 1));
     m.insert("azure.policy.fn.first", (fn_first, 1));
     m.insert("azure.policy.fn.last", (fn_last, 1));
-    m.insert("azure.policy.fn.create_array", (fn_create_array, 0));
     m.insert("azure.policy.fn.starts_with", (fn_starts_with, 2));
     m.insert("azure.policy.fn.ends_with", (fn_ends_with, 2));
     m.insert("azure.policy.fn.int", (fn_int, 1));
     m.insert("azure.policy.fn.string", (fn_string, 1));
     m.insert("azure.policy.fn.bool", (fn_bool, 1));
+    m.insert("azure.policy.fn.pad_left", (fn_pad_left, 3));
+    m.insert(
+        "azure.policy.fn.ip_range_contains",
+        (fn_ip_range_contains, 2),
+    );
 }
 
 /// `split(inputString, delimiter)` → array of strings.
@@ -95,16 +101,6 @@ fn fn_last(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -
         }
         _ => Ok(Value::Undefined),
     }
-}
-
-/// `createArray(items...)` → array containing all arguments.
-fn fn_create_array(
-    _span: &Span,
-    _params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
-    Ok(Value::from(args.to_vec()))
 }
 
 /// `startsWith(stringToSearch, stringToFind)` → bool (case-insensitive).
@@ -219,4 +215,91 @@ fn fn_bool(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -
         }
         _ => Ok(Value::Undefined),
     }
+}
+
+/// `padLeft(value, totalWidth, padChar)` → left-padded string.
+fn fn_pad_left(
+    _span: &Span,
+    _params: &[Ref<Expr>],
+    args: &[Value],
+    _strict: bool,
+) -> Result<Value> {
+    if args.len() < 2 || args.len() > 3 {
+        return Ok(Value::Undefined);
+    }
+
+    let Some(value) = as_string(&args[0]) else {
+        return Ok(Value::Undefined);
+    };
+
+    let width = match &args[1] {
+        Value::Number(n) => n
+            .as_i64()
+            .and_then(|x| usize::try_from(x).ok())
+            .or_else(|| n.as_f64().and_then(|x| usize::try_from(x as i64).ok())),
+        Value::String(s) => try_coerce_to_number(s).and_then(|n| {
+            n.as_i64()
+                .and_then(|x| usize::try_from(x).ok())
+                .or_else(|| n.as_f64().and_then(|x| usize::try_from(x as i64).ok()))
+        }),
+        _ => None,
+    };
+
+    let Some(total_width) = width else {
+        return Ok(Value::Undefined);
+    };
+
+    let pad_char = if args.len() == 3 {
+        as_string(&args[2])
+            .and_then(|s| s.chars().next())
+            .unwrap_or(' ')
+    } else {
+        ' '
+    };
+
+    let value_len = value.chars().count();
+    if value_len >= total_width {
+        return Ok(Value::from(value));
+    }
+
+    let pad_count = total_width.saturating_sub(value_len);
+    let mut padded = String::with_capacity(total_width);
+    for _ in 0..pad_count {
+        padded.push(pad_char);
+    }
+    padded.push_str(&value);
+
+    Ok(Value::from(padded))
+}
+
+/// `ipRangeContains(range, targetRange)` → bool.
+fn fn_ip_range_contains(
+    _span: &Span,
+    _params: &[Ref<Expr>],
+    args: &[Value],
+    _strict: bool,
+) -> Result<Value> {
+    if args.len() != 2 {
+        return Ok(Value::Bool(false));
+    }
+
+    let (Some(range), Some(target)) = (as_string(&args[0]), as_string(&args[1])) else {
+        return Ok(Value::Bool(false));
+    };
+
+    let Ok(net) = range.parse::<IpNet>() else {
+        return Ok(Value::Bool(false));
+    };
+
+    if target.contains('/') {
+        let Ok(target_net) = target.parse::<IpNet>() else {
+            return Ok(Value::Bool(false));
+        };
+        return Ok(Value::Bool(net.contains(&target_net)));
+    }
+
+    let Ok(target_ip) = target.parse::<IpAddr>() else {
+        return Ok(Value::Bool(false));
+    };
+    Ok(Value::Bool(net.contains(&target_ip)))
 }

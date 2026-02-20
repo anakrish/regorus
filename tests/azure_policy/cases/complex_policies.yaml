@@ -286,6 +286,11 @@ cases:
       }
     resource:
       type: "Microsoft.KeyVault/vaults"
+    host_await:
+      - key:
+          operation: "lookup_related_resources"
+          type: "Microsoft.Insights/diagnosticSettings"
+        response: true
     want_effect: "auditIfNotExists"
 
   # =========================================================================

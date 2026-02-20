@@ -17,7 +17,7 @@
 mod aggregates;
 mod arrays;
 #[cfg(feature = "azure_policy")]
-mod azure_policy;
+pub mod azure_policy;
 mod bitwise;
 #[cfg(feature = "cedar")]
 mod cedar;

@@ -116,6 +116,30 @@ impl Compiler {
             "contains" => self.emit_binary_instruction(args, span, |dest, left, right| {
                 Instruction::PolicyContains { dest, left, right }
             })?,
+            "greater" => self.emit_binary_instruction(args, span, |dest, left, right| {
+                Instruction::PolicyGreater { dest, left, right }
+            })?,
+            "less" => self.emit_binary_instruction(args, span, |dest, left, right| {
+                Instruction::PolicyLess { dest, left, right }
+            })?,
+
+            // ── Logical functions ─────────────────────────────────────
+            "or" => {
+                let regs = self.compile_call_args(args)?;
+                self.emit_builtin_call("azure.policy.logic_any", &regs, span)?
+            }
+            "true" => {
+                if !args.is_empty() {
+                    bail!(span.error("true() takes no arguments"));
+                }
+                self.load_literal(crate::Value::Bool(true), span)?
+            }
+            "false" => {
+                if !args.is_empty() {
+                    bail!(span.error("false() takes no arguments"));
+                }
+                self.load_literal(crate::Value::Bool(false), span)?
+            }
 
             // ── Existing ARM template functions ───────────────────────
             "split" => self.emit_builtin_call_from_args("azure.policy.fn.split", args, span)?,
@@ -244,6 +268,22 @@ impl Compiler {
             "min" => self.emit_builtin_call_from_args("azure.policy.fn.min", args, span)?,
             "max" => self.emit_builtin_call_from_args("azure.policy.fn.max", args, span)?,
             "float" => self.emit_builtin_call_from_args("azure.policy.fn.float", args, span)?,
+
+            // ── JSON / misc functions ─────────────────────────────────
+            "json" => self.emit_builtin_call_from_args("azure.policy.fn.json", args, span)?,
+            "join" => self.emit_builtin_call_from_args("azure.policy.fn.join", args, span)?,
+            "guid" => self.emit_builtin_call_from_args("azure.policy.fn.guid", args, span)?,
+            "uniquestring" => {
+                self.emit_builtin_call_from_args("azure.policy.fn.unique_string", args, span)?
+            }
+            "items" => self.emit_builtin_call_from_args("azure.policy.fn.items", args, span)?,
+            "indexfromend" => {
+                self.emit_builtin_call_from_args("azure.policy.fn.index_from_end", args, span)?
+            }
+            "tryget" => self.emit_builtin_call_from_args("azure.policy.fn.try_get", args, span)?,
+            "tryindexfromend" => {
+                self.emit_builtin_call_from_args("azure.policy.fn.try_index_from_end", args, span)?
+            }
 
             // ── Date/Time functions ───────────────────────────────────
             "datetimeadd" => {

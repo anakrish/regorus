@@ -25,8 +25,8 @@ The alias system (`src/languages/azure_policy/aliases/`) supports:
   flattening (including nested 2-level), per-element versioned field remapping
 - Nested wildcard count paths (e.g., `rules[*].targets[*]`)
 
-5 end-to-end tests use real Azure Policy JSON definitions.
-~464 test cases across 22 YAML suites pass.
+10 end-to-end tests use real Azure Policy JSON definitions.
+~464 test cases across 24 YAML suites pass.
 
 ---
 
@@ -152,25 +152,30 @@ The alias system (`src/languages/azure_policy/aliases/`) supports:
 - [x] `dateTimeToEpoch(dateTime)`
 - [x] `addDays(dateTime, numberOfDays)`
 
-**Resource:**
-- [ ] `reference(resourceName)`
-- [ ] `resourceId(type, name, ...)`
-- [ ] `extensionResourceId(baseId, type, name)`
-- [ ] `subscriptionResourceId(type, name)`
-- [ ] `tenantResourceId(type, name)`
+**Comparison:**
+- [x] `less(a, b)` — native `PolicyLess` instruction
+- [x] `greater(a, b)` — native `PolicyGreater` instruction
 
-**Unique ID:**
-- [ ] `newGuid()`
-- [ ] `guid(baseString, ...)`
-- [ ] `uniqueString(baseString, ...)`
+**Logical:**
+- [x] `or(a, b, ...)` — via `azure.policy.logic_any` builtin
+- [x] `true()` — emits `LoadLiteral(true)`
+- [x] `false()` — emits `LoadLiteral(false)`
 
-**Other:**
-- [ ] `copyIndex(loopName?, offset?)`
-- [ ] `environment()`
-- [ ] `deployment()`
-- [ ] `variables(name)`
-- [ ] `providers(namespace, type?)`
-- [ ] `tenant()`
+**Misc (json, join, guid, uniqueString, items, indexFromEnd, tryGet, tryIndexFromEnd):**
+- [x] `json(string)` — parse JSON string to value
+- [x] `join(array, delimiter)` — join array elements
+- [x] `guid(baseString, ...)` — deterministic v5 UUID (SHA-1)
+- [x] `uniqueString(baseString, ...)` — 13-char deterministic hash
+- [x] `items(object)` — object to [{key,value}] array
+- [x] `indexFromEnd(array, reverseIndex)` — reverse array indexing
+- [x] `tryGet(obj, keyOrIndex)` — safe property/index access
+- [x] `tryIndexFromEnd(array, reverseIndex)` — safe reverse indexing
+
+**Blocked in policy rules (out of scope):**
+See [docs/azure-policy/arm-template-functions.md](docs/azure-policy/arm-template-functions.md)
+for full list. These include: `reference`, `resourceId`, `extensionResourceId`,
+`subscriptionResourceId`, `tenantResourceId`, `newGuid`, `copyIndex`,
+`environment`, `deployment`, `variables`, `providers`, `tenant`.
 
 ### Field Path Edge Cases
 - [ ] General bracket notation in field paths (e.g., `properties['network-acls']`)
@@ -261,7 +266,7 @@ Center, Network routing, Kubernetes data connectors.
 
 ### Recommended Real-Policy E2E Test Cases
 
-#### Completed (5 YAML files, 35 test cases)
+#### Completed (10 YAML files)
 
 | Policy | YAML File | Features Exercised |
 |--------|-----------|-------------------|
@@ -270,19 +275,11 @@ Center, Network routing, Kubernetes data connectors.
 | **Compute/VMRequireManagedDisk_Audit.json** | `e2e_vm_managed_disk.yaml` | anyOf + allOf nesting, `exists`, multiple types |
 | **Storage/StorageAccountOnlyVnetRulesEnabled_Audit.json** | `e2e_storage_vnet_rules.yaml` | `count.field` ipRules + virtualNetworkRules, alias resolution |
 | **Resilience/ContainerService_managedclusters_ZoneRedundant_Audit.json** | `e2e_aks_zone_redundant.yaml` | Nested count (agentPoolProfiles → availabilityZones) |
-
-#### Remaining (5 — blocked on missing features)
-
-| Policy | Blocking Features |
-|--------|-------------------|
-| **Network/NetworkSecurityGroup_RDPAccess_Audit.json** | `and()`, `not()`, `lessOrEquals()`, `greaterOrEquals()` as **callable template functions** (currently only condition operators) |
-| **Key Vault/FirewallEnabled_Audit.json** | `ipRangeContains()` template function, named `count.value` over parameters |
-| **SQL/SqlServerAuditing_Audit.json** | AuditIfNotExists / `existenceCondition` cross-resource evaluation |
-| **Service Bus/AuditDiagnosticLog_Audit.json** | AuditIfNotExists, `padLeft()` template function |
-| **Monitoring/ActivityLog_CaptureAllRegions.json** | AuditIfNotExists (subscription-scope `logProfiles` existence check) |
-
-**Closest to ready:** NSG/RDP — only needs 4 template functions (`and`, `not`, `lessOrEquals`, `greaterOrEquals`).
-**Biggest blocker:** AuditIfNotExists cross-resource evaluation (blocks 3 policies).
+| **Network/NetworkSecurityGroup_RDPAccess_Audit.json** | `e2e_nsg_rdp_access.yaml` | `and()`, `not()`, `lessOrEquals()`, `greaterOrEquals()`, `if()`, port range parsing |
+| **Key Vault/FirewallEnabled_Audit.json** | `e2e_keyvault_firewall_enabled.yaml` | `ipRangeContains()`, named `count.value` over parameters |
+| **SQL/SqlServerAuditing_Audit.json** | `e2e_sql_server_auditing.yaml` | AuditIfNotExists / `existenceCondition` |
+| **Service Bus/AuditDiagnosticLog_Audit.json** | `e2e_servicebus_diagnostic_logs.yaml` | AuditIfNotExists, `padLeft()` |
+| **Monitoring/ActivityLog_CaptureAllRegions.json** | `e2e_activitylog_capture_all_regions.yaml` | AuditIfNotExists (subscription-scope) |
 
 ---
 

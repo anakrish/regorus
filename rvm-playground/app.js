@@ -2235,11 +2235,13 @@ when {
             this.azureAliases.catalog = catalog;
             this.azureAliases.aliasMap = this.buildAzureAliasMap(catalog);
             this.azureAliases.aliasesByType = this.buildAzureAliasIndex(catalog);
+            this.updateAliasStatus();
         } catch (error) {
             console.warn('Azure alias catalog unavailable:', error);
             this.azureAliases.catalog = null;
             this.azureAliases.aliasMap = {};
             this.azureAliases.aliasesByType = {};
+            this.updateAliasStatus();
         }
     }
 
@@ -3589,6 +3591,15 @@ when {
 
     updateVMStatus(message) {
         document.getElementById('vm-status').textContent = `VM: ${message}`;
+    }
+
+    updateAliasStatus() {
+        const element = document.getElementById('alias-status');
+        if (!element) {
+            return;
+        }
+        const count = Object.keys(this.azureAliases.aliasMap || {}).length;
+        element.textContent = count > 0 ? `Aliases: ${count}` : 'Aliases: unavailable';
     }
 
 

@@ -1,0 +1,10 @@
+{
+  "principal": "User::\"dr_smith\"",
+  "action": "Action::\"viewRecord\"",
+  "resource": "PatientRecord::\"chart-42\"",
+  "context": {
+    "hour": 23,
+    "device_trusted": false,
+    "emergency": false
+  }
+}

@@ -45,7 +45,14 @@ pub fn apply_schema_constraints<'ctx>(
     max_elements: usize,
 ) -> Vec<Z3Bool<'ctx>> {
     let mut constraints = Vec::new();
-    walk_schema(ctx, registry, schema, prefix, max_elements, &mut constraints);
+    walk_schema(
+        ctx,
+        registry,
+        schema,
+        prefix,
+        max_elements,
+        &mut constraints,
+    );
     constraints
 }
 
@@ -64,22 +71,33 @@ fn walk_schema<'ctx>(
     };
 
     // ---- type ----
-    let sort = obj.get("type").and_then(|t| t.as_str()).and_then(|t| match t {
-        "boolean" => Some(ValueSort::Bool),
-        "integer" => Some(ValueSort::Int),
-        "number" => Some(ValueSort::Real),
-        "string" => Some(ValueSort::String),
-        "object" | "array" => None, // structural — no leaf sort
-        _ => None,
-    });
+    let sort = obj
+        .get("type")
+        .and_then(|t| t.as_str())
+        .and_then(|t| match t {
+            "boolean" => Some(ValueSort::Bool),
+            "integer" => Some(ValueSort::Int),
+            "number" => Some(ValueSort::Real),
+            "string" => Some(ValueSort::String),
+            "object" | "array" => None, // structural — no leaf sort
+            _ => None,
+        });
 
     // Register sort and create Z3 variable for leaf types.
     if let Some(s) = sort {
         match s {
-            ValueSort::Bool => { registry.get_bool(path); }
-            ValueSort::Int => { registry.get_int(path); }
-            ValueSort::Real => { registry.get_real(path); }
-            ValueSort::String => { registry.get_string(path); }
+            ValueSort::Bool => {
+                registry.get_bool(path);
+            }
+            ValueSort::Int => {
+                registry.get_int(path);
+            }
+            ValueSort::Real => {
+                registry.get_real(path);
+            }
+            ValueSort::String => {
+                registry.get_string(path);
+            }
             ValueSort::Unknown => {}
         }
     }
@@ -88,7 +106,14 @@ fn walk_schema<'ctx>(
     if let Some(props) = obj.get("properties").and_then(|p| p.as_object()) {
         for (key, sub_schema) in props {
             let child_path = format!("{}.{}", path, key);
-            walk_schema(ctx, registry, sub_schema, &child_path, max_elements, constraints);
+            walk_schema(
+                ctx,
+                registry,
+                sub_schema,
+                &child_path,
+                max_elements,
+                constraints,
+            );
         }
     }
 
@@ -108,10 +133,7 @@ fn walk_schema<'ctx>(
 
     // ---- items (array) ----
     if let Some(items_schema) = obj.get("items") {
-        let min_items = obj
-            .get("minItems")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize;
+        let min_items = obj.get("minItems").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let max_items = obj
             .get("maxItems")
             .and_then(|v| v.as_u64())
@@ -122,7 +144,14 @@ fn walk_schema<'ctx>(
         let n = max_items.min(max_elements);
         for idx in 0..n {
             let child_path = format!("{}[{}]", path, idx);
-            walk_schema(ctx, registry, items_schema, &child_path, max_elements, constraints);
+            walk_schema(
+                ctx,
+                registry,
+                items_schema,
+                &child_path,
+                max_elements,
+                constraints,
+            );
         }
 
         // minItems: assert that indices 0..min_items are all defined.
@@ -145,7 +174,11 @@ fn walk_schema<'ctx>(
         }
 
         // ---- uniqueItems: pairwise ≠ for plain-value arrays ----
-        if obj.get("uniqueItems").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if obj
+            .get("uniqueItems")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             apply_unique_items(ctx, registry, path, n, constraints);
         }
     }
@@ -162,8 +195,7 @@ fn walk_schema<'ctx>(
             #[allow(unsafe_code)]
             let str_len = unsafe {
                 let ctx_ptr: *const z3::Context = ctx;
-                let raw_ctx: z3_sys::Z3_context =
-                    *(ctx_ptr as *const z3_sys::Z3_context);
+                let raw_ctx: z3_sys::Z3_context = *(ctx_ptr as *const z3_sys::Z3_context);
                 let len_ast = z3_sys::Z3_mk_seq_length(raw_ctx, str_var.get_z3_ast());
                 Z3Int::wrap(ctx, len_ast)
             };

@@ -3,7 +3,6 @@
 
 use anyhow::{anyhow, bail, Result};
 
-use regorus::languages::rego::compiler::Compiler;
 use regorus::rvm::analysis::{generate_input_for_goal, AnalysisConfig, AnalysisGoal};
 
 pub fn rego_analyze(
@@ -22,6 +21,8 @@ pub fn rego_analyze(
 ) -> Result<()> {
     // Create engine and load policies/data.
     let mut engine = regorus::Engine::new();
+    let mut cedar_sources: Vec<(String, String)> = Vec::new();
+    let mut cedar_entities: Option<regorus::Value> = None;
 
     for dir in bundles.iter() {
         let entries =
@@ -40,27 +41,50 @@ pub fn rego_analyze(
     for file in files.iter() {
         if file.ends_with(".rego") {
             super::add_policy_from_file(&mut engine, file.clone())?;
+        } else if file.ends_with(".cedar") {
+            let contents = std::fs::read_to_string(file)
+                .map_err(|e| anyhow!("Failed to read Cedar file '{}': {}", file, e))?;
+            cedar_sources.push((file.clone(), contents));
         } else if file.ends_with(".json") {
             let d = super::read_value_from_json_file(file)?;
-            engine.add_data(d)?;
+            if !cedar_sources.is_empty() {
+                // For Cedar policies, JSON files contain entity data.
+                // Stash it to inject as concrete input.entities later.
+                cedar_entities = Some(d);
+            } else {
+                engine.add_data(d)?;
+            }
         } else if file.ends_with(".yaml") {
             let d = super::read_value_from_yaml_file(file)?;
             engine.add_data(d)?;
         } else {
-            bail!("Unsupported data file `{file}`. Must be rego, json or yaml.");
+            bail!("Unsupported data file `{file}`. Must be rego, cedar, json or yaml.");
         }
     }
 
-    // Compile policy to RVM bytecode.
-    let ep: regorus::Rc<str> = regorus::Rc::from(entrypoint.as_str());
-    let compiled = engine.compile_with_entrypoint(&ep)?;
-    let program = Compiler::compile_from_policy(&compiled, &[entrypoint.as_str()])?;
+    // Compile to RVM bytecode — Cedar or Rego path.
+    let is_cedar = !cedar_sources.is_empty();
+    let (program_owned, program_rc);
+    let program: &regorus::rvm::program::Program = if is_cedar {
+        program_owned = compile_cedar_to_program(&cedar_sources)?;
+        &program_owned
+    } else {
+        let ep: regorus::Rc<str> = regorus::Rc::from(entrypoint.as_str());
+        let compiled = engine.compile_with_entrypoint(&ep)?;
+        program_rc = regorus::languages::rego::compiler::Compiler::compile_from_policy(
+            &compiled,
+            &[entrypoint.as_str()],
+        )?;
+        &program_rc
+    };
     let data = engine.get_data();
 
     // Parse the expected output value (if given).
     let desired_value: Option<regorus::Value> = match &output {
-        Some(json_str) => Some(regorus::Value::from_json_str(json_str)
-            .map_err(|e| anyhow!("invalid JSON for --output: {e}"))?),
+        Some(json_str) => Some(
+            regorus::Value::from_json_str(json_str)
+                .map_err(|e| anyhow!("invalid JSON for --output: {e}"))?,
+        ),
         None => None,
     };
 
@@ -114,8 +138,10 @@ pub fn rego_analyze(
         Some(path) => {
             let contents = std::fs::read_to_string(path)
                 .map_err(|e| anyhow!("Failed to read input file '{}': {}", path, e))?;
-            Some(regorus::Value::from_json_str(&contents)
-                .map_err(|e| anyhow!("Failed to parse input file '{}': {}", path, e))?)
+            Some(
+                regorus::Value::from_json_str(&contents)
+                    .map_err(|e| anyhow!("Failed to parse input file '{}': {}", path, e))?,
+            )
         }
         None => None,
     };
@@ -125,11 +151,20 @@ pub fn rego_analyze(
         Some(path) => {
             let contents = std::fs::read_to_string(path)
                 .map_err(|e| anyhow!("Failed to read schema file '{}': {}", path, e))?;
-            Some(serde_json::from_str(&contents)
-                .map_err(|e| anyhow!("Failed to parse schema file '{}': {}", path, e))?)
+            Some(
+                serde_json::from_str(&contents)
+                    .map_err(|e| anyhow!("Failed to parse schema file '{}': {}", path, e))?,
+            )
         }
         None => None,
     };
+
+    let mut concrete_input = std::collections::HashMap::new();
+    if is_cedar {
+        if let Some(entities) = cedar_entities {
+            concrete_input.insert("entities".to_string(), entities);
+        }
+    }
 
     let config = AnalysisConfig {
         max_loop_depth: max_loops,
@@ -139,6 +174,7 @@ pub fn rego_analyze(
         dump_model: dump_model.is_some(),
         example_input,
         input_schema,
+        concrete_input,
     };
 
     let result = generate_input_for_goal(&program, &data, &entrypoint, &goal, &config)?;
@@ -171,4 +207,33 @@ pub fn rego_analyze(
     println!("{}", serde_json::to_string_pretty(&output_obj)?);
 
     Ok(())
+}
+
+#[cfg(feature = "cedar")]
+fn compile_cedar_to_program(
+    sources: &[(String, String)],
+) -> Result<regorus::rvm::program::Program> {
+    use regorus::languages::cedar::{compiler, parser::Parser as CedarParser};
+
+    let mut all_policies = Vec::new();
+    for (path, contents) in sources {
+        let source = regorus::Source::from_contents(path.clone(), contents.clone())
+            .map_err(|e| anyhow!("Failed to create source for '{}': {}", path, e))?;
+        let mut parser = CedarParser::new(&source)
+            .map_err(|e| anyhow!("Failed to parse Cedar file '{}': {}", path, e))?;
+        let policies = parser
+            .parse()
+            .map_err(|e| anyhow!("Failed to parse Cedar file '{}': {}", path, e))?;
+        all_policies.extend(policies);
+    }
+    let program = compiler::compile_to_program(&all_policies)
+        .map_err(|e| anyhow!("Failed to compile Cedar policies: {}", e))?;
+    Ok(program)
+}
+
+#[cfg(not(feature = "cedar"))]
+fn compile_cedar_to_program(
+    _sources: &[(String, String)],
+) -> Result<regorus::rvm::program::Program> {
+    bail!("Cedar support requires the `cedar` feature");
 }

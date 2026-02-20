@@ -1,0 +1,9 @@
+{
+  "principal": "User::\"root\"",
+  "action": "Action::\"delete\"",
+  "resource": "Namespace::\"kube-system\"",
+  "context": {
+    "has_incident_ticket": true,
+    "oncall_session": true
+  }
+}

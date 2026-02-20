@@ -1,16 +1,21 @@
-# Z3 Symbolic Analysis for Rego
+# Z3 Symbolic Analysis for Rego and Cedar
 
 Regorus includes an **experimental** Z3-backed symbolic analysis engine that
-can automatically answer questions about Rego policies:
+can automatically answer questions about Rego and Cedar policies:
 
 * *"What input would cause this policy to deny?"*
 * *"Is there any input that passes compliance?"*
 * *"Can the DMZ rule fire without the PII rule also firing?"*
+* *"What Cedar request gets permitted despite the forbid rule?"*
 
 Instead of executing the policy on test inputs, the analyzer **translates the
 compiled RVM bytecode into SMT constraints** and hands them to the
 [Z3 theorem prover](https://github.com/Z3Prover/z3).  Z3 either produces a
 concrete satisfying input or proves that none exists.
+
+For Cedar policies, the analyzer synthesises a complete **authorization
+request** — principal, action, resource, and context fields — that satisfies
+(or violates) the policy given a concrete entity graph.
 
 ---
 
@@ -25,6 +30,12 @@ concrete satisfying input or proves that none exists.
   - [Server Infrastructure](#example-1--server-infrastructure)
   - [Container Admission](#example-2--container-admission-controller)
   - [Network Segmentation](#example-3--network-segmentation-compliance)
+- [Cedar Policy Analysis](#cedar-policy-analysis)
+  - [Cedar Quick Start](#cedar-quick-start)
+  - [IAM Zero Trust](#cedar-example-1--iam-zero-trust)
+  - [Healthcare (HIPAA-inspired)](#cedar-example-2--healthcare-hipaa-inspired)
+  - [Financial Trading](#cedar-example-3--financial-trading-platform)
+  - [Kubernetes RBAC](#cedar-example-4--kubernetes-rbac)
 - [Running the Demo Suite](#running-the-demo-suite)
 - [Inspecting Z3 Internals](#inspecting-z3-internals)
 - [Pre-generated SMT2 Files](#pre-generated-smt2-files)
@@ -74,7 +85,8 @@ ninja && sudo ninja install
 ## Building & Installing
 
 The Z3 integration is behind the `z3-analysis` Cargo feature and is **not
-included in default builds**.
+included in default builds**.  Cedar support additionally requires the `cedar`
+feature.
 
 The examples below use a bare `regorus` command.  To make that available,
 **install** the example binary:
@@ -84,13 +96,13 @@ The examples below use a bare `regorus` command.  To make that available,
 ```bash
 BINDGEN_EXTRA_CLANG_ARGS="-I/opt/homebrew/include" \
 LIBRARY_PATH="/opt/homebrew/lib" \
-cargo install --example regorus --features z3-analysis --path .
+cargo install --example regorus --features z3-analysis,cedar --path .
 ```
 
 ### Linux (system Z3)
 
 ```bash
-cargo install --example regorus --features z3-analysis --path .
+cargo install --example regorus --features z3-analysis,cedar --path .
 ```
 
 If Z3 is installed in a non-standard location, set:
@@ -110,10 +122,10 @@ cargo install --example regorus --features z3-analysis --path .
 # macOS
 BINDGEN_EXTRA_CLANG_ARGS="-I/opt/homebrew/include" \
 LIBRARY_PATH="/opt/homebrew/lib" \
-cargo test --features z3-analysis
+cargo test --features z3-analysis,cedar
 
 # Linux
-cargo test --features z3-analysis
+cargo test --features z3-analysis,cedar
 ```
 
 ---
@@ -549,6 +561,199 @@ PII rule (line 121) is never triggered.
 
 ---
 
+## Cedar Policy Analysis
+
+The analyzer also supports [Cedar](https://www.cedarpolicy.com/) policies.
+Cedar uses a **permit/forbid** model with entity hierarchies, wildcard
+patterns (`like`), and typed context attributes.  The analyzer translates
+Cedar policies to SMT constraints and synthesises a complete authorization
+**request** — principal, action, resource, and context — given a concrete
+entity graph.
+
+### Cedar Quick Start
+
+```bash
+# "What request gets permitted?"
+regorus analyze \
+  -d policy.cedar \
+  -d entities.json \
+  -e cedar.authorize \
+  -o 1
+
+# "What request gets denied?"
+regorus analyze \
+  -d policy.cedar \
+  -d entities.json \
+  -e cedar.authorize \
+  -o 0
+```
+
+Cedar output uses `1` for permit and `0` for deny (matching Cedar's
+`to_number(permit_exclusive)` encoding).
+
+### Cedar Example 1 — IAM Zero Trust
+
+**Policy:** [`examples/cedar/examples/iam_zero_trust/policy.cedar`](examples/cedar/examples/iam_zero_trust/policy.cedar)
+**Entities:** [`examples/cedar/examples/iam_zero_trust/entities.json`](examples/cedar/examples/iam_zero_trust/entities.json)
+
+Admin login requires MFA, an internal IP (`10.*`), and the account must not
+be suspended.  The policy features two interacting rules: a `permit` with
+context constraints and a `forbid` override for suspended accounts.
+
+```bash
+regorus analyze \
+  -d examples/cedar/examples/iam_zero_trust/policy.cedar \
+  -d examples/cedar/examples/iam_zero_trust/entities.json \
+  -e cedar.authorize \
+  -o 1
+```
+
+```json
+{
+  "input": {
+    "action": "Action::login",
+    "context": {
+      "ip": "10.",
+      "mfa": true,
+      "suspended": false
+    },
+    "principal": "User::admins",
+    "resource": "App::portal"
+  },
+  "satisfiable": true,
+  "warnings": []
+}
+```
+
+Z3 discovers that the principal must be in the `admins` hierarchy
+(`User::admins` or `User::alice`), the IP must match `10.*` (Z3 string
+regex theory), MFA must be `true`, and `suspended` must be `false` — all
+derived purely from the policy and entity graph.
+
+> **SMT2 encoding:** [`examples/smt2/cedar/iam_zero_trust_permit.smt2`](examples/smt2/cedar/iam_zero_trust_permit.smt2)
+
+### Cedar Example 2 — Healthcare (HIPAA-inspired)
+
+**Policy:** [`examples/cedar/examples/hipaa_healthcare/policy.cedar`](examples/cedar/examples/hipaa_healthcare/policy.cedar)
+**Entities:** [`examples/cedar/examples/hipaa_healthcare/entities.json`](examples/cedar/examples/hipaa_healthcare/entities.json)
+
+Doctors in the oncology department may view patient records during approved
+hours (8–18) with a trusted device.  Nurses may view non-VIP records during
+a wider window (6–20).  After-hours access is forbidden for non-emergencies.
+
+```bash
+regorus analyze \
+  -d examples/cedar/examples/hipaa_healthcare/policy.cedar \
+  -d examples/cedar/examples/hipaa_healthcare/entities.json \
+  -e cedar.authorize \
+  -o 1
+```
+
+```json
+{
+  "input": {
+    "action": "Action::viewRecord",
+    "context": {
+      "device_trusted": false,
+      "emergency": true,
+      "hour": 6
+    },
+    "principal": "Role::nurses",
+    "resource": "PatientRecord::chart-42"
+  },
+  "satisfiable": true,
+  "warnings": []
+}
+```
+
+Z3 navigates a 3-level entity hierarchy (`User → Role → Staff`), an ITE
+chain for the `department` attribute, numeric hour range constraints (`>=`
+and `<=`), and the VIP boolean flag — and finds the nurse path at hour 6.
+
+> **SMT2 encoding:** [`examples/smt2/cedar/hipaa_healthcare_permit.smt2`](examples/smt2/cedar/hipaa_healthcare_permit.smt2)
+
+### Cedar Example 3 — Financial Trading Platform
+
+**Policy:** [`examples/cedar/examples/financial_trading/policy.cedar`](examples/cedar/examples/financial_trading/policy.cedar)
+**Entities:** [`examples/cedar/examples/financial_trading/entities.json`](examples/cedar/examples/financial_trading/entities.json)
+
+Tiered trade execution: regular traders up to $1M, senior traders up to $50M.
+Compliance officers can review/audit any trade.  All access is
+forbidden from sanctioned regions (`SANC-*`).
+
+```bash
+regorus analyze \
+  -d examples/cedar/examples/financial_trading/policy.cedar \
+  -d examples/cedar/examples/financial_trading/entities.json \
+  -e cedar.authorize \
+  -o 1
+```
+
+```json
+{
+  "input": {
+    "action": "Action::reviewTrade",
+    "context": {
+      "market_open": false,
+      "region": "",
+      "trade_value": 0
+    },
+    "principal": "Role::compliance",
+    "resource": "Market::NYSE"
+  },
+  "satisfiable": true,
+  "warnings": []
+}
+```
+
+Z3 finds the compliance officer path (no trade value or region constraints)
+as the easiest permit.  The SMT2 encoding beautifully shows the three
+permit disjuncts, the sanctions forbid, and the entity hierarchy — all in
+~40 lines of readable SMT-LIB2.
+
+> **SMT2 encoding:** [`examples/smt2/cedar/financial_trading_permit.smt2`](examples/smt2/cedar/financial_trading_permit.smt2)
+
+### Cedar Example 4 — Kubernetes RBAC
+
+**Policy:** [`examples/cedar/examples/k8s_rbac/policy.cedar`](examples/cedar/examples/k8s_rbac/policy.cedar)
+**Entities:** [`examples/cedar/examples/k8s_rbac/entities.json`](examples/cedar/examples/k8s_rbac/entities.json)
+
+Namespace-scoped access: developers can read, SREs can also delete (with an
+incident ticket + on-call session), cluster-admins can do everything —
+**except** nobody can delete `kube-system` resources (hard deny).
+
+```bash
+regorus analyze \
+  -d examples/cedar/examples/k8s_rbac/policy.cedar \
+  -d examples/cedar/examples/k8s_rbac/entities.json \
+  -e cedar.authorize \
+  -o 1
+```
+
+```json
+{
+  "input": {
+    "action": "Action::get",
+    "context": {
+      "has_incident_ticket": false,
+      "oncall_session": false
+    },
+    "principal": "Group::cluster-admins",
+    "resource": "Namespace::kube-system"
+  },
+  "satisfiable": true,
+  "warnings": []
+}
+```
+
+Z3 discovers that cluster-admins can `get` from `kube-system` — the forbid
+only blocks `Action::delete`.  The SMT2 encoding shows the four permit
+disjuncts and the forbid negation clearly.
+
+> **SMT2 encoding:** [`examples/smt2/cedar/k8s_rbac_permit.smt2`](examples/smt2/cedar/k8s_rbac_permit.smt2)
+
+---
+
 ## Running the Demo Suite
 
 A script that runs all examples end-to-end is provided:
@@ -558,7 +763,8 @@ A script that runs all examples end-to-end is provided:
 ```
 
 This exercises violation finding, compliance synthesis, targeted path
-exploration, and SMT/model file dumps across all three policies.
+exploration, Cedar permit/deny synthesis, and SMT/model file dumps across
+Rego and Cedar policies.
 
 ---
 
@@ -620,6 +826,12 @@ standalone Z3 binary (`z3 file.smt2`) without building Regorus.
 | [`container_admission_targeted.smt2`](examples/smt2/container_admission_targeted.smt2) | Container Admission | Targeted: cover line 97, avoid line 73 |
 | [`network_segmentation_compliant_false.smt2`](examples/smt2/network_segmentation_compliant_false.smt2) | Network Segmentation | Find non-compliant topology |
 | [`network_segmentation_targeted.smt2`](examples/smt2/network_segmentation_targeted.smt2) | Network Segmentation | Targeted: DMZ rule only (line 93, avoid 121) |
+| [`cedar/quickstart_permit.smt2`](examples/smt2/cedar/quickstart_permit.smt2) | Cedar Quickstart | Permit with IP regex + entity hierarchy |
+| [`cedar/iam_zero_trust_permit.smt2`](examples/smt2/cedar/iam_zero_trust_permit.smt2) | Cedar IAM Zero Trust | Permit with MFA + IP + forbid override |
+| [`cedar/hipaa_healthcare_permit.smt2`](examples/smt2/cedar/hipaa_healthcare_permit.smt2) | Cedar Healthcare | Permit with hour ranges + VIP + department |
+| [`cedar/financial_trading_permit.smt2`](examples/smt2/cedar/financial_trading_permit.smt2) | Cedar Financial Trading | Permit with trade limits + sanctions forbid |
+| [`cedar/k8s_rbac_permit.smt2`](examples/smt2/cedar/k8s_rbac_permit.smt2) | Cedar Kubernetes RBAC | Permit with tiered access + hard deny |
+| [`cedar/deny_overrides_permit.smt2`](examples/smt2/cedar/deny_overrides_permit.smt2) | Cedar Deny Overrides | Permit when suspended=false |
 
 To regenerate these files, run the corresponding `regorus analyze` command with
 `--dump-smt <path>`.
@@ -641,8 +853,11 @@ The symbolic engine is under active development.  Current limitations include:
 | **Negation** | `not` in rule bodies is supported for concrete and simple symbolic expressions |
 | **`with` keyword** | Not yet supported |
 | **Functions** | User-defined functions are inlined up to the rule depth limit |
+| **Cedar** | Supports `permit`/`forbid`, `in` (entity hierarchy), `like` (regex), `has`, `attr`, `is`, `==`, numeric/boolean context; entity graph must be concrete |
 
 Despite these limitations, the engine handles the core Rego patterns — nested
 loops, multi-way joins, set membership (`in`), partial rules, `count`, and
-Boolean/string/numeric comparisons — which cover a large class of real-world
-admission control and compliance policies.
+Boolean/string/numeric comparisons — and the core Cedar patterns — entity
+hierarchy traversal, permit/forbid interplay, wildcard matching, and typed
+context constraints — which cover a large class of real-world admission
+control, compliance, and authorization policies.

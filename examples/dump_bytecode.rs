@@ -1,6 +1,6 @@
 // Temporary tool to dump RVM bytecode for the allowed_server policy.
-use regorus::Engine;
 use regorus::languages::rego::compiler::Compiler;
+use regorus::Engine;
 
 fn main() {
     let policy = r#"
@@ -32,15 +32,11 @@ fn main() {
         .unwrap();
     let ep: regorus::Rc<str> = regorus::Rc::from("data.example.deny");
     let compiled = engine.compile_with_entrypoint(&ep).unwrap();
-    let program =
-        Compiler::compile_from_policy(&compiled, &["data.example.deny"]).unwrap();
+    let program = Compiler::compile_from_policy(&compiled, &["data.example.deny"]).unwrap();
 
     println!("=== Instructions ===");
     for (i, instr) in program.instructions.iter().enumerate() {
-        let span_info = program
-            .instruction_spans
-            .get(i)
-            .and_then(|s| s.as_ref());
+        let span_info = program.instruction_spans.get(i).and_then(|s| s.as_ref());
         let line_info = span_info
             .map(|s| format!("  [src{} line {}]", s.source_index, s.line))
             .unwrap_or_default();
@@ -96,11 +92,15 @@ fn main() {
         ]
     }"#;
     engine.set_input(regorus::Value::from_json_str(input_json).unwrap());
-    let ps = engine.eval_query("data.example.public_server".to_string(), false).unwrap();
+    let ps = engine
+        .eval_query("data.example.public_server".to_string(), false)
+        .unwrap();
     println!("\n=== public_server (concrete) ===");
     println!("{}", serde_json::to_string_pretty(&ps).unwrap());
 
-    let violation = engine.eval_query("data.example.violation".to_string(), false).unwrap();
+    let violation = engine
+        .eval_query("data.example.violation".to_string(), false)
+        .unwrap();
     println!("\n=== violation (concrete) ===");
     println!("{}", serde_json::to_string_pretty(&violation).unwrap());
 }

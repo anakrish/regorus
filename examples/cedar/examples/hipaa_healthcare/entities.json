@@ -1,0 +1,9 @@
+{
+  "User::dr_smith": { "parents": ["Role::doctors"], "attrs": { "department": "oncology" } },
+  "User::dr_jones": { "parents": ["Role::doctors"], "attrs": { "department": "cardiology" } },
+  "User::nurse_amy": { "parents": ["Role::nurses"], "attrs": {} },
+  "Role::doctors": { "parents": ["Role::staff"], "attrs": {} },
+  "Role::nurses": { "parents": ["Role::staff"], "attrs": {} },
+  "Role::staff": { "parents": [], "attrs": {} },
+  "PatientRecord::chart-42": { "parents": [], "attrs": { "vip": false } }
+}

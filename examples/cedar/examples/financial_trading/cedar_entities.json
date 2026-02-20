@@ -1,0 +1,32 @@
+[
+  {
+    "uid": { "__entity": { "type": "User", "id": "alice" } },
+    "attrs": { "clearance": "L1" },
+    "parents": [{ "__entity": { "type": "Team", "id": "trading-desk" } }]
+  },
+  {
+    "uid": { "__entity": { "type": "User", "id": "bob" } },
+    "attrs": { "clearance": "L3" },
+    "parents": [{ "__entity": { "type": "Team", "id": "senior-traders" } }]
+  },
+  {
+    "uid": { "__entity": { "type": "User", "id": "carol" } },
+    "attrs": {},
+    "parents": [{ "__entity": { "type": "Role", "id": "compliance" } }]
+  },
+  {
+    "uid": { "__entity": { "type": "Team", "id": "trading-desk" } },
+    "attrs": {},
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "Team", "id": "senior-traders" } },
+    "attrs": {},
+    "parents": [{ "__entity": { "type": "Team", "id": "trading-desk" } }]
+  },
+  {
+    "uid": { "__entity": { "type": "Role", "id": "compliance" } },
+    "attrs": {},
+    "parents": []
+  }
+]

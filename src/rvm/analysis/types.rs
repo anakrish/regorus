@@ -308,9 +308,7 @@ impl<'ctx> Definedness<'ctx> {
             (Definedness::Defined, Definedness::Defined) => Definedness::Defined,
             (Definedness::Undefined, _) | (_, Definedness::Undefined) => Definedness::Undefined,
             (Definedness::Defined, Definedness::Symbolic(s))
-            | (Definedness::Symbolic(s), Definedness::Defined) => {
-                Definedness::Symbolic(s.clone())
-            }
+            | (Definedness::Symbolic(s), Definedness::Defined) => Definedness::Symbolic(s.clone()),
             (Definedness::Symbolic(a), Definedness::Symbolic(b)) => {
                 Definedness::Symbolic(Z3Bool::and(ctx, &[a, b]))
             }

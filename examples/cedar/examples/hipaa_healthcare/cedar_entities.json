@@ -1,0 +1,37 @@
+[
+  {
+    "uid": { "__entity": { "type": "User", "id": "dr_smith" } },
+    "attrs": { "department": "oncology" },
+    "parents": [{ "__entity": { "type": "Role", "id": "doctors" } }]
+  },
+  {
+    "uid": { "__entity": { "type": "User", "id": "dr_jones" } },
+    "attrs": { "department": "cardiology" },
+    "parents": [{ "__entity": { "type": "Role", "id": "doctors" } }]
+  },
+  {
+    "uid": { "__entity": { "type": "User", "id": "nurse_amy" } },
+    "attrs": {},
+    "parents": [{ "__entity": { "type": "Role", "id": "nurses" } }]
+  },
+  {
+    "uid": { "__entity": { "type": "Role", "id": "doctors" } },
+    "attrs": {},
+    "parents": [{ "__entity": { "type": "Role", "id": "staff" } }]
+  },
+  {
+    "uid": { "__entity": { "type": "Role", "id": "nurses" } },
+    "attrs": {},
+    "parents": [{ "__entity": { "type": "Role", "id": "staff" } }]
+  },
+  {
+    "uid": { "__entity": { "type": "Role", "id": "staff" } },
+    "attrs": {},
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "PatientRecord", "id": "chart-42" } },
+    "attrs": { "vip": false },
+    "parents": []
+  }
+]

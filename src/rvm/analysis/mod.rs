@@ -73,6 +73,12 @@ pub struct AnalysisConfig {
     /// non-degenerate values (required fields, min-length strings,
     /// pairwise-distinct IDs, etc.).
     pub input_schema: Option<serde_json::Value>,
+    /// Concrete values for specific input paths.  When provided, these
+    /// paths are treated as concrete data rather than symbolic variables.
+    /// Keys are top-level input field names (e.g., `"entities"`).
+    /// Used by Cedar analysis to inject the entity hierarchy as concrete
+    /// data while keeping principal/action/resource/context symbolic.
+    pub concrete_input: std::collections::HashMap<String, Value>,
 }
 
 impl Default for AnalysisConfig {
@@ -85,6 +91,7 @@ impl Default for AnalysisConfig {
             dump_model: false,
             example_input: None,
             input_schema: None,
+            concrete_input: std::collections::HashMap::new(),
         }
     }
 }
@@ -426,8 +433,13 @@ pub fn generate_input_for_goal(
     let mut extra_warnings = Vec::new();
     if let Some(lines) = cover_lines {
         if !lines.is_empty() {
-            let line_constraints =
-                lines_to_constraints(program, lines, &pc_path_conditions, &ctx, &mut extra_warnings);
+            let line_constraints = lines_to_constraints(
+                program,
+                lines,
+                &pc_path_conditions,
+                &ctx,
+                &mut extra_warnings,
+            );
             for lc in &line_constraints {
                 solver.assert(lc);
             }
@@ -435,8 +447,13 @@ pub fn generate_input_for_goal(
     }
     if let Some(lines) = avoid_lines {
         if !lines.is_empty() {
-            let line_constraints =
-                lines_to_constraints(program, lines, &pc_path_conditions, &ctx, &mut extra_warnings);
+            let line_constraints = lines_to_constraints(
+                program,
+                lines,
+                &pc_path_conditions,
+                &ctx,
+                &mut extra_warnings,
+            );
             for lc in &line_constraints {
                 solver.assert(&lc.not());
             }
@@ -520,14 +537,9 @@ fn lines_to_constraints<'ctx>(
 
     for (file, line) in lines {
         // Find the source index for this file name.
-        let source_idx = program
-            .sources
-            .iter()
-            .position(|s| {
-                s.name == *file
-                    || s.name.ends_with(file.as_str())
-                    || file.ends_with(s.name.as_str())
-            });
+        let source_idx = program.sources.iter().position(|s| {
+            s.name == *file || s.name.ends_with(file.as_str()) || file.ends_with(s.name.as_str())
+        });
 
         let source_idx = match source_idx {
             Some(idx) => idx,

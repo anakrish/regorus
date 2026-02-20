@@ -17,10 +17,7 @@ use super::types::ValueSort;
 /// Each path variable like `input.user.role` is evaluated in the model. If defined,
 /// its concrete value is placed into the output JSON tree. This is the key payoff
 /// of path-based encoding: extraction is a simple iteration over flat variables.
-pub fn extract_input<'ctx>(
-    model: &z3::Model<'ctx>,
-    registry: &PathRegistry<'ctx>,
-) -> Value {
+pub fn extract_input<'ctx>(model: &z3::Model<'ctx>, registry: &PathRegistry<'ctx>) -> Value {
     let mut result = Value::new_object();
 
     for (path, entry) in registry.iter() {

@@ -1,9 +1,10 @@
 # Z3 Symbolic Analysis — Demo Gallery
 
-These demos showcase **automatic input synthesis** for Rego policies using
-Z3-backed symbolic execution.  Given a policy, a schema, and a goal, the
-analyzer constructs a concrete JSON input that satisfies (or violates) the
-policy — without executing the policy at all.
+These demos showcase **automatic input synthesis** for Rego and Cedar
+policies using Z3-backed symbolic execution.  Given a policy, a schema (for
+Rego) or entity data (for Cedar), and a goal, the analyzer constructs a
+concrete JSON input that satisfies (or violates) the policy — without
+executing the policy at all.
 
 ## Quick start
 
@@ -11,7 +12,7 @@ policy — without executing the policy at all.
 # One-time build (requires Z3: brew install z3)
 BINDGEN_EXTRA_CLANG_ARGS="-I/opt/homebrew/include" \
 LIBRARY_PATH="/opt/homebrew/lib" \
-cargo build --example regorus --features z3-analysis
+cargo build --example regorus --features z3-analysis,cedar
 
 # Run all demos
 ./examples/demos/run_demos.sh
@@ -115,16 +116,109 @@ operator for protocol membership checks.
 
 ---
 
-## Demo 4 — SMT / Model File Dump
+## Demo 4 — Cedar: IAM Zero Trust
+
+**Policy** ([../../examples/cedar/examples/iam_zero_trust/policy.cedar](../../examples/cedar/examples/iam_zero_trust/policy.cedar)):
+Admins may log in if they have MFA enabled and connect from an internal IP
+(matching `10.*`).  A `forbid` rule overrides everything if the account is
+suspended.
+
+```bash
+regorus analyze \
+  -d examples/cedar/examples/iam_zero_trust/policy.cedar \
+  -d examples/cedar/examples/iam_zero_trust/entities.json \
+  -e cedar.authorize -o 1
+```
+
+Z3 discovers that the principal must belong to the `admins` group, the IP
+must start with `"10."` (encoded as a Z3 regex `re.++ (str.to_re "10.") re.all`),
+`mfa` must be `true`, and `suspended` must be `false`.
+
+---
+
+## Demo 5 — Cedar: Healthcare (HIPAA-inspired)
+
+**Policy** ([../../examples/cedar/examples/hipaa_healthcare/policy.cedar](../../examples/cedar/examples/hipaa_healthcare/policy.cedar)):
+Doctors in oncology may view patient records during hours 8–18 with a
+trusted device.  Nurses may view non-VIP records during hours 6–20.
+A `forbid` rule blocks all access outside hours 6–22 unless
+`emergency` is `true`.
+
+```bash
+regorus analyze \
+  -d examples/cedar/examples/hipaa_healthcare/policy.cedar \
+  -d examples/cedar/examples/hipaa_healthcare/entities.json \
+  -e cedar.authorize -o 1
+```
+
+Z3 navigates a 3-level entity hierarchy (`User → Role → Staff`),
+department attribute matching, and numeric hour constraints to find a
+valid combination.
+
+---
+
+## Demo 6 — Cedar: Financial Trading Platform
+
+**Policy** ([../../examples/cedar/examples/financial_trading/policy.cedar](../../examples/cedar/examples/financial_trading/policy.cedar)):
+Regular traders may execute trades ≤ $1M from `US-*` regions during market
+hours.  Senior traders get a $50M limit.  Compliance officers may
+`reviewTrade` or `auditLog` with no monetary constraints.  A `forbid`
+blocks all access from sanctioned regions matching `SANC-*`.
+
+```bash
+regorus analyze \
+  -d examples/cedar/examples/financial_trading/policy.cedar \
+  -d examples/cedar/examples/financial_trading/entities.json \
+  -e cedar.authorize -o 1
+```
+
+Z3 discovers the compliance-officer path (no trade-value or region
+constraints), or a trader path satisfying the `US-*` region regex and
+`trade_value ≤ limit`.
+
+---
+
+## Demo 7 — Cedar: Kubernetes RBAC
+
+**Policy** ([../../examples/cedar/examples/k8s_rbac/policy.cedar](../../examples/cedar/examples/k8s_rbac/policy.cedar)):
+Developers may `get`/`list` resources in the `production` namespace.
+SREs may also `delete`, but only with an incident ticket and while on-call.
+Cluster-admins may perform all actions on `production` and read
+`kube-system`.  A hard `forbid` prevents *anyone* from deleting
+`kube-system` resources.
+
+```bash
+regorus analyze \
+  -d examples/cedar/examples/k8s_rbac/policy.cedar \
+  -d examples/cedar/examples/k8s_rbac/entities.json \
+  -e cedar.authorize -o 1
+```
+
+Z3 explores the permit/forbid interplay — cluster-admins can read
+`kube-system` but the forbid blocks delete there.
+
+---
+
+## Demo 8 — SMT / Model File Dump
 
 Use `--dump-smt <file>` and `--dump-model <file>` to inspect the Z3 encoding:
 
 ```bash
+# Rego: container admission targeted query
 regorus analyze ... --dump-smt demo.smt2 --dump-model demo.model
+
+# Cedar: financial trading
+regorus analyze \
+  -d examples/cedar/examples/financial_trading/policy.cedar \
+  -d examples/cedar/examples/financial_trading/entities.json \
+  -e cedar.authorize -o 1 \
+  --dump-smt cedar.smt2 --dump-model cedar.model
 ```
 
-The SMT file contains ~1,900 lines of SMT-LIB2 assertions, and the model
-file shows every symbolic variable assignment Z3 chose.
+The Rego SMT file contains ~1,900 lines of SMT-LIB2 assertions.  The Cedar
+encoding is much more compact (~67 lines) — entity hierarchy disjuncts,
+regex constraints for `like` patterns, numeric bounds, and the
+permit-unless-forbid structure are all directly visible.
 
 ---
 
@@ -132,10 +226,13 @@ file shows every symbolic variable assignment Z3 chose.
 
 | Capability | How it's shown |
 |---|---|
-| **Input synthesis** | Given `-o true` or `-o false`, Z3 constructs the exact JSON |
-| **Schema constraints** | `minItems`, `maxItems`, `x-unique`, `required`, `minLength` restrict the search space |
-| **Cross-collection joins** | Z3 coordinates string IDs across 3–4 collections |
-| **Path targeting** | `-l FILE:LINE` forces execution through a specific rule body |
-| **Path avoidance** | `--avoid-line FILE:LINE` prevents a specific code path |
-| **Soundness** | Every generated input is verified by the concrete Rego engine |
+| **Input synthesis** | Given `-o true`/`false` (Rego) or `-o 1`/`0` (Cedar), Z3 constructs the exact JSON |
+| **Schema constraints** | `minItems`, `maxItems`, `x-unique`, `required`, `minLength` restrict the Rego search space |
+| **Cross-collection joins** | Z3 coordinates string IDs across 3–4 collections (Rego) |
+| **Entity hierarchy** | Z3 enumerates transitive group membership in Cedar `in` checks |
+| **Permit / forbid interplay** | Cedar's `forbid` overrides are encoded as `permit ∧ ¬forbid` |
+| **Regex constraints** | Cedar `like` patterns become Z3 string regexes |
+| **Path targeting** | `-l FILE:LINE` forces execution through a specific rule body (Rego) |
+| **Path avoidance** | `--avoid-line FILE:LINE` prevents a specific code path (Rego) |
+| **Soundness** | Every generated input is verified by the concrete engine |
 | **SMT debugging** | `--dump-smt` / `--dump-model` dump the full Z3 encoding |

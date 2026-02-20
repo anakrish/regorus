@@ -146,8 +146,8 @@ mod tests {
             .compile_with_entrypoint(&entry_point)
             .expect("compile_with_entrypoint");
 
-        let program = Compiler::compile_from_policy(&compiled, &[entrypoint])
-            .expect("compile_from_policy");
+        let program =
+            Compiler::compile_from_policy(&compiled, &[entrypoint]).expect("compile_from_policy");
 
         let config = AnalysisConfig::default();
         let data = Value::new_object();
@@ -164,7 +164,9 @@ mod tests {
                 if let Some(ref input) = r.input {
                     output.push_str(&alloc::format!(
                         "Generated input:\n{}\n",
-                        input.to_json_str().unwrap_or_else(|_| alloc::format!("{:?}", input))
+                        input
+                            .to_json_str()
+                            .unwrap_or_else(|_| alloc::format!("{:?}", input))
                     ));
                 }
                 if !r.warnings.is_empty() {
@@ -187,8 +189,14 @@ mod tests {
     /// Convenience: assert SAT and return the input.
     fn expect_sat(test_name: &str, policy: &str, entrypoint: &str) -> Value {
         let (result, _) = run_analysis(test_name, policy, entrypoint, Value::Bool(true));
-        assert!(result.satisfiable, "{}: Expected SAT but got UNSAT", test_name);
-        result.input.expect(&alloc::format!("{}: Expected input value", test_name))
+        assert!(
+            result.satisfiable,
+            "{}: Expected SAT but got UNSAT",
+            test_name
+        );
+        result
+            .input
+            .expect(&alloc::format!("{}: Expected input value", test_name))
     }
 
     // ===================================================================
@@ -217,22 +225,24 @@ mod tests {
             .compile_with_entrypoint(&entry_point)
             .expect("compile_with_entrypoint");
 
-        let program = Compiler::compile_from_policy(&compiled, &[entrypoint])
-            .expect("compile_from_policy");
+        let program =
+            Compiler::compile_from_policy(&compiled, &[entrypoint]).expect("compile_from_policy");
 
         let config = AnalysisConfig::default();
         let data = Value::new_object();
 
-        let result =
-            generate_input_for_goal(&program, &data, entrypoint, &goal, &config)
-                .expect(&alloc::format!("{}: generate_input_for_goal failed", test_name));
+        let result = generate_input_for_goal(&program, &data, entrypoint, &goal, &config).expect(
+            &alloc::format!("{}: generate_input_for_goal failed", test_name),
+        );
 
         std::println!("\n=== {} ===", test_name);
         std::println!("Satisfiable: {}", result.satisfiable);
         if let Some(ref input) = result.input {
             std::println!(
                 "Generated input:\n{}",
-                input.to_json_str().unwrap_or_else(|_| alloc::format!("{:?}", input))
+                input
+                    .to_json_str()
+                    .unwrap_or_else(|_| alloc::format!("{:?}", input))
             );
         }
         if !result.warnings.is_empty() {
@@ -450,9 +460,14 @@ mod tests {
         );
         assert!(result.satisfiable, "Expected SAT");
         let input = result.input.expect("Expected input");
-        let role = input[&Value::from("role")].as_string().expect("role should be string");
-        assert!(role.as_ref() != "guest" && role.as_ref() != "anonymous",
-            "Expected role != guest and != anonymous, got '{}'", role);
+        let role = input[&Value::from("role")]
+            .as_string()
+            .expect("role should be string");
+        assert!(
+            role.as_ref() != "guest" && role.as_ref() != "anonymous",
+            "Expected role != guest and != anonymous, got '{}'",
+            role
+        );
     }
 
     // ===================================================================
@@ -472,7 +487,11 @@ mod tests {
             .expect("score should be number")
             .as_i64()
             .expect("score should fit i64");
-        assert!(score + 10 >= 100, "Expected score+10 >= 100, got score={}", score);
+        assert!(
+            score + 10 >= 100,
+            "Expected score+10 >= 100, got score={}",
+            score
+        );
     }
 
     // ===================================================================
@@ -495,7 +514,10 @@ mod tests {
             "data.test.allow",
             Value::Bool(true),
         );
-        assert!(!result.satisfiable, "Expected UNSAT: role can't be both admin and guest");
+        assert!(
+            !result.satisfiable,
+            "Expected UNSAT: role can't be both admin and guest"
+        );
     }
 
     // ===================================================================
@@ -514,15 +536,18 @@ mod tests {
             }
         "#;
         let input = expect_sat("level13_deep_nesting", policy, "data.test.allow");
-        let dept = &input[&Value::from("request")][&Value::from("user")][&Value::from("department")];
+        let dept =
+            &input[&Value::from("request")][&Value::from("user")][&Value::from("department")];
         assert_eq!(dept, &Value::from("engineering"));
-        let clearance = input[&Value::from("request")][&Value::from("user")][&Value::from("clearance")]
+        let clearance = input[&Value::from("request")][&Value::from("user")]
+            [&Value::from("clearance")]
             .as_number()
             .expect("clearance should be number")
             .as_i64()
             .expect("clearance i64");
         assert!(clearance >= 3);
-        let class = &input[&Value::from("request")][&Value::from("resource")][&Value::from("classification")];
+        let class = &input[&Value::from("request")][&Value::from("resource")]
+            [&Value::from("classification")];
         assert_eq!(class, &Value::from("internal"));
     }
 
@@ -574,7 +599,12 @@ mod tests {
         assert!(result.satisfiable, "Expected SAT");
         let input = result.input.expect("Expected input");
         // Should have a users array with at least one element == "admin".
-        std::println!("level14a input: {}", input.to_json_str().unwrap_or_else(|_| alloc::format!("{:?}", input)));
+        std::println!(
+            "level14a input: {}",
+            input
+                .to_json_str()
+                .unwrap_or_else(|_| alloc::format!("{:?}", input))
+        );
     }
 
     // ===================================================================
@@ -599,7 +629,12 @@ mod tests {
         );
         assert!(result.satisfiable, "Expected SAT");
         let input = result.input.expect("Expected input");
-        std::println!("level14b input: {}", input.to_json_str().unwrap_or_else(|_| alloc::format!("{:?}", input)));
+        std::println!(
+            "level14b input: {}",
+            input
+                .to_json_str()
+                .unwrap_or_else(|_| alloc::format!("{:?}", input))
+        );
     }
 
     // ===================================================================
@@ -625,7 +660,12 @@ mod tests {
         );
         assert!(result.satisfiable, "Expected SAT");
         let input = result.input.expect("Expected input");
-        std::println!("level14c input: {}", input.to_json_str().unwrap_or_else(|_| alloc::format!("{:?}", input)));
+        std::println!(
+            "level14c input: {}",
+            input
+                .to_json_str()
+                .unwrap_or_else(|_| alloc::format!("{:?}", input))
+        );
     }
 
     // ===================================================================
@@ -651,7 +691,12 @@ mod tests {
         );
         assert!(result.satisfiable, "Expected SAT");
         let input = result.input.expect("Expected input");
-        std::println!("level14d input: {}", input.to_json_str().unwrap_or_else(|_| alloc::format!("{:?}", input)));
+        std::println!(
+            "level14d input: {}",
+            input
+                .to_json_str()
+                .unwrap_or_else(|_| alloc::format!("{:?}", input))
+        );
     }
 
     // ===================================================================
@@ -681,7 +726,12 @@ mod tests {
         );
         assert!(result.satisfiable, "Expected SAT");
         let input = result.input.expect("Expected input");
-        std::println!("level14e input: {}", input.to_json_str().unwrap_or_else(|_| alloc::format!("{:?}", input)));
+        std::println!(
+            "level14e input: {}",
+            input
+                .to_json_str()
+                .unwrap_or_else(|_| alloc::format!("{:?}", input))
+        );
     }
 
     // ===================================================================
@@ -759,7 +809,12 @@ mod tests {
             Ok(r) => {
                 std::println!("Satisfiable: {}", r.satisfiable);
                 if let Some(ref input) = r.input {
-                    std::println!("Generated input:\n{}", input.to_json_str().unwrap_or_else(|_| alloc::format!("{:?}", input)));
+                    std::println!(
+                        "Generated input:\n{}",
+                        input
+                            .to_json_str()
+                            .unwrap_or_else(|_| alloc::format!("{:?}", input))
+                    );
                 }
                 if !r.warnings.is_empty() {
                     std::println!("Warnings:");
@@ -854,8 +909,12 @@ mod tests {
             Ok(r) => {
                 std::println!("Satisfiable: {}", r.satisfiable);
                 if let Some(ref input) = r.input {
-                    std::println!("Generated input:\n{}",
-                        input.to_json_str().unwrap_or_else(|_| alloc::format!("{:?}", input)));
+                    std::println!(
+                        "Generated input:\n{}",
+                        input
+                            .to_json_str()
+                            .unwrap_or_else(|_| alloc::format!("{:?}", input))
+                    );
                 }
                 if !r.warnings.is_empty() {
                     std::println!("Warnings:");
@@ -869,8 +928,7 @@ mod tests {
                     "Expected SAT: should be able to find a problematic server"
                 );
                 if let Some(ref input) = r.input {
-                    std::println!("level16_deny input: {}",
-                        input.to_json_str().unwrap());
+                    std::println!("level16_deny input: {}", input.to_json_str().unwrap());
                 }
             }
             Err(e) => {
@@ -893,7 +951,12 @@ mod tests {
             allow if input.role == "admin"
         "#;
         let goal = AnalysisGoal::ExpectedOutput(Value::Bool(true));
-        let r = run_goal_analysis("level17_expected_output_true", policy, "data.test.allow", goal);
+        let r = run_goal_analysis(
+            "level17_expected_output_true",
+            policy,
+            "data.test.allow",
+            goal,
+        );
         assert!(r.satisfiable, "Expected SAT");
         let input = r.input.unwrap();
         assert_eq!(&input[&Value::from("role")], &Value::from("admin"));
@@ -909,8 +972,16 @@ mod tests {
             allow if input.role == "admin"
         "#;
         let goal = AnalysisGoal::ExpectedOutput(Value::Bool(false));
-        let r = run_goal_analysis("level17b_expected_output_false", policy, "data.test.allow", goal);
-        assert!(r.satisfiable, "Expected SAT: false output should be trivially satisfiable");
+        let r = run_goal_analysis(
+            "level17b_expected_output_false",
+            policy,
+            "data.test.allow",
+            goal,
+        );
+        assert!(
+            r.satisfiable,
+            "Expected SAT: false output should be trivially satisfiable"
+        );
     }
 
     // ===================================================================
@@ -935,7 +1006,10 @@ mod tests {
             avoid: alloc::vec![],
         };
         let r = run_goal_analysis("level18_cover_lines", policy, "data.test.allow", goal);
-        assert!(r.satisfiable, "Expected SAT: should find input that covers line 4");
+        assert!(
+            r.satisfiable,
+            "Expected SAT: should find input that covers line 4"
+        );
         let input = r.input.unwrap();
         assert_eq!(&input[&Value::from("role")], &Value::from("admin"));
     }
@@ -961,7 +1035,10 @@ mod tests {
             avoid: alloc::vec![],
         };
         let r = run_goal_analysis("level19_output_and_cover", policy, "data.test.allow", goal);
-        assert!(r.satisfiable, "Expected SAT: should find input covering the superuser rule");
+        assert!(
+            r.satisfiable,
+            "Expected SAT: should find input covering the superuser rule"
+        );
         let input = r.input.unwrap();
         let role = &input[&Value::from("role")];
         // Should specifically be "superuser" since that's line 4.
@@ -1026,17 +1103,19 @@ mod tests {
 
         // Ask for allow == false — find an input with a violation.
         let goal = AnalysisGoal::ExpectedOutput(Value::Bool(false));
-        let result = generate_input_for_goal(
-            &program, &data, "data.example.allow", &goal, &config
-        );
+        let result = generate_input_for_goal(&program, &data, "data.example.allow", &goal, &config);
 
         match result {
             Ok(r) => {
                 std::println!("\n=== level20_allowed_server_false ===");
                 std::println!("Satisfiable: {}", r.satisfiable);
                 if let Some(ref input) = r.input {
-                    std::println!("Generated input:\n{}",
-                        input.to_json_str().unwrap_or_else(|_| alloc::format!("{:?}", input)));
+                    std::println!(
+                        "Generated input:\n{}",
+                        input
+                            .to_json_str()
+                            .unwrap_or_else(|_| alloc::format!("{:?}", input))
+                    );
                 }
                 if !r.warnings.is_empty() {
                     std::println!("Warnings (first 10):");

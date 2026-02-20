@@ -209,7 +209,7 @@ fn rego_ast(file: String) -> Result<()> {
 mod analyze;
 
 #[cfg(feature = "cedar")]
-#[path = "cedar/cli.rs"]
+#[path = "../cedar/cli.rs"]
 mod cedar_cli;
 
 #[derive(clap::Subcommand)]
@@ -397,18 +397,8 @@ fn main() -> Result<()> {
             input,
             schema,
         } => analyze::rego_analyze(
-            &bundles,
-            &data,
-            entrypoint,
-            output,
-            cover_line,
-            avoid_line,
-            dump_smt,
-            dump_model,
-            timeout,
-            max_loops,
-            input,
-            schema,
+            &bundles, &data, entrypoint, output, cover_line, avoid_line, dump_smt, dump_model,
+            timeout, max_loops, input, schema,
         ),
         #[cfg(feature = "cedar")]
         RegorusCommand::Cedar { command } => cedar_cli::run(command),

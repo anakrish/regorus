@@ -172,7 +172,12 @@ impl<'ctx> PathRegistry<'ctx> {
     /// its `ValueSort`.  Array elements are expanded up to `max_elements`
     /// indices so that symbolic witness paths like `input.servers[2].id`
     /// will already have a known sort when the translator encounters them.
-    pub fn seed_sorts_from_value(&mut self, prefix: &str, value: &super::super::super::value::Value, max_elements: usize) {
+    pub fn seed_sorts_from_value(
+        &mut self,
+        prefix: &str,
+        value: &super::super::super::value::Value,
+        max_elements: usize,
+    ) {
         use super::super::super::value::Value;
         match value {
             Value::Object(obj) => {

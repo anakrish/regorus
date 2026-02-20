@@ -1,0 +1,17 @@
+{
+  "principal": "User::root",
+  "action": "Action::delete",
+  "resource": "Namespace::kube-system",
+  "context": {
+    "has_incident_ticket": true,
+    "oncall_session": true
+  },
+  "entities": {
+    "User::alice": { "parents": ["Group::developers"], "attrs": {} },
+    "User::bob": { "parents": ["Group::sre-oncall"], "attrs": {} },
+    "User::root": { "parents": ["Group::cluster-admins"], "attrs": {} },
+    "Group::developers": { "parents": [], "attrs": {} },
+    "Group::sre-oncall": { "parents": ["Group::developers"], "attrs": {} },
+    "Group::cluster-admins": { "parents": [], "attrs": {} }
+  }
+}

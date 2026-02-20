@@ -1,0 +1,32 @@
+[
+  {
+    "uid": { "__entity": { "type": "User", "id": "alice" } },
+    "attrs": {},
+    "parents": [{ "__entity": { "type": "Group", "id": "developers" } }]
+  },
+  {
+    "uid": { "__entity": { "type": "User", "id": "bob" } },
+    "attrs": {},
+    "parents": [{ "__entity": { "type": "Group", "id": "sre-oncall" } }]
+  },
+  {
+    "uid": { "__entity": { "type": "User", "id": "root" } },
+    "attrs": {},
+    "parents": [{ "__entity": { "type": "Group", "id": "cluster-admins" } }]
+  },
+  {
+    "uid": { "__entity": { "type": "Group", "id": "developers" } },
+    "attrs": {},
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "Group", "id": "sre-oncall" } },
+    "attrs": {},
+    "parents": [{ "__entity": { "type": "Group", "id": "developers" } }]
+  },
+  {
+    "uid": { "__entity": { "type": "Group", "id": "cluster-admins" } },
+    "attrs": {},
+    "parents": []
+  }
+]

@@ -1,0 +1,9 @@
+{
+  "principal": "User::\"bob\"",
+  "action": "Action::\"delete\"",
+  "resource": "Namespace::\"production\"",
+  "context": {
+    "has_incident_ticket": true,
+    "oncall_session": true
+  }
+}

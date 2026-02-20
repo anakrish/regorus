@@ -1,0 +1,10 @@
+{
+  "principal": "User::alice",
+  "action": "Action::executeTrade",
+  "resource": "Market::NYSE",
+  "context": {
+    "trade_value": 500000,
+    "region": "US-East",
+    "market_open": true
+  }
+}

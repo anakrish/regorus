@@ -23,16 +23,20 @@ mod conditions;
 mod count;
 mod expressions;
 mod fields;
+mod template_dispatch;
 mod utils;
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::{String, ToString as _};
 use alloc::vec::Vec;
 
 use anyhow::{anyhow, bail, Result};
 
-use crate::languages::azure_policy::ast::{EffectKind, PolicyDefinition, PolicyRule};
+use crate::languages::azure_policy::ast::{
+    Condition, EffectKind, EffectNode, Expr, ExprLiteral, FieldKind, JsonValue, Lhs, OperatorKind,
+    PolicyDefinition, PolicyRule, ValueOrExpr,
+};
 use crate::rvm::instructions::{BuiltinCallParams, ChainedIndexParams, LiteralOrRegister};
 use crate::rvm::program::{Program, SpanInfo};
 use crate::rvm::Instruction;
@@ -69,6 +73,24 @@ struct Compiler {
     /// When set, the compiler emits a builtin call for `parameters()` that falls
     /// back to these defaults when the caller does not supply a value.
     parameter_defaults: Option<Value>,
+
+    // -- Metadata accumulators (populated during compilation) ---------------
+    /// Built-in field kinds referenced (e.g. "type", "location", "tags").
+    observed_field_kinds: BTreeSet<String>,
+    /// Fully-qualified alias paths referenced.
+    observed_aliases: BTreeSet<String>,
+    /// Tag names referenced via `tags.name` or `tags['name']`.
+    observed_tag_names: BTreeSet<String>,
+    /// Operator kinds used in conditions.
+    observed_operators: BTreeSet<String>,
+    /// Resource types discovered from `field("type") equals/in` conditions.
+    observed_resource_types: BTreeSet<String>,
+    /// Whether a count expression was compiled.
+    observed_uses_count: bool,
+    /// Whether a `FieldKind::Expr` (dynamic field reference) was compiled.
+    observed_has_dynamic_fields: bool,
+    /// Whether any alias contains `[*]` (wildcard array traversal).
+    observed_has_wildcard_aliases: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +132,9 @@ impl Compiler {
         self.program
             .validate_limits()
             .map_err(|message| anyhow!(message))?;
+
+        // Populate annotations accumulated during compilation.
+        self.populate_compiled_annotations();
 
         Ok(Rc::new(self.program))
     }
@@ -160,8 +185,8 @@ impl Compiler {
     }
 
     fn get_or_add_builtin_index(&mut self, name: &str, num_args: u16) -> u16 {
-        // Key by name+arity so variadic builtins (logic_all, logic_any)
-        // can be called with different argument counts.
+        // Key by name+arity so the same builtin can be called with
+        // different argument counts.
         let key = format!("{}/{}", name, num_args);
         if let Some(index) = self.builtin_index.get(&key) {
             return *index;
@@ -244,6 +269,12 @@ impl Compiler {
         Ok(dest)
     }
 
+    fn load_context(&mut self, span: &crate::lexer::Span) -> Result<u8> {
+        let dest = self.alloc_register()?;
+        self.emit(Instruction::LoadContext { dest }, span);
+        Ok(dest)
+    }
+
     /// Emit a `CoalesceUndefinedToNull` instruction for the given register.
     ///
     /// In Azure Policy, a missing field is semantically `null`, not undefined.
@@ -253,37 +284,543 @@ impl Compiler {
         self.emit(Instruction::CoalesceUndefinedToNull { register }, span);
     }
 
+    /// Return the PC (instruction index) that the *next* emitted instruction
+    /// will occupy.
+    fn current_pc(&self) -> Result<u16> {
+        u16::try_from(self.program.instructions.len())
+            .map_err(|_| anyhow!("instruction index overflow"))
+    }
+
+    /// Patch a set of tracked instruction indices, setting their `end_pc`
+    /// field to the given value.
+    ///
+    /// Works for `AllOfStart`, `AllOfNext`, `AnyOfStart`, and `AnyOfNext`
+    /// instructions — any instruction whose `end_pc` needs back-patching.
+    fn patch_end_pc(&mut self, pcs: &[u16], end_pc: u16) {
+        for &pc in pcs {
+            match &mut self.program.instructions[pc as usize] {
+                Instruction::AllOfStart {
+                    end_pc: ref mut ep, ..
+                }
+                | Instruction::AllOfNext {
+                    end_pc: ref mut ep, ..
+                }
+                | Instruction::AnyOfStart {
+                    end_pc: ref mut ep, ..
+                }
+                | Instruction::AnyOfNext {
+                    end_pc: ref mut ep, ..
+                } => {
+                    *ep = end_pc;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn resolve_alias_path(&self, path: &str) -> Result<String> {
+        if let Some(short) = self.alias_map.get(&path.to_lowercase()) {
+            let resolved = short.clone();
+            return Ok(self.strip_fq_prefix(&resolved));
+        }
+
+        // When aliases are loaded, every field must be a known alias.
+        if !self.alias_map.is_empty() {
+            bail!(
+                "unknown alias '{}': field references must use fully-qualified alias names when an alias catalog is loaded",
+                path
+            );
+        }
+
+        // No alias catalog — pass through as-is (legacy / no-alias mode).
+        Ok(path.to_string())
+    }
+
+    /// Strip the `Provider/ResourceType/` prefix from a resolved alias short
+    /// name, keeping only the trailing property path.
+    fn strip_fq_prefix(&self, resolved: &str) -> String {
+        if !resolved.contains('/') {
+            return resolved.to_string();
+        }
+
+        let canonical = {
+            let mut segments = resolved.split('/');
+            let _provider = segments.next();
+            let _resource_type = segments.next();
+            let tail = segments.collect::<Vec<_>>().join("/");
+            if tail.is_empty() {
+                resolved.to_string()
+            } else {
+                tail
+            }
+        };
+
+        if resolved.contains("[*]") {
+            canonical
+        } else {
+            canonical
+                .rsplit('/')
+                .next()
+                .map(|segment| segment.to_string())
+                .unwrap_or(canonical)
+        }
+    }
+
     // -- effect compilation ------------------------------------------------
 
     fn compile_effect(&mut self, rule: &PolicyRule) -> Result<u8> {
         let effect = &rule.then_block.effect;
         let span = &effect.span;
+        if matches!(effect.kind, EffectKind::Other(_)) {
+            let resolved_effect_kind = self.resolve_effect_kind(effect);
+            if resolved_effect_kind == EffectKind::AuditIfNotExists {
+                let effect_text = self
+                    .resolve_effect_name_from_parameter_default(effect)
+                    .unwrap_or_else(|| "AuditIfNotExists".to_string());
+                return self.compile_audit_if_not_exists_effect(rule, &effect_text);
+            }
+
+            if effect.raw.starts_with('[')
+                && effect.raw.ends_with(']')
+                && !effect.raw.starts_with("[[")
+            {
+                let inner = &effect.raw[1..effect.raw.len().saturating_sub(1)];
+                let expr = crate::languages::azure_policy::expr::ExprParser::parse_from_brackets(
+                    inner, span,
+                )
+                .map_err(|error| anyhow!("invalid effect expression: {}", error))?;
+                return self.compile_expr(&expr);
+            }
+
+            return self.load_literal(Value::from(effect.raw.clone()), span);
+        }
 
         match &effect.kind {
-            // Known effects: emit the original text to preserve casing.
+            EffectKind::AuditIfNotExists => {
+                self.compile_audit_if_not_exists_effect(rule, &effect.raw)
+            }
             EffectKind::Deny
             | EffectKind::Audit
             | EffectKind::Append
-            | EffectKind::AuditIfNotExists
             | EffectKind::DeployIfNotExists
             | EffectKind::Disabled
             | EffectKind::Modify
             | EffectKind::DenyAction
             | EffectKind::Manual => self.load_literal(Value::from(effect.raw.clone()), span),
-            EffectKind::Other(raw) => {
-                if raw.starts_with('[') && raw.ends_with(']') && !raw.starts_with("[[") {
-                    let inner = &raw[1..raw.len().saturating_sub(1)];
-                    let expr =
-                        crate::languages::azure_policy::expr::ExprParser::parse_from_brackets(
-                            inner, span,
-                        )
-                        .map_err(|error| anyhow!("invalid effect expression: {}", error))?;
-                    self.compile_expr(&expr)
-                } else {
-                    self.load_literal(Value::from(raw.clone()), span)
+            // SAFETY: Other variants are filtered out by the bail!() above.
+            EffectKind::Other(_) => {
+                bail!(span.error(&alloc::format!("unsupported effect kind: {}", effect.raw)))
+            }
+        }
+    }
+
+    fn compile_audit_if_not_exists_effect(
+        &mut self,
+        rule: &PolicyRule,
+        effect_text: &str,
+    ) -> Result<u8> {
+        let span = &rule.then_block.effect.span;
+
+        // Defer related-resource existence evaluation to host via HostAwait.
+        // Host contract:
+        //   id  = "azure.policy.audit_if_not_exists"
+        //   arg = lookup request object (type/name/scope metadata)
+        //   response: truthy => non-compliant (return effect), falsy => compliant (return undefined)
+        if let Some(details) = rule.then_block.details.as_ref() {
+            let request_value = self.build_host_await_request(details)?;
+            let request_reg = self.load_literal(request_value, span)?;
+            let id_reg =
+                self.load_literal(Value::from("azure.policy.audit_if_not_exists"), span)?;
+
+            let host_result_reg = self.alloc_register()?;
+            self.emit(
+                Instruction::HostAwait {
+                    dest: host_result_reg,
+                    arg: request_reg,
+                    id: id_reg,
+                },
+                span,
+            );
+
+            let effect_reg = self.load_literal(Value::from(effect_text.to_string()), span)?;
+            self.emit(
+                Instruction::ReturnUndefinedIfNotTrue {
+                    condition: host_result_reg,
+                },
+                span,
+            );
+
+            Ok(effect_reg)
+        } else {
+            self.load_literal(Value::from(effect_text.to_string()), span)
+        }
+    }
+
+    fn resolve_effect_kind(&self, effect: &EffectNode) -> EffectKind {
+        match effect.kind {
+            EffectKind::Other(_) => self
+                .resolve_effect_kind_from_parameter_default(effect)
+                .unwrap_or_else(|| effect.kind.clone()),
+            _ => effect.kind.clone(),
+        }
+    }
+
+    fn resolve_effect_kind_from_parameter_default(
+        &self,
+        effect: &EffectNode,
+    ) -> Option<EffectKind> {
+        let raw = effect.raw.as_str();
+        if !(raw.starts_with('[') && raw.ends_with(']') && !raw.starts_with("[[")) {
+            return None;
+        }
+
+        let inner = &raw[1..raw.len().saturating_sub(1)];
+        let expr = crate::languages::azure_policy::expr::ExprParser::parse_from_brackets(
+            inner,
+            &effect.span,
+        )
+        .ok()?;
+
+        let parameter_name = match expr {
+            Expr::Call { func, args, .. } if args.len() == 1 => match (*func, &args[0]) {
+                (
+                    Expr::Ident { name, .. },
+                    Expr::Literal {
+                        value: ExprLiteral::String(param_name),
+                        ..
+                    },
+                ) if name.eq_ignore_ascii_case("parameters") => param_name.clone(),
+                _ => return None,
+            },
+            _ => return None,
+        };
+
+        let defaults = self.parameter_defaults.as_ref()?;
+        let defaults_obj = defaults.as_object().ok()?;
+        let default_effect = defaults_obj.get(&Value::from(parameter_name))?;
+        let effect_name = default_effect.as_string().ok()?;
+
+        Self::effect_kind_from_string(effect_name)
+    }
+
+    fn resolve_effect_name_from_parameter_default(&self, effect: &EffectNode) -> Option<String> {
+        let raw = effect.raw.as_str();
+        if !(raw.starts_with('[') && raw.ends_with(']') && !raw.starts_with("[[")) {
+            return None;
+        }
+
+        let inner = &raw[1..raw.len().saturating_sub(1)];
+        let expr = crate::languages::azure_policy::expr::ExprParser::parse_from_brackets(
+            inner,
+            &effect.span,
+        )
+        .ok()?;
+
+        let parameter_name = match expr {
+            Expr::Call { func, args, .. } if args.len() == 1 => match (*func, &args[0]) {
+                (
+                    Expr::Ident { name, .. },
+                    Expr::Literal {
+                        value: ExprLiteral::String(param_name),
+                        ..
+                    },
+                ) if name.eq_ignore_ascii_case("parameters") => param_name.clone(),
+                _ => return None,
+            },
+            _ => return None,
+        };
+
+        let defaults = self.parameter_defaults.as_ref()?;
+        let defaults_obj = defaults.as_object().ok()?;
+        let default_effect = defaults_obj.get(&Value::from(parameter_name))?;
+        let effect_name = default_effect.as_string().ok()?;
+        Some(effect_name.to_string())
+    }
+
+    // -- metadata population -----------------------------------------------
+
+    /// Record a built-in field kind reference.
+    fn record_field_kind(&mut self, name: &str) {
+        self.observed_field_kinds.insert(name.to_string());
+    }
+
+    /// Record an alias reference.
+    fn record_alias(&mut self, path: &str) {
+        self.observed_aliases.insert(path.to_string());
+        if path.contains("[*]") {
+            self.observed_has_wildcard_aliases = true;
+        }
+    }
+
+    /// Record a tag name reference.
+    fn record_tag_name(&mut self, tag: &str) {
+        self.observed_tag_names.insert(tag.to_string());
+    }
+
+    /// Record an operator usage.
+    fn record_operator(&mut self, kind: &OperatorKind) {
+        let name = match kind {
+            OperatorKind::Equals => "equals",
+            OperatorKind::NotEquals => "notEquals",
+            OperatorKind::Greater => "greater",
+            OperatorKind::GreaterOrEquals => "greaterOrEquals",
+            OperatorKind::Less => "less",
+            OperatorKind::LessOrEquals => "lessOrEquals",
+            OperatorKind::In => "in",
+            OperatorKind::NotIn => "notIn",
+            OperatorKind::Contains => "contains",
+            OperatorKind::NotContains => "notContains",
+            OperatorKind::ContainsKey => "containsKey",
+            OperatorKind::NotContainsKey => "notContainsKey",
+            OperatorKind::Like => "like",
+            OperatorKind::NotLike => "notLike",
+            OperatorKind::Match => "match",
+            OperatorKind::NotMatch => "notMatch",
+            OperatorKind::MatchInsensitively => "matchInsensitively",
+            OperatorKind::NotMatchInsensitively => "notMatchInsensitively",
+            OperatorKind::Exists => "exists",
+        };
+        self.observed_operators.insert(name.to_string());
+    }
+
+    /// Record a resource type discovered from a `{ "field": "type", "equals"/"in": ... }` condition.
+    fn record_resource_type_from_condition(&mut self, condition: &Condition) {
+        // Only extract when LHS is FieldKind::Type
+        let is_type_field =
+            matches!(&condition.lhs, Lhs::Field(f) if matches!(f.kind, FieldKind::Type));
+        if !is_type_field {
+            return;
+        }
+
+        match &condition.operator.kind {
+            OperatorKind::Equals => {
+                // RHS should be a string literal
+                if let ValueOrExpr::Value(JsonValue::Str(_, s)) = &condition.rhs {
+                    self.observed_resource_types.insert(s.clone());
+                }
+            }
+            OperatorKind::In | OperatorKind::Like => {
+                // RHS should be an array of string literals
+                if let ValueOrExpr::Value(JsonValue::Array(_, items)) = &condition.rhs {
+                    for item in items {
+                        if let JsonValue::Str(_, s) = item {
+                            self.observed_resource_types.insert(s.clone());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Build the effect annotation string, resolving parameterized effects to their defaults.
+    fn resolve_effect_annotation(&self, rule: &PolicyRule) -> String {
+        let effect = &rule.then_block.effect;
+        match &effect.kind {
+            EffectKind::Other(_) => {
+                // Try to resolve from parameter defaults
+                self.resolve_effect_name_from_parameter_default(effect)
+                    .unwrap_or_else(|| effect.raw.clone())
+            }
+            _ => effect.raw.clone(),
+        }
+    }
+
+    /// Populate `program.metadata.annotations` from accumulated observations.
+    fn populate_compiled_annotations(&mut self) {
+        // Read has_host_await before borrowing annotations mutably.
+        let has_host_await = self.program.has_host_await();
+
+        let annot = &mut self.program.metadata.annotations;
+
+        // Effect
+        // (set externally in entry points that have the PolicyRule)
+
+        // Field kinds used
+        if !self.observed_field_kinds.is_empty() {
+            let set: BTreeSet<Value> = self
+                .observed_field_kinds
+                .iter()
+                .map(|s| Value::String(s.as_str().into()))
+                .collect();
+            annot.insert("field_kinds".to_string(), Value::Set(Rc::new(set)));
+        }
+
+        // Aliases used
+        if !self.observed_aliases.is_empty() {
+            let set: BTreeSet<Value> = self
+                .observed_aliases
+                .iter()
+                .map(|s| Value::String(s.as_str().into()))
+                .collect();
+            annot.insert("aliases".to_string(), Value::Set(Rc::new(set)));
+        }
+
+        // Tag names
+        if !self.observed_tag_names.is_empty() {
+            let set: BTreeSet<Value> = self
+                .observed_tag_names
+                .iter()
+                .map(|s| Value::String(s.as_str().into()))
+                .collect();
+            annot.insert("tag_names".to_string(), Value::Set(Rc::new(set)));
+        }
+
+        // Operators used
+        if !self.observed_operators.is_empty() {
+            let set: BTreeSet<Value> = self
+                .observed_operators
+                .iter()
+                .map(|s| Value::String(s.as_str().into()))
+                .collect();
+            annot.insert("operators".to_string(), Value::Set(Rc::new(set)));
+        }
+
+        // Resource types
+        if !self.observed_resource_types.is_empty() {
+            let set: BTreeSet<Value> = self
+                .observed_resource_types
+                .iter()
+                .map(|s| Value::String(s.as_str().into()))
+                .collect();
+            annot.insert("resource_types".to_string(), Value::Set(Rc::new(set)));
+        }
+
+        // Boolean flags
+        if self.observed_uses_count {
+            annot.insert("uses_count".to_string(), Value::Bool(true));
+        }
+        if self.observed_has_dynamic_fields {
+            annot.insert("has_dynamic_fields".to_string(), Value::Bool(true));
+        }
+        if self.observed_has_wildcard_aliases {
+            annot.insert("has_wildcard_aliases".to_string(), Value::Bool(true));
+        }
+        if has_host_await {
+            annot.insert("has_host_await".to_string(), Value::Bool(true));
+        }
+    }
+
+    /// Set definition-level metadata from a PolicyDefinition.
+    fn populate_definition_metadata(&mut self, defn: &PolicyDefinition) {
+        let annot = &mut self.program.metadata.annotations;
+
+        if let Some(ref name) = defn.display_name {
+            annot.insert(
+                "display_name".to_string(),
+                Value::String(name.as_str().into()),
+            );
+        }
+        if let Some(ref desc) = defn.description {
+            annot.insert(
+                "description".to_string(),
+                Value::String(desc.as_str().into()),
+            );
+        }
+        if let Some(ref mode) = defn.mode {
+            annot.insert("mode".to_string(), Value::String(mode.as_str().into()));
+        }
+
+        // Extract category and version from metadata JSON
+        if let Some(JsonValue::Object(_, entries)) = defn.metadata.as_ref() {
+            for entry in entries {
+                let key_lower = entry.key.to_ascii_lowercase();
+                match key_lower.as_str() {
+                    "category" => {
+                        if let JsonValue::Str(_, ref s) = entry.value {
+                            annot.insert("category".to_string(), Value::String(s.as_str().into()));
+                        }
+                    }
+                    "version" => {
+                        if let JsonValue::Str(_, ref s) = entry.value {
+                            annot.insert("version".to_string(), Value::String(s.as_str().into()));
+                        }
+                    }
+                    "preview" => {
+                        if let JsonValue::Bool(_, b) = entry.value {
+                            annot.insert("preview".to_string(), Value::Bool(b));
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
+
+        // Parameter names
+        if !defn.parameters.is_empty() {
+            let set: BTreeSet<Value> = defn
+                .parameters
+                .iter()
+                .map(|p| Value::String(p.name.as_str().into()))
+                .collect();
+            annot.insert("parameter_names".to_string(), Value::Set(Rc::new(set)));
+        }
+
+        // Extra fields: policyType, id, name
+        for entry in &defn.extra {
+            let key_lower = entry.key.to_ascii_lowercase();
+            match key_lower.as_str() {
+                "policytype" => {
+                    if let JsonValue::Str(_, ref s) = entry.value {
+                        annot.insert("policy_type".to_string(), Value::String(s.as_str().into()));
+                    }
+                }
+                "id" => {
+                    if let JsonValue::Str(_, ref s) = entry.value {
+                        annot.insert("policy_id".to_string(), Value::String(s.as_str().into()));
+                    }
+                }
+                "name" => {
+                    if let JsonValue::Str(_, ref s) = entry.value {
+                        annot.insert("policy_name".to_string(), Value::String(s.as_str().into()));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn effect_kind_from_string(effect_name: &str) -> Option<EffectKind> {
+        let normalized = effect_name.to_ascii_lowercase();
+        Some(match normalized.as_str() {
+            "deny" => EffectKind::Deny,
+            "audit" => EffectKind::Audit,
+            "append" => EffectKind::Append,
+            "auditifnotexists" => EffectKind::AuditIfNotExists,
+            "deployifnotexists" => EffectKind::DeployIfNotExists,
+            "disabled" => EffectKind::Disabled,
+            "modify" => EffectKind::Modify,
+            "denyaction" => EffectKind::DenyAction,
+            "manual" => EffectKind::Manual,
+            _ => return None,
+        })
+    }
+
+    fn build_host_await_request(&self, details: &JsonValue) -> Result<Value> {
+        let mut request = Value::new_object();
+        let request_obj = request.as_object_mut()?;
+        request_obj.insert(
+            Value::from("operation"),
+            Value::from("lookup_related_resources"),
+        );
+
+        let JsonValue::Object(_, entries) = details else {
+            return Ok(request);
+        };
+
+        for key in ["type", "name", "resourceGroupName", "existenceScope"] {
+            if let Some(entry) = entries
+                .iter()
+                .find(|entry| entry.key.eq_ignore_ascii_case(key))
+            {
+                let value = crate::languages::azure_policy::compiler::utils::json_value_to_runtime(
+                    &entry.value,
+                )?;
+                request_obj.insert(Value::from(key), value);
+            }
+        }
+
+        Ok(request)
     }
 }
 
@@ -293,7 +830,15 @@ impl Compiler {
 
 /// Compile a parsed Azure Policy rule into an RVM program.
 pub fn compile_policy_rule(rule: &PolicyRule) -> Result<Rc<Program>> {
-    Compiler::new().compile(rule)
+    let mut compiler = Compiler::new();
+    compiler.program.metadata.language = "azure_policy".to_string();
+    let effect = compiler.resolve_effect_annotation(rule);
+    compiler
+        .program
+        .metadata
+        .annotations
+        .insert("effect".to_string(), Value::String(effect.as_str().into()));
+    compiler.compile(rule)
 }
 
 /// Compile a parsed Azure Policy rule with alias resolution.
@@ -309,7 +854,14 @@ pub fn compile_policy_rule_with_aliases(
     alias_map: BTreeMap<String, String>,
 ) -> Result<Rc<Program>> {
     let mut compiler = Compiler::new();
+    compiler.program.metadata.language = "azure_policy".to_string();
     compiler.alias_map = alias_map;
+    let effect = compiler.resolve_effect_annotation(rule);
+    compiler
+        .program
+        .metadata
+        .annotations
+        .insert("effect".to_string(), Value::String(effect.as_str().into()));
     compiler.compile(rule)
 }
 
@@ -320,7 +872,15 @@ pub fn compile_policy_rule_with_aliases(
 /// `azure.policy.get_parameter` builtin can fall back to them at runtime.
 pub fn compile_policy_definition(defn: &PolicyDefinition) -> Result<Rc<Program>> {
     let mut compiler = Compiler::new();
+    compiler.program.metadata.language = "azure_policy".to_string();
     compiler.parameter_defaults = Some(build_parameter_defaults(&defn.parameters)?);
+    compiler.populate_definition_metadata(defn);
+    let effect = compiler.resolve_effect_annotation(&defn.policy_rule);
+    compiler
+        .program
+        .metadata
+        .annotations
+        .insert("effect".to_string(), Value::String(effect.as_str().into()));
     compiler.compile(&defn.policy_rule)
 }
 
@@ -332,8 +892,16 @@ pub fn compile_policy_definition_with_aliases(
     alias_map: BTreeMap<String, String>,
 ) -> Result<Rc<Program>> {
     let mut compiler = Compiler::new();
+    compiler.program.metadata.language = "azure_policy".to_string();
     compiler.alias_map = alias_map;
     compiler.parameter_defaults = Some(build_parameter_defaults(&defn.parameters)?);
+    compiler.populate_definition_metadata(defn);
+    let effect = compiler.resolve_effect_annotation(&defn.policy_rule);
+    compiler
+        .program
+        .metadata
+        .annotations
+        .insert("effect".to_string(), Value::String(effect.as_str().into()));
     compiler.compile(&defn.policy_rule)
 }
 

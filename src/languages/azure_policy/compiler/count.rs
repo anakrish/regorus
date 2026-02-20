@@ -19,6 +19,7 @@ use super::{Compiler, CountBinding};
 
 impl Compiler {
     pub(super) fn compile_count(&mut self, count_node: &CountNode) -> Result<u8> {
+        self.observed_uses_count = true;
         match count_node {
             CountNode::Value {
                 span,
@@ -103,15 +104,10 @@ impl Compiler {
             FieldKind::Location => Ok("location".to_string()),
             FieldKind::FullName => Ok("fullName".to_string()),
             FieldKind::IdentityType => Ok("identity.type".to_string()),
+            FieldKind::ApiVersion => Ok("apiVersion".to_string()),
             FieldKind::Tags => Ok("tags".to_string()),
             FieldKind::Tag(tag) => Ok(format!("tags.{}", tag)),
-            FieldKind::Alias(path) => {
-                // Resolve FQ alias name to short name, matching compile_field_kind.
-                match self.alias_map.get(&path.to_lowercase()) {
-                    Some(short) => Ok(short.clone()),
-                    None => Ok(path.clone()),
-                }
-            }
+            FieldKind::Alias(path) => self.resolve_alias_path(path),
             FieldKind::Expr(_) => {
                 bail!("count over expression field is not supported in core subset")
             }
@@ -302,47 +298,68 @@ impl Compiler {
         key: &str,
         span: &crate::lexer::Span,
     ) -> Result<u8> {
-        for binding in self.count_bindings.iter().rev() {
-            if let Some(name) = &binding.name {
-                if key == name {
-                    let current_reg = binding.current_reg;
-                    let dest = self.alloc_register()?;
-                    self.emit(
-                        Instruction::Move {
-                            dest,
-                            src: current_reg,
-                        },
-                        span,
-                    );
-                    return Ok(dest);
+        let resolve_for_key = |compiler: &mut Self, candidate: &str| -> Result<Option<u8>> {
+            for binding in compiler.count_bindings.iter().rev() {
+                if let Some(name) = &binding.name {
+                    if candidate == name {
+                        let current_reg = binding.current_reg;
+                        let dest = compiler.alloc_register()?;
+                        compiler.emit(
+                            Instruction::Move {
+                                dest,
+                                src: current_reg,
+                            },
+                            span,
+                        );
+                        return Ok(Some(dest));
+                    }
+
+                    if candidate.starts_with(&(name.clone() + ".")) {
+                        let suffix = &candidate[name.len().saturating_add(1)..];
+                        let parts = split_path_without_wildcards(suffix)?;
+                        let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+                        return compiler
+                            .emit_chained_index_literal_path(binding.current_reg, &refs, span)
+                            .map(Some);
+                    }
                 }
 
-                if key.starts_with(&(name.clone() + ".")) {
-                    let suffix = &key[name.len().saturating_add(1)..];
-                    let parts = split_path_without_wildcards(suffix)?;
-                    let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-                    return self.emit_chained_index_literal_path(binding.current_reg, &refs, span);
+                if let Some(prefix) = &binding.field_wildcard_prefix {
+                    if candidate == prefix || candidate == format!("{}[*]", prefix) {
+                        let current_reg = binding.current_reg;
+                        let dest = compiler.alloc_register()?;
+                        compiler.emit(
+                            Instruction::Move {
+                                dest,
+                                src: current_reg,
+                            },
+                            span,
+                        );
+                        return Ok(Some(dest));
+                    }
+
+                    if candidate.starts_with(&(prefix.clone() + "[*].")) {
+                        let suffix = &candidate[prefix.len().saturating_add(4)..];
+                        return compiler
+                            .compile_suffix_from_binding(binding.current_reg, suffix, span)
+                            .map(Some);
+                    }
                 }
             }
 
-            if let Some(prefix) = &binding.field_wildcard_prefix {
-                if key == prefix || key == format!("{}[*]", prefix) {
-                    let current_reg = binding.current_reg;
-                    let dest = self.alloc_register()?;
-                    self.emit(
-                        Instruction::Move {
-                            dest,
-                            src: current_reg,
-                        },
-                        span,
-                    );
-                    return Ok(dest);
-                }
+            Ok(None)
+        };
 
-                if key.starts_with(&(prefix.clone() + "[*].")) {
-                    let suffix = &key[prefix.len().saturating_add(4)..];
-                    return self.compile_suffix_from_binding(binding.current_reg, suffix, span);
-                }
+        if let Some(result) = resolve_for_key(self, key)? {
+            return Ok(result);
+        }
+
+        let normalized_key = self
+            .resolve_alias_path(key)
+            .unwrap_or_else(|_| key.to_string());
+        if normalized_key != key {
+            if let Some(result) = resolve_for_key(self, &normalized_key)? {
+                return Ok(result);
             }
         }
 

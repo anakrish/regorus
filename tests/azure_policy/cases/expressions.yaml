@@ -282,6 +282,94 @@ cases:
       type: "any"
     want_effect: "audit"
 
+  - note: expr_requestContext_apiVersion
+    policy_rule: |
+      {
+        "if": {
+          "value": "[requestContext().apiVersion]",
+          "greaterOrEquals": "2021-04-01"
+        },
+        "then": { "effect": "deny" }
+      }
+    context:
+      resourceGroup:
+        name: "myResourceGroup"
+        location: "eastus"
+      subscription:
+        subscriptionId: "00000000-0000-0000-0000-000000000000"
+      requestContext:
+        apiVersion: "2023-01-01"
+    resource:
+      type: "any"
+    want_effect: "deny"
+
+  - note: expr_requestContext_apiVersion_older
+    policy_rule: |
+      {
+        "if": {
+          "value": "[requestContext().apiVersion]",
+          "greaterOrEquals": "2024-06-01"
+        },
+        "then": { "effect": "deny" }
+      }
+    context:
+      resourceGroup:
+        name: "myResourceGroup"
+        location: "eastus"
+      subscription:
+        subscriptionId: "00000000-0000-0000-0000-000000000000"
+      requestContext:
+        apiVersion: "2023-01-01"
+    resource:
+      type: "any"
+    want_undefined: true
+
+  - note: expr_policy_assignmentId
+    policy_rule: |
+      {
+        "if": {
+          "value": "[policy().assignmentId]",
+          "equals": "/subscriptions/sub1/providers/Microsoft.Authorization/policyAssignments/myAssignment"
+        },
+        "then": { "effect": "audit" }
+      }
+    context:
+      resourceGroup:
+        name: "myResourceGroup"
+        location: "eastus"
+      subscription:
+        subscriptionId: "00000000-0000-0000-0000-000000000000"
+      policy:
+        assignmentId: "/subscriptions/sub1/providers/Microsoft.Authorization/policyAssignments/myAssignment"
+        definitionId: "/providers/Microsoft.Authorization/policyDefinitions/myDefinition"
+        setDefinitionId: ""
+        definitionReferenceId: ""
+    resource:
+      type: "any"
+    want_effect: "audit"
+
+  - note: expr_policy_definitionId
+    policy_rule: |
+      {
+        "if": {
+          "value": "[policy().definitionId]",
+          "contains": "myDefinition"
+        },
+        "then": { "effect": "deny" }
+      }
+    context:
+      resourceGroup:
+        name: "myResourceGroup"
+        location: "eastus"
+      subscription:
+        subscriptionId: "00000000-0000-0000-0000-000000000000"
+      policy:
+        assignmentId: "/subscriptions/sub1/providers/Microsoft.Authorization/policyAssignments/myAssignment"
+        definitionId: "/providers/Microsoft.Authorization/policyDefinitions/myDefinition"
+    resource:
+      type: "any"
+    want_effect: "deny"
+
   # =========================================================================
   # current() in count contexts
   # =========================================================================

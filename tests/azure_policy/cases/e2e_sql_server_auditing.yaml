@@ -1,0 +1,81 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# E2E Test: SQL/SqlServerAuditing_Audit
+# Features: AuditIfNotExists routed via HostAwait response
+
+policy_definition: |
+  {
+    "properties": {
+      "displayName": "Auditing on SQL server should be enabled",
+      "policyType": "BuiltIn",
+      "mode": "Indexed",
+      "parameters": {
+        "effect": {
+          "type": "string",
+          "defaultValue": "AuditIfNotExists",
+          "allowedValues": ["AuditIfNotExists", "Disabled"]
+        },
+        "setting": {
+          "type": "String",
+          "defaultValue": "enabled",
+          "allowedValues": ["enabled", "disabled"]
+        }
+      },
+      "policyRule": {
+        "if": {
+          "allOf": [
+            {"field": "type", "equals": "Microsoft.Sql/servers"},
+            {"field": "kind", "notContains": "analytics"}
+          ]
+        },
+        "then": {
+          "effect": "AuditIfNotExists",
+          "details": {
+            "type": "Microsoft.Sql/servers/auditingSettings",
+            "name": "default",
+            "existenceCondition": {
+              "field": "Microsoft.Sql/auditingSettings.state",
+              "equals": "[parameters('setting')]"
+            }
+          }
+        }
+      }
+    }
+  }
+
+cases:
+  - note: audit_if_not_exists_when_host_reports_missing
+    resource:
+      type: "Microsoft.Sql/servers"
+      kind: "v12.0"
+      name: "sql-a"
+      properties: {}
+    host_await:
+      - key:
+          operation: "lookup_related_resources"
+          type: "Microsoft.Sql/servers/auditingSettings"
+          name: "default"
+        response: true
+    want_effect: "AuditIfNotExists"
+
+  - note: pass_when_host_reports_exists_and_compliant
+    resource:
+      type: "Microsoft.Sql/servers"
+      kind: "v12.0"
+      name: "sql-b"
+      properties: {}
+    host_await:
+      - key:
+          operation: "lookup_related_resources"
+          type: "Microsoft.Sql/servers/auditingSettings"
+          name: "default"
+        response: false
+    want_undefined: true
+
+  - note: pass_when_type_not_matching
+    resource:
+      type: "Microsoft.Storage/storageAccounts"
+      name: "stg"
+      properties: {}
+    want_undefined: true

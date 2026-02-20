@@ -127,6 +127,8 @@ impl Program {
                 compiled_at: "unknown".to_string(),
                 source_info: "unknown".to_string(),
                 optimization_level: 0,
+                language: String::new(),
+                annotations: alloc::collections::BTreeMap::new(),
             },
             rule_tree: Value::new_object(),
             resolved_builtins: Vec::new(),

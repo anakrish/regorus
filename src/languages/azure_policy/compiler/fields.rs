@@ -23,25 +23,54 @@ impl Compiler {
         span: &crate::lexer::Span,
     ) -> Result<u8> {
         let reg = match kind {
-            FieldKind::Type => self.compile_resource_path_value("type", span)?,
-            FieldKind::Id => self.compile_resource_path_value("id", span)?,
-            FieldKind::Kind => self.compile_resource_path_value("kind", span)?,
-            FieldKind::Name => self.compile_resource_path_value("name", span)?,
-            FieldKind::Location => self.compile_resource_path_value("location", span)?,
-            FieldKind::FullName => self.compile_resource_path_value("fullName", span)?,
-            FieldKind::Tags => self.compile_resource_path_value("tags", span)?,
-            FieldKind::IdentityType => self.compile_resource_path_value("identity.type", span)?,
+            FieldKind::Type => {
+                self.record_field_kind("type");
+                self.compile_resource_path_value("type", span)?
+            }
+            FieldKind::Id => {
+                self.record_field_kind("id");
+                self.compile_resource_path_value("id", span)?
+            }
+            FieldKind::Kind => {
+                self.record_field_kind("kind");
+                self.compile_resource_path_value("kind", span)?
+            }
+            FieldKind::Name => {
+                self.record_field_kind("name");
+                self.compile_resource_path_value("name", span)?
+            }
+            FieldKind::Location => {
+                self.record_field_kind("location");
+                self.compile_resource_path_value("location", span)?
+            }
+            FieldKind::FullName => {
+                self.record_field_kind("fullName");
+                self.compile_resource_path_value("fullName", span)?
+            }
+            FieldKind::Tags => {
+                self.record_field_kind("tags");
+                self.compile_resource_path_value("tags", span)?
+            }
+            FieldKind::IdentityType => {
+                self.record_field_kind("identity.type");
+                self.compile_resource_path_value("identity.type", span)?
+            }
+            FieldKind::ApiVersion => {
+                self.record_field_kind("apiVersion");
+                self.compile_resource_path_value("apiVersion", span)?
+            }
             FieldKind::Tag(tag) => {
+                self.record_field_kind("tags");
+                self.record_tag_name(tag);
                 self.compile_resource_path_value(&format!("tags.{}", tag), span)?
             }
             FieldKind::Alias(path) => {
-                let short = match self.alias_map.get(&path.to_lowercase()) {
-                    Some(s) => s.clone(),
-                    None => path.clone(),
-                };
+                self.record_alias(path);
+                let short = self.resolve_alias_path(path)?;
                 self.compile_field_path_expression(&short, span)?
             }
             FieldKind::Expr(expr) => {
+                self.observed_has_dynamic_fields = true;
                 let path_reg = self.compile_expr(expr)?;
                 let resource_reg = self.compile_resource_root(span)?;
                 self.emit_builtin_call(
@@ -99,10 +128,7 @@ impl Compiler {
     /// collects all matching values into an array.
     ///
     /// For example, `field('properties.ipRules[*].value')` produces an array
-    /// of `value` fields from every element of `input.resource.properties.ipRules`.
-    ///
-    /// Nested wildcards (e.g. `a[*].b[*].c`) are handled by recursive
-    /// flattening — each level of `[*]` emits a `ForEach` loop that pushes
+    /// of each element's `value` field.
     /// directly into the same result array.
     ///
     /// When the underlying array is missing (undefined), the `ForEach` loop

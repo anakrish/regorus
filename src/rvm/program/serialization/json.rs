@@ -85,6 +85,27 @@ impl Program {
             .and_then(|v| v.as_u64())
             .and_then(|v| u8::try_from(v).ok())
             .unwrap_or(0);
+        let language = metadata
+            .get("language")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let annotations: alloc::collections::BTreeMap<String, Value> = metadata
+            .get("annotations")
+            .and_then(|v| match *v {
+                // Deserialize JSON annotations into Value map
+                serde_json::Value::Object(ref map) => {
+                    let mut result = alloc::collections::BTreeMap::new();
+                    for (k, json_val) in map {
+                        if let Ok(val) = serde_json::from_value::<Value>(json_val.clone()) {
+                            result.insert(k.clone(), val);
+                        }
+                    }
+                    Some(result)
+                }
+                _ => None,
+            })
+            .unwrap_or_default();
         let rego_v0 = metadata
             .get("rego_v0")
             .and_then(|v| v.as_bool())
@@ -188,6 +209,8 @@ impl Program {
                 compiled_at,
                 source_info,
                 optimization_level,
+                language,
+                annotations,
             },
             rule_tree,
             resolved_builtins: Vec::new(),

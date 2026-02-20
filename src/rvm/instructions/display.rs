@@ -149,6 +149,8 @@ impl core::fmt::Display for Instruction {
             Instruction::LoadBool { dest, value } => format!("LOAD_BOOL R({}) {}", dest, value),
             Instruction::LoadData { dest } => format!("LOAD_DATA R({})", dest),
             Instruction::LoadInput { dest } => format!("LOAD_INPUT R({})", dest),
+            Instruction::LoadContext { dest } => format!("LOAD_CONTEXT R({})", dest),
+            Instruction::LoadMetadata { dest } => format!("LOAD_METADATA R({})", dest),
             Instruction::Move { dest, src } => format!("MOVE R({}) R({})", dest, src),
             Instruction::Add { dest, left, right } => {
                 format!("ADD R({}) R({}) R({})", dest, left, right)
@@ -287,6 +289,106 @@ impl core::fmt::Display for Instruction {
                 |k| format!("COMPREHENSION_YIELD R({}) R({})", k, value_reg),
             ),
             Instruction::ComprehensionEnd {} => String::from("COMPREHENSION_END"),
+
+            // Azure Policy condition operators
+            Instruction::PolicyEquals { dest, left, right } => {
+                format!("POLICY_EQUALS R({}) R({}) R({})", dest, left, right)
+            }
+            Instruction::PolicyNotEquals { dest, left, right } => {
+                format!("POLICY_NOT_EQUALS R({}) R({}) R({})", dest, left, right)
+            }
+            Instruction::PolicyGreater { dest, left, right } => {
+                format!("POLICY_GREATER R({}) R({}) R({})", dest, left, right)
+            }
+            Instruction::PolicyGreaterOrEquals { dest, left, right } => {
+                format!(
+                    "POLICY_GREATER_OR_EQUALS R({}) R({}) R({})",
+                    dest, left, right
+                )
+            }
+            Instruction::PolicyLess { dest, left, right } => {
+                format!("POLICY_LESS R({}) R({}) R({})", dest, left, right)
+            }
+            Instruction::PolicyLessOrEquals { dest, left, right } => {
+                format!("POLICY_LESS_OR_EQUALS R({}) R({}) R({})", dest, left, right)
+            }
+            Instruction::PolicyIn { dest, left, right } => {
+                format!("POLICY_IN R({}) R({}) R({})", dest, left, right)
+            }
+            Instruction::PolicyNotIn { dest, left, right } => {
+                format!("POLICY_NOT_IN R({}) R({}) R({})", dest, left, right)
+            }
+            Instruction::PolicyContains { dest, left, right } => {
+                format!("POLICY_CONTAINS R({}) R({}) R({})", dest, left, right)
+            }
+            Instruction::PolicyNotContains { dest, left, right } => {
+                format!("POLICY_NOT_CONTAINS R({}) R({}) R({})", dest, left, right)
+            }
+            Instruction::PolicyContainsKey { dest, left, right } => {
+                format!("POLICY_CONTAINS_KEY R({}) R({}) R({})", dest, left, right)
+            }
+            Instruction::PolicyNotContainsKey { dest, left, right } => {
+                format!(
+                    "POLICY_NOT_CONTAINS_KEY R({}) R({}) R({})",
+                    dest, left, right
+                )
+            }
+            Instruction::PolicyLike { dest, left, right } => {
+                format!("POLICY_LIKE R({}) R({}) R({})", dest, left, right)
+            }
+            Instruction::PolicyNotLike { dest, left, right } => {
+                format!("POLICY_NOT_LIKE R({}) R({}) R({})", dest, left, right)
+            }
+            Instruction::PolicyMatch { dest, left, right } => {
+                format!("POLICY_MATCH R({}) R({}) R({})", dest, left, right)
+            }
+            Instruction::PolicyNotMatch { dest, left, right } => {
+                format!("POLICY_NOT_MATCH R({}) R({}) R({})", dest, left, right)
+            }
+            Instruction::PolicyMatchInsensitively { dest, left, right } => {
+                format!(
+                    "POLICY_MATCH_INSENSITIVELY R({}) R({}) R({})",
+                    dest, left, right
+                )
+            }
+            Instruction::PolicyNotMatchInsensitively { dest, left, right } => {
+                format!(
+                    "POLICY_NOT_MATCH_INSENSITIVELY R({}) R({}) R({})",
+                    dest, left, right
+                )
+            }
+            Instruction::PolicyExists { dest, left, right } => {
+                format!("POLICY_EXISTS R({}) R({}) R({})", dest, left, right)
+            }
+            Instruction::PolicyNot { dest, operand } => {
+                format!("POLICY_NOT R({}) R({})", dest, operand)
+            }
+
+            // AllOf / AnyOf structured instructions
+            Instruction::AllOfStart { result, end_pc } => {
+                format!("ALL_OF_START R({}) {}", result, end_pc)
+            }
+            Instruction::AllOfNext {
+                check,
+                result,
+                end_pc,
+            } => {
+                format!("ALL_OF_NEXT R({}) R({}) {}", check, result, end_pc)
+            }
+            Instruction::AllOfEnd { result } => {
+                format!("ALL_OF_END R({})", result)
+            }
+            Instruction::AnyOfStart { result, end_pc } => {
+                format!("ANY_OF_START R({}) {}", result, end_pc)
+            }
+            Instruction::AnyOfNext {
+                check,
+                result,
+                end_pc,
+            } => {
+                format!("ANY_OF_NEXT R({}) R({}) {}", check, result, end_pc)
+            }
+            Instruction::AnyOfEnd {} => String::from("ANY_OF_END"),
         };
         write!(f, "{}", text)
     }

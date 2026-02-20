@@ -235,6 +235,20 @@
             "name": "Microsoft.Storage/storageAccounts/networkAcls.ipRules[*].value",
             "defaultPath": "properties.networkAcls.ipRules[*].value",
             "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/networkAcls.ipRules[*].action",
+            "defaultPath": "properties.networkAcls.ipRules[*].action",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/minimumTlsVersion",
+            "defaultPath": "properties.minimumTlsVersion",
+            "defaultMetadata": {
+              "attributes": "Modifiable",
+              "type": "String"
+            },
+            "paths": []
           }
         ]
       }
@@ -442,6 +456,63 @@
                 }
               }
             ]
+          },
+          {
+            "name": "Microsoft.Network/networkSecurityGroups/securityRules[*].access",
+            "defaultPath": "properties.securityRules[*].properties.access",
+            "defaultMetadata": {
+              "attributes": "Modifiable",
+              "type": "String"
+            },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Network/networkSecurityGroups/securityRules[*].direction",
+            "defaultPath": "properties.securityRules[*].properties.direction",
+            "defaultMetadata": {
+              "attributes": "Modifiable",
+              "type": "String"
+            },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Network/networkSecurityGroups/securityRules[*].sourceAddressPrefix",
+            "defaultPath": "properties.securityRules[*].properties.sourceAddressPrefix",
+            "defaultMetadata": {
+              "attributes": "Modifiable",
+              "type": "String"
+            },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Network/networkSecurityGroups/securityRules/access",
+            "defaultPath": "properties.access",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Network/networkSecurityGroups/securityRules/direction",
+            "defaultPath": "properties.direction",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Network/networkSecurityGroups/securityRules/destinationPortRange",
+            "defaultPath": "properties.destinationPortRange",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Network/networkSecurityGroups/securityRules/destinationPortRanges[*]",
+            "defaultPath": "properties.destinationPortRanges[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Network/networkSecurityGroups/securityRules/sourceAddressPrefix",
+            "defaultPath": "properties.sourceAddressPrefix",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Network/networkSecurityGroups/securityRules/sourceAddressPrefixes[*]",
+            "defaultPath": "properties.sourceAddressPrefixes[*]",
+            "paths": []
           }
         ]
       }
@@ -620,6 +691,44 @@
                 }
               }
             ]
+          },
+          {
+            "name": "Microsoft.KeyVault/vaults/createMode",
+            "defaultPath": "properties.createMode",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.KeyVault/vaults/networkAcls.defaultAction",
+            "defaultPath": "properties.networkAcls.defaultAction",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.KeyVault/vaults/networkAcls.ipRules[*]",
+            "defaultPath": "properties.networkAcls.ipRules[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.KeyVault/vaults/networkAcls.ipRules[*].value",
+            "defaultPath": "properties.networkAcls.ipRules[*].value",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.KeyVault/vaults/enableSoftDelete",
+            "defaultPath": "properties.enableSoftDelete",
+            "defaultMetadata": {
+              "attributes": "Modifiable",
+              "type": "Boolean"
+            },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.KeyVault/vaults/enablePurgeProtection",
+            "defaultPath": "properties.enablePurgeProtection",
+            "defaultMetadata": {
+              "attributes": "Modifiable",
+              "type": "Boolean"
+            },
+            "paths": []
           }
         ]
       }
@@ -830,6 +939,15 @@
           {
             "name": "Microsoft.Compute/virtualMachines/storageProfile.dataDisks[*].image",
             "defaultPath": "properties.storageProfile.dataDisks[*].image",
+            "defaultMetadata": {
+              "attributes": "Modifiable",
+              "type": "Object"
+            },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/storageProfile.dataDisks[*]",
+            "defaultPath": "properties.storageProfile.dataDisks[*]",
             "defaultMetadata": {
               "attributes": "Modifiable",
               "type": "Object"
@@ -1229,6 +1347,15 @@
                 ]
               }
             ]
+          },
+          {
+            "name": "Microsoft.Web/sites/siteConfig.minTlsVersion",
+            "defaultPath": "properties.siteConfig.minTlsVersion",
+            "defaultMetadata": {
+              "attributes": "Modifiable",
+              "type": "String"
+            },
+            "paths": []
           }
         ]
       }

@@ -10,26 +10,26 @@ use alloc::vec::Vec;
 
 // ── Type helpers ──────────────────────────────────────────────────────
 
-pub(super) fn is_true(value: &Value) -> bool {
+pub fn is_true(value: &Value) -> bool {
     matches!(value, Value::Bool(true))
 }
 
-pub(super) fn is_undefined(value: &Value) -> bool {
+pub fn is_undefined(value: &Value) -> bool {
     matches!(value, Value::Undefined)
 }
 
-pub(super) fn as_string(value: &Value) -> Option<String> {
+pub fn as_string(value: &Value) -> Option<String> {
     match value {
         Value::String(s) => Some(s.to_string()),
         _ => None,
     }
 }
 
-pub(super) fn as_string_ci(value: &Value) -> Option<String> {
+pub fn as_string_ci(value: &Value) -> Option<String> {
     as_string(value).map(|s| s.to_ascii_lowercase())
 }
 
-pub(super) fn as_boolish(value: &Value) -> Option<bool> {
+pub fn as_boolish(value: &Value) -> Option<bool> {
     match value {
         Value::Bool(b) => Some(*b),
         Value::String(s) => match s.to_ascii_lowercase().as_str() {
@@ -43,7 +43,7 @@ pub(super) fn as_boolish(value: &Value) -> Option<bool> {
 
 // ── Comparison and coercion ───────────────────────────────────────────
 
-pub(super) fn compare_values(args: &[Value]) -> Option<i8> {
+pub fn compare_values(args: &[Value]) -> Option<i8> {
     if args.len() != 2 || is_undefined(&args[0]) || is_undefined(&args[1]) {
         return None;
     }
@@ -97,7 +97,7 @@ pub(super) fn compare_values(args: &[Value]) -> Option<i8> {
     }
 }
 
-pub(super) fn case_insensitive_equals(left: &Value, right: &Value) -> bool {
+pub fn case_insensitive_equals(left: &Value, right: &Value) -> bool {
     if is_undefined(left) || is_undefined(right) {
         return false;
     }
@@ -123,7 +123,7 @@ pub(super) fn case_insensitive_equals(left: &Value, right: &Value) -> bool {
 }
 
 /// Try to parse a string as a number for Azure Policy type coercion.
-pub(super) fn try_coerce_to_number(s: &str) -> Option<crate::number::Number> {
+pub fn try_coerce_to_number(s: &str) -> Option<crate::number::Number> {
     use core::str::FromStr;
     // Try integer first, then float.
     if let Ok(n) = i64::from_str(s.trim()) {
@@ -137,7 +137,7 @@ pub(super) fn try_coerce_to_number(s: &str) -> Option<crate::number::Number> {
 
 // ── Pattern matching ──────────────────────────────────────────────────
 
-pub(super) fn match_pattern(args: &[Value], insensitive: bool) -> bool {
+pub fn match_pattern(args: &[Value], insensitive: bool) -> bool {
     if args.len() != 2 {
         return false;
     }
@@ -157,7 +157,7 @@ pub(super) fn match_pattern(args: &[Value], insensitive: bool) -> bool {
     match_question_hash_pattern(&input, &pattern)
 }
 
-pub(super) fn match_like_pattern_ci(input: &str, pattern: &str) -> bool {
+pub fn match_like_pattern_ci(input: &str, pattern: &str) -> bool {
     wildcard_match(input.as_bytes(), pattern.as_bytes())
 }
 
@@ -192,7 +192,7 @@ fn wildcard_match(input: &[u8], pattern: &[u8]) -> bool {
     pattern_index == pattern.len()
 }
 
-pub(super) fn match_question_hash_pattern(input: &str, pattern: &str) -> bool {
+pub fn match_question_hash_pattern(input: &str, pattern: &str) -> bool {
     let input_chars = input.chars().collect::<Vec<_>>();
     let pattern_chars = pattern.chars().collect::<Vec<_>>();
 
@@ -219,7 +219,7 @@ pub(super) fn match_question_hash_pattern(input: &str, pattern: &str) -> bool {
 
 // ── Path resolution ───────────────────────────────────────────────────
 
-pub(super) fn resolve_path(root: &Value, path: &str) -> Value {
+pub fn resolve_path(root: &Value, path: &str) -> Value {
     let segments = tokenize_path(path);
     let mut current = root.clone();
 

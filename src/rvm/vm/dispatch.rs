@@ -72,6 +72,14 @@ impl RegoVM {
                 self.set_register(dest, self.input.clone())?;
                 Ok(InstructionOutcome::Continue)
             }
+            LoadContext { dest } => {
+                self.set_register(dest, self.context.clone())?;
+                Ok(InstructionOutcome::Continue)
+            }
+            LoadMetadata { dest } => {
+                self.set_register(dest, program.metadata.to_value())?;
+                Ok(InstructionOutcome::Continue)
+            }
             Move { dest, src } => {
                 let value = self.get_register(src)?.clone();
                 self.set_register(dest, value)?;
@@ -776,6 +784,359 @@ impl RegoVM {
                 let result = self.get_register(0)?.clone();
                 Ok(InstructionOutcome::Return(result))
             }
+            other => self.execute_policy_instruction(program, other),
+        }
+    }
+
+    #[cfg(not(feature = "azure_policy"))]
+    fn execute_policy_instruction(
+        &mut self,
+        program: &Program,
+        instruction: Instruction,
+    ) -> Result<InstructionOutcome> {
+        self.execute_virtual_instruction(program, instruction)
+    }
+
+    #[cfg(feature = "azure_policy")]
+    fn execute_policy_instruction(
+        &mut self,
+        program: &Program,
+        instruction: Instruction,
+    ) -> Result<InstructionOutcome> {
+        use crate::builtins::azure_policy::helpers::{
+            as_boolish, as_string_ci, case_insensitive_equals, compare_values, is_true,
+            is_undefined, match_like_pattern_ci, match_pattern,
+        };
+        use Instruction::*;
+        match instruction {
+            PolicyEquals { dest, left, right } => {
+                let l = self.get_register(left)?;
+                let r = self.get_register(right)?;
+                let result = case_insensitive_equals(l, r);
+                self.set_register(dest, Value::Bool(result))?;
+                Ok(InstructionOutcome::Continue)
+            }
+            PolicyNotEquals { dest, left, right } => {
+                let l = self.get_register(left)?;
+                if is_undefined(l) {
+                    self.set_register(dest, Value::Bool(true))?;
+                } else {
+                    let r = self.get_register(right)?;
+                    let result = !case_insensitive_equals(l, r);
+                    self.set_register(dest, Value::Bool(result))?;
+                }
+                Ok(InstructionOutcome::Continue)
+            }
+            PolicyGreater { dest, left, right } => {
+                let args = [
+                    self.get_register(left)?.clone(),
+                    self.get_register(right)?.clone(),
+                ];
+                let result = compare_values(&args).is_some_and(|c| c > 0);
+                self.set_register(dest, Value::Bool(result))?;
+                Ok(InstructionOutcome::Continue)
+            }
+            PolicyGreaterOrEquals { dest, left, right } => {
+                let args = [
+                    self.get_register(left)?.clone(),
+                    self.get_register(right)?.clone(),
+                ];
+                let result = compare_values(&args).is_some_and(|c| c >= 0);
+                self.set_register(dest, Value::Bool(result))?;
+                Ok(InstructionOutcome::Continue)
+            }
+            PolicyLess { dest, left, right } => {
+                let args = [
+                    self.get_register(left)?.clone(),
+                    self.get_register(right)?.clone(),
+                ];
+                let result = compare_values(&args).is_some_and(|c| c < 0);
+                self.set_register(dest, Value::Bool(result))?;
+                Ok(InstructionOutcome::Continue)
+            }
+            PolicyLessOrEquals { dest, left, right } => {
+                let args = [
+                    self.get_register(left)?.clone(),
+                    self.get_register(right)?.clone(),
+                ];
+                let result = compare_values(&args).is_some_and(|c| c <= 0);
+                self.set_register(dest, Value::Bool(result))?;
+                Ok(InstructionOutcome::Continue)
+            }
+            PolicyIn { dest, left, right } => {
+                let l = self.get_register(left)?;
+                let r = self.get_register(right)?;
+
+                if is_undefined(l) || is_undefined(r) {
+                    self.set_register(dest, Value::Bool(false))?;
+                } else {
+                    let result = match *r {
+                        Value::Array(ref items) => {
+                            items.iter().any(|item| case_insensitive_equals(item, l))
+                        }
+                        Value::Set(ref items) => {
+                            items.iter().any(|item| case_insensitive_equals(item, l))
+                        }
+                        _ => false,
+                    };
+                    self.set_register(dest, Value::Bool(result))?;
+                }
+                Ok(InstructionOutcome::Continue)
+            }
+            PolicyNotIn { dest, left, right } => {
+                let l = self.get_register(left)?;
+                if is_undefined(l) {
+                    self.set_register(dest, Value::Bool(true))?;
+                } else {
+                    let r = self.get_register(right)?;
+                    if is_undefined(r) {
+                        self.set_register(dest, Value::Bool(false))?;
+                    } else {
+                        let in_result = match *r {
+                            Value::Array(ref items) => {
+                                items.iter().any(|item| case_insensitive_equals(item, l))
+                            }
+                            Value::Set(ref items) => {
+                                items.iter().any(|item| case_insensitive_equals(item, l))
+                            }
+                            _ => false,
+                        };
+                        self.set_register(dest, Value::Bool(!in_result))?;
+                    }
+                }
+                Ok(InstructionOutcome::Continue)
+            }
+            PolicyContains { dest, left, right } => {
+                let l = self.get_register(left)?;
+                let r = self.get_register(right)?;
+
+                if is_undefined(l) || is_undefined(r) {
+                    self.set_register(dest, Value::Bool(false))?;
+                } else {
+                    let result = match *l {
+                        Value::String(ref haystack) => {
+                            if let Value::String(ref needle) = *r {
+                                haystack
+                                    .to_ascii_lowercase()
+                                    .contains(&needle.to_ascii_lowercase())
+                            } else {
+                                false
+                            }
+                        }
+                        Value::Array(ref items) => {
+                            items.iter().any(|item| case_insensitive_equals(item, r))
+                        }
+                        Value::Set(ref items) => {
+                            items.iter().any(|item| case_insensitive_equals(item, r))
+                        }
+                        _ => false,
+                    };
+                    self.set_register(dest, Value::Bool(result))?;
+                }
+                Ok(InstructionOutcome::Continue)
+            }
+            PolicyNotContains { dest, left, right } => {
+                let l = self.get_register(left)?;
+                if is_undefined(l) {
+                    self.set_register(dest, Value::Bool(true))?;
+                } else {
+                    let r = self.get_register(right)?;
+                    if is_undefined(r) {
+                        self.set_register(dest, Value::Bool(false))?;
+                    } else {
+                        let contains_result = match *l {
+                            Value::String(ref haystack) => {
+                                if let Value::String(ref needle) = *r {
+                                    haystack
+                                        .to_ascii_lowercase()
+                                        .contains(&needle.to_ascii_lowercase())
+                                } else {
+                                    false
+                                }
+                            }
+                            Value::Array(ref items) => {
+                                items.iter().any(|item| case_insensitive_equals(item, r))
+                            }
+                            Value::Set(ref items) => {
+                                items.iter().any(|item| case_insensitive_equals(item, r))
+                            }
+                            _ => false,
+                        };
+                        self.set_register(dest, Value::Bool(!contains_result))?;
+                    }
+                }
+                Ok(InstructionOutcome::Continue)
+            }
+            PolicyContainsKey { dest, left, right } => {
+                let l = self.get_register(left)?;
+                let r = self.get_register(right)?;
+
+                if is_undefined(l) || is_undefined(r) {
+                    self.set_register(dest, Value::Bool(false))?;
+                } else {
+                    let result = match *l {
+                        Value::Object(ref map) => {
+                            map.keys().any(|key| case_insensitive_equals(key, r))
+                        }
+                        _ => false,
+                    };
+                    self.set_register(dest, Value::Bool(result))?;
+                }
+                Ok(InstructionOutcome::Continue)
+            }
+            PolicyNotContainsKey { dest, left, right } => {
+                let l = self.get_register(left)?;
+                if is_undefined(l) {
+                    self.set_register(dest, Value::Bool(true))?;
+                } else {
+                    let r = self.get_register(right)?;
+                    if is_undefined(r) {
+                        self.set_register(dest, Value::Bool(false))?;
+                    } else {
+                        let ck_result = match *l {
+                            Value::Object(ref map) => {
+                                map.keys().any(|key| case_insensitive_equals(key, r))
+                            }
+                            _ => false,
+                        };
+                        self.set_register(dest, Value::Bool(!ck_result))?;
+                    }
+                }
+                Ok(InstructionOutcome::Continue)
+            }
+            PolicyLike { dest, left, right } => {
+                let l = self.get_register(left)?;
+                let r = self.get_register(right)?;
+
+                let result = match (as_string_ci(l), as_string_ci(r)) {
+                    (Some(input), Some(pattern)) => match_like_pattern_ci(&input, &pattern),
+                    _ => false,
+                };
+                self.set_register(dest, Value::Bool(result))?;
+                Ok(InstructionOutcome::Continue)
+            }
+            PolicyNotLike { dest, left, right } => {
+                let l = self.get_register(left)?;
+                if is_undefined(l) {
+                    self.set_register(dest, Value::Bool(true))?;
+                } else {
+                    let r = self.get_register(right)?;
+                    let result = match (as_string_ci(l), as_string_ci(r)) {
+                        (Some(input), Some(pattern)) => match_like_pattern_ci(&input, &pattern),
+                        _ => false,
+                    };
+                    self.set_register(dest, Value::Bool(!result))?;
+                }
+                Ok(InstructionOutcome::Continue)
+            }
+            PolicyMatch { dest, left, right } => {
+                let args = [
+                    self.get_register(left)?.clone(),
+                    self.get_register(right)?.clone(),
+                ];
+                let result = match_pattern(&args, false);
+                self.set_register(dest, Value::Bool(result))?;
+                Ok(InstructionOutcome::Continue)
+            }
+            PolicyNotMatch { dest, left, right } => {
+                let l = self.get_register(left)?;
+                if is_undefined(l) {
+                    self.set_register(dest, Value::Bool(true))?;
+                } else {
+                    let args = [l.clone(), self.get_register(right)?.clone()];
+                    let result = !match_pattern(&args, false);
+                    self.set_register(dest, Value::Bool(result))?;
+                }
+                Ok(InstructionOutcome::Continue)
+            }
+            PolicyMatchInsensitively { dest, left, right } => {
+                let args = [
+                    self.get_register(left)?.clone(),
+                    self.get_register(right)?.clone(),
+                ];
+                let result = match_pattern(&args, true);
+                self.set_register(dest, Value::Bool(result))?;
+                Ok(InstructionOutcome::Continue)
+            }
+            PolicyNotMatchInsensitively { dest, left, right } => {
+                let l = self.get_register(left)?;
+                if is_undefined(l) {
+                    self.set_register(dest, Value::Bool(true))?;
+                } else {
+                    let args = [l.clone(), self.get_register(right)?.clone()];
+                    let result = !match_pattern(&args, true);
+                    self.set_register(dest, Value::Bool(result))?;
+                }
+                Ok(InstructionOutcome::Continue)
+            }
+            PolicyExists { dest, left, right } => {
+                let l = self.get_register(left)?;
+                let r = self.get_register(right)?;
+                let expected = as_boolish(r).unwrap_or(false);
+                let is_defined = !is_undefined(l) && !matches!(l, Value::Null);
+                self.set_register(dest, Value::Bool(is_defined == expected))?;
+                Ok(InstructionOutcome::Continue)
+            }
+            PolicyNot { dest, operand } => {
+                let val = self.get_register(operand)?;
+                let result = !is_true(val);
+                self.set_register(dest, Value::Bool(result))?;
+                Ok(InstructionOutcome::Continue)
+            }
+
+            // AllOf / AnyOf structured instructions
+            AllOfStart { result, end_pc: _ } => {
+                // Initialize result to false (pessimistic — will be set to true
+                // by AllOfEnd if all children pass).
+                self.set_register(result, Value::Bool(false))?;
+                // No children case: AllOfStart is immediately followed by AllOfEnd.
+                // The normal flow handles this — we just continue.
+                Ok(InstructionOutcome::Continue)
+            }
+            AllOfNext {
+                check,
+                result: _,
+                end_pc,
+            } => {
+                let val = self.get_register(check)?;
+                if !matches!(val, Value::Bool(true)) {
+                    // Child failed — short-circuit.  Result stays false.
+                    // Jump PAST AllOfEnd: after the main loop's +1 we land at
+                    // end_pc + 1, skipping the AllOfEnd that would set true.
+                    self.pc = usize::from(end_pc);
+                }
+                Ok(InstructionOutcome::Continue)
+            }
+            AllOfEnd { result } => {
+                // All children passed — set result to true.
+                self.set_register(result, Value::Bool(true))?;
+                Ok(InstructionOutcome::Continue)
+            }
+            AnyOfStart { result, end_pc: _ } => {
+                // Initialize result to false.
+                self.set_register(result, Value::Bool(false))?;
+                Ok(InstructionOutcome::Continue)
+            }
+            AnyOfNext {
+                check,
+                result,
+                end_pc,
+            } => {
+                let val = self.get_register(check)?;
+                if matches!(val, Value::Bool(true)) {
+                    // Child succeeded — short-circuit.
+                    self.set_register(result, Value::Bool(true))?;
+                    // Jump PAST AnyOfEnd: after the main loop's +1 we land at
+                    // end_pc + 1, skipping the AnyOfEnd no-op.
+                    self.pc = usize::from(end_pc);
+                }
+                Ok(InstructionOutcome::Continue)
+            }
+            AnyOfEnd {} => {
+                // No child matched — result stays false (set by AnyOfStart).
+                Ok(InstructionOutcome::Continue)
+            }
+
             other => self.execute_virtual_instruction(program, other),
         }
     }

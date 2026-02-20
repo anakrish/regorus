@@ -71,9 +71,9 @@ The alias system (`src/languages/azure_policy/aliases/`) supports:
 - [x] `field('alias')` — returns value of a field
 - [x] `current('name')` — access current value in count loop
 - [x] `current()` — zero-arg form (innermost count element when no nesting)
-- [ ] `requestContext().apiVersion` — API version of the triggering request
-- [ ] `policy()` — returns assignmentId, definitionId, setDefinitionId, definitionReferenceId
-- [ ] `ipRangeContains(range, targetRange)` — CIDR/IP range containment check
+- [x] `requestContext().apiVersion` — API version of the triggering request
+- [x] `policy()` — returns assignmentId, definitionId, setDefinitionId, definitionReferenceId
+- [x] `ipRangeContains(range, targetRange)` — CIDR/IP range containment check
 
 ---
 
@@ -112,44 +112,45 @@ The alias system (`src/languages/azure_policy/aliases/`) supports:
 ### Additional ARM Template Functions (~40 remaining)
 
 **String:**
-- [ ] `indexOf(string, search)`
-- [ ] `lastIndexOf(string, search)`
-- [ ] `padLeft(string, length, char)`
-- [ ] `trim(string)`
-- [ ] `format(formatString, args...)`
-- [ ] `base64(string)`
-- [ ] `base64ToString(base64)`
-- [ ] `base64ToJson(base64)`
-- [ ] `uri(baseUri, relativeUri)`
-- [ ] `uriComponent(string)`
-- [ ] `uriComponentToString(encoded)`
-- [ ] `dataUri(string)`
-- [ ] `dataUriToString(dataUri)`
+- [x] `indexOf(string, search)`
+- [x] `lastIndexOf(string, search)`
+- [x] `padLeft(string, length, char)`
+- [x] `trim(string)`
+- [x] `format(formatString, args...)`
+- [x] `base64(string)`
+- [x] `base64ToString(base64)`
+- [x] `base64ToJson(base64)`
+- [x] `uri(baseUri, relativeUri)`
+- [x] `uriComponent(string)`
+- [x] `uriComponentToString(encoded)`
+- [x] `dataUri(string)`
+- [x] `dataUriToString(dataUri)`
 
 **Array/Object:**
-- [ ] `intersection(array1, array2, ...)`
-- [ ] `union(array1, array2, ...)`
-- [ ] `take(array, count)`
-- [ ] `skip(array, count)`
-- [ ] `range(start, count)`
-- [ ] `array(value)` — convert to array
-- [ ] `coalesce(value1, value2, ...)`
-- [ ] `createObject(key1, val1, ...)`
+- [x] `intersection(array1, array2, ...)`
+- [x] `union(array1, array2, ...)`
+- [x] `take(array, count)`
+- [x] `skip(array, count)`
+- [x] `range(start, count)`
+- [x] `array(value)` — convert to array
+- [x] `coalesce(value1, value2, ...)`
+- [x] `createObject(key1, val1, ...)`
 
 **Numeric:**
-- [ ] `sub(a, b)`
-- [ ] `mul(a, b)`
-- [ ] `div(a, b)`
-- [ ] `mod(a, b)`
-- [ ] `min(a, b, ...)`
-- [ ] `max(a, b, ...)`
-- [ ] `float(value)`
+- [x] `sub(a, b)`
+- [x] `mul(a, b)`
+- [x] `div(a, b)`
+- [x] `mod(a, b)`
+- [x] `min(a, b, ...)`
+- [x] `max(a, b, ...)`
+- [x] `float(value)`
 
 **Date/Time:**
-- [ ] `utcNow(format?)`
-- [ ] `dateTimeAdd(base, duration, format?)`
-- [ ] `dateTimeFromEpoch(epoch)`
-- [ ] `dateTimeToEpoch(dateTime)`
+- [x] `utcNow(format?)`
+- [x] `dateTimeAdd(base, duration, format?)`
+- [x] `dateTimeFromEpoch(epoch)`
+- [x] `dateTimeToEpoch(dateTime)`
+- [x] `addDays(dateTime, numberOfDays)`
 
 **Resource:**
 - [ ] `reference(resourceName)`

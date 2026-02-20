@@ -31,6 +31,8 @@ pub fn parse_instruction(text: &str) -> Result<Instruction> {
             "LoadBool" => parse_load_bool(params_text),
             "LoadData" => parse_load_data(params_text),
             "LoadInput" => parse_load_input(params_text),
+            "LoadContext" => parse_load_context(params_text),
+            "LoadMetadata" => parse_load_metadata(params_text),
             "Move" => parse_move(params_text),
             "Add" => parse_add(params_text),
             "Sub" => parse_sub(params_text),
@@ -76,6 +78,39 @@ pub fn parse_instruction(text: &str) -> Result<Instruction> {
             "ComprehensionAdd" => parse_comprehension_add(params_text),
             "ComprehensionBegin" => parse_comprehension_start(params_text),
             "ComprehensionYield" => parse_comprehension_add(params_text),
+            "ReturnUndefinedIfNotTrue" => parse_return_undefined_if_not_true(params_text),
+            "CoalesceUndefinedToNull" => parse_coalesce_undefined_to_null(params_text),
+            // Azure Policy condition operators
+            "PolicyEquals" => parse_policy_ternary(params_text, "PolicyEquals"),
+            "PolicyNotEquals" => parse_policy_ternary(params_text, "PolicyNotEquals"),
+            "PolicyGreater" => parse_policy_ternary(params_text, "PolicyGreater"),
+            "PolicyGreaterOrEquals" => parse_policy_ternary(params_text, "PolicyGreaterOrEquals"),
+            "PolicyLess" => parse_policy_ternary(params_text, "PolicyLess"),
+            "PolicyLessOrEquals" => parse_policy_ternary(params_text, "PolicyLessOrEquals"),
+            "PolicyIn" => parse_policy_ternary(params_text, "PolicyIn"),
+            "PolicyNotIn" => parse_policy_ternary(params_text, "PolicyNotIn"),
+            "PolicyContains" => parse_policy_ternary(params_text, "PolicyContains"),
+            "PolicyNotContains" => parse_policy_ternary(params_text, "PolicyNotContains"),
+            "PolicyContainsKey" => parse_policy_ternary(params_text, "PolicyContainsKey"),
+            "PolicyNotContainsKey" => parse_policy_ternary(params_text, "PolicyNotContainsKey"),
+            "PolicyLike" => parse_policy_ternary(params_text, "PolicyLike"),
+            "PolicyNotLike" => parse_policy_ternary(params_text, "PolicyNotLike"),
+            "PolicyMatch" => parse_policy_ternary(params_text, "PolicyMatch"),
+            "PolicyNotMatch" => parse_policy_ternary(params_text, "PolicyNotMatch"),
+            "PolicyMatchInsensitively" => {
+                parse_policy_ternary(params_text, "PolicyMatchInsensitively")
+            }
+            "PolicyNotMatchInsensitively" => {
+                parse_policy_ternary(params_text, "PolicyNotMatchInsensitively")
+            }
+            "PolicyExists" => parse_policy_ternary(params_text, "PolicyExists"),
+            "PolicyNot" => parse_policy_not(params_text),
+            // AllOf / AnyOf
+            "AllOfStart" => parse_allof_start(params_text),
+            "AllOfNext" => parse_allof_next(params_text),
+            "AllOfEnd" => parse_allof_end(params_text),
+            "AnyOfStart" => parse_anyof_start(params_text),
+            "AnyOfNext" => parse_anyof_next(params_text),
             _ => bail!("Unknown instruction: {}", name),
         }
     } else {
@@ -86,6 +121,7 @@ pub fn parse_instruction(text: &str) -> Result<Instruction> {
             "RuleReturn" => Ok(Instruction::RuleReturn {}),
             "DestructuringSuccess" => Ok(Instruction::DestructuringSuccess {}),
             "ComprehensionEnd" => Ok(Instruction::ComprehensionEnd {}),
+            "AnyOfEnd" => Ok(Instruction::AnyOfEnd {}),
             _ => bail!("Unknown instruction: {}", name),
         }
     }
@@ -549,6 +585,22 @@ fn parse_load_input(params_text: &str) -> Result<Instruction> {
     })
 }
 
+fn parse_load_context(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let dest = get_param_u16(&params, "dest")?;
+    Ok(Instruction::LoadContext {
+        dest: dest.try_into().unwrap(),
+    })
+}
+
+fn parse_load_metadata(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let dest = get_param_u16(&params, "dest")?;
+    Ok(Instruction::LoadMetadata {
+        dest: dest.try_into().unwrap(),
+    })
+}
+
 fn parse_mod(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let dest = get_param_u16(&params, "dest")?;
@@ -652,5 +704,105 @@ fn parse_comprehension_add(params_text: &str) -> Result<Instruction> {
     Ok(Instruction::ComprehensionYield {
         value_reg: value_reg.try_into().unwrap(),
         key_reg,
+    })
+}
+
+fn parse_return_undefined_if_not_true(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let condition = get_param_u16(&params, "condition")?;
+    Ok(Instruction::ReturnUndefinedIfNotTrue {
+        condition: condition.try_into().unwrap(),
+    })
+}
+
+fn parse_coalesce_undefined_to_null(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let register = get_param_u16(&params, "register")?;
+    Ok(Instruction::CoalesceUndefinedToNull {
+        register: register.try_into().unwrap(),
+    })
+}
+
+/// Generic parser for Policy instructions with { dest, left, right } fields.
+fn parse_policy_ternary(params_text: &str, name: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let dest: u8 = get_param_u16(&params, "dest")?.try_into().unwrap();
+    let left: u8 = get_param_u16(&params, "left")?.try_into().unwrap();
+    let right: u8 = get_param_u16(&params, "right")?.try_into().unwrap();
+
+    Ok(match name {
+        "PolicyEquals" => Instruction::PolicyEquals { dest, left, right },
+        "PolicyNotEquals" => Instruction::PolicyNotEquals { dest, left, right },
+        "PolicyGreater" => Instruction::PolicyGreater { dest, left, right },
+        "PolicyGreaterOrEquals" => Instruction::PolicyGreaterOrEquals { dest, left, right },
+        "PolicyLess" => Instruction::PolicyLess { dest, left, right },
+        "PolicyLessOrEquals" => Instruction::PolicyLessOrEquals { dest, left, right },
+        "PolicyIn" => Instruction::PolicyIn { dest, left, right },
+        "PolicyNotIn" => Instruction::PolicyNotIn { dest, left, right },
+        "PolicyContains" => Instruction::PolicyContains { dest, left, right },
+        "PolicyNotContains" => Instruction::PolicyNotContains { dest, left, right },
+        "PolicyContainsKey" => Instruction::PolicyContainsKey { dest, left, right },
+        "PolicyNotContainsKey" => Instruction::PolicyNotContainsKey { dest, left, right },
+        "PolicyLike" => Instruction::PolicyLike { dest, left, right },
+        "PolicyNotLike" => Instruction::PolicyNotLike { dest, left, right },
+        "PolicyMatch" => Instruction::PolicyMatch { dest, left, right },
+        "PolicyNotMatch" => Instruction::PolicyNotMatch { dest, left, right },
+        "PolicyMatchInsensitively" => Instruction::PolicyMatchInsensitively { dest, left, right },
+        "PolicyNotMatchInsensitively" => {
+            Instruction::PolicyNotMatchInsensitively { dest, left, right }
+        }
+        "PolicyExists" => Instruction::PolicyExists { dest, left, right },
+        _ => bail!("Unknown policy ternary instruction: {}", name),
+    })
+}
+
+fn parse_policy_not(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let dest: u8 = get_param_u16(&params, "dest")?.try_into().unwrap();
+    let operand: u8 = get_param_u16(&params, "operand")?.try_into().unwrap();
+    Ok(Instruction::PolicyNot { dest, operand })
+}
+
+fn parse_allof_start(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let result: u8 = get_param_u16(&params, "result")?.try_into().unwrap();
+    let end_pc = get_param_u16(&params, "end_pc")?;
+    Ok(Instruction::AllOfStart { result, end_pc })
+}
+
+fn parse_allof_next(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let check: u8 = get_param_u16(&params, "check")?.try_into().unwrap();
+    let result: u8 = get_param_u16(&params, "result")?.try_into().unwrap();
+    let end_pc = get_param_u16(&params, "end_pc")?;
+    Ok(Instruction::AllOfNext {
+        check,
+        result,
+        end_pc,
+    })
+}
+
+fn parse_allof_end(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let result: u8 = get_param_u16(&params, "result")?.try_into().unwrap();
+    Ok(Instruction::AllOfEnd { result })
+}
+
+fn parse_anyof_start(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let result: u8 = get_param_u16(&params, "result")?.try_into().unwrap();
+    let end_pc = get_param_u16(&params, "end_pc")?;
+    Ok(Instruction::AnyOfStart { result, end_pc })
+}
+
+fn parse_anyof_next(params_text: &str) -> Result<Instruction> {
+    let params = parse_params(params_text)?;
+    let check: u8 = get_param_u16(&params, "check")?.try_into().unwrap();
+    let result: u8 = get_param_u16(&params, "result")?.try_into().unwrap();
+    let end_pc = get_param_u16(&params, "end_pc")?;
+    Ok(Instruction::AnyOfNext {
+        check,
+        result,
+        end_pc,
     })
 }

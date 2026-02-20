@@ -205,6 +205,97 @@ fn rego_ast(file: String) -> Result<()> {
     }
 }
 
+fn rego_compile(
+    bundles: &[String],
+    files: &[String],
+    entrypoints: &[String],
+    output: Option<String>,
+    listing: Option<String>,
+    listing_output: Option<String>,
+) -> Result<()> {
+    let mut engine = regorus::Engine::new();
+
+    // Load .rego files from bundle directories.
+    for dir in bundles.iter() {
+        let entries =
+            std::fs::read_dir(dir).or_else(|e| bail!("failed to read bundle {dir}.\n{e}"))?;
+        for entry in entries {
+            let entry = entry.or_else(|e| bail!("failed to unwrap entry. {e}"))?;
+            let path = entry.path();
+            match (path.is_file(), path.extension()) {
+                (true, Some(ext)) if ext == "rego" => {}
+                _ => continue,
+            }
+            let _package = add_policy_from_file(&mut engine, entry.path().display().to_string())?;
+        }
+    }
+
+    // Load files: .rego → policy, .json/.yaml → data.
+    for file in files.iter() {
+        if file.ends_with(".rego") {
+            let _package = add_policy_from_file(&mut engine, file.clone())?;
+        } else {
+            let data = if file.ends_with(".json") {
+                read_value_from_json_file(file)?
+            } else if file.ends_with(".yaml") {
+                read_value_from_yaml_file(file)?
+            } else {
+                bail!("Unsupported data file `{file}`. Must be rego, json or yaml.");
+            };
+            engine.add_data(data)?;
+        }
+    }
+
+    // Compile to RVM bytecode.
+    if entrypoints.is_empty() {
+        bail!("at least one --entrypoint is required");
+    }
+    let ep: regorus::Rc<str> = regorus::Rc::from(entrypoints[0].as_str());
+    let compiled = engine.compile_with_entrypoint(&ep)?;
+    let ep_strs: Vec<&str> = entrypoints.iter().map(|s| s.as_str()).collect();
+    let program = regorus::languages::rego::compiler::Compiler::compile_from_policy(
+        &compiled,
+        &ep_strs,
+    )?;
+
+    // Generate listing if requested.
+    let listing_kind = listing.as_deref().or_else(|| {
+        if listing_output.is_some() || output.is_none() {
+            Some("standard")
+        } else {
+            None
+        }
+    });
+
+    if let Some(listing_kind) = listing_kind {
+        let listing_text = match listing_kind {
+            "standard" => regorus::rvm::program::generate_assembly_listing(
+                &program,
+                &regorus::rvm::program::AssemblyListingConfig::default(),
+            ),
+            "tabular" => regorus::rvm::program::generate_tabular_assembly_listing(
+                &program,
+                &regorus::rvm::program::AssemblyListingConfig::default(),
+            ),
+            _ => bail!("unsupported listing format `{listing_kind}`"),
+        };
+
+        if let Some(path) = listing_output.as_ref() {
+            std::fs::write(path, listing_text)?;
+        } else {
+            println!("{listing_text}");
+        }
+    }
+
+    // Write program JSON if requested.
+    if let Some(path) = output.as_ref() {
+        let serialized = program.serialize_json().map_err(|err| anyhow!(err))?;
+        std::fs::write(path, serialized)?;
+    }
+
+    Ok(())
+}
+
 #[cfg(feature = "z3-analysis")]
 mod analyze;
 
@@ -280,6 +371,33 @@ enum RegorusCommand {
     Ast {
         /// Rego policy file.
         file: String,
+    },
+
+    /// Compile Rego policies into an RVM program (bytecode JSON or listing).
+    Compile {
+        /// Directories containing Rego files.
+        #[arg(long, short, value_name = "bundle")]
+        bundles: Vec<String>,
+
+        /// Policy or data files. Rego, json or yaml.
+        #[arg(long, short, value_name = "policy.rego|data.json")]
+        data: Vec<String>,
+
+        /// Entry points to compile (e.g. "data.example.allow").
+        #[arg(long, short, value_name = "RULE", required = true)]
+        entrypoint: Vec<String>,
+
+        /// Output file for compiled program JSON.
+        #[arg(short, long, value_name = "program.json")]
+        output: Option<String>,
+
+        /// Assembly listing format (standard or tabular).
+        #[arg(long, value_name = "standard|tabular")]
+        listing: Option<String>,
+
+        /// Output file for assembly listing.
+        #[arg(long, value_name = "listing.txt")]
+        listing_output: Option<String>,
     },
 
     /// Evaluate a Rego Query.
@@ -382,6 +500,14 @@ fn main() -> Result<()> {
         RegorusCommand::Lex { file, verbose } => rego_lex(file, verbose),
         RegorusCommand::Parse { file, v0 } => rego_parse(file, v0),
         RegorusCommand::Ast { file } => rego_ast(file),
+        RegorusCommand::Compile {
+            bundles,
+            data,
+            entrypoint,
+            output,
+            listing,
+            listing_output,
+        } => rego_compile(&bundles, &data, &entrypoint, output, listing, listing_output),
         #[cfg(feature = "z3-analysis")]
         RegorusCommand::Analyze {
             bundles,

@@ -237,6 +237,101 @@ echo "Cedar SMT encoding (complete — much more compact than Rego):"
 cat /tmp/cedar_demo.smt2
 echo
 
+# ==============================================================
+# ==============================================================
+#                PYTHON Z3 ANALYZER DEMOS
+# ==============================================================
+# ==============================================================
+# The Python analyzer operates on pre-compiled RVM bytecode JSON
+# files (checked in alongside the .rego policies).
+#
+# Prerequisites:
+#   pip install z3-solver
+#
+# To regenerate the bytecode JSON files:
+#   regorus compile -d <policy.rego> -e <entrypoint> -o <output.json>
+# ==============================================================
+
+DEMOS=examples/demos
+
+title "DEMO 9 — Python Z3 Analyzer: Container Admission" \
+      "Same policy as Demo 1, using python3 -m tools.z3analyze"
+
+echo "▸ 9a) Find a VIOLATED input (allow = false):"
+run python3 -m tools.z3analyze $DEMOS/container_admission_program.json \
+  -e data.container_admission.allow -o false \
+  --example-input $DEMOS/container_admission_input.json \
+  --schema $DEMOS/container_admission_schema.json \
+  --max-loop-depth 3
+
+echo "▸ 9b) Find a COMPLIANT input (allow = true):"
+run python3 -m tools.z3analyze $DEMOS/container_admission_program.json \
+  -e data.container_admission.allow -o true \
+  --example-input $DEMOS/container_admission_input.json \
+  --schema $DEMOS/container_admission_schema.json \
+  --max-loop-depth 3
+
+echo "▸ 9c) Targeted: violate ONLY via sensitive-container-on-public-host"
+echo "   (cover line 101, avoid line 75 — the privileged check):"
+run python3 -m tools.z3analyze $DEMOS/container_admission_program.json \
+  -e data.container_admission.allow -o false \
+  --cover-line container_admission.rego 101 \
+  --avoid-line container_admission.rego 75 \
+  --example-input $DEMOS/container_admission_input.json \
+  --schema $DEMOS/container_admission_schema.json \
+  --max-loop-depth 3
+
+# ==============================================================
+title "DEMO 10 — Python Z3 Analyzer: Network Segmentation" \
+      "Same policy as Demo 2, using python3 -m tools.z3analyze"
+# ==============================================================
+
+echo "▸ 10a) Find a non-compliant topology:"
+run python3 -m tools.z3analyze $DEMOS/network_segmentation_program.json \
+  -e data.network_segmentation.compliant -o false \
+  --example-input $DEMOS/network_segmentation_input.json \
+  --schema $DEMOS/network_segmentation_schema.json \
+  --max-loop-depth 3
+
+echo "▸ 10b) Targeted: fail ONLY via DMZ→internal-DB (cover line 99,"
+echo "   avoid line 126 — the PII rule):"
+run python3 -m tools.z3analyze $DEMOS/network_segmentation_program.json \
+  -e data.network_segmentation.compliant -o false \
+  --cover-line network_segmentation.rego 99 \
+  --avoid-line network_segmentation.rego 126 \
+  --example-input $DEMOS/network_segmentation_input.json \
+  --schema $DEMOS/network_segmentation_schema.json \
+  --max-loop-depth 3
+
+echo "▸ 10c) Targeted: fail ONLY via PII-over-unencrypted (cover line 126,"
+echo "   avoid line 99 — the DMZ rule):"
+run python3 -m tools.z3analyze $DEMOS/network_segmentation_program.json \
+  -e data.network_segmentation.compliant -o false \
+  --cover-line network_segmentation.rego 126 \
+  --avoid-line network_segmentation.rego 99 \
+  --example-input $DEMOS/network_segmentation_input.json \
+  --schema $DEMOS/network_segmentation_schema.json \
+  --max-loop-depth 3
+
+# ==============================================================
+title "DEMO 11 — Python Z3 Analyzer: Server Infrastructure" \
+      "Same policy as Demo 3, using python3 -m tools.z3analyze"
+# ==============================================================
+
+echo "▸ 11a) Find input where allow = false (a violation exists):"
+run python3 -m tools.z3analyze $DEMOS/allowed_server_program.json \
+  -e data.example.allow -o false \
+  --example-input examples/server/input.json \
+  --schema examples/server/input_schema.json \
+  --max-loop-depth 3
+
+echo "▸ 11b) Find input where allow = true (fully compliant):"
+run python3 -m tools.z3analyze $DEMOS/allowed_server_program.json \
+  -e data.example.allow -o true \
+  --example-input examples/server/input.json \
+  --schema examples/server/input_schema.json \
+  --max-loop-depth 3
+
 sep
 echo "  All demos completed successfully."
 sep

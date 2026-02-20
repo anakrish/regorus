@@ -1,0 +1,1301 @@
+{
+  "builtin_info_table": [
+    {
+      "kind": "Standard",
+      "name": "count",
+      "num_args": 1
+    }
+  ],
+  "entry_points": {
+    "data.network_segmentation.compliant": 0
+  },
+  "instruction_data": {
+    "array_create_params": [],
+    "builtin_call_params": [
+      {
+        "args": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "builtin_index": 0,
+        "dest": 2,
+        "num_args": 1
+      }
+    ],
+    "chained_index_params": [],
+    "comprehension_begin_params": [],
+    "function_call_params": [],
+    "loop_params": [
+      {
+        "body_start": 14,
+        "collection": 1,
+        "key_reg": 2,
+        "loop_end": 42,
+        "mode": "ForEach",
+        "result_reg": 4,
+        "value_reg": 3
+      },
+      {
+        "body_start": 19,
+        "collection": 7,
+        "key_reg": 8,
+        "loop_end": 41,
+        "mode": "ForEach",
+        "result_reg": 10,
+        "value_reg": 9
+      },
+      {
+        "body_start": 27,
+        "collection": 15,
+        "key_reg": 16,
+        "loop_end": 40,
+        "mode": "ForEach",
+        "result_reg": 18,
+        "value_reg": 17
+      },
+      {
+        "body_start": 47,
+        "collection": 2,
+        "key_reg": 3,
+        "loop_end": 69,
+        "mode": "ForEach",
+        "result_reg": 5,
+        "value_reg": 4
+      },
+      {
+        "body_start": 55,
+        "collection": 10,
+        "key_reg": 11,
+        "loop_end": 68,
+        "mode": "ForEach",
+        "result_reg": 13,
+        "value_reg": 12
+      },
+      {
+        "body_start": 74,
+        "collection": 2,
+        "key_reg": 3,
+        "loop_end": 91,
+        "mode": "ForEach",
+        "result_reg": 5,
+        "value_reg": 4
+      },
+      {
+        "body_start": 78,
+        "collection": 7,
+        "key_reg": 8,
+        "loop_end": 90,
+        "mode": "ForEach",
+        "result_reg": 10,
+        "value_reg": 9
+      }
+    ],
+    "object_create_params": [],
+    "set_create_params": [],
+    "virtual_data_document_lookup_params": []
+  },
+  "instruction_spans": [
+    {
+      "column": 0,
+      "length": 0,
+      "line": 0,
+      "source_index": 0
+    },
+    {
+      "column": 0,
+      "length": 0,
+      "line": 0,
+      "source_index": 0
+    },
+    {
+      "column": 19,
+      "length": 32,
+      "line": 67,
+      "source_index": 0
+    },
+    {
+      "column": 11,
+      "length": 9,
+      "line": 68,
+      "source_index": 0
+    },
+    {
+      "column": 10,
+      "length": 16,
+      "line": 68,
+      "source_index": 0
+    },
+    {
+      "column": 25,
+      "length": 1,
+      "line": 68,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 21,
+      "line": 68,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 21,
+      "line": 68,
+      "source_index": 0
+    },
+    {
+      "column": 14,
+      "length": 4,
+      "line": 67,
+      "source_index": 0
+    },
+    {
+      "column": 14,
+      "length": 4,
+      "line": 67,
+      "source_index": 0
+    },
+    {
+      "column": 19,
+      "length": 32,
+      "line": 67,
+      "source_index": 0
+    },
+    {
+      "column": 29,
+      "length": 424,
+      "line": 93,
+      "source_index": 0
+    },
+    {
+      "column": 17,
+      "length": 11,
+      "line": 94,
+      "source_index": 0
+    },
+    {
+      "column": 17,
+      "length": 11,
+      "line": 94,
+      "source_index": 0
+    },
+    {
+      "column": 17,
+      "length": 11,
+      "line": 94,
+      "source_index": 0
+    },
+    {
+      "column": 17,
+      "length": 11,
+      "line": 94,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 17,
+      "line": 95,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 17,
+      "line": 95,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 17,
+      "line": 95,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 17,
+      "line": 95,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 17,
+      "line": 95,
+      "source_index": 0
+    },
+    {
+      "column": 9,
+      "length": 11,
+      "line": 96,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 8,
+      "line": 96,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 23,
+      "line": 96,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 23,
+      "line": 96,
+      "source_index": 0
+    },
+    {
+      "column": 21,
+      "length": 15,
+      "line": 97,
+      "source_index": 0
+    },
+    {
+      "column": 21,
+      "length": 15,
+      "line": 97,
+      "source_index": 0
+    },
+    {
+      "column": 21,
+      "length": 15,
+      "line": 97,
+      "source_index": 0
+    },
+    {
+      "column": 21,
+      "length": 15,
+      "line": 97,
+      "source_index": 0
+    },
+    {
+      "column": 7,
+      "length": 7,
+      "line": 98,
+      "source_index": 0
+    },
+    {
+      "column": 20,
+      "length": 11,
+      "line": 98,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 22,
+      "line": 98,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 22,
+      "line": 98,
+      "source_index": 0
+    },
+    {
+      "column": 7,
+      "length": 11,
+      "line": 99,
+      "source_index": 0
+    },
+    {
+      "column": 20,
+      "length": 4,
+      "line": 99,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 19,
+      "line": 99,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 19,
+      "line": 99,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 8,
+      "line": 93,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 8,
+      "line": 93,
+      "source_index": 0
+    },
+    {
+      "column": 21,
+      "length": 15,
+      "line": 97,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 17,
+      "line": 95,
+      "source_index": 0
+    },
+    {
+      "column": 17,
+      "length": 11,
+      "line": 94,
+      "source_index": 0
+    },
+    {
+      "column": 29,
+      "length": 424,
+      "line": 93,
+      "source_index": 0
+    },
+    {
+      "column": 29,
+      "length": 357,
+      "line": 121,
+      "source_index": 0
+    },
+    {
+      "column": 22,
+      "length": 14,
+      "line": 122,
+      "source_index": 0
+    },
+    {
+      "column": 22,
+      "length": 14,
+      "line": 122,
+      "source_index": 0
+    },
+    {
+      "column": 22,
+      "length": 14,
+      "line": 122,
+      "source_index": 0
+    },
+    {
+      "column": 22,
+      "length": 14,
+      "line": 122,
+      "source_index": 0
+    },
+    {
+      "column": 22,
+      "length": 14,
+      "line": 122,
+      "source_index": 0
+    },
+    {
+      "column": 8,
+      "length": 15,
+      "line": 123,
+      "source_index": 0
+    },
+    {
+      "column": 24,
+      "length": 4,
+      "line": 123,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 23,
+      "line": 123,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 23,
+      "line": 123,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 17,
+      "line": 124,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 17,
+      "line": 124,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 17,
+      "line": 124,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 17,
+      "line": 124,
+      "source_index": 0
+    },
+    {
+      "column": 9,
+      "length": 11,
+      "line": 125,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 8,
+      "line": 125,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 23,
+      "line": 125,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 23,
+      "line": 125,
+      "source_index": 0
+    },
+    {
+      "column": 9,
+      "length": 14,
+      "line": 126,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 5,
+      "line": 126,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 23,
+      "line": 126,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 23,
+      "line": 126,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 8,
+      "line": 121,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 8,
+      "line": 121,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 17,
+      "line": 124,
+      "source_index": 0
+    },
+    {
+      "column": 22,
+      "length": 14,
+      "line": 122,
+      "source_index": 0
+    },
+    {
+      "column": 29,
+      "length": 357,
+      "line": 121,
+      "source_index": 0
+    },
+    {
+      "column": 26,
+      "length": 259,
+      "line": 145,
+      "source_index": 0
+    },
+    {
+      "column": 22,
+      "length": 14,
+      "line": 146,
+      "source_index": 0
+    },
+    {
+      "column": 22,
+      "length": 14,
+      "line": 146,
+      "source_index": 0
+    },
+    {
+      "column": 22,
+      "length": 14,
+      "line": 146,
+      "source_index": 0
+    },
+    {
+      "column": 22,
+      "length": 14,
+      "line": 146,
+      "source_index": 0
+    },
+    {
+      "column": 22,
+      "length": 14,
+      "line": 146,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 11,
+      "line": 147,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 11,
+      "line": 147,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 11,
+      "line": 147,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 11,
+      "line": 147,
+      "source_index": 0
+    },
+    {
+      "column": 9,
+      "length": 7,
+      "line": 148,
+      "source_index": 0
+    },
+    {
+      "column": 19,
+      "length": 11,
+      "line": 148,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 22,
+      "line": 148,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 22,
+      "line": 148,
+      "source_index": 0
+    },
+    {
+      "column": 9,
+      "length": 8,
+      "line": 149,
+      "source_index": 0
+    },
+    {
+      "column": 17,
+      "length": 4,
+      "line": 149,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 16,
+      "line": 149,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 16,
+      "line": 149,
+      "source_index": 0
+    },
+    {
+      "column": 22,
+      "length": 3,
+      "line": 145,
+      "source_index": 0
+    },
+    {
+      "column": 23,
+      "length": 11,
+      "line": 147,
+      "source_index": 0
+    },
+    {
+      "column": 22,
+      "length": 14,
+      "line": 146,
+      "source_index": 0
+    },
+    {
+      "column": 26,
+      "length": 259,
+      "line": 145,
+      "source_index": 0
+    }
+  ],
+  "instructions": [
+    {
+      "CallRule": {
+        "dest": 1,
+        "rule_index": 0
+      }
+    },
+    {
+      "Return": {
+        "value": 1
+      }
+    },
+    {
+      "RuleInit": {
+        "result_reg": 0,
+        "rule_index": 0
+      }
+    },
+    {
+      "CallRule": {
+        "dest": 1,
+        "rule_index": 1
+      }
+    },
+    {
+      "BuiltinCall": {
+        "params_index": 0
+      }
+    },
+    {
+      "Load": {
+        "dest": 3,
+        "literal_idx": 0
+      }
+    },
+    {
+      "Eq": {
+        "dest": 4,
+        "left": 2,
+        "right": 3
+      }
+    },
+    {
+      "AssertCondition": {
+        "condition": 4
+      }
+    },
+    {
+      "Load": {
+        "dest": 5,
+        "literal_idx": 1
+      }
+    },
+    {
+      "Move": {
+        "dest": 0,
+        "src": 5
+      }
+    },
+    {
+      "RuleReturn": {}
+    },
+    {
+      "RuleInit": {
+        "result_reg": 0,
+        "rule_index": 1
+      }
+    },
+    {
+      "CallRule": {
+        "dest": 1,
+        "rule_index": 2
+      }
+    },
+    {
+      "LoopStart": {
+        "params_index": 0
+      }
+    },
+    {
+      "Move": {
+        "dest": 5,
+        "src": 3
+      }
+    },
+    {
+      "AssertNotUndefined": {
+        "register": 5
+      }
+    },
+    {
+      "LoadInput": {
+        "dest": 6
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 6,
+        "dest": 7,
+        "literal_idx": 2
+      }
+    },
+    {
+      "LoopStart": {
+        "params_index": 1
+      }
+    },
+    {
+      "Move": {
+        "dest": 11,
+        "src": 9
+      }
+    },
+    {
+      "AssertNotUndefined": {
+        "register": 11
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 11,
+        "dest": 12,
+        "literal_idx": 3
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 5,
+        "dest": 13,
+        "literal_idx": 4
+      }
+    },
+    {
+      "Eq": {
+        "dest": 14,
+        "left": 12,
+        "right": 13
+      }
+    },
+    {
+      "AssertCondition": {
+        "condition": 14
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 6,
+        "dest": 15,
+        "literal_idx": 5
+      }
+    },
+    {
+      "LoopStart": {
+        "params_index": 2
+      }
+    },
+    {
+      "Move": {
+        "dest": 19,
+        "src": 17
+      }
+    },
+    {
+      "AssertNotUndefined": {
+        "register": 19
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 19,
+        "dest": 20,
+        "literal_idx": 4
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 11,
+        "dest": 21,
+        "literal_idx": 6
+      }
+    },
+    {
+      "Eq": {
+        "dest": 22,
+        "left": 20,
+        "right": 21
+      }
+    },
+    {
+      "AssertCondition": {
+        "condition": 22
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 19,
+        "dest": 23,
+        "literal_idx": 7
+      }
+    },
+    {
+      "Load": {
+        "dest": 24,
+        "literal_idx": 1
+      }
+    },
+    {
+      "Eq": {
+        "dest": 25,
+        "left": 23,
+        "right": 24
+      }
+    },
+    {
+      "AssertCondition": {
+        "condition": 25
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 5,
+        "dest": 26,
+        "literal_idx": 4
+      }
+    },
+    {
+      "SetAdd": {
+        "set": 0,
+        "value": 26
+      }
+    },
+    {
+      "LoopNext": {
+        "body_start": 27,
+        "loop_end": 40
+      }
+    },
+    {
+      "LoopNext": {
+        "body_start": 19,
+        "loop_end": 41
+      }
+    },
+    {
+      "LoopNext": {
+        "body_start": 14,
+        "loop_end": 42
+      }
+    },
+    {
+      "RuleReturn": {}
+    },
+    {
+      "RuleInit": {
+        "result_reg": 0,
+        "rule_index": 1
+      }
+    },
+    {
+      "LoadInput": {
+        "dest": 1
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 1,
+        "dest": 2,
+        "literal_idx": 8
+      }
+    },
+    {
+      "LoopStart": {
+        "params_index": 3
+      }
+    },
+    {
+      "Move": {
+        "dest": 6,
+        "src": 4
+      }
+    },
+    {
+      "AssertNotUndefined": {
+        "register": 6
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 6,
+        "dest": 7,
+        "literal_idx": 9
+      }
+    },
+    {
+      "Load": {
+        "dest": 8,
+        "literal_idx": 1
+      }
+    },
+    {
+      "Eq": {
+        "dest": 9,
+        "left": 7,
+        "right": 8
+      }
+    },
+    {
+      "AssertCondition": {
+        "condition": 9
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 1,
+        "dest": 10,
+        "literal_idx": 2
+      }
+    },
+    {
+      "LoopStart": {
+        "params_index": 4
+      }
+    },
+    {
+      "Move": {
+        "dest": 14,
+        "src": 12
+      }
+    },
+    {
+      "AssertNotUndefined": {
+        "register": 14
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 14,
+        "dest": 15,
+        "literal_idx": 3
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 6,
+        "dest": 16,
+        "literal_idx": 4
+      }
+    },
+    {
+      "Eq": {
+        "dest": 17,
+        "left": 15,
+        "right": 16
+      }
+    },
+    {
+      "AssertCondition": {
+        "condition": 17
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 14,
+        "dest": 18,
+        "literal_idx": 10
+      }
+    },
+    {
+      "Load": {
+        "dest": 19,
+        "literal_idx": 11
+      }
+    },
+    {
+      "Eq": {
+        "dest": 20,
+        "left": 18,
+        "right": 19
+      }
+    },
+    {
+      "AssertCondition": {
+        "condition": 20
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 6,
+        "dest": 21,
+        "literal_idx": 4
+      }
+    },
+    {
+      "SetAdd": {
+        "set": 0,
+        "value": 21
+      }
+    },
+    {
+      "LoopNext": {
+        "body_start": 55,
+        "loop_end": 68
+      }
+    },
+    {
+      "LoopNext": {
+        "body_start": 47,
+        "loop_end": 69
+      }
+    },
+    {
+      "RuleReturn": {}
+    },
+    {
+      "RuleInit": {
+        "result_reg": 0,
+        "rule_index": 2
+      }
+    },
+    {
+      "LoadInput": {
+        "dest": 1
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 1,
+        "dest": 2,
+        "literal_idx": 8
+      }
+    },
+    {
+      "LoopStart": {
+        "params_index": 5
+      }
+    },
+    {
+      "Move": {
+        "dest": 6,
+        "src": 4
+      }
+    },
+    {
+      "AssertNotUndefined": {
+        "register": 6
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 1,
+        "dest": 7,
+        "literal_idx": 12
+      }
+    },
+    {
+      "LoopStart": {
+        "params_index": 6
+      }
+    },
+    {
+      "Move": {
+        "dest": 11,
+        "src": 9
+      }
+    },
+    {
+      "AssertNotUndefined": {
+        "register": 11
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 11,
+        "dest": 12,
+        "literal_idx": 13
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 6,
+        "dest": 13,
+        "literal_idx": 14
+      }
+    },
+    {
+      "Eq": {
+        "dest": 14,
+        "left": 12,
+        "right": 13
+      }
+    },
+    {
+      "AssertCondition": {
+        "condition": 14
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 11,
+        "dest": 15,
+        "literal_idx": 15
+      }
+    },
+    {
+      "Load": {
+        "dest": 16,
+        "literal_idx": 1
+      }
+    },
+    {
+      "Eq": {
+        "dest": 17,
+        "left": 15,
+        "right": 16
+      }
+    },
+    {
+      "AssertCondition": {
+        "condition": 17
+      }
+    },
+    {
+      "SetAdd": {
+        "set": 0,
+        "value": 6
+      }
+    },
+    {
+      "LoopNext": {
+        "body_start": 78,
+        "loop_end": 90
+      }
+    },
+    {
+      "LoopNext": {
+        "body_start": 74,
+        "loop_end": 91
+      }
+    },
+    {
+      "RuleReturn": {}
+    }
+  ],
+  "literals": [
+    0,
+    true,
+    "connections",
+    "source",
+    "name",
+    "databases",
+    "target",
+    "internal",
+    "services",
+    "handles_pii",
+    "encrypted",
+    false,
+    "zones",
+    "id",
+    "zone_id",
+    "dmz"
+  ],
+  "metadata": {
+    "compiled_at": "unknown",
+    "compiler_version": "0.9.1",
+    "needs_recompilation": false,
+    "needs_runtime_recursion_check": false,
+    "optimization_level": 0,
+    "rego_v0": false,
+    "source_info": "unknown"
+  },
+  "program_structure": {
+    "dispatch_window_size": 2,
+    "main_entry_point": 0,
+    "max_rule_window_size": 27
+  },
+  "rule_infos": [
+    {
+      "default_literal_index": 11,
+      "definitions": [
+        [
+          2
+        ]
+      ],
+      "destructuring_blocks": [
+        null
+      ],
+      "function_info": null,
+      "name": "data.network_segmentation.compliant",
+      "num_registers": 6,
+      "result_reg": 0,
+      "rule_type": "Complete"
+    },
+    {
+      "default_literal_index": null,
+      "definitions": [
+        [
+          11
+        ],
+        [
+          43
+        ]
+      ],
+      "destructuring_blocks": [
+        null,
+        null
+      ],
+      "function_info": null,
+      "name": "data.network_segmentation.violation",
+      "num_registers": 27,
+      "result_reg": 0,
+      "rule_type": "PartialSet"
+    },
+    {
+      "default_literal_index": null,
+      "definitions": [
+        [
+          70
+        ]
+      ],
+      "destructuring_blocks": [
+        null
+      ],
+      "function_info": null,
+      "name": "data.network_segmentation.dmz_service",
+      "num_registers": 18,
+      "result_reg": 0,
+      "rule_type": "PartialSet"
+    }
+  ],
+  "rule_tree": {
+    "data": {
+      "network_segmentation": {
+        "compliant": 0,
+        "dmz_service": 2,
+        "violation": 1
+      }
+    }
+  },
+  "sources": [
+    {
+      "content": "package network_segmentation\n\n# ============================================================\n# Network Segmentation Compliance\n# ============================================================\n#\n# Scenario\n# --------\n# A security team reviews a microservice network topology before\n# deployment.  The input describes four collections:\n#\n#   input.services[]      – microservices\n#       .name             – unique identifier (string)\n#       .zone_id          – the network zone it resides in (string FK)\n#       .handles_pii      – whether it processes personal data (bool)\n#\n#   input.zones[]         – network zones\n#       .id               – unique identifier (string)\n#       .dmz              – whether the zone is a DMZ (bool)\n#\n#   input.connections[]   – directed network links between services\n#       .source           – originating service name (string FK)\n#       .target           – destination service/database name (string FK)\n#       .encrypted        – whether the link uses TLS (bool)\n#\n#   input.databases[]     – data stores\n#       .name             – unique identifier (string)\n#       .internal         – whether the DB is on the internal network (bool)\n#\n# Policy\n# ------\n# The topology is COMPLIANT only when ZERO violations exist.\n#\n# Violation sources:\n#   1. A service in the DMZ connects to an internal database.\n#   2. A service that handles PII uses an unencrypted connection.\n#\n# Why this is interesting for Z3\n# ------------------------------\n# Rule 1 is a **4-way cross-collection join**: services → zones\n# (to determine DMZ membership), services → connections (to find\n# outbound links), and connections → databases (to check the\n# target).  Z3 must simultaneously satisfy string equalities\n# across four different arrays to synthesise a counterexample.\n#\n# Rule 2 is a 2-way join (services → connections) with mixed\n# Boolean and string constraints.\n#\n# The `--cover-line` / `--avoid-line` flags let you ask Z3 to\n# produce a violation through ONE specific rule while proving\n# the other rule's path is never taken — a form of targeted\n# counterexample generation.\n# ============================================================\n\n# ---------------------------------------------------------------\n# Top-level decision\n# ---------------------------------------------------------------\n\n# Default: unless the body below fires, the topology is non-compliant.\n# (Fail-closed: an empty or malformed input is treated as non-compliant.)\ndefault compliant := false\n\n# `compliant` becomes true exactly when the violation set is empty.\n# `count(violation)` triggers evaluation of both partial-set rules\n# below.  The symbolic engine models the result as a cardinality\n# constraint over a SymbolicSet.\ncompliant := true if {\n    count(violation) == 0\n}\n\n# ---------------------------------------------------------------\n# Violation Rule 1 — DMZ Service → Internal Database\n# ---------------------------------------------------------------\n# A service located in the DMZ must never connect directly to an\n# internal database.  This prevents an Internet-facing service\n# from having a direct path to sensitive backend data.\n#\n# Symbolically this is a 4-way join.  Z3 must find values for:\n#\n#   ∃ svc  ∈ dmz_service,           (resolved via helper rule)\n#   ∃ conn ∈ input.connections,\n#   ∃ db   ∈ input.databases:\n#       conn.source == svc.name     (string eq: link originates at svc)\n#     ∧ db.name    == conn.target   (string eq: link targets the DB)\n#     ∧ db.internal == true         (boolean: DB is on internal network)\n#\n# The `dmz_service` helper (below) adds another join level:\n#   ∃ zone ∈ input.zones:\n#       zone.id  == svc.zone_id ∧ zone.dmz == true\n#\n# That makes it effectively a 4-collection coordination problem.\n# ---------------------------------------------------------------\nviolation contains svc.name if {\n    some svc in dmz_service            # draw from the DMZ helper set\n    some conn in input.connections     # iterate over network links\n    conn.source == svc.name            # JOIN: connection ↔ service\n    some db in input.databases         # iterate over databases\n    db.name == conn.target             # JOIN: database ↔ connection target\n    db.internal == true                # constraint: DB is internal\n}\n\n# ---------------------------------------------------------------\n# Violation Rule 2 — PII Over Unencrypted Connection\n# ---------------------------------------------------------------\n# A service that handles personally identifiable information (PII)\n# must only communicate over encrypted (TLS) links.  An\n# unencrypted connection from a PII-handling service is a\n# violation.\n#\n# Symbolically this is a 2-way join:\n#\n#   ∃ svc  ∈ input.services,\n#   ∃ conn ∈ input.connections:\n#       svc.handles_pii == true        (boolean)\n#     ∧ conn.source     == svc.name    (string equality)\n#     ∧ conn.encrypted  == false       (boolean)\n#\n# Simpler than Rule 1, but still requires Z3 to coordinate a\n# string equality between two different arrays.\n# ---------------------------------------------------------------\nviolation contains svc.name if {\n    some svc in input.services         # iterate over all services\n    svc.handles_pii == true            # constraint: service handles PII\n    some conn in input.connections     # iterate over network links\n    conn.source == svc.name            # JOIN: connection ↔ service\n    conn.encrypted == false            # constraint: link is unencrypted\n}\n\n# ---------------------------------------------------------------\n# Helper Rule — DMZ Service Detection\n# ---------------------------------------------------------------\n# A service is classified as a DMZ service when it resides in a\n# network zone whose `dmz` flag is true.\n#\n# This is a 2-way join (services → zones on zone_id == id) that\n# feeds into Violation Rule 1.  The entire service object is\n# added to the set so that Rule 1 can access `.name` on it.\n#\n# Symbolically:\n#   ∃ svc  ∈ input.services,\n#   ∃ zone ∈ input.zones:\n#       zone.id  == svc.zone_id   (string equality)\n#     ∧ zone.dmz == true          (boolean)\n# ---------------------------------------------------------------\ndmz_service contains svc if {\n    some svc in input.services         # iterate over services\n    some zone in input.zones           # iterate over zones\n    zone.id == svc.zone_id            # JOIN: zone ↔ service\n    zone.dmz == true                   # constraint: zone is a DMZ\n}\n",
+      "name": "examples/demos/network_segmentation.rego"
+    }
+  ]
+}

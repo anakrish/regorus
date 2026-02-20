@@ -23,6 +23,7 @@ request** — principal, action, resource, and context fields — that satisfies
 
 - [Prerequisites](#prerequisites)
 - [Building](#building)
+- [Python Z3 Analyzer](#python-z3-analyzer)
 - [Quick Start](#quick-start)
 - [CLI Reference](#cli-reference)
 - [JSON Schema Support](#json-schema-support)
@@ -127,6 +128,125 @@ cargo test --features z3-analysis,cedar
 # Linux
 cargo test --features z3-analysis,cedar
 ```
+
+---
+
+## Python Z3 Analyzer
+
+A **pure-Python** reimplementation of the Z3 symbolic analyzer is available
+under [`tools/z3analyze/`](tools/z3analyze/).  It operates on the same RVM
+bytecode as the Rust version but has no Rust/C build dependency — only Python 3
+and the `z3-solver` pip package.
+
+### Why two implementations?
+
+| | Rust (`regorus analyze`) | Python (`tools/z3analyze`) |
+|---|---|---|
+| **Build** | Requires Z3 C library + bindgen | `pip install z3-solver` |
+| **Workflow** | Single command | Two steps: compile → analyze |
+| **Cedar** | ✅ | Rego only |
+| **SMT dump** | `--dump-smt FILE` | `--dump-smt` (stdout) |
+
+Use the Rust version for Cedar policies and the tightest integration.
+Use the Python version for quick experimentation without a C toolchain.
+
+### Prerequisites
+
+```bash
+pip install z3-solver   # or: pip3 install z3-solver
+```
+
+### Workflow
+
+Pre-compiled RVM bytecode JSON files are checked in alongside the demo
+policies (e.g. `container_admission_program.json`).  You can run the Python
+analyzer directly on these files:
+
+```bash
+python3 -m tools.z3analyze examples/demos/container_admission_program.json \
+  -e data.container_admission.allow -o false \
+  --example-input examples/demos/container_admission_input.json \
+  --schema examples/demos/container_admission_schema.json
+```
+
+To compile your own policy, use the two-step workflow:
+
+```bash
+# Step 1 — Compile the Rego policy to RVM bytecode JSON
+regorus compile \
+  -d policy.rego \
+  -e data.example.allow \
+  -o program.json
+
+# Step 2 — Run the Python analyzer
+python3 -m tools.z3analyze program.json \
+  -e data.example.allow \
+  -o false \
+  --example-input input.json \
+  --schema input_schema.json
+```
+
+> **Note:** the `regorus compile` command does **not** need the `z3-analysis`
+> feature.  A plain `cargo build --example regorus` is sufficient for the
+> compile step.
+
+### Python CLI Reference
+
+```
+python3 -m tools.z3analyze <program.json> [OPTIONS]
+```
+
+| Flag | Description |
+|---|---|
+| `program` | Path to JSON bytecode from `regorus compile -o` |
+| `-e, --entrypoint` | Entry point name (e.g. `data.policy.allow`) |
+| `-o, --output` | Desired output value as JSON (default: `true`) |
+| `-d, --data` | Path to data JSON file |
+| `--example-input` | Example input JSON — seeds Z3 sort info |
+| `--schema` | JSON Schema for input — generates Z3 constraints |
+| `--concrete-input KEY FILE` | Inject a concrete input key (repeatable) |
+| `--cover-line FILE LINE` | Force coverage of a source line (repeatable) |
+| `--avoid-line FILE LINE` | Avoid a source line (repeatable) |
+| `--max-loop-depth N` | Max loop unrolling (default: 5) |
+| `--max-rule-depth N` | Max rule recursion (default: 3) |
+| `--timeout MS` | Z3 timeout in ms (default: 30000) |
+| `--dump-smt` | Print SMT-LIB2 assertions to stdout |
+| `--dump-model` | Print Z3 model when SAT |
+| `--sat-check` | Just check satisfiability (no target output) |
+
+### Python Quick-Start Examples
+
+```bash
+# Find a violation (using checked-in bytecode)
+python3 -m tools.z3analyze \
+  examples/demos/container_admission_program.json \
+  -e data.container_admission.allow -o false \
+  --example-input examples/demos/container_admission_input.json \
+  --schema examples/demos/container_admission_schema.json \
+  --max-loop-depth 3
+
+# Targeted: cover line 101 (sensitive-on-public-host), avoid line 75 (privileged)
+python3 -m tools.z3analyze \
+  examples/demos/container_admission_program.json \
+  -e data.container_admission.allow -o false \
+  --cover-line container_admission.rego 101 \
+  --avoid-line container_admission.rego 75 \
+  --example-input examples/demos/container_admission_input.json \
+  --schema examples/demos/container_admission_schema.json \
+  --max-loop-depth 3
+```
+
+### Pre-compiled Bytecode Files
+
+The following bytecode JSON files are checked in under `examples/demos/`:
+
+| Bytecode file | Source policy | Entry point |
+|---|---|---|
+| `container_admission_program.json` | `container_admission.rego` | `data.container_admission.allow` |
+| `network_segmentation_program.json` | `network_segmentation.rego` | `data.network_segmentation.compliant` |
+| `allowed_server_program.json` | `allowed_server.rego` | `data.example.allow` |
+
+To regenerate: `regorus compile -d <policy.rego> -e <entrypoint> -o <output.json>`
 
 ---
 
@@ -765,6 +885,10 @@ A script that runs all examples end-to-end is provided:
 This exercises violation finding, compliance synthesis, targeted path
 exploration, Cedar permit/deny synthesis, and SMT/model file dumps across
 Rego and Cedar policies.
+
+The demo script also includes **Python analyzer demos** (Demos 9–11) that
+mirror the Rego demos using the two-step `regorus compile` →
+`python3 -m tools.z3analyze` workflow.  These require `pip install z3-solver`.
 
 ---
 

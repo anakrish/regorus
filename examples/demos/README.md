@@ -14,8 +14,19 @@ BINDGEN_EXTRA_CLANG_ARGS="-I/opt/homebrew/include" \
 LIBRARY_PATH="/opt/homebrew/lib" \
 cargo build --example regorus --features z3-analysis,cedar
 
-# Run all demos
+# Run all demos (Rust + Python)
 ./examples/demos/run_demos.sh
+```
+
+**Python-only alternative** (no C toolchain needed):
+
+```bash
+pip install z3-solver
+# Use pre-compiled bytecode JSON (checked in)
+python3 -m tools.z3analyze examples/demos/container_admission_program.json \
+  -e data.container_admission.allow -o false \
+  --example-input examples/demos/container_admission_input.json \
+  --schema examples/demos/container_admission_schema.json
 ```
 
 ---
@@ -219,6 +230,54 @@ The Rego SMT file contains ~1,900 lines of SMT-LIB2 assertions.  The Cedar
 encoding is much more compact (~67 lines) — entity hierarchy disjuncts,
 regex constraints for `like` patterns, numeric bounds, and the
 permit-unless-forbid structure are all directly visible.
+
+---
+
+## Python Z3 Analyzer (Demos 9–11)
+
+The same analysis can be performed with the **Python Z3 analyzer** — a
+pure-Python reimplementation under [`../../tools/z3analyze/`](../../tools/z3analyze/).
+It requires only `pip install z3-solver` (no C toolchain or bindgen).
+
+Pre-compiled bytecode JSON files are checked in alongside the policies:
+
+| Bytecode file | Source policy |
+|---|---|
+| `container_admission_program.json` | `container_admission.rego` |
+| `network_segmentation_program.json` | `network_segmentation.rego` |
+| `allowed_server_program.json` | `allowed_server.rego` |
+
+### Demo 9 — Python: Container Admission
+
+Mirrors Demos 1a–1c.  Violation finding, compliance synthesis, and targeted
+path analysis all work identically.
+
+```bash
+# Violation
+python3 -m tools.z3analyze examples/demos/container_admission_program.json \
+  -e data.container_admission.allow -o false \
+  --example-input container_admission_input.json \
+  --schema container_admission_schema.json --max-loop-depth 3
+
+# Targeted: cover line 101, avoid line 75
+python3 -m tools.z3analyze examples/demos/container_admission_program.json \
+  -e data.container_admission.allow -o false \
+  --cover-line container_admission.rego 101 \
+  --avoid-line container_admission.rego 75 \
+  --example-input container_admission_input.json \
+  --schema container_admission_schema.json --max-loop-depth 3
+```
+
+### Demo 10 — Python: Network Segmentation
+
+Mirrors Demos 2a–2c.  Includes targeted DMZ-only and PII-only queries.
+
+### Demo 11 — Python: Server Infrastructure
+
+Mirrors Demos 3a–3b.
+
+> **Note:** `--cover-line` and `--avoid-line` take **separate** `FILE` and
+> `LINE` arguments (not `FILE:LINE` as in the Rust CLI).
 
 ---
 

@@ -1,0 +1,1256 @@
+{
+  "builtin_info_table": [
+    {
+      "kind": "Contexted",
+      "name": "cedar.in",
+      "num_args": 3
+    },
+    {
+      "kind": "Contexted",
+      "name": "cedar.in_set",
+      "num_args": 3
+    },
+    {
+      "kind": "Contexted",
+      "name": "cedar.attr",
+      "num_args": 3
+    },
+    {
+      "kind": "Standard",
+      "name": "to_number",
+      "num_args": 1
+    }
+  ],
+  "entry_points": {
+    "cedar.authorize": 0
+  },
+  "instruction_data": {
+    "array_create_params": [
+      {
+        "dest": 8,
+        "elements": [
+          6,
+          7
+        ]
+      },
+      {
+        "dest": 22,
+        "elements": [
+          19,
+          20,
+          21
+        ]
+      },
+      {
+        "dest": 45,
+        "elements": [
+          41,
+          42,
+          43,
+          44
+        ]
+      },
+      {
+        "dest": 57,
+        "elements": [
+          55,
+          56
+        ]
+      }
+    ],
+    "builtin_call_params": [
+      {
+        "args": [
+          1,
+          2,
+          3,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "builtin_index": 0,
+        "dest": 4,
+        "num_args": 3
+      },
+      {
+        "args": [
+          5,
+          8,
+          3,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "builtin_index": 1,
+        "dest": 9,
+        "num_args": 3
+      },
+      {
+        "args": [
+          1,
+          17,
+          3,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "builtin_index": 0,
+        "dest": 18,
+        "num_args": 3
+      },
+      {
+        "args": [
+          5,
+          22,
+          3,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "builtin_index": 1,
+        "dest": 23,
+        "num_args": 3
+      },
+      {
+        "args": [
+          28,
+          29,
+          3,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "builtin_index": 2,
+        "dest": 30,
+        "num_args": 3
+      },
+      {
+        "args": [
+          28,
+          33,
+          3,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "builtin_index": 2,
+        "dest": 34,
+        "num_args": 3
+      },
+      {
+        "args": [
+          1,
+          39,
+          3,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "builtin_index": 0,
+        "dest": 40,
+        "num_args": 3
+      },
+      {
+        "args": [
+          5,
+          45,
+          3,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "builtin_index": 1,
+        "dest": 46,
+        "num_args": 3
+      },
+      {
+        "args": [
+          1,
+          53,
+          3,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "builtin_index": 0,
+        "dest": 54,
+        "num_args": 3
+      },
+      {
+        "args": [
+          5,
+          57,
+          3,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "builtin_index": 1,
+        "dest": 58,
+        "num_args": 3
+      },
+      {
+        "args": [
+          78,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "builtin_index": 3,
+        "dest": 79,
+        "num_args": 1
+      }
+    ],
+    "chained_index_params": [],
+    "comprehension_begin_params": [],
+    "function_call_params": [],
+    "loop_params": [],
+    "object_create_params": [],
+    "set_create_params": [],
+    "virtual_data_document_lookup_params": []
+  },
+  "instruction_spans": [
+    {
+      "column": 3,
+      "length": 31,
+      "line": 10,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 31,
+      "line": 10,
+      "source_index": 0
+    },
+    {
+      "column": 13,
+      "length": 21,
+      "line": 10,
+      "source_index": 0
+    },
+    {
+      "column": 13,
+      "length": 21,
+      "line": 10,
+      "source_index": 0
+    },
+    {
+      "column": 13,
+      "length": 21,
+      "line": 10,
+      "source_index": 0
+    },
+    {
+      "column": 7,
+      "length": 122,
+      "line": 9,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 41,
+      "line": 11,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 41,
+      "line": 11,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 41,
+      "line": 11,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 41,
+      "line": 11,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 34,
+      "line": 12,
+      "source_index": 0
+    },
+    {
+      "column": 12,
+      "length": 25,
+      "line": 12,
+      "source_index": 0
+    },
+    {
+      "column": 12,
+      "length": 25,
+      "line": 12,
+      "source_index": 0
+    },
+    {
+      "column": 7,
+      "length": 122,
+      "line": 9,
+      "source_index": 0
+    },
+    {
+      "column": 7,
+      "length": 122,
+      "line": 9,
+      "source_index": 0
+    },
+    {
+      "column": 1,
+      "length": 129,
+      "line": 9,
+      "source_index": 0
+    },
+    {
+      "column": 1,
+      "length": 129,
+      "line": 9,
+      "source_index": 0
+    },
+    {
+      "column": 13,
+      "length": 21,
+      "line": 16,
+      "source_index": 0
+    },
+    {
+      "column": 13,
+      "length": 21,
+      "line": 16,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 59,
+      "line": 17,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 59,
+      "line": 17,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 59,
+      "line": 17,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 59,
+      "line": 17,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 59,
+      "line": 17,
+      "source_index": 0
+    },
+    {
+      "column": 12,
+      "length": 25,
+      "line": 18,
+      "source_index": 0
+    },
+    {
+      "column": 12,
+      "length": 25,
+      "line": 18,
+      "source_index": 0
+    },
+    {
+      "column": 7,
+      "length": 140,
+      "line": 15,
+      "source_index": 0
+    },
+    {
+      "column": 7,
+      "length": 140,
+      "line": 15,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 7,
+      "line": 21,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 27,
+      "line": 21,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 27,
+      "line": 21,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 27,
+      "line": 21,
+      "source_index": 0
+    },
+    {
+      "column": 34,
+      "length": 4,
+      "line": 21,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 35,
+      "line": 21,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 22,
+      "line": 22,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 22,
+      "line": 22,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 22,
+      "line": 22,
+      "source_index": 0
+    },
+    {
+      "column": 29,
+      "length": 4,
+      "line": 22,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 30,
+      "line": 22,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 71,
+      "line": 21,
+      "source_index": 0
+    },
+    {
+      "column": 1,
+      "length": 230,
+      "line": 15,
+      "source_index": 0
+    },
+    {
+      "column": 13,
+      "length": 25,
+      "line": 26,
+      "source_index": 0
+    },
+    {
+      "column": 13,
+      "length": 25,
+      "line": 26,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 77,
+      "line": 27,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 77,
+      "line": 27,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 77,
+      "line": 27,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 77,
+      "line": 27,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 77,
+      "line": 27,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 77,
+      "line": 27,
+      "source_index": 0
+    },
+    {
+      "column": 12,
+      "length": 25,
+      "line": 28,
+      "source_index": 0
+    },
+    {
+      "column": 12,
+      "length": 25,
+      "line": 28,
+      "source_index": 0
+    },
+    {
+      "column": 7,
+      "length": 162,
+      "line": 25,
+      "source_index": 0
+    },
+    {
+      "column": 7,
+      "length": 162,
+      "line": 25,
+      "source_index": 0
+    },
+    {
+      "column": 1,
+      "length": 169,
+      "line": 25,
+      "source_index": 0
+    },
+    {
+      "column": 1,
+      "length": 169,
+      "line": 25,
+      "source_index": 0
+    },
+    {
+      "column": 13,
+      "length": 25,
+      "line": 32,
+      "source_index": 0
+    },
+    {
+      "column": 13,
+      "length": 25,
+      "line": 32,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 41,
+      "line": 33,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 41,
+      "line": 33,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 41,
+      "line": 33,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 41,
+      "line": 33,
+      "source_index": 0
+    },
+    {
+      "column": 12,
+      "length": 26,
+      "line": 34,
+      "source_index": 0
+    },
+    {
+      "column": 12,
+      "length": 26,
+      "line": 34,
+      "source_index": 0
+    },
+    {
+      "column": 7,
+      "length": 127,
+      "line": 31,
+      "source_index": 0
+    },
+    {
+      "column": 7,
+      "length": 127,
+      "line": 31,
+      "source_index": 0
+    },
+    {
+      "column": 1,
+      "length": 134,
+      "line": 31,
+      "source_index": 0
+    },
+    {
+      "column": 1,
+      "length": 134,
+      "line": 31,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 9,
+      "line": 39,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 25,
+      "line": 40,
+      "source_index": 0
+    },
+    {
+      "column": 3,
+      "length": 25,
+      "line": 40,
+      "source_index": 0
+    },
+    {
+      "column": 12,
+      "length": 26,
+      "line": 41,
+      "source_index": 0
+    },
+    {
+      "column": 12,
+      "length": 26,
+      "line": 41,
+      "source_index": 0
+    },
+    {
+      "column": 7,
+      "length": 85,
+      "line": 38,
+      "source_index": 0
+    },
+    {
+      "column": 7,
+      "length": 85,
+      "line": 38,
+      "source_index": 0
+    },
+    {
+      "column": 1,
+      "length": 92,
+      "line": 38,
+      "source_index": 0
+    },
+    {
+      "column": 1,
+      "length": 92,
+      "line": 38,
+      "source_index": 0
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "instructions": [
+    {
+      "LoadInput": {
+        "dest": 0
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 0,
+        "dest": 1,
+        "literal_idx": 0
+      }
+    },
+    {
+      "Load": {
+        "dest": 2,
+        "literal_idx": 1
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 0,
+        "dest": 3,
+        "literal_idx": 2
+      }
+    },
+    {
+      "BuiltinCall": {
+        "params_index": 0
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 0,
+        "dest": 5,
+        "literal_idx": 3
+      }
+    },
+    {
+      "Load": {
+        "dest": 6,
+        "literal_idx": 4
+      }
+    },
+    {
+      "Load": {
+        "dest": 7,
+        "literal_idx": 5
+      }
+    },
+    {
+      "ArrayCreate": {
+        "params_index": 0
+      }
+    },
+    {
+      "BuiltinCall": {
+        "params_index": 1
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 0,
+        "dest": 10,
+        "literal_idx": 6
+      }
+    },
+    {
+      "Load": {
+        "dest": 11,
+        "literal_idx": 7
+      }
+    },
+    {
+      "Eq": {
+        "dest": 12,
+        "left": 10,
+        "right": 11
+      }
+    },
+    {
+      "And": {
+        "dest": 13,
+        "left": 4,
+        "right": 9
+      }
+    },
+    {
+      "And": {
+        "dest": 14,
+        "left": 13,
+        "right": 12
+      }
+    },
+    {
+      "LoadBool": {
+        "dest": 15,
+        "value": true
+      }
+    },
+    {
+      "And": {
+        "dest": 16,
+        "left": 14,
+        "right": 15
+      }
+    },
+    {
+      "Load": {
+        "dest": 17,
+        "literal_idx": 8
+      }
+    },
+    {
+      "BuiltinCall": {
+        "params_index": 2
+      }
+    },
+    {
+      "Load": {
+        "dest": 19,
+        "literal_idx": 4
+      }
+    },
+    {
+      "Load": {
+        "dest": 20,
+        "literal_idx": 5
+      }
+    },
+    {
+      "Load": {
+        "dest": 21,
+        "literal_idx": 9
+      }
+    },
+    {
+      "ArrayCreate": {
+        "params_index": 1
+      }
+    },
+    {
+      "BuiltinCall": {
+        "params_index": 3
+      }
+    },
+    {
+      "Load": {
+        "dest": 24,
+        "literal_idx": 7
+      }
+    },
+    {
+      "Eq": {
+        "dest": 25,
+        "left": 10,
+        "right": 24
+      }
+    },
+    {
+      "And": {
+        "dest": 26,
+        "left": 18,
+        "right": 23
+      }
+    },
+    {
+      "And": {
+        "dest": 27,
+        "left": 26,
+        "right": 25
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 0,
+        "dest": 28,
+        "literal_idx": 10
+      }
+    },
+    {
+      "Load": {
+        "dest": 29,
+        "literal_idx": 11
+      }
+    },
+    {
+      "BuiltinCall": {
+        "params_index": 4
+      }
+    },
+    {
+      "AssertNotUndefined": {
+        "register": 30
+      }
+    },
+    {
+      "Load": {
+        "dest": 31,
+        "literal_idx": 12
+      }
+    },
+    {
+      "Eq": {
+        "dest": 32,
+        "left": 30,
+        "right": 31
+      }
+    },
+    {
+      "Load": {
+        "dest": 33,
+        "literal_idx": 13
+      }
+    },
+    {
+      "BuiltinCall": {
+        "params_index": 5
+      }
+    },
+    {
+      "AssertNotUndefined": {
+        "register": 34
+      }
+    },
+    {
+      "Load": {
+        "dest": 35,
+        "literal_idx": 12
+      }
+    },
+    {
+      "Eq": {
+        "dest": 36,
+        "left": 34,
+        "right": 35
+      }
+    },
+    {
+      "And": {
+        "dest": 37,
+        "left": 32,
+        "right": 36
+      }
+    },
+    {
+      "And": {
+        "dest": 38,
+        "left": 27,
+        "right": 37
+      }
+    },
+    {
+      "Load": {
+        "dest": 39,
+        "literal_idx": 14
+      }
+    },
+    {
+      "BuiltinCall": {
+        "params_index": 6
+      }
+    },
+    {
+      "Load": {
+        "dest": 41,
+        "literal_idx": 4
+      }
+    },
+    {
+      "Load": {
+        "dest": 42,
+        "literal_idx": 5
+      }
+    },
+    {
+      "Load": {
+        "dest": 43,
+        "literal_idx": 9
+      }
+    },
+    {
+      "Load": {
+        "dest": 44,
+        "literal_idx": 15
+      }
+    },
+    {
+      "ArrayCreate": {
+        "params_index": 2
+      }
+    },
+    {
+      "BuiltinCall": {
+        "params_index": 7
+      }
+    },
+    {
+      "Load": {
+        "dest": 47,
+        "literal_idx": 7
+      }
+    },
+    {
+      "Eq": {
+        "dest": 48,
+        "left": 10,
+        "right": 47
+      }
+    },
+    {
+      "And": {
+        "dest": 49,
+        "left": 40,
+        "right": 46
+      }
+    },
+    {
+      "And": {
+        "dest": 50,
+        "left": 49,
+        "right": 48
+      }
+    },
+    {
+      "LoadBool": {
+        "dest": 51,
+        "value": true
+      }
+    },
+    {
+      "And": {
+        "dest": 52,
+        "left": 50,
+        "right": 51
+      }
+    },
+    {
+      "Load": {
+        "dest": 53,
+        "literal_idx": 14
+      }
+    },
+    {
+      "BuiltinCall": {
+        "params_index": 8
+      }
+    },
+    {
+      "Load": {
+        "dest": 55,
+        "literal_idx": 4
+      }
+    },
+    {
+      "Load": {
+        "dest": 56,
+        "literal_idx": 5
+      }
+    },
+    {
+      "ArrayCreate": {
+        "params_index": 3
+      }
+    },
+    {
+      "BuiltinCall": {
+        "params_index": 9
+      }
+    },
+    {
+      "Load": {
+        "dest": 59,
+        "literal_idx": 16
+      }
+    },
+    {
+      "Eq": {
+        "dest": 60,
+        "left": 10,
+        "right": 59
+      }
+    },
+    {
+      "And": {
+        "dest": 61,
+        "left": 54,
+        "right": 58
+      }
+    },
+    {
+      "And": {
+        "dest": 62,
+        "left": 61,
+        "right": 60
+      }
+    },
+    {
+      "LoadBool": {
+        "dest": 63,
+        "value": true
+      }
+    },
+    {
+      "And": {
+        "dest": 64,
+        "left": 62,
+        "right": 63
+      }
+    },
+    {
+      "LoadBool": {
+        "dest": 65,
+        "value": true
+      }
+    },
+    {
+      "Load": {
+        "dest": 66,
+        "literal_idx": 9
+      }
+    },
+    {
+      "Eq": {
+        "dest": 67,
+        "left": 5,
+        "right": 66
+      }
+    },
+    {
+      "Load": {
+        "dest": 68,
+        "literal_idx": 16
+      }
+    },
+    {
+      "Eq": {
+        "dest": 69,
+        "left": 10,
+        "right": 68
+      }
+    },
+    {
+      "And": {
+        "dest": 70,
+        "left": 65,
+        "right": 67
+      }
+    },
+    {
+      "And": {
+        "dest": 71,
+        "left": 70,
+        "right": 69
+      }
+    },
+    {
+      "LoadBool": {
+        "dest": 72,
+        "value": true
+      }
+    },
+    {
+      "And": {
+        "dest": 73,
+        "left": 71,
+        "right": 72
+      }
+    },
+    {
+      "Or": {
+        "dest": 74,
+        "left": 16,
+        "right": 38
+      }
+    },
+    {
+      "Or": {
+        "dest": 75,
+        "left": 74,
+        "right": 52
+      }
+    },
+    {
+      "Or": {
+        "dest": 76,
+        "left": 75,
+        "right": 64
+      }
+    },
+    {
+      "Not": {
+        "dest": 77,
+        "operand": 73
+      }
+    },
+    {
+      "And": {
+        "dest": 78,
+        "left": 76,
+        "right": 77
+      }
+    },
+    {
+      "BuiltinCall": {
+        "params_index": 10
+      }
+    },
+    {
+      "Return": {
+        "value": 79
+      }
+    }
+  ],
+  "literals": [
+    "principal",
+    "Group::developers",
+    "entities",
+    "action",
+    "Action::get",
+    "Action::list",
+    "resource",
+    "Namespace::production",
+    "Group::sre-oncall",
+    "Action::delete",
+    "context",
+    "has_incident_ticket",
+    true,
+    "oncall_session",
+    "Group::cluster-admins",
+    "Action::create",
+    "Namespace::kube-system"
+  ],
+  "metadata": {
+    "compiled_at": "unknown",
+    "compiler_version": "0.9.1",
+    "needs_recompilation": false,
+    "needs_runtime_recursion_check": false,
+    "optimization_level": 0,
+    "rego_v0": false,
+    "source_info": "unknown"
+  },
+  "program_structure": {
+    "dispatch_window_size": 80,
+    "main_entry_point": 0,
+    "max_rule_window_size": 80
+  },
+  "rule_infos": [],
+  "rule_tree": {},
+  "sources": [
+    {
+      "content": "// Kubernetes-style RBAC — namespace-scoped resource access.\n//\n// Developers can read and list pods in their namespace.\n// SREs can additionally delete pods, but only with an\n// approved incident ticket and from an on-call session.\n// Cluster admins can do everything in production.\n// Nobody can delete the kube-system namespace resources.\n\npermit(\n  principal in Group::\"developers\",\n  action in [Action::\"get\", Action::\"list\"],\n  resource == Namespace::\"production\"\n);\n\npermit(\n  principal in Group::\"sre-oncall\",\n  action in [Action::\"get\", Action::\"list\", Action::\"delete\"],\n  resource == Namespace::\"production\"\n)\nwhen {\n  context.has_incident_ticket == true &&\n  context.oncall_session == true\n};\n\npermit(\n  principal in Group::\"cluster-admins\",\n  action in [Action::\"get\", Action::\"list\", Action::\"delete\", Action::\"create\"],\n  resource == Namespace::\"production\"\n);\n\npermit(\n  principal in Group::\"cluster-admins\",\n  action in [Action::\"get\", Action::\"list\"],\n  resource == Namespace::\"kube-system\"\n);\n\n// Hard deny: nobody deletes kube-system resources.\nforbid(\n  principal,\n  action == Action::\"delete\",\n  resource == Namespace::\"kube-system\"\n);\n",
+      "name": "examples/cedar/examples/k8s_rbac/policy.cedar"
+    }
+  ]
+}

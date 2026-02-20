@@ -1982,7 +1982,7 @@ def _cedar_pattern_to_z3_re(pattern: str):
         if seg:
             parts.append(z3.Re(z3.StringVal(seg)))
         if i < len(segments) - 1:
-            parts.append(z3.Star(z3.Re(z3.Full(z3.ReSort(z3.StringSort())))))
+            parts.append(z3.Full(z3.ReSort(z3.StringSort())))
     if len(parts) == 1:
         return parts[0]
     return z3.Concat(*parts)

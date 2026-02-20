@@ -246,6 +246,10 @@ Pre-compiled bytecode JSON files are checked in alongside the policies:
 | `container_admission_program.json` | `container_admission.rego` |
 | `network_segmentation_program.json` | `network_segmentation.rego` |
 | `allowed_server_program.json` | `allowed_server.rego` |
+| `iam_zero_trust_program.json` | `iam_zero_trust/policy.cedar` |
+| `hipaa_healthcare_program.json` | `hipaa_healthcare/policy.cedar` |
+| `financial_trading_program.json` | `financial_trading/policy.cedar` |
+| `k8s_rbac_program.json` | `k8s_rbac/policy.cedar` |
 
 ### Demo 9 — Python: Container Admission
 
@@ -278,6 +282,36 @@ Mirrors Demos 3a–3b.
 
 > **Note:** `--cover-line` and `--avoid-line` take **separate** `FILE` and
 > `LINE` arguments (not `FILE:LINE` as in the Rust CLI).
+
+---
+
+## Python Cedar Demos (Demos 12–15)
+
+The Python analyzer also supports **Cedar policies** using pre-compiled
+bytecode.  Entity graphs are passed via `--concrete-input entities <file>`.
+
+### Demo 12 — Python Cedar: IAM Zero Trust
+
+Mirrors Demo 4.  Finds permitted and denied requests.
+
+```bash
+python3 -m tools.z3analyze examples/demos/iam_zero_trust_program.json \
+  -e cedar.authorize -o 1 \
+  --concrete-input entities \
+  examples/cedar/examples/iam_zero_trust/entities.json
+```
+
+### Demo 13 — Python Cedar: Healthcare (HIPAA)
+
+Mirrors Demo 5.
+
+### Demo 14 — Python Cedar: Financial Trading
+
+Mirrors Demo 6.
+
+### Demo 15 — Python Cedar: Kubernetes RBAC
+
+Mirrors Demo 7.
 
 ---
 

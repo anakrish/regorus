@@ -332,6 +332,65 @@ run python3 -m tools.z3analyze $DEMOS/allowed_server_program.json \
   --schema examples/server/input_schema.json \
   --max-loop-depth 3
 
+# ==============================================================
+#            PYTHON Z3 ANALYZER — CEDAR DEMOS
+# ==============================================================
+# These demos mirror the Rust Cedar demos (4–7) using the Python
+# analyzer with pre-compiled Cedar bytecode JSON files.
+#
+# Cedar bytecode is produced with:
+#   regorus cedar compile -p <policy.cedar> -o <output.json>
+#
+# Entity graphs are passed via --concrete-input entities <file>.
+# ==============================================================
+
+CEDAR=examples/cedar/examples
+
+# ==============================================================
+title "DEMO 12 — Python Cedar: IAM Zero Trust" \
+      "Same policy as Demo 4, using python3 -m tools.z3analyze"
+# ==============================================================
+
+echo "▸ 12a) Find a PERMITTED request:"
+run python3 -m tools.z3analyze $DEMOS/iam_zero_trust_program.json \
+  -e cedar.authorize -o 1 \
+  --concrete-input entities $CEDAR/iam_zero_trust/entities.json
+
+echo "▸ 12b) Find a DENIED request:"
+run python3 -m tools.z3analyze $DEMOS/iam_zero_trust_program.json \
+  -e cedar.authorize -o 0 \
+  --concrete-input entities $CEDAR/iam_zero_trust/entities.json
+
+# ==============================================================
+title "DEMO 13 — Python Cedar: Healthcare (HIPAA-inspired)" \
+      "Same policy as Demo 5, using python3 -m tools.z3analyze"
+# ==============================================================
+
+echo "▸ 13a) Find a PERMITTED request:"
+run python3 -m tools.z3analyze $DEMOS/hipaa_healthcare_program.json \
+  -e cedar.authorize -o 1 \
+  --concrete-input entities $CEDAR/hipaa_healthcare/entities.json
+
+# ==============================================================
+title "DEMO 14 — Python Cedar: Financial Trading" \
+      "Same policy as Demo 6, using python3 -m tools.z3analyze"
+# ==============================================================
+
+echo "▸ 14a) Find a PERMITTED trade:"
+run python3 -m tools.z3analyze $DEMOS/financial_trading_program.json \
+  -e cedar.authorize -o 1 \
+  --concrete-input entities $CEDAR/financial_trading/entities.json
+
+# ==============================================================
+title "DEMO 15 — Python Cedar: Kubernetes RBAC" \
+      "Same policy as Demo 7, using python3 -m tools.z3analyze"
+# ==============================================================
+
+echo "▸ 15a) Find a PERMITTED request:"
+run python3 -m tools.z3analyze $DEMOS/k8s_rbac_program.json \
+  -e cedar.authorize -o 1 \
+  --concrete-input entities $CEDAR/k8s_rbac/entities.json
+
 sep
 echo "  All demos completed successfully."
 sep

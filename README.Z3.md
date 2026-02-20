@@ -144,10 +144,10 @@ and the `z3-solver` pip package.
 |---|---|---|
 | **Build** | Requires Z3 C library + bindgen | `pip install z3-solver` |
 | **Workflow** | Single command | Two steps: compile → analyze |
-| **Cedar** | ✅ | Rego only |
+| **Cedar** | ✅ | ✅ |
 | **SMT dump** | `--dump-smt FILE` | `--dump-smt` (stdout) |
 
-Use the Rust version for Cedar policies and the tightest integration.
+Use the Rust version for the tightest integration (single command).
 Use the Python version for quick experimentation without a C toolchain.
 
 ### Prerequisites
@@ -186,8 +186,28 @@ python3 -m tools.z3analyze program.json \
   --schema input_schema.json
 ```
 
-> **Note:** the `regorus compile` command does **not** need the `z3-analysis`
-> feature.  A plain `cargo build --example regorus` is sufficient for the
+#### Cedar policies
+
+Cedar policies use a separate compile command and require the entity graph
+to be passed as a concrete input:
+
+```bash
+# Step 1 — Compile the Cedar policy to RVM bytecode JSON
+regorus cedar compile \
+  -p policy.cedar \
+  -o program.json
+
+# Step 2 — Run the Python analyzer with concrete entities
+python3 -m tools.z3analyze program.json \
+  -e cedar.authorize -o 1 \
+  --concrete-input entities entities.json
+```
+
+Cedar output uses `1` for permit and `0` for deny.
+
+> **Note:** the `regorus compile` / `regorus cedar compile` commands do **not**
+> need the `z3-analysis` feature.  A plain
+> `cargo build --example regorus --features cedar` is sufficient for the
 > compile step.
 
 ### Python CLI Reference
@@ -234,6 +254,20 @@ python3 -m tools.z3analyze \
   --example-input examples/demos/container_admission_input.json \
   --schema examples/demos/container_admission_schema.json \
   --max-loop-depth 3
+
+# Cedar: find a PERMITTED request (IAM zero trust)
+python3 -m tools.z3analyze \
+  examples/demos/iam_zero_trust_program.json \
+  -e cedar.authorize -o 1 \
+  --concrete-input entities \
+  examples/cedar/examples/iam_zero_trust/entities.json
+
+# Cedar: find a DENIED request
+python3 -m tools.z3analyze \
+  examples/demos/iam_zero_trust_program.json \
+  -e cedar.authorize -o 0 \
+  --concrete-input entities \
+  examples/cedar/examples/iam_zero_trust/entities.json
 ```
 
 ### Pre-compiled Bytecode Files
@@ -245,8 +279,13 @@ The following bytecode JSON files are checked in under `examples/demos/`:
 | `container_admission_program.json` | `container_admission.rego` | `data.container_admission.allow` |
 | `network_segmentation_program.json` | `network_segmentation.rego` | `data.network_segmentation.compliant` |
 | `allowed_server_program.json` | `allowed_server.rego` | `data.example.allow` |
+| `iam_zero_trust_program.json` | `iam_zero_trust/policy.cedar` | `cedar.authorize` |
+| `hipaa_healthcare_program.json` | `hipaa_healthcare/policy.cedar` | `cedar.authorize` |
+| `financial_trading_program.json` | `financial_trading/policy.cedar` | `cedar.authorize` |
+| `k8s_rbac_program.json` | `k8s_rbac/policy.cedar` | `cedar.authorize` |
 
-To regenerate: `regorus compile -d <policy.rego> -e <entrypoint> -o <output.json>`
+To regenerate Rego: `regorus compile -d <policy.rego> -e <entrypoint> -o <output.json>`
+To regenerate Cedar: `regorus cedar compile -p <policy.cedar> -o <output.json>`
 
 ---
 

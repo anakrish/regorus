@@ -2,7 +2,14 @@
 # Licensed under the MIT License.
 
 # E2E Test: SQL/SqlServerAuditing_Audit
-# Features: AuditIfNotExists routed via HostAwait response
+# Features: AuditIfNotExists with inline existenceCondition evaluation.
+# The host returns the related resource (or null if not found), and the
+# compiler evaluates the existenceCondition against it.
+#
+# NOTE: Without an alias catalog, fully-qualified field paths like
+# "Microsoft.Sql/auditingSettings.state" resolve as raw object keys
+# ("Microsoft" → "Sql/auditingSettings" → "state"). The test response
+# structure mirrors this resolution.
 
 policy_definition: |
   {
@@ -45,7 +52,8 @@ policy_definition: |
   }
 
 cases:
-  - note: audit_if_not_exists_when_host_reports_missing
+  # Related resource not found → non-compliant
+  - note: non_compliant_resource_not_found
     resource:
       type: "Microsoft.Sql/servers"
       kind: "v12.0"
@@ -56,23 +64,38 @@ cases:
           operation: "lookup_related_resources"
           type: "Microsoft.Sql/servers/auditingSettings"
           name: "default"
-        response: true
+        response: null
     want_effect: "AuditIfNotExists"
 
-  - note: pass_when_host_reports_exists_and_compliant
+  # Related resource found and existenceCondition matches → compliant
+  - note: compliant_resource_found_and_condition_passes
     resource:
       type: "Microsoft.Sql/servers"
       kind: "v12.0"
       name: "sql-b"
       properties: {}
     host_await:
-      - key:
-          operation: "lookup_related_resources"
-          type: "Microsoft.Sql/servers/auditingSettings"
-          name: "default"
-        response: false
+      - response:
+          Microsoft:
+            "Sql/auditingSettings":
+              state: "enabled"
     want_undefined: true
 
+  # Related resource found but existenceCondition fails → non-compliant
+  - note: non_compliant_condition_fails
+    resource:
+      type: "Microsoft.Sql/servers"
+      kind: "v12.0"
+      name: "sql-c"
+      properties: {}
+    host_await:
+      - response:
+          Microsoft:
+            "Sql/auditingSettings":
+              state: "disabled"
+    want_effect: "AuditIfNotExists"
+
+  # Primary resource type doesn't match → if-condition false → compliant
   - note: pass_when_type_not_matching
     resource:
       type: "Microsoft.Storage/storageAccounts"

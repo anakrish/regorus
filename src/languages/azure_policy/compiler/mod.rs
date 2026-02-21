@@ -74,6 +74,11 @@ struct Compiler {
     /// back to these defaults when the caller does not supply a value.
     parameter_defaults: Option<Value>,
 
+    /// When set, field references resolve against this register instead of
+    /// `input.resource`. Used while compiling `existenceCondition` to resolve
+    /// fields against the related resource returned by `HostAwait`.
+    resource_override_reg: Option<u8>,
+
     // -- Metadata accumulators (populated during compilation) ---------------
     /// Built-in field kinds referenced (e.g. "type", "location", "tags").
     observed_field_kinds: BTreeSet<String>,
@@ -377,7 +382,13 @@ impl Compiler {
                 let effect_text = self
                     .resolve_effect_name_from_parameter_default(effect)
                     .unwrap_or_else(|| "AuditIfNotExists".to_string());
-                return self.compile_audit_if_not_exists_effect(rule, &effect_text);
+                return self.compile_cross_resource_effect(rule, &effect_text);
+            }
+            if resolved_effect_kind == EffectKind::DeployIfNotExists {
+                let effect_text = self
+                    .resolve_effect_name_from_parameter_default(effect)
+                    .unwrap_or_else(|| "DeployIfNotExists".to_string());
+                return self.compile_cross_resource_effect(rule, &effect_text);
             }
 
             if effect.raw.starts_with('[')
@@ -396,13 +407,12 @@ impl Compiler {
         }
 
         match &effect.kind {
-            EffectKind::AuditIfNotExists => {
-                self.compile_audit_if_not_exists_effect(rule, &effect.raw)
+            EffectKind::AuditIfNotExists | EffectKind::DeployIfNotExists => {
+                self.compile_cross_resource_effect(rule, &effect.raw)
             }
             EffectKind::Deny
             | EffectKind::Audit
             | EffectKind::Append
-            | EffectKind::DeployIfNotExists
             | EffectKind::Disabled
             | EffectKind::Modify
             | EffectKind::DenyAction
@@ -414,46 +424,95 @@ impl Compiler {
         }
     }
 
-    fn compile_audit_if_not_exists_effect(
+    /// Compile cross-resource effects (auditIfNotExists / deployIfNotExists).
+    ///
+    /// These effects use a two-phase evaluation:
+    /// 1. `HostAwait` requests the related resource from the host
+    /// 2. The `existenceCondition` (if any) is evaluated against the returned
+    ///    resource inline. If no `existenceCondition`, existence is checked
+    ///    via `PolicyExists`.
+    ///
+    /// Host protocol:
+    ///   id  = `"azure.policy.existence_check"`
+    ///   arg = `{ operation: "lookup_related_resources", type, name, ... }`
+    ///   response = related resource object, or `null` if not found
+    fn compile_cross_resource_effect(
         &mut self,
         rule: &PolicyRule,
         effect_text: &str,
     ) -> Result<u8> {
         let span = &rule.then_block.effect.span;
 
-        // Defer related-resource existence evaluation to host via HostAwait.
+        let Some(details) = rule.then_block.details.as_ref() else {
+            return self.load_literal(Value::from(effect_text.to_string()), span);
+        };
+
+        // Phase 1: Request related resource from host via HostAwait.
         // Host contract:
-        //   id  = "azure.policy.audit_if_not_exists"
+        //   id  = "azure.policy.existence_check"
         //   arg = lookup request object (type/name/scope metadata)
-        //   response: truthy => non-compliant (return effect), falsy => compliant (return undefined)
-        if let Some(details) = rule.then_block.details.as_ref() {
-            let request_value = self.build_host_await_request(details)?;
-            let request_reg = self.load_literal(request_value, span)?;
-            let id_reg =
-                self.load_literal(Value::from("azure.policy.audit_if_not_exists"), span)?;
+        //   response: the related resource (object), or null if not found
+        let request_value = self.build_host_await_request(details)?;
+        let request_reg = self.load_literal(request_value, span)?;
+        let id_reg = self.load_literal(Value::from("azure.policy.existence_check"), span)?;
 
-            let host_result_reg = self.alloc_register()?;
-            self.emit(
-                Instruction::HostAwait {
-                    dest: host_result_reg,
-                    arg: request_reg,
-                    id: id_reg,
-                },
-                span,
-            );
+        let related_resource_reg = self.alloc_register()?;
+        self.emit(
+            Instruction::HostAwait {
+                dest: related_resource_reg,
+                arg: request_reg,
+                id: id_reg,
+            },
+            span,
+        );
 
-            let effect_reg = self.load_literal(Value::from(effect_text.to_string()), span)?;
-            self.emit(
-                Instruction::ReturnUndefinedIfNotTrue {
-                    condition: host_result_reg,
-                },
-                span,
-            );
-
-            Ok(effect_reg)
+        // Phase 2: Evaluate existence.
+        let exists_reg = if let Some(ref existence_condition) = rule.then_block.existence_condition
+        {
+            // Compile existenceCondition with field references resolving
+            // against the related resource instead of input.resource.
+            self.resource_override_reg = Some(related_resource_reg);
+            let cond_reg = self.compile_constraint(existence_condition)?;
+            self.resource_override_reg = None;
+            cond_reg
         } else {
-            self.load_literal(Value::from(effect_text.to_string()), span)
-        }
+            // No existenceCondition — just check if the resource was found
+            // (non-null/non-undefined). Uses PolicyExists which returns true
+            // when the value is defined and non-null (matching expected=true).
+            let true_reg = self.load_literal(Value::Bool(true), span)?;
+            let dest = self.alloc_register()?;
+            self.emit(
+                Instruction::PolicyExists {
+                    dest,
+                    left: related_resource_reg,
+                    right: true_reg,
+                },
+                span,
+            );
+            dest
+        };
+
+        // Phase 3: Produce result.
+        // If exists_reg is truthy → resource is compliant → return Undefined.
+        // If exists_reg is falsy → non-compliant → return the effect string.
+        let not_exists_reg = self.alloc_register()?;
+        self.emit(
+            Instruction::PolicyNot {
+                dest: not_exists_reg,
+                operand: exists_reg,
+            },
+            span,
+        );
+
+        let effect_reg = self.load_literal(Value::from(effect_text.to_string()), span)?;
+        self.emit(
+            Instruction::ReturnUndefinedIfNotTrue {
+                condition: not_exists_reg,
+            },
+            span,
+        );
+
+        Ok(effect_reg)
     }
 
     fn resolve_effect_kind(&self, effect: &EffectNode) -> EffectKind {

@@ -210,7 +210,111 @@ cases:
       - key:
           operation: "lookup_related_resources"
           type: "Microsoft.Compute/virtualMachines/extensions"
-        response: true
+        response: null
+    want_effect: "auditIfNotExists"
+
+  # Related resource found and existenceCondition matches → compliant (undefined)
+  - note: effect_auditIfNotExists_compliant
+    policy_rule: |
+      {
+        "if": {
+          "field": "type",
+          "equals": "Microsoft.Compute/virtualMachines"
+        },
+        "then": {
+          "effect": "auditIfNotExists",
+          "details": {
+            "type": "Microsoft.Compute/virtualMachines/extensions",
+            "existenceCondition": {
+              "allOf": [
+                { "field": "properties.publisher", "equals": "Microsoft.Azure.Security" },
+                { "field": "properties.type", "equals": "IaaSAntimalware" }
+              ]
+            }
+          }
+        }
+      }
+    resource:
+      type: "Microsoft.Compute/virtualMachines"
+    host_await:
+      - response:
+          properties:
+            publisher: "Microsoft.Azure.Security"
+            type: "IaaSAntimalware"
+    want_undefined: true
+
+  # Related resource found but existenceCondition fails → non-compliant
+  - note: effect_auditIfNotExists_condition_fails
+    policy_rule: |
+      {
+        "if": {
+          "field": "type",
+          "equals": "Microsoft.Compute/virtualMachines"
+        },
+        "then": {
+          "effect": "auditIfNotExists",
+          "details": {
+            "type": "Microsoft.Compute/virtualMachines/extensions",
+            "existenceCondition": {
+              "allOf": [
+                { "field": "properties.publisher", "equals": "Microsoft.Azure.Security" },
+                { "field": "properties.type", "equals": "IaaSAntimalware" }
+              ]
+            }
+          }
+        }
+      }
+    resource:
+      type: "Microsoft.Compute/virtualMachines"
+    host_await:
+      - response:
+          properties:
+            publisher: "SomeOtherPublisher"
+            type: "SomeOtherExtension"
+    want_effect: "auditIfNotExists"
+
+  # No existenceCondition — just check if resource exists
+  - note: effect_auditIfNotExists_no_condition_exists
+    policy_rule: |
+      {
+        "if": {
+          "field": "type",
+          "equals": "Microsoft.Compute/virtualMachines"
+        },
+        "then": {
+          "effect": "auditIfNotExists",
+          "details": {
+            "type": "Microsoft.Compute/virtualMachines/extensions"
+          }
+        }
+      }
+    resource:
+      type: "Microsoft.Compute/virtualMachines"
+    host_await:
+      - response:
+          name: "some-extension"
+          properties: {}
+    want_undefined: true
+
+  # No existenceCondition, resource not found → non-compliant
+  - note: effect_auditIfNotExists_no_condition_missing
+    policy_rule: |
+      {
+        "if": {
+          "field": "type",
+          "equals": "Microsoft.Compute/virtualMachines"
+        },
+        "then": {
+          "effect": "auditIfNotExists",
+          "details": {
+            "type": "Microsoft.Compute/virtualMachines/extensions"
+          }
+        }
+      }
+    resource:
+      type: "Microsoft.Compute/virtualMachines"
+    host_await:
+      - response: null
     want_effect: "auditIfNotExists"
 
   - note: effect_deployIfNotExists
@@ -246,6 +350,8 @@ cases:
       }
     resource:
       type: "Microsoft.Compute/virtualMachines"
+    host_await:
+      - response: null
     want_effect: "deployIfNotExists"
 
   # =========================================================================

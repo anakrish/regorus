@@ -75,11 +75,15 @@ struct TestCase {
     #[serde(default)]
     pub context: Option<serde_yaml::Value>,
 
-    /// Host-await response entries for policies that use `auditIfNotExists`.
+    /// Host-await response entries for cross-resource effects
+    /// (`auditIfNotExists` / `deployIfNotExists`).
     ///
     /// Each entry maps a request key (describing the lookup) to a response
     /// value.  These are injected into the VM as run-to-completion host
-    /// await responses keyed by `"azure.policy.audit_if_not_exists"`.
+    /// await responses keyed by `"azure.policy.existence_check"`.
+    ///
+    /// The response should be the related resource object (for found
+    /// resources) or `null` (when the resource does not exist).
     #[serde(default)]
     pub host_await: Vec<HostAwaitEntry>,
 
@@ -95,8 +99,13 @@ struct TestCase {
 ///   - key:
 ///       operation: "lookup_related_resources"
 ///       type: "Microsoft.Insights/diagnosticSettings"
-///     response: true
+///     response:
+///       properties:
+///         logs:
+///           - enabled: true
 /// ```
+///
+/// Use `response: null` when the related resource does not exist.
 #[derive(Serialize, Deserialize, Debug)]
 struct HostAwaitEntry {
     /// Descriptive key identifying the request (not used at runtime;
@@ -292,7 +301,7 @@ fn yaml_test_impl(file: &str) -> Result<()> {
                 let response_value = Value::from_json_str(&response_json)
                     .expect("host_await response JSON→Value failed");
                 responses
-                    .entry(Value::from("azure.policy.audit_if_not_exists"))
+                    .entry(Value::from("azure.policy.existence_check"))
                     .or_default()
                     .push(response_value);
             }

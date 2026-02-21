@@ -39,6 +39,8 @@ pub enum ParseError {
     InvalidCountName { span: Span },
     /// `name` used without `value` in count.
     MisplacedCountName { span: Span },
+    /// A custom error message (e.g., from sub-parsing).
+    Custom { span: Span, message: String },
 }
 
 impl core::fmt::Display for ParseError {
@@ -133,6 +135,12 @@ impl core::fmt::Display for ParseError {
                     "{}",
                     span.error("'name' can only be used with count-value")
                 )
+            }
+            ParseError::Custom {
+                ref span,
+                ref message,
+            } => {
+                write!(f, "{}", span.error(message))
             }
         }
     }

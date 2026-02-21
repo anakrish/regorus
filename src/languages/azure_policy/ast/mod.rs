@@ -57,6 +57,10 @@ pub struct ThenBlock {
     pub effect: EffectNode,
     /// Optional details block (for modify/append/deployIfNotExists effects).
     pub details: Option<JsonValue>,
+    /// Parsed `existenceCondition` from `details` (for auditIfNotExists /
+    /// deployIfNotExists). This is extracted from the `details` JSON and
+    /// parsed as a `Constraint` (same grammar as `policyRule.if`).
+    pub existence_condition: Option<Constraint>,
 }
 
 /// The `"effect"` value in the then block.

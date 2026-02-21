@@ -92,10 +92,14 @@ The alias system (`src/languages/azure_policy/aliases/`) supports:
 - [ ] Type-check parameter values against declared types
 
 ### Cross-Resource Evaluation
-- [ ] `auditIfNotExists`: Evaluate `existenceCondition` against related resource
-- [ ] `deployIfNotExists`: Evaluate `existenceCondition` against related resource
-- [ ] Resolve related resource from `details.type` / `details.name` / `details.resourceGroupName`
-- [ ] Define interface for related-resource lookup (external data source)
+- [x] `auditIfNotExists`: Evaluate `existenceCondition` against related resource
+- [x] `deployIfNotExists`: Evaluate `existenceCondition` against related resource
+- [x] Resolve related resource from `details.type` / `details.name` / `details.resourceGroupName`
+- [x] Define interface for related-resource lookup (external data source via `HostAwait`)
+- [x] Parse `existenceCondition` from `details` block into `Constraint` AST node
+- [x] Compile `existenceCondition` inline with `resource_override_reg` for field resolution
+- [x] Support `existenceCondition` with `count`/`where`, wildcards, ARM template expressions
+- [ ] Add String ↔ Bool coercion to `case_insensitive_equals` (Azure Policy coerces `true`/`"true"`)
 
 ---
 

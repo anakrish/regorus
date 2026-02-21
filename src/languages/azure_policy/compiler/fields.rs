@@ -105,6 +105,15 @@ impl Compiler {
         field_path: &str,
         span: &crate::lexer::Span,
     ) -> Result<u8> {
+        // When resource_override_reg is set (e.g., inside existenceCondition),
+        // resolve fields against the override register directly instead of
+        // input.resource.
+        if let Some(override_reg) = self.resource_override_reg {
+            let parts = split_path_without_wildcards(field_path)?;
+            let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+            return self.emit_chained_index_literal_path(override_reg, &refs, span);
+        }
+
         let input_reg = self.load_input(span)?;
 
         let mut path = Vec::new();
@@ -118,6 +127,9 @@ impl Compiler {
     }
 
     pub(super) fn compile_resource_root(&mut self, span: &crate::lexer::Span) -> Result<u8> {
+        if let Some(override_reg) = self.resource_override_reg {
+            return Ok(override_reg);
+        }
         let input_reg = self.load_input(span)?;
         self.emit_chained_index_literal_path(input_reg, &["resource"], span)
     }

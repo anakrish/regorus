@@ -9,7 +9,9 @@ use alloc::vec::Vec;
 
 use anyhow::{anyhow, bail, Result};
 
-use crate::languages::azure_policy::ast::{Constraint, CountNode, FieldKind};
+use crate::languages::azure_policy::ast::{
+    Condition, Constraint, CountNode, FieldKind, JsonValue, OperatorKind, ValueOrExpr,
+};
 use crate::rvm::instructions::{LoopMode, LoopStartParams};
 use crate::rvm::Instruction;
 use crate::Value;
@@ -41,55 +43,41 @@ impl Compiler {
                 field,
                 where_,
             } => {
-                let field_path = self.extract_field_count_path(field)?;
-                let (collection_prefix, _suffix) = split_count_wildcard_path(&field_path)?;
-
-                // Check if this field path is relative to an outer count binding.
-                // For nested counts like `rules[*].targets[*]` inside a `rules[*]`
-                // loop, the collection should come from the outer loop's current
-                // element, not from `input.resource`.
-                if let Some(binding) = self.resolve_count_binding(&field_path)? {
-                    if let Some(outer_prefix) = &binding.field_wildcard_prefix {
-                        // Strip the outer prefix + `[*].` to get the inner path.
-                        // e.g., "rules[*].targets[*]" → strip "rules[*]." → "targets[*]"
-                        let strip_len = outer_prefix.len() + 4; // len of prefix + "[*]."
-                        if field_path.len() > strip_len {
-                            let inner_path = &field_path[strip_len..];
-                            let (inner_collection, _inner_suffix) =
-                                split_count_wildcard_path(inner_path)?;
-                            let parts = split_path_without_wildcards(&inner_collection)?;
-                            let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-                            let collection_reg = self.emit_chained_index_literal_path(
-                                binding.current_reg,
-                                &refs,
-                                span,
-                            )?;
-                            // The inner binding's wildcard prefix covers the full
-                            // path up to the inner `[*]`.
-                            let inner_prefix = format!("{}[*].{}", outer_prefix, inner_collection);
-                            return self.compile_count_loop(
-                                collection_reg,
-                                None,
-                                Some(inner_prefix),
-                                where_.as_deref(),
-                                span,
-                            );
-                        }
-                    }
-                }
-
-                // Top-level count: collection from input.resource.
-                let collection_reg = self.compile_resource_path_value(&collection_prefix, span)?;
-
-                self.compile_count_loop(
-                    collection_reg,
-                    None,
-                    Some(collection_prefix),
-                    where_.as_deref(),
-                    span,
-                )
+                let (collection_reg, prefix) = self.resolve_count_field_collection(field, span)?;
+                self.compile_count_loop(collection_reg, None, Some(prefix), where_.as_deref(), span)
             }
         }
+    }
+
+    /// Resolve the collection register and wildcard prefix for a field-based
+    /// count node, handling nested count bindings.
+    fn resolve_count_field_collection(
+        &mut self,
+        field: &crate::languages::azure_policy::ast::FieldNode,
+        span: &crate::lexer::Span,
+    ) -> Result<(u8, String)> {
+        let field_path = self.extract_field_count_path(field)?;
+        let (collection_prefix, _suffix) = split_count_wildcard_path(&field_path)?;
+
+        // Check if this field path is relative to an outer count binding.
+        if let Some(binding) = self.resolve_count_binding(&field_path)? {
+            if let Some(outer_prefix) = &binding.field_wildcard_prefix {
+                let strip_len = outer_prefix.len() + 4; // prefix + "[*]."
+                if field_path.len() > strip_len {
+                    let inner_path = &field_path[strip_len..];
+                    let (inner_collection, _) = split_count_wildcard_path(inner_path)?;
+                    let parts = split_path_without_wildcards(&inner_collection)?;
+                    let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+                    let collection_reg =
+                        self.emit_chained_index_literal_path(binding.current_reg, &refs, span)?;
+                    let inner_prefix = format!("{}[*].{}", outer_prefix, inner_collection);
+                    return Ok((collection_reg, inner_prefix));
+                }
+            }
+        }
+
+        let collection_reg = self.compile_resource_path_value(&collection_prefix, span)?;
+        Ok((collection_reg, collection_prefix))
     }
 
     fn extract_field_count_path(
@@ -123,11 +111,12 @@ impl Compiler {
         span: &crate::lexer::Span,
     ) -> Result<u8> {
         let count_reg = self.load_literal(Value::from(0_i64), span)?;
+        // Hoist the increment constant above the loop.
+        let one_reg = self.load_literal(Value::from(1_i64), span)?;
         let key_reg = self.alloc_register()?;
         let current_reg = self.alloc_register()?;
         let loop_result_reg = self.alloc_register()?;
 
-        let loop_start_index = self.program.instructions.len();
         let params_index = self.program.add_loop_params(LoopStartParams {
             mode: LoopMode::ForEach,
             collection: collection_reg,
@@ -149,8 +138,9 @@ impl Compiler {
             current_reg,
         });
 
-        if let Some(where_constraint) = where_constraint {
-            let where_reg = self.compile_constraint(where_constraint)?;
+        // Compile where clause body (if present) as a conditional increment.
+        if let Some(where_clause) = where_constraint {
+            let where_reg = self.compile_constraint(where_clause)?;
             self.emit(
                 Instruction::AssertCondition {
                     condition: where_reg,
@@ -159,7 +149,6 @@ impl Compiler {
             );
         }
 
-        let one_reg = self.load_literal(Value::from(1_i64), span)?;
         self.emit(
             Instruction::Add {
                 dest: count_reg,
@@ -191,8 +180,171 @@ impl Compiler {
             *loop_end = loop_end_u16;
         }
 
-        let _ = loop_start_index;
         Ok(count_reg)
+    }
+
+    // -- count existence optimization (Any mode) ---------------------------
+
+    /// Try to compile a count condition as a `LoopMode::Any` loop when the
+    /// operator + RHS form an existence check (e.g., `count > 0`).
+    ///
+    /// Returns `Some(result_reg)` if optimized, `None` to fall back to the
+    /// generic count + compare path.
+    pub(super) fn try_compile_count_as_any(
+        &mut self,
+        count_node: &CountNode,
+        condition: &Condition,
+    ) -> Result<Option<u8>> {
+        // Extract the where clause — without one, the Count-instruction fast
+        // path in compile_count_loop already handles all operators.
+        let where_constraint = match count_node {
+            CountNode::Field {
+                where_: Some(w), ..
+            }
+            | CountNode::Value {
+                where_: Some(w), ..
+            } => w.as_ref(),
+            _ => return Ok(None),
+        };
+
+        // Determine whether the operator+RHS is an existence pattern.
+        let exists = match Self::classify_existence_pattern(condition) {
+            Some(e) => e,
+            None => return Ok(None),
+        };
+
+        self.observed_uses_count = true;
+
+        // Resolve collection and compile as Any loop.
+        let any_result = match count_node {
+            CountNode::Value {
+                span, value, name, ..
+            } => {
+                let collection_reg = self.compile_value_or_expr(value, span)?;
+                self.compile_count_any_loop(
+                    collection_reg,
+                    name.as_ref().map(|n| n.name.clone()),
+                    None,
+                    where_constraint,
+                    span,
+                )?
+            }
+            CountNode::Field { span, field, .. } => {
+                let (collection_reg, prefix) = self.resolve_count_field_collection(field, span)?;
+                self.compile_count_any_loop(
+                    collection_reg,
+                    None,
+                    Some(prefix),
+                    where_constraint,
+                    span,
+                )?
+            }
+        };
+
+        if exists {
+            Ok(Some(any_result))
+        } else {
+            let dest = self.alloc_register()?;
+            self.emit(
+                Instruction::PolicyNot {
+                    dest,
+                    operand: any_result,
+                },
+                &condition.span,
+            );
+            Ok(Some(dest))
+        }
+    }
+
+    /// Check whether a count condition's operator + RHS form an existence
+    /// pattern.  Returns `Some(true)` for "at least one" semantics,
+    /// `Some(false)` for "none" semantics, or `None` if not applicable.
+    fn classify_existence_pattern(condition: &Condition) -> Option<bool> {
+        let n = match &condition.rhs {
+            ValueOrExpr::Value(JsonValue::Number(_, s)) => s.parse::<i64>().ok()?,
+            _ => return None,
+        };
+        match (&condition.operator.kind, n) {
+            (OperatorKind::Greater, 0)
+            | (OperatorKind::GreaterOrEquals, 1)
+            | (OperatorKind::NotEquals, 0) => Some(true),
+            (OperatorKind::Equals, 0)
+            | (OperatorKind::Less, 1)
+            | (OperatorKind::LessOrEquals, 0) => Some(false),
+            _ => None,
+        }
+    }
+
+    /// Compile a count's where clause as a `LoopMode::Any` loop.
+    ///
+    /// The result register is `true` if any element satisfies the where
+    /// constraint, `false` otherwise.  The loop exits on the first match.
+    fn compile_count_any_loop(
+        &mut self,
+        collection_reg: u8,
+        binding_name: Option<String>,
+        field_wildcard_prefix: Option<String>,
+        where_constraint: &Constraint,
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        let key_reg = self.alloc_register()?;
+        let current_reg = self.alloc_register()?;
+        let result_reg = self.alloc_register()?;
+
+        let params_index = self.program.add_loop_params(LoopStartParams {
+            mode: LoopMode::Any,
+            collection: collection_reg,
+            key_reg,
+            value_reg: current_reg,
+            result_reg,
+            body_start: 0,
+            loop_end: 0,
+        });
+
+        self.emit(Instruction::LoopStart { params_index }, span);
+
+        let body_start = u16::try_from(self.program.instructions.len())
+            .map_err(|_| anyhow!("instruction index overflow"))?;
+
+        self.count_bindings.push(CountBinding {
+            name: binding_name,
+            field_wildcard_prefix,
+            current_reg,
+        });
+
+        let where_reg = self.compile_constraint(where_constraint)?;
+        self.emit(
+            Instruction::AssertCondition {
+                condition: where_reg,
+            },
+            span,
+        );
+
+        self.count_bindings.pop();
+
+        self.emit(
+            Instruction::LoopNext {
+                body_start,
+                loop_end: 0,
+            },
+            span,
+        );
+
+        let loop_end = u16::try_from(self.program.instructions.len())
+            .map_err(|_| anyhow!("instruction index overflow"))?;
+
+        self.program.update_loop_params(params_index, |params| {
+            params.body_start = body_start;
+            params.loop_end = loop_end;
+        });
+
+        if let Some(Instruction::LoopNext { loop_end: le, .. }) =
+            self.program.instructions.last_mut()
+        {
+            *le = loop_end;
+        }
+
+        Ok(result_reg)
     }
 
     pub(super) fn resolve_count_binding(&self, field_path: &str) -> Result<Option<CountBinding>> {

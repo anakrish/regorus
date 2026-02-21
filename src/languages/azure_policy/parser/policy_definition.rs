@@ -64,7 +64,7 @@ impl<'source> Parser<'source> {
 
         // Check if wrapped (has a "properties" key that is an object).
         let is_wrapped = top_entries.iter().any(|e| {
-            e.key.to_ascii_lowercase() == "properties" && matches!(e.value, JsonValue::Object(..))
+            e.key.to_lowercase() == "properties" && matches!(e.value, JsonValue::Object(..))
         });
 
         if is_wrapped {
@@ -86,7 +86,7 @@ impl<'source> Parser<'source> {
         let mut extra = Vec::new();
 
         for entry in entries {
-            if entry.key.to_ascii_lowercase() == "properties" {
+            if entry.key.to_lowercase() == "properties" {
                 if let JsonValue::Object(_, entries) = entry.value {
                     properties_entries = Some(entries);
                 }
@@ -118,7 +118,7 @@ impl<'source> Parser<'source> {
         let mut policy_rule_value: Option<JsonValue> = None;
 
         for entry in entries {
-            match entry.key.to_ascii_lowercase().as_str() {
+            match entry.key.to_lowercase().as_str() {
                 "displayname" => {
                     display_name = extract_string_value(&entry.value);
                     if display_name.is_none() {
@@ -234,7 +234,7 @@ fn parse_single_parameter(entry: ObjectEntry) -> Result<ParameterDefinition, Par
     let mut extra = Vec::new();
 
     for e in inner_entries {
-        match e.key.to_ascii_lowercase().as_str() {
+        match e.key.to_lowercase().as_str() {
             "type" => {
                 param_type = extract_string_value(&e.value);
                 if param_type.is_none() {

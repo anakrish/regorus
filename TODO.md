@@ -99,7 +99,7 @@ The alias system (`src/languages/azure_policy/aliases/`) supports:
 - [x] Parse `existenceCondition` from `details` block into `Constraint` AST node
 - [x] Compile `existenceCondition` inline with `resource_override_reg` for field resolution
 - [x] Support `existenceCondition` with `count`/`where`, wildcards, ARM template expressions
-- [ ] Add String ↔ Bool coercion to `case_insensitive_equals` (Azure Policy coerces `true`/`"true"`)
+- [x] Add String ↔ Bool coercion to `case_insensitive_equals` (Azure Policy coerces `true`/`"true"`)
 
 ---
 
@@ -182,14 +182,14 @@ for full list. These include: `reference`, `resourceId`, `extensionResourceId`,
 `environment`, `deployment`, `variables`, `providers`, `tenant`.
 
 ### Field Path Edge Cases
-- [ ] General bracket notation in field paths (e.g., `properties['network-acls']`)
-- [ ] Array index access outside count (e.g., `properties.ipConfigurations[0].name`)
+- [x] General bracket notation in field paths (e.g., `properties['network-acls']`)
+- [x] Array index access outside count (e.g., `properties.ipConfigurations[0].name`)
 
 ### Expression Parser
-- [ ] Unary minus for negative number literals in expressions (e.g., `[add(-1, 5)]`)
+- [x] Unary minus for negative number literals in expressions (e.g., `[add(-1, 5)]`)
 
 ### String Comparison
-- [ ] Unicode case-insensitivity (currently ASCII-only via `to_ascii_lowercase()`)
+- [x] Unicode case-insensitivity (currently ASCII-only via `to_ascii_lowercase()`)
 
 ---
 

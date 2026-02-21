@@ -117,9 +117,7 @@ fn fn_starts_with(
         return Ok(Value::Bool(false));
     };
     Ok(Value::Bool(
-        haystack
-            .to_ascii_lowercase()
-            .starts_with(&needle.to_ascii_lowercase()),
+        haystack.to_lowercase().starts_with(&needle.to_lowercase()),
     ))
 }
 
@@ -137,9 +135,7 @@ fn fn_ends_with(
         return Ok(Value::Bool(false));
     };
     Ok(Value::Bool(
-        haystack
-            .to_ascii_lowercase()
-            .ends_with(&needle.to_ascii_lowercase()),
+        haystack.to_lowercase().ends_with(&needle.to_lowercase()),
     ))
 }
 
@@ -199,7 +195,7 @@ fn fn_bool(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -
     };
     match arg {
         Value::Bool(_) => Ok(arg.clone()),
-        Value::String(s) => match s.to_ascii_lowercase().as_str() {
+        Value::String(s) => match s.to_lowercase().as_str() {
             "true" | "1" => Ok(Value::Bool(true)),
             "false" | "0" => Ok(Value::Bool(false)),
             _ => Ok(Value::Undefined),

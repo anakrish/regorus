@@ -50,7 +50,7 @@ impl Compiler {
             }
             Expr::Ident { name, span } => {
                 // The lexer may produce `true`/`false`/`null` as identifiers.
-                match name.to_ascii_lowercase().as_str() {
+                match name.to_lowercase().as_str() {
                     "true" => self.load_literal(Value::Bool(true), span),
                     "false" => self.load_literal(Value::Bool(false), span),
                     "null" => self.load_literal(Value::Null, span),
@@ -111,7 +111,7 @@ impl Compiler {
             bail!(span.error("unsupported dynamic function expression"));
         };
 
-        let function_name = name.to_ascii_lowercase();
+        let function_name = name.to_lowercase();
 
         match function_name.as_str() {
             "parameters" => {

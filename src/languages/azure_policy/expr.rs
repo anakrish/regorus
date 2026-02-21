@@ -213,7 +213,7 @@ impl<'source> ExprParser<'source> {
         Ok(expr)
     }
 
-    /// Parse a primary expression (literal, identifier).
+    /// Parse a primary expression (literal, identifier, or unary minus).
     fn parse_primary(&mut self) -> Result<Expr, ExprParseError> {
         match self.tok.0 {
             TokenKind::Ident => {
@@ -234,7 +234,7 @@ impl<'source> ExprParser<'source> {
                 let text: String = span.text().into();
                 self.advance()?;
                 // In ARM template expressions, string "true"/"false" → boolean.
-                match text.to_ascii_lowercase().as_str() {
+                match text.to_lowercase().as_str() {
                     "true" => Ok(Expr::Literal {
                         span,
                         value: ExprLiteral::Bool(true),
@@ -247,6 +247,51 @@ impl<'source> ExprParser<'source> {
                         span,
                         value: ExprLiteral::String(text),
                     }),
+                }
+            }
+            // Unary minus: `-5`, `-3.14`, or `-expr`
+            TokenKind::Symbol if self.token_text() == "-" => {
+                let minus_span = self.tok.1.clone();
+                self.advance()?;
+                // Fuse with a following numeric literal into a negative number.
+                if self.tok.0 == TokenKind::Number {
+                    let num_span = self.tok.1.clone();
+                    let raw: String = num_span.text().into();
+                    self.advance()?;
+                    let negated = format!("-{}", raw);
+                    let span = Span {
+                        source: minus_span.source.clone(),
+                        line: minus_span.line,
+                        col: minus_span.col,
+                        start: minus_span.start,
+                        end: num_span.end,
+                    };
+                    Ok(Expr::Literal {
+                        span,
+                        value: ExprLiteral::Number(negated),
+                    })
+                } else {
+                    // General unary minus: compile as `sub(0, expr)`.
+                    let operand = self.parse_primary()?;
+                    let span = Span {
+                        source: minus_span.source.clone(),
+                        line: minus_span.line,
+                        col: minus_span.col,
+                        start: minus_span.start,
+                        end: operand.span().end,
+                    };
+                    let zero = Expr::Literal {
+                        span: minus_span,
+                        value: ExprLiteral::Number("0".into()),
+                    };
+                    Ok(Expr::Call {
+                        span: span.clone(),
+                        func: Box::new(Expr::Ident {
+                            span,
+                            name: "sub".into(),
+                        }),
+                        args: alloc::vec![zero, operand],
+                    })
                 }
             }
             _ => Err(ExprParseError::UnexpectedToken {

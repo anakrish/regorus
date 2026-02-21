@@ -32,7 +32,7 @@ impl<'source> Parser<'source> {
                 let (key_span, key) = self.expect_string()?;
                 self.expect_symbol(":")?;
 
-                match key.to_ascii_lowercase().as_str() {
+                match key.to_lowercase().as_str() {
                     "if" => {
                         condition_span = Some(key_span);
                         condition = Some(self.parse_constraint()?);
@@ -91,10 +91,10 @@ impl<'source> Parser<'source> {
                 let (_key_span, key) = self.expect_string()?;
                 self.expect_symbol(":")?;
 
-                match key.to_ascii_lowercase().as_str() {
+                match key.to_lowercase().as_str() {
                     "effect" => {
                         let (val_span, val_text) = self.expect_string()?;
-                        let kind = match val_text.to_ascii_lowercase().as_str() {
+                        let kind = match val_text.to_lowercase().as_str() {
                             "deny" => EffectKind::Deny,
                             "audit" => EffectKind::Audit,
                             "append" => EffectKind::Append,
@@ -217,7 +217,7 @@ impl<'source> Parser<'source> {
             loop {
                 let (key_span, key) = self.expect_string()?;
                 self.expect_symbol(":")?;
-                let key_lower = key.to_ascii_lowercase();
+                let key_lower = key.to_lowercase();
 
                 match key_lower.as_str() {
                     "field" => {

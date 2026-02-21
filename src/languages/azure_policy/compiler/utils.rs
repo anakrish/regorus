@@ -41,7 +41,10 @@ pub(super) fn split_count_wildcard_path(path: &str) -> Result<(String, Option<St
 
 /// Split a dotted path (without `[*]` wildcards) into its component segments.
 ///
-/// Handles `tags['key']` syntax by expanding it to two segments: `tags`, `key`.
+/// Handles bracket notation:
+///   - `tags['key']` → `["tags", "key"]`
+///   - `properties['network-acls']` → `["properties", "network-acls"]`
+///   - `properties.ipRules[0].value` → `["properties", "ipRules", "0", "value"]`
 pub(super) fn split_path_without_wildcards(path: &str) -> Result<Vec<String>> {
     if path.contains("[*]") {
         bail!(
@@ -51,22 +54,48 @@ pub(super) fn split_path_without_wildcards(path: &str) -> Result<Vec<String>> {
     }
 
     let mut parts = Vec::new();
-    for segment in path.split('.') {
-        let trimmed = segment.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
+    let mut token = String::new();
+    let mut bracket = String::new();
+    let mut in_bracket = false;
 
-        if let Some(tag_key) = trimmed
-            .strip_prefix("tags['")
-            .and_then(|value| value.strip_suffix("']"))
-        {
-            parts.push("tags".to_string());
-            parts.push(tag_key.to_string());
-            continue;
+    for ch in path.chars() {
+        match ch {
+            '.' if !in_bracket => {
+                let t = token.trim();
+                if !t.is_empty() {
+                    parts.push(t.to_string());
+                }
+                token.clear();
+            }
+            '[' => {
+                in_bracket = true;
+                let t = token.trim();
+                if !t.is_empty() {
+                    parts.push(t.to_string());
+                }
+                token.clear();
+            }
+            ']' => {
+                in_bracket = false;
+                let cleaned = bracket.trim_matches('"').trim_matches('\'').to_string();
+                if !cleaned.is_empty() {
+                    parts.push(cleaned);
+                }
+                bracket.clear();
+            }
+            _ => {
+                if in_bracket {
+                    bracket.push(ch);
+                } else {
+                    token.push(ch);
+                }
+            }
         }
+    }
 
-        parts.push(trimmed.to_string());
+    let t = token.trim();
+    if !t.is_empty() {
+        parts.push(t.to_string());
     }
 
     Ok(parts)

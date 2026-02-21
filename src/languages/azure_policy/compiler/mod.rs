@@ -250,8 +250,13 @@ impl Compiler {
         let path_components = path
             .iter()
             .map(|segment| {
-                self.add_literal_u16(Value::from((*segment).to_string()))
-                    .map(LiteralOrRegister::Literal)
+                // Numeric segments → Number literals (for array indexing).
+                let value = if let Ok(n) = segment.parse::<u64>() {
+                    Value::from(n)
+                } else {
+                    Value::from((*segment).to_string())
+                };
+                self.add_literal_u16(value).map(LiteralOrRegister::Literal)
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -783,7 +788,7 @@ impl Compiler {
         // Extract category and version from metadata JSON
         if let Some(JsonValue::Object(_, entries)) = defn.metadata.as_ref() {
             for entry in entries {
-                let key_lower = entry.key.to_ascii_lowercase();
+                let key_lower = entry.key.to_lowercase();
                 match key_lower.as_str() {
                     "category" => {
                         if let JsonValue::Str(_, ref s) = entry.value {
@@ -817,7 +822,7 @@ impl Compiler {
 
         // Extra fields: policyType, id, name
         for entry in &defn.extra {
-            let key_lower = entry.key.to_ascii_lowercase();
+            let key_lower = entry.key.to_lowercase();
             match key_lower.as_str() {
                 "policytype" => {
                     if let JsonValue::Str(_, ref s) = entry.value {
@@ -840,7 +845,7 @@ impl Compiler {
     }
 
     fn effect_kind_from_string(effect_name: &str) -> Option<EffectKind> {
-        let normalized = effect_name.to_ascii_lowercase();
+        let normalized = effect_name.to_lowercase();
         Some(match normalized.as_str() {
             "deny" => EffectKind::Deny,
             "audit" => EffectKind::Audit,

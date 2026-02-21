@@ -916,9 +916,7 @@ impl RegoVM {
                     let result = match *l {
                         Value::String(ref haystack) => {
                             if let Value::String(ref needle) = *r {
-                                haystack
-                                    .to_ascii_lowercase()
-                                    .contains(&needle.to_ascii_lowercase())
+                                haystack.to_lowercase().contains(&needle.to_lowercase())
                             } else {
                                 false
                             }
@@ -947,9 +945,7 @@ impl RegoVM {
                         let contains_result = match *l {
                             Value::String(ref haystack) => {
                                 if let Value::String(ref needle) = *r {
-                                    haystack
-                                        .to_ascii_lowercase()
-                                        .contains(&needle.to_ascii_lowercase())
+                                    haystack.to_lowercase().contains(&needle.to_lowercase())
                                 } else {
                                     false
                                 }

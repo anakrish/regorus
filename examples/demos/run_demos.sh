@@ -391,6 +391,137 @@ run python3 -m tools.z3analyze $DEMOS/k8s_rbac_program.json \
   -e cedar.authorize -o 1 \
   --concrete-input entities $CEDAR/k8s_rbac/entities.json
 
+# ==============================================================
+# ==============================================================
+#           POLICY DIFF / SUBSUMPTION / TEST GEN DEMOS
+# ==============================================================
+# ==============================================================
+# These demos exercise the new diff, subsumes, and gen-tests
+# subcommands using the server infrastructure policy.
+# ==============================================================
+
+# ==============================================================
+title "DEMO 16 — Policy Diff" \
+      "Compare allowed_server.rego (v1 — bans telnet)" \
+      "with allowed_server_v2.rego (v2 — telnet rule removed)."
+# ==============================================================
+
+echo "▸ 16a) Find a distinguishing input between v1 and v2:"
+run $BIN diff \
+  --policy1 examples/server/allowed_server.rego \
+  --policy2 examples/server/allowed_server_v2.rego \
+  -e data.example.allow \
+  -i examples/server/input.json \
+  -s examples/server/input_schema.json \
+  --max-loops 3
+
+echo "▸ Insight: Z3 finds an input with a telnet server — v1 denies it"
+echo "   but v2 allows it, since v2 removed the telnet ban rule."
+
+# ==============================================================
+title "DEMO 17 — Policy Subsumption" \
+      "Check whether one policy is at least as permissive" \
+      "as another (∀ input: old permits → new permits)."
+# ==============================================================
+
+echo "▸ 17a) Does v2 subsume v1? (v2 is more permissive → expect yes):"
+run $BIN subsumes \
+  --old examples/server/allowed_server.rego \
+  --new examples/server/allowed_server_v2.rego \
+  -e data.example.allow \
+  -i examples/server/input.json \
+  -s examples/server/input_schema.json \
+  --max-loops 3
+
+echo "▸ 17b) Does v1 subsume v2? (v1 is stricter → expect no):"
+run $BIN subsumes \
+  --old examples/server/allowed_server_v2.rego \
+  --new examples/server/allowed_server.rego \
+  -e data.example.allow \
+  -i examples/server/input.json \
+  -s examples/server/input_schema.json \
+  --max-loops 3
+
+echo "▸ Insight: v2⊇v1 holds (every allow under v1 is also allowed under v2)."
+echo "   v1⊇v2 fails — Z3 provides a counterexample with a telnet server"
+echo "   that v2 allows but v1 denies."
+
+# ==============================================================
+title "DEMO 18 — Test Suite Generation" \
+      "Automatically generate test inputs that cover all" \
+      "reachable source lines in the server policy."
+# ==============================================================
+
+echo "▸ 18a) Generate tests targeting allow = false:"
+run $BIN gen-tests \
+  -d examples/server/allowed_server.rego \
+  -e data.example.allow \
+  -o false \
+  -i examples/server/input.json \
+  -s examples/server/input_schema.json \
+  --max-loops 3 \
+  --max-tests 10
+
+echo "▸ 18b) Generate tests for all paths (no output constraint):"
+run $BIN gen-tests \
+  -d examples/server/allowed_server.rego \
+  -e data.example.allow \
+  -i examples/server/input.json \
+  -s examples/server/input_schema.json \
+  --max-loops 3 \
+  --max-tests 10
+
+echo "▸ Insight: With -o false, 2 test cases cover 100% of lines."
+echo "   Without -o, a few more tests are needed to also cover the"
+echo "   allow=true paths."
+
+# ==============================================================
+title "DEMO 19 — Network Segmentation: Diff v1 vs v2" \
+      "v2 uses object-comprehension maps, function rules," \
+      "and \`every\` — plus drops the PII rule (more permissive)."
+# ==============================================================
+
+echo "▸ 19a) Find a distinguishing input between v1 and v2:"
+run $BIN diff \
+  --policy1 examples/demos/network_segmentation.rego \
+  --policy2 examples/demos/network_segmentation_v2.rego \
+  -e data.network_segmentation.compliant \
+  -i examples/demos/network_segmentation_input.json \
+  -s examples/demos/network_segmentation_schema.json \
+  --max-loops 3
+
+echo "▸ Insight: Z3 finds a PII-related input — a service handling"
+echo "   PII with an unencrypted connection.  v1 flags it, v2 allows it"
+echo "   because v2 dropped the PII rule."
+
+# ==============================================================
+title "DEMO 20 — Network Segmentation: Subsumption v1 vs v2" \
+      "Prove v2 ⊇ v1 (v2 is more permissive) and" \
+      "disprove v1 ⊇ v2 (with counterexample)."
+# ==============================================================
+
+echo "▸ 20a) Does v2 subsume v1? (v2 is more permissive → expect yes):"
+run $BIN subsumes \
+  --old examples/demos/network_segmentation.rego \
+  --new examples/demos/network_segmentation_v2.rego \
+  -e data.network_segmentation.compliant \
+  -i examples/demos/network_segmentation_input.json \
+  -s examples/demos/network_segmentation_schema.json \
+  --max-loops 3
+
+echo "▸ 20b) Does v1 subsume v2? (v1 is stricter → expect no):"
+run $BIN subsumes \
+  --old examples/demos/network_segmentation_v2.rego \
+  --new examples/demos/network_segmentation.rego \
+  -e data.network_segmentation.compliant \
+  -i examples/demos/network_segmentation_input.json \
+  -s examples/demos/network_segmentation_schema.json \
+  --max-loops 3
+
+echo "▸ Insight: v2⊇v1 holds — every compliant topology under v1 is also"
+echo "   compliant under v2.  v1⊇v2 fails — Z3 provides a counterexample"
+echo "   involving a PII service with an unencrypted connection."
+
 sep
 echo "  All demos completed successfully."
 sep

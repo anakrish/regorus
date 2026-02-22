@@ -100,6 +100,11 @@ pub struct Translator<'ctx, 'a> {
     /// Stack of active comprehension accumulators.
     /// Pushed at ComprehensionBegin, popped after the body completes.
     comprehension_stack: Vec<ComprehensionAccumulator<'ctx>>,
+
+    /// Optional prefix prepended to all generated Z3 variable names.
+    /// Used by diff/subsumption to prevent aliasing when two programs
+    /// share the same solver context.
+    prefix: String,
 }
 
 impl<'ctx, 'a> Translator<'ctx, 'a> {
@@ -138,6 +143,26 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             partial_set_main_value_reg: None,
             partial_set_elements: Vec::new(),
             comprehension_stack: Vec::new(),
+            prefix: String::new(),
+        }
+    }
+
+    /// Set a prefix for all generated Z3 variable names.
+    /// Used by diff/subsumption to prevent variable aliasing when
+    /// two different programs share the same solver context.
+    pub fn set_prefix(&mut self, prefix: impl Into<String>) {
+        self.prefix = prefix.into();
+    }
+
+    /// Generate a prefixed variable name.  When `self.prefix` is empty
+    /// (the common single-program case), the returned name is identical
+    /// to the input.  When set (e.g. `"p1_"`), it is prepended.
+    #[inline]
+    fn pname(&self, base: &str) -> String {
+        if self.prefix.is_empty() {
+            base.to_string()
+        } else {
+            format!("{}{}", self.prefix, base)
         }
     }
 
@@ -515,7 +540,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     "PC {}: HostAwait modeled as unconstrained symbolic value",
                     self.pc
                 ));
-                let name = format!("host_await_{}", self.pc);
+                let name = self.pname(&format!("host_await_{}", self.pc));
                 let var = Z3String::new_const(self.ctx, name.as_str());
                 self.set_register_sym(dest, SymValue::Str(var), Definedness::Defined, None);
                 Ok(InstructionAction::Continue)
@@ -719,7 +744,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                             "PC {}: String ordering comparison approximated",
                             self.pc
                         ));
-                        let name = format!("str_cmp_{}_{}", self.pc, op as u8);
+                        let name = self.pname(&format!("str_cmp_{}_{}", self.pc, op as u8));
                         Ok(Z3Bool::new_const(self.ctx, name.as_str()))
                     }
                 }
@@ -965,7 +990,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Dynamic index into symbolic container — limited precision",
             self.pc
         ));
-        let name = format!("dyn_idx_{}", self.pc);
+        let name = self.pname(&format!("dyn_idx_{}", self.pc));
         let var = Z3String::new_const(self.ctx, name.as_str());
         self.set_register_sym(dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(InstructionAction::Continue)
@@ -999,7 +1024,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: IndexLiteral on symbolic non-path container",
             self.pc
         ));
-        let name = format!("idx_lit_{}_{}", self.pc, literal_idx);
+        let name = self.pname(&format!("idx_lit_{}_{}", self.pc, literal_idx));
         let var = Z3String::new_const(self.ctx, name.as_str());
         self.set_register_sym(dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(InstructionAction::Continue)
@@ -1072,7 +1097,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                                 "PC {}: ChainedIndex with symbolic register component",
                                 self.pc
                             ));
-                            let name = format!("chain_idx_{}", self.pc);
+                            let name = self.pname(&format!("chain_idx_{}", self.pc));
                             let var = Z3String::new_const(self.ctx, name.as_str());
                             self.set_register_sym(
                                 params.dest,
@@ -1095,7 +1120,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: ChainedIndex on fully symbolic container",
             self.pc
         ));
-        let name = format!("chain_idx_{}", self.pc);
+        let name = self.pname(&format!("chain_idx_{}", self.pc));
         let var = Z3String::new_const(self.ctx, name.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(InstructionAction::Continue)
@@ -1109,6 +1134,15 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         &mut self,
         dest: u8,
         rule_index: u16,
+    ) -> anyhow::Result<InstructionAction<'ctx>> {
+        self.translate_call_rule_inner(dest, rule_index, None)
+    }
+
+    fn translate_call_rule_inner(
+        &mut self,
+        dest: u8,
+        rule_index: u16,
+        function_args: Option<&[SymRegister<'ctx>]>,
     ) -> anyhow::Result<InstructionAction<'ctx>> {
         // Check rule cache first.
         if let Some((cached_val, cached_def)) = self.rule_cache.get(&rule_index).cloned() {
@@ -1163,9 +1197,28 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         let num_regs = rule_info.num_registers as usize;
         self.registers
             .resize_with(num_regs.max(self.registers.len()), SymRegister::undefined);
-        // Clear rule registers (keep any existing ones for arguments).
+
+        // Number of registers retained across body attempts:
+        // For function calls: reg 0 (Undefined) + argument registers
+        // For partial set/object: reg 0 (result accumulator)
+        // For complete rules: 0
+        let num_retained = match &function_args {
+            Some(args) => 1 + args.len(),
+            None => match rule_info.rule_type {
+                RuleType::PartialSet | RuleType::PartialObject => 1,
+                RuleType::Complete => 0,
+            },
+        };
+
+        // Clear rule registers.
         for i in 0..num_regs {
             self.registers[i] = SymRegister::undefined();
+        }
+        // Place function arguments in registers 1..n (mirroring the VM's register window).
+        if let Some(args) = &function_args {
+            for (i, arg) in args.iter().enumerate() {
+                self.registers[i + 1] = arg.clone();
+            }
         }
 
         // Translate each definition's body.
@@ -1185,7 +1238,8 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 self.path_condition = Z3Bool::from_bool(self.ctx, true);
 
                 // Re-initialize registers for this body attempt.
-                for i in 0..num_regs {
+                // For function calls, retain argument registers (0..num_retained).
+                for i in num_retained..num_regs {
                     self.registers[i] = SymRegister::undefined();
                 }
 
@@ -1654,7 +1708,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     let elem_path = r
                         .source_path
                         .clone()
-                        .unwrap_or_else(|| format!("arr_create_{}_{}", self.pc, i));
+                        .unwrap_or_else(|| self.pname(&format!("arr_create_{}_{}", self.pc, i)));
                     let elem_sort = if r.source_path.is_some() {
                         self.registry
                             .get(elem_path.as_str())
@@ -1740,7 +1794,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     let elem_path = r
                         .source_path
                         .clone()
-                        .unwrap_or_else(|| format!("set_create_{}_{}", self.pc, i));
+                        .unwrap_or_else(|| self.pname(&format!("set_create_{}_{}", self.pc, i)));
                     let elem_sort = if r.source_path.is_some() {
                         self.registry
                             .get(elem_path.as_str())
@@ -1916,7 +1970,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Contains with symbolic values — limited precision",
             self.pc
         ));
-        let name = format!("contains_{}", self.pc);
+        let name = self.pname(&format!("contains_{}", self.pc));
         let var = Z3Bool::new_const(self.ctx, name.as_str());
         self.set_register_sym(dest, SymValue::Bool(var), result_defined, None);
         Ok(InstructionAction::Continue)
@@ -1979,7 +2033,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             SymValue::Real(r) => Ok(ContainsZ3Value::Real(r.clone())),
             _ => {
                 // Fallback: treat as unknown string
-                let name = format!("contains_val_{}", self.pc);
+                let name = self.pname(&format!("contains_val_{}", self.pc));
                 Ok(ContainsZ3Value::Str(z3::ast::String::new_const(
                     self.ctx,
                     name.as_str(),
@@ -2295,7 +2349,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             let witness_base = if let Some(ref path) = coll_path {
                 format!("{}[{}]", path, wi)
             } else {
-                format!("sym_coll_{}_{}", self.pc, wi)
+                self.pname(&format!("sym_coll_{}_{}", self.pc, wi))
             };
 
             // Set key register to a concrete index (for array-like iteration).
@@ -2477,11 +2531,9 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         // Build a SymbolicSet from symbolic yields.
         let mut elements = Vec::new();
         for entry in &acc.yields {
-            let elem_path = entry
-                .value
-                .source_path
-                .clone()
-                .unwrap_or_else(|| format!("compr_set_{}_{}", self.pc, elements.len()));
+            let elem_path = entry.value.source_path.clone().unwrap_or_else(|| {
+                self.pname(&format!("compr_set_{}_{}", self.pc, elements.len()))
+            });
             // Get sort from the registry if the value is a path placeholder.
             let elem_sort = if entry.value.source_path.is_some() {
                 self.registry
@@ -2558,7 +2610,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 .value
                 .source_path
                 .clone()
-                .unwrap_or_else(|| format!("compr_arr_{}_{}", self.pc, i));
+                .unwrap_or_else(|| self.pname(&format!("compr_arr_{}_{}", self.pc, i)));
             let elem_sort = if entry.value.source_path.is_some() {
                 self.registry
                     .get(elem_path.as_str())
@@ -2641,7 +2693,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 .value
                 .source_path
                 .clone()
-                .unwrap_or_else(|| format!("compr_obj_{}_{}", self.pc, i));
+                .unwrap_or_else(|| self.pname(&format!("compr_obj_{}_{}", self.pc, i)));
             let elem_sort = if entry.value.source_path.is_some() {
                 self.registry
                     .get(elem_path.as_str())
@@ -2843,7 +2895,11 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     "PC {}: Builtin '{}' modeled as unconstrained Bool",
                     self.pc, builtin_name
                 ));
-                let name = format!("builtin_{}_{}", builtin_name.replace('.', "_"), self.pc);
+                let name = self.pname(&format!(
+                    "builtin_{}_{}",
+                    builtin_name.replace('.', "_"),
+                    self.pc
+                ));
                 let var = Z3Bool::new_const(self.ctx, name.as_str());
                 self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
             }
@@ -2859,7 +2915,11 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     "PC {}: Builtin '{}' modeled as unconstrained Int",
                     self.pc, builtin_name
                 ));
-                let name = format!("builtin_{}_{}", builtin_name.replace('.', "_"), self.pc);
+                let name = self.pname(&format!(
+                    "builtin_{}_{}",
+                    builtin_name.replace('.', "_"),
+                    self.pc
+                ));
                 let var = Z3Int::new_const(self.ctx, name.as_str());
                 self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
             }
@@ -2872,7 +2932,11 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     "PC {}: Builtin '{}' modeled as uninterpreted (String)",
                     self.pc, builtin_name
                 ));
-                let name = format!("builtin_{}_{}", builtin_name.replace('.', "_"), self.pc);
+                let name = self.pname(&format!(
+                    "builtin_{}_{}",
+                    builtin_name.replace('.', "_"),
+                    self.pc
+                ));
                 let var = Z3String::new_const(self.ctx, name.as_str());
                 self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
             }
@@ -2952,7 +3016,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Builtin 'count' on symbolic collection → unconstrained Int",
             self.pc
         ));
-        let name = format!("builtin_count_{}", self.pc);
+        let name = self.pname(&format!("builtin_count_{}", self.pc));
         let var = Z3Int::new_const(self.ctx, name.as_str());
         let zero = Z3Int::from_i64(self.ctx, 0);
         self.constraints.push(var.ge(&zero));
@@ -3043,7 +3107,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Builtin '{}' — cannot resolve args, unconstrained Bool",
             self.pc, name
         ));
-        let vname = format!("builtin_{}_{}", name, self.pc);
+        let vname = self.pname(&format!("builtin_{}_{}", name, self.pc));
         let var = Z3Bool::new_const(self.ctx, vname.as_str());
         self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
         Ok(())
@@ -3086,7 +3150,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Builtin 'indexof' — cannot resolve args, unconstrained Int",
             self.pc
         ));
-        let name = format!("builtin_indexof_{}", self.pc);
+        let name = self.pname(&format!("builtin_indexof_{}", self.pc));
         let var = Z3Int::new_const(self.ctx, name.as_str());
         self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
         Ok(())
@@ -3133,7 +3197,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Builtin 'replace' — cannot resolve args, unconstrained String",
             self.pc
         ));
-        let name = format!("builtin_replace_{}", self.pc);
+        let name = self.pname(&format!("builtin_replace_{}", self.pc));
         let var = Z3String::new_const(self.ctx, name.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(())
@@ -3197,7 +3261,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Builtin 'substring' — cannot resolve args, unconstrained String",
             self.pc
         ));
-        let name = format!("builtin_substring_{}", self.pc);
+        let name = self.pname(&format!("builtin_substring_{}", self.pc));
         let var = Z3String::new_const(self.ctx, name.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(())
@@ -3243,7 +3307,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Builtin 'trim_prefix' — cannot resolve args, unconstrained String",
             self.pc
         ));
-        let name = format!("builtin_trim_prefix_{}", self.pc);
+        let name = self.pname(&format!("builtin_trim_prefix_{}", self.pc));
         let var = Z3String::new_const(self.ctx, name.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(())
@@ -3289,7 +3353,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Builtin 'trim_suffix' — cannot resolve args, unconstrained String",
             self.pc
         ));
-        let name = format!("builtin_trim_suffix_{}", self.pc);
+        let name = self.pname(&format!("builtin_trim_suffix_{}", self.pc));
         let var = Z3String::new_const(self.ctx, name.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(())
@@ -3328,7 +3392,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Builtin 'abs' — cannot resolve arg, unconstrained non-negative Int",
             self.pc
         ));
-        let name = format!("builtin_abs_{}", self.pc);
+        let name = self.pname(&format!("builtin_abs_{}", self.pc));
         let var = Z3Int::new_const(self.ctx, name.as_str());
         let zero = Z3Int::from_i64(self.ctx, 0);
         self.constraints.push(var.ge(&zero));
@@ -3382,7 +3446,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Builtin '{}' — unknown sort, unconstrained Bool",
             self.pc, name
         ));
-        let vname = format!("builtin_{}_{}", name, self.pc);
+        let vname = self.pname(&format!("builtin_{}_{}", name, self.pc));
         let var = Z3Bool::new_const(self.ctx, vname.as_str());
         self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
         Ok(())
@@ -3430,7 +3494,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Builtin 'is_number' — unknown sort, unconstrained Bool",
             self.pc
         ));
-        let name = format!("builtin_is_number_{}", self.pc);
+        let name = self.pname(&format!("builtin_is_number_{}", self.pc));
         let var = Z3Bool::new_const(self.ctx, name.as_str());
         self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
         Ok(())
@@ -3488,7 +3552,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Builtin '{}' — unknown type, unconstrained Bool",
             self.pc, name
         ));
-        let vname = format!("builtin_{}_{}", name, self.pc);
+        let vname = self.pname(&format!("builtin_{}_{}", name, self.pc));
         let var = Z3Bool::new_const(self.ctx, vname.as_str());
         self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
         Ok(())
@@ -3544,7 +3608,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Builtin '{}' — cannot resolve args, unconstrained Int",
             self.pc, name
         ));
-        let vname = format!("builtin_{}_{}", name.replace('.', "_"), self.pc);
+        let vname = self.pname(&format!("builtin_{}_{}", name.replace('.', "_"), self.pc));
         let var = Z3Int::new_const(self.ctx, vname.as_str());
         self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
         Ok(())
@@ -3584,7 +3648,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Builtin '{}' — cannot resolve arg, unconstrained Int",
             self.pc, name
         ));
-        let vname = format!("builtin_{}_{}", name.replace('.', "_"), self.pc);
+        let vname = self.pname(&format!("builtin_{}_{}", name.replace('.', "_"), self.pc));
         let var = Z3Int::new_const(self.ctx, vname.as_str());
         self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
         Ok(())
@@ -3647,7 +3711,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Builtin 'to_number' — cannot resolve arg, unconstrained Int",
             self.pc
         ));
-        let vname = format!("builtin_to_number_{}", self.pc);
+        let vname = self.pname(&format!("builtin_to_number_{}", self.pc));
         let var = Z3Int::new_const(self.ctx, vname.as_str());
         self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
         Ok(())
@@ -3703,7 +3767,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Builtin 'cedar.like' — cannot model symbolically, unconstrained Bool",
             self.pc
         ));
-        let vname = format!("builtin_cedar_like_{}", self.pc);
+        let vname = self.pname(&format!("builtin_cedar_like_{}", self.pc));
         let var = Z3Bool::new_const(self.ctx, vname.as_str());
         self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
         Ok(())
@@ -3759,7 +3823,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Builtin 'cedar.is' — cannot model symbolically, unconstrained Bool",
             self.pc
         ));
-        let vname = format!("builtin_cedar_is_{}", self.pc);
+        let vname = self.pname(&format!("builtin_cedar_is_{}", self.pc));
         let var = Z3Bool::new_const(self.ctx, vname.as_str());
         self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
         Ok(())
@@ -3842,7 +3906,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Builtin 'cedar.in' — entity/target not concrete, unconstrained Bool",
             self.pc
         ));
-        let vname = format!("builtin_cedar_in_{}", self.pc);
+        let vname = self.pname(&format!("builtin_cedar_in_{}", self.pc));
         let var = Z3Bool::new_const(self.ctx, vname.as_str());
         self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
         Ok(())
@@ -3928,7 +3992,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Builtin 'cedar.in_set' — not fully concrete, unconstrained Bool",
             self.pc
         ));
-        let vname = format!("builtin_cedar_in_set_{}", self.pc);
+        let vname = self.pname(&format!("builtin_cedar_in_set_{}", self.pc));
         let var = Z3Bool::new_const(self.ctx, vname.as_str());
         self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
         Ok(())
@@ -4004,7 +4068,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Builtin 'cedar.has' — not fully concrete, unconstrained Bool",
             self.pc
         ));
-        let vname = format!("builtin_cedar_has_{}", self.pc);
+        let vname = self.pname(&format!("builtin_cedar_has_{}", self.pc));
         let var = Z3Bool::new_const(self.ctx, vname.as_str());
         self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
         Ok(())
@@ -4123,7 +4187,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "PC {}: Builtin 'cedar.attr' — not fully concrete, unconstrained String",
             self.pc
         ));
-        let vname = format!("builtin_cedar_attr_{}", self.pc);
+        let vname = self.pname(&format!("builtin_cedar_attr_{}", self.pc));
         let var = Z3String::new_const(self.ctx, vname.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(())
@@ -4222,9 +4286,14 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             .ok_or_else(|| anyhow::anyhow!("Invalid function call params {}", params_index))?
             .clone();
 
-        // Translate as a rule call with arguments.
-        // For now, delegate to translate_call_rule (arguments are not passed yet).
-        self.translate_call_rule(params.dest, params.func_rule_index)
+        // Collect argument values from caller's registers before the register window swap.
+        let arg_values: Vec<SymRegister<'ctx>> = params
+            .arg_registers()
+            .iter()
+            .map(|&reg| self.get_register(reg).clone())
+            .collect();
+
+        self.translate_call_rule_inner(params.dest, params.func_rule_index, Some(&arg_values))
     }
 
     // -----------------------------------------------------------------------
@@ -4266,7 +4335,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         if !all_concrete {
             self.warnings
                 .push(format!("PC {}: VDDL with symbolic path component", self.pc));
-            let name = format!("vddl_{}", self.pc);
+            let name = self.pname(&format!("vddl_{}", self.pc));
             let var = Z3String::new_const(self.ctx, name.as_str());
             self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
             return Ok(InstructionAction::Continue);

@@ -24,6 +24,7 @@ pub use types::{Definedness, SymRegister, SymValue, ValueSort};
 
 use alloc::format;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -580,4 +581,534 @@ fn lines_to_constraints<'ctx>(
     }
 
     constraints
+}
+
+// ===========================================================================
+// Policy Diff
+// ===========================================================================
+
+/// Result of a policy-diff analysis.
+#[derive(Debug, Clone)]
+pub struct DiffResult {
+    /// True when Z3 proved no distinguishing input exists.
+    pub equivalent: bool,
+    /// A concrete input where the two policies disagree (when not equivalent).
+    pub distinguishing_input: Option<Value>,
+    /// Human-readable description of policy 1's output on the distinguishing
+    /// input (e.g. `"matches"` / `"does not match"`).
+    pub output_policy1: Option<String>,
+    /// Human-readable description of policy 2's output.
+    pub output_policy2: Option<String>,
+    pub warnings: Vec<String>,
+    pub solver_smt: Option<String>,
+    pub model_string: Option<String>,
+}
+
+/// Find an input on which two policies disagree.
+///
+/// Both programs are translated against the **same** symbolic input space
+/// (shared `PathRegistry`).  The solver is asked for an input where:
+///
+/// * `result₁ ≠ result₂` (with respect to `desired_output`, this becomes
+///   `(result₁ == desired) XOR (result₂ == desired)`).
+///
+/// If SAT, the model is a concrete **distinguishing input**.  If UNSAT, the
+/// two policies are equivalent for all inputs (within the analysis scope).
+pub fn policy_diff(
+    program1: &Program,
+    program2: &Program,
+    data: &Value,
+    entry_point: &str,
+    desired_output: Option<&Value>,
+    config: &AnalysisConfig,
+) -> anyhow::Result<DiffResult> {
+    let z3_cfg = z3::Config::new();
+    let ctx = z3::Context::new(&z3_cfg);
+    let solver = z3::Solver::new(&ctx);
+
+    if config.timeout_ms > 0 {
+        let mut params = z3::Params::new(&ctx);
+        params.set_u32("timeout", config.timeout_ms);
+        solver.set_params(&params);
+    }
+
+    let mut registry = PathRegistry::new(&ctx);
+
+    if let Some(ref example) = config.example_input {
+        registry.seed_sorts_from_value("input", example, config.max_loop_depth);
+    }
+
+    let schema_constraints = if let Some(ref schema) = config.input_schema {
+        apply_schema_constraints(&ctx, &mut registry, schema, "input", config.max_loop_depth)
+    } else {
+        vec![]
+    };
+
+    // --- Translate program 1 ---
+    let (result1, constraints1, path_cond1, warnings1) = {
+        let mut translator = Translator::new(&ctx, program1, data, &mut registry, config);
+        translator.set_prefix("p1_");
+        let entry_pc = program1.get_entry_point(entry_point).ok_or_else(|| {
+            anyhow::anyhow!("Entry point '{}' not found in policy 1", entry_point)
+        })?;
+        let result = translator.translate_entry_point(entry_pc)?;
+        let constraints = core::mem::take(&mut translator.constraints);
+        let path_condition = translator.path_condition.clone();
+        let warnings = core::mem::take(&mut translator.warnings);
+        (result, constraints, path_condition, warnings)
+    };
+
+    // --- Translate program 2 (shares the same symbolic input variables) ---
+    let (result2, constraints2, path_cond2, warnings2) = {
+        let mut translator = Translator::new(&ctx, program2, data, &mut registry, config);
+        translator.set_prefix("p2_");
+        let entry_pc = program2.get_entry_point(entry_point).ok_or_else(|| {
+            anyhow::anyhow!("Entry point '{}' not found in policy 2", entry_point)
+        })?;
+        let result = translator.translate_entry_point(entry_pc)?;
+        let constraints = core::mem::take(&mut translator.constraints);
+        let path_condition = translator.path_condition.clone();
+        let warnings = core::mem::take(&mut translator.warnings);
+        (result, constraints, path_condition, warnings)
+    };
+
+    // Assert all constraints from both translations.
+    for c in &constraints1 {
+        solver.assert(c);
+    }
+    for c in &constraints2 {
+        solver.assert(c);
+    }
+    for c in &schema_constraints {
+        solver.assert(c);
+    }
+    solver.assert(&path_cond1);
+    solver.assert(&path_cond2);
+
+    // Build the XOR constraint: result1 matches desired XOR result2 matches desired.
+    let desired = desired_output.cloned().unwrap_or(Value::Bool(true));
+    let r1_matches = result1.equals_value(&ctx, &desired)?;
+    let r2_matches = result2.equals_value(&ctx, &desired)?;
+    let xor = z3::ast::Bool::xor(&r1_matches, &r2_matches);
+    solver.assert(&xor);
+
+    let solver_smt = if config.dump_smt {
+        Some(format!("{}", solver))
+    } else {
+        None
+    };
+
+    let mut all_warnings = warnings1;
+    all_warnings.extend(warnings2);
+
+    match solver.check() {
+        z3::SatResult::Sat => {
+            let model = solver.get_model().unwrap();
+            let model_string = if config.dump_model {
+                Some(format!("{}", model))
+            } else {
+                None
+            };
+            let input = extract_input(&model, &registry);
+
+            // Determine which policy matched the desired output.
+            let p1_match = model
+                .eval(&r1_matches, true)
+                .map(|b| format!("{}", b))
+                .unwrap_or_else(|| "unknown".to_string());
+            let p2_match = model
+                .eval(&r2_matches, true)
+                .map(|b| format!("{}", b))
+                .unwrap_or_else(|| "unknown".to_string());
+
+            Ok(DiffResult {
+                equivalent: false,
+                distinguishing_input: Some(input),
+                output_policy1: Some(p1_match),
+                output_policy2: Some(p2_match),
+                warnings: all_warnings,
+                solver_smt,
+                model_string,
+            })
+        }
+        z3::SatResult::Unsat => Ok(DiffResult {
+            equivalent: true,
+            distinguishing_input: None,
+            output_policy1: None,
+            output_policy2: None,
+            warnings: all_warnings,
+            solver_smt,
+            model_string: None,
+        }),
+        z3::SatResult::Unknown => {
+            all_warnings.push(format!(
+                "Z3 returned Unknown: {}",
+                solver.get_reason_unknown().unwrap_or_default()
+            ));
+            Ok(DiffResult {
+                equivalent: false,
+                distinguishing_input: None,
+                output_policy1: None,
+                output_policy2: None,
+                warnings: all_warnings,
+                solver_smt,
+                model_string: None,
+            })
+        }
+    }
+}
+
+// ===========================================================================
+// Policy Subsumption
+// ===========================================================================
+
+/// Result of a policy-subsumption check.
+#[derive(Debug, Clone)]
+pub struct SubsumptionResult {
+    /// True when new_policy subsumes old_policy: every input that old_policy
+    /// accepts is also accepted by new_policy.
+    pub subsumes: bool,
+    /// A counterexample where old_policy permits but new_policy does not.
+    pub counterexample: Option<Value>,
+    pub warnings: Vec<String>,
+    pub solver_smt: Option<String>,
+    pub model_string: Option<String>,
+}
+
+/// Check whether `new_program` subsumes `old_program`.
+///
+/// Subsumption means: for all inputs, if `old_program` produces
+/// `desired_output` then `new_program` also produces `desired_output`.
+///
+/// To check this, we negate the statement and ask Z3:
+///   ∃ input: old(input) == desired ∧ new(input) ≠ desired
+///
+/// If SAT → counterexample found → new does NOT subsume old.
+/// If UNSAT → new subsumes old.
+pub fn policy_subsumes(
+    old_program: &Program,
+    new_program: &Program,
+    data: &Value,
+    entry_point: &str,
+    desired_output: &Value,
+    config: &AnalysisConfig,
+) -> anyhow::Result<SubsumptionResult> {
+    let z3_cfg = z3::Config::new();
+    let ctx = z3::Context::new(&z3_cfg);
+    let solver = z3::Solver::new(&ctx);
+
+    if config.timeout_ms > 0 {
+        let mut params = z3::Params::new(&ctx);
+        params.set_u32("timeout", config.timeout_ms);
+        solver.set_params(&params);
+    }
+
+    let mut registry = PathRegistry::new(&ctx);
+
+    if let Some(ref example) = config.example_input {
+        registry.seed_sorts_from_value("input", example, config.max_loop_depth);
+    }
+
+    let schema_constraints = if let Some(ref schema) = config.input_schema {
+        apply_schema_constraints(&ctx, &mut registry, schema, "input", config.max_loop_depth)
+    } else {
+        vec![]
+    };
+
+    // --- Translate old policy ---
+    let (old_result, old_constraints, old_path_cond, old_warnings) = {
+        let mut translator = Translator::new(&ctx, old_program, data, &mut registry, config);
+        translator.set_prefix("old_");
+        let entry_pc = old_program.get_entry_point(entry_point).ok_or_else(|| {
+            anyhow::anyhow!("Entry point '{}' not found in old policy", entry_point)
+        })?;
+        let result = translator.translate_entry_point(entry_pc)?;
+        let constraints = core::mem::take(&mut translator.constraints);
+        let path_condition = translator.path_condition.clone();
+        let warnings = core::mem::take(&mut translator.warnings);
+        (result, constraints, path_condition, warnings)
+    };
+
+    // --- Translate new policy ---
+    let (new_result, new_constraints, new_path_cond, new_warnings) = {
+        let mut translator = Translator::new(&ctx, new_program, data, &mut registry, config);
+        translator.set_prefix("new_");
+        let entry_pc = new_program.get_entry_point(entry_point).ok_or_else(|| {
+            anyhow::anyhow!("Entry point '{}' not found in new policy", entry_point)
+        })?;
+        let result = translator.translate_entry_point(entry_pc)?;
+        let constraints = core::mem::take(&mut translator.constraints);
+        let path_condition = translator.path_condition.clone();
+        let warnings = core::mem::take(&mut translator.warnings);
+        (result, constraints, path_condition, warnings)
+    };
+
+    for c in &old_constraints {
+        solver.assert(c);
+    }
+    for c in &new_constraints {
+        solver.assert(c);
+    }
+    for c in &schema_constraints {
+        solver.assert(c);
+    }
+    solver.assert(&old_path_cond);
+    solver.assert(&new_path_cond);
+
+    // ∃ input: old(input) == desired  ∧  new(input) ≠ desired
+    let old_matches = old_result.equals_value(&ctx, desired_output)?;
+    let new_matches = new_result.equals_value(&ctx, desired_output)?;
+    solver.assert(&old_matches);
+    solver.assert(&new_matches.not());
+
+    let solver_smt = if config.dump_smt {
+        Some(format!("{}", solver))
+    } else {
+        None
+    };
+
+    let mut all_warnings = old_warnings;
+    all_warnings.extend(new_warnings);
+
+    match solver.check() {
+        z3::SatResult::Sat => {
+            let model = solver.get_model().unwrap();
+            let model_string = if config.dump_model {
+                Some(format!("{}", model))
+            } else {
+                None
+            };
+            let input = extract_input(&model, &registry);
+            Ok(SubsumptionResult {
+                subsumes: false,
+                counterexample: Some(input),
+                warnings: all_warnings,
+                solver_smt,
+                model_string,
+            })
+        }
+        z3::SatResult::Unsat => Ok(SubsumptionResult {
+            subsumes: true,
+            counterexample: None,
+            warnings: all_warnings,
+            solver_smt,
+            model_string: None,
+        }),
+        z3::SatResult::Unknown => {
+            all_warnings.push(format!(
+                "Z3 returned Unknown: {}",
+                solver.get_reason_unknown().unwrap_or_default()
+            ));
+            Ok(SubsumptionResult {
+                subsumes: false,
+                counterexample: None,
+                warnings: all_warnings,
+                solver_smt,
+                model_string: None,
+            })
+        }
+    }
+}
+
+// ===========================================================================
+// Test Suite Generation
+// ===========================================================================
+
+/// A single generated test case.
+#[derive(Debug, Clone)]
+pub struct TestCase {
+    /// Concrete input for this test.
+    pub input: Value,
+    /// Lines covered by this test (as `("file.rego", line_number)` pairs).
+    pub covered_lines: Vec<(String, usize)>,
+}
+
+/// Result of test-suite generation.
+#[derive(Debug, Clone)]
+pub struct TestSuiteResult {
+    /// Generated test cases, one per unique reachability path.
+    pub test_cases: Vec<TestCase>,
+    /// How many source lines were coverable (had bytecode with path conditions).
+    pub coverable_lines: usize,
+    /// How many source lines were covered across all test cases.
+    pub covered_lines: usize,
+    pub warnings: Vec<String>,
+    pub solver_smt: Option<String>,
+}
+
+/// Generate a test suite by iteratively covering all reachable source lines.
+///
+/// The algorithm:
+/// 1. Translate the program once, collecting per-PC path conditions.
+/// 2. Group PCs by source line → set of coverable lines.
+/// 3. For each uncovered line, push/pop a constraint requiring that line
+///    to be covered and solve.
+/// 4. When SAT, record the test case and all lines it covers.
+/// 5. Repeat until all lines are covered or proved uncoverable.
+pub fn generate_test_suite(
+    program: &Program,
+    data: &Value,
+    entry_point: &str,
+    desired_output: Option<&Value>,
+    config: &AnalysisConfig,
+    max_tests: usize,
+) -> anyhow::Result<TestSuiteResult> {
+    let z3_cfg = z3::Config::new();
+    let ctx = z3::Context::new(&z3_cfg);
+    let solver = z3::Solver::new(&ctx);
+
+    if config.timeout_ms > 0 {
+        let mut params = z3::Params::new(&ctx);
+        params.set_u32("timeout", config.timeout_ms);
+        solver.set_params(&params);
+    }
+
+    let mut registry = PathRegistry::new(&ctx);
+
+    if let Some(ref example) = config.example_input {
+        registry.seed_sorts_from_value("input", example, config.max_loop_depth);
+    }
+
+    let schema_constraints = if let Some(ref schema) = config.input_schema {
+        apply_schema_constraints(&ctx, &mut registry, schema, "input", config.max_loop_depth)
+    } else {
+        vec![]
+    };
+
+    let (result, constraints, path_condition, pc_path_conditions, warnings) = {
+        let mut translator = Translator::new(&ctx, program, data, &mut registry, config);
+        let entry_pc = program
+            .get_entry_point(entry_point)
+            .ok_or_else(|| anyhow::anyhow!("Entry point '{}' not found", entry_point))?;
+        let result = translator.translate_entry_point(entry_pc)?;
+        let constraints = core::mem::take(&mut translator.constraints);
+        let path_condition = translator.path_condition.clone();
+        let pc_conds = translator.take_pc_path_conditions();
+        let warnings = core::mem::take(&mut translator.warnings);
+        (result, constraints, path_condition, pc_conds, warnings)
+    };
+
+    // Assert base constraints and path condition.
+    for c in &constraints {
+        solver.assert(c);
+    }
+    for c in &schema_constraints {
+        solver.assert(c);
+    }
+    solver.assert(&path_condition);
+
+    // Assert output constraint (if given).
+    if let Some(desired) = desired_output {
+        let output_constraint = result.equals_value(&ctx, desired)?;
+        solver.assert(&output_constraint);
+    } else {
+        let defined = result.is_defined(&ctx);
+        solver.assert(&defined);
+    }
+
+    // Build a map: (source_file, line) → Z3 condition (OR of all PCs on that line).
+    // We use the LAST PC per line (same logic as lines_to_constraints).
+    let mut line_conditions: std::collections::BTreeMap<(String, usize), z3::ast::Bool<'_>> =
+        std::collections::BTreeMap::new();
+
+    for (pc, span) in program.instruction_spans.iter().enumerate() {
+        if let Some(span) = span {
+            if let Some(cond) = pc_path_conditions.get(&pc) {
+                let source_name = if span.source_index < program.sources.len() {
+                    program.sources[span.source_index].name.clone()
+                } else {
+                    continue;
+                };
+                // Always replace: last PC on a line wins.
+                line_conditions.insert((source_name, span.line), cond.clone());
+            }
+        }
+    }
+
+    let coverable_lines = line_conditions.len();
+    let mut globally_covered: std::collections::BTreeSet<(String, usize)> =
+        std::collections::BTreeSet::new();
+    let mut test_cases: Vec<TestCase> = Vec::new();
+    let mut all_warnings = warnings;
+
+    // Capture the base SMT for reporting.
+    let solver_smt = if config.dump_smt {
+        Some(format!("{}", solver))
+    } else {
+        None
+    };
+
+    // Collect the lines to iterate over.
+    let all_lines: Vec<(String, usize)> = line_conditions.keys().cloned().collect();
+
+    for target_line in &all_lines {
+        if test_cases.len() >= max_tests {
+            break;
+        }
+        if globally_covered.contains(target_line) {
+            continue;
+        }
+
+        let cond = match line_conditions.get(target_line) {
+            Some(c) => c.clone(),
+            None => continue,
+        };
+
+        // Push a scope, assert the target line must be covered, solve.
+        solver.push();
+        solver.assert(&cond);
+
+        match solver.check() {
+            z3::SatResult::Sat => {
+                let model = solver.get_model().unwrap();
+                let input = extract_input(&model, &registry);
+
+                // Determine all lines covered by this model.
+                let mut covered = Vec::new();
+                for (line_key, line_cond) in &line_conditions {
+                    if let Some(val) = model.eval(line_cond, true) {
+                        // Check if the evaluated condition is `true`.
+                        if format!("{}", val) == "true" {
+                            covered.push(line_key.clone());
+                        }
+                    }
+                }
+
+                for l in &covered {
+                    globally_covered.insert(l.clone());
+                }
+
+                test_cases.push(TestCase {
+                    input,
+                    covered_lines: covered,
+                });
+            }
+            z3::SatResult::Unsat => {
+                // This line is uncoverable with the current output constraint.
+                globally_covered.insert(target_line.clone());
+                all_warnings.push(format!(
+                    "Line {}:{} is unreachable (UNSAT)",
+                    target_line.0, target_line.1
+                ));
+            }
+            z3::SatResult::Unknown => {
+                all_warnings.push(format!(
+                    "Z3 returned Unknown for line {}:{}",
+                    target_line.0, target_line.1
+                ));
+            }
+        }
+
+        solver.pop(1);
+    }
+
+    let covered_count = globally_covered.len();
+
+    Ok(TestSuiteResult {
+        test_cases,
+        coverable_lines,
+        covered_lines: covered_count,
+        warnings: all_warnings,
+        solver_smt,
+    })
 }

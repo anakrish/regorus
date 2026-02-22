@@ -26,6 +26,9 @@ request** — principal, action, resource, and context fields — that satisfies
 - [Python Z3 Analyzer](#python-z3-analyzer)
 - [Quick Start](#quick-start)
 - [CLI Reference](#cli-reference)
+- [Policy Diff](#policy-diff)
+- [Policy Subsumption](#policy-subsumption)
+- [Test Suite Generation](#test-suite-generation)
 - [JSON Schema Support](#json-schema-support)
 - [Example Walkthroughs](#example-walkthroughs)
   - [Server Infrastructure](#example-1--server-infrastructure)
@@ -380,6 +383,325 @@ regorus analyze [OPTIONS] --entrypoint <RULE>
 |---|---|
 | `--dump-smt <FILE>` | Write the full SMT-LIB2 encoding to a file. |
 | `--dump-model <FILE>` | Write Z3's variable assignments (the model) to a file when SAT. |
+
+---
+
+## Policy Diff
+
+Find inputs where two policy versions disagree:
+
+```bash
+regorus diff \
+  --policy1 policy_v1.rego \
+  --policy2 policy_v2.rego \
+  -e data.example.allow \
+  -s input_schema.json \
+  -i input.json
+```
+
+The analyzer translates **both** policies into SMT constraints over the
+**same** symbolic input space and asks Z3 for an input where
+`policy1(input) XOR policy2(input)`.  If SAT, the model is a concrete
+**distinguishing input**.  If UNSAT, the two policies are **equivalent**
+for all inputs (within the analysis scope).
+
+### Diff CLI Reference
+
+```
+regorus diff [OPTIONS] --policy1 <FILE> --policy2 <FILE> --entrypoint <RULE>
+```
+
+| Flag | Description |
+|---|---|
+| `--policy1 <FILE>` | Policy or data files for version 1. Repeatable. |
+| `--policy2 <FILE>` | Policy or data files for version 2. Repeatable. |
+| `-e, --entrypoint <RULE>` | Entry point to compare. |
+| `-o, --output <JSON>` | Desired output value to compare against (default: `true`). |
+| `-i, --input <FILE>` | Example input JSON for type inference. |
+| `-s, --schema <FILE>` | JSON Schema for input constraints. |
+| `--timeout <MS>` | Z3 timeout (default: 30000). |
+| `--max-loops <N>` | Loop unrolling depth (default: 5). |
+| `--dump-smt <FILE>` | Write SMT-LIB2 assertions. |
+| `--dump-model <FILE>` | Write Z3 model. |
+
+### Diff Output
+
+```json
+{
+  "equivalent": false,
+  "distinguishing_input": { "servers": [ ... ] },
+  "policy1_output": "false",
+  "policy2_output": "true",
+  "warnings": []
+}
+```
+
+When `equivalent` is `true`, no `distinguishing_input` is produced.
+
+### Diff Example 1 — Server Infrastructure
+
+Compare the original server policy (which bans telnet) with a v2 that
+removes the telnet rule **and** completely restructures the HTTP-on-public
+check:
+
+| Aspect | v1 | v2 |
+|---|---|---|
+| Decision | `count(violation) == 0` | `not http_on_public_network` |
+| HTTP check | `"http" in server.protocols` | `speaks_http()` function, `proto == "http"` |
+| Public server | `public_server` partial-set + inline join | `public_port_ids` comprehension + `is_public_network()` function |
+| Join style | `port.id in server.ports` | `server_is_public()` function, port-set membership |
+| Telnet rule | Present | Removed |
+
+```bash
+regorus diff \
+  --policy1 examples/server/allowed_server.rego \
+  --policy2 examples/server/allowed_server_v2.rego \
+  -e data.example.allow \
+  -i examples/server/input.json \
+  -s examples/server/input_schema.json \
+  --max-loops 3
+```
+
+Z3 finds a server using `"telnet"` — policy 1 denies it, policy 2 allows it.
+The completely different HTTP-on-public logic is proved equivalent; only the
+removed telnet rule creates a behavioural difference.
+
+### Diff Example 2 — Network Segmentation
+
+Compare the network segmentation v1 (partial-set violations + `dmz_service`
+helper) with a v2 that uses object-comprehension lookup maps, function rules,
+and `every` — plus drops the PII rule:
+
+| Aspect | v1 | v2 |
+|---|---|---|
+| Decision | `count(violation) == 0` | `every conn ... { not dmz_to_internal(conn) }` |
+| DMZ detection | `dmz_service` partial-set (linear scan) | `zone_of[]` / `zone_is_dmz[]` comprehension maps + `in_dmz()` |
+| DB check | Inline in 4-way join | `db_is_internal[]` map + `targets_internal_db()` function |
+| Iteration | Service-centric | Connection-centric |
+| PII rule | Present | Removed |
+
+```bash
+regorus diff \
+  --policy1 examples/demos/network_segmentation.rego \
+  --policy2 examples/demos/network_segmentation_v2.rego \
+  -e data.network_segmentation.compliant \
+  -i examples/demos/network_segmentation_input.json \
+  -s examples/demos/network_segmentation_schema.json \
+  --max-loops 3
+```
+
+Z3 finds a PII-related distinguishing input — a service handling PII with
+an unencrypted connection.  v1 flags it as non-compliant; v2 allows it
+because v2 dropped the PII rule.
+
+---
+
+## Policy Subsumption
+
+Prove whether one policy is at least as permissive as another:
+
+```bash
+regorus subsumes \
+  --old policy_old.rego \
+  --new policy_new.rego \
+  -e data.example.allow \
+  -s input_schema.json
+```
+
+The analyzer checks: **∀ input: old(input) = desired → new(input) = desired**.
+It negates this to ∃ input: old(input) = desired ∧ new(input) ≠ desired.
+If SAT, the model is a **counterexample** where old permits but new does not.
+If UNSAT, new **subsumes** old.
+
+### Subsumption CLI Reference
+
+```
+regorus subsumes [OPTIONS] --old <FILE> --new <FILE> --entrypoint <RULE>
+```
+
+| Flag | Description |
+|---|---|
+| `--old <FILE>` | Policy files for the old (reference) policy. Repeatable. |
+| `--new <FILE>` | Policy files for the new policy. Repeatable. |
+| `-e, --entrypoint <RULE>` | Entry point to check. |
+| `-o, --output <JSON>` | Desired output value (default: `true`). |
+| `-i, --input <FILE>` | Example input JSON for type inference. |
+| `-s, --schema <FILE>` | JSON Schema for input constraints. |
+| `--timeout <MS>` | Z3 timeout (default: 30000). |
+| `--max-loops <N>` | Loop unrolling depth (default: 5). |
+| `--dump-smt <FILE>` | Write SMT-LIB2 assertions. |
+| `--dump-model <FILE>` | Write Z3 model. |
+
+### Subsumption Output
+
+```json
+{
+  "subsumes": true,
+  "counterexample": null,
+  "warnings": []
+}
+```
+
+When `subsumes` is `false`, `counterexample` contains a concrete input where
+old permits but new does not.
+
+### Subsumption Example 1 — Server Infrastructure
+
+Check whether v2 (telnet rule removed, HTTP logic restructured) subsumes v1:
+
+```bash
+# Does v2 subsume v1? (Yes — v2 is more permissive)
+regorus subsumes \
+  --old examples/server/allowed_server.rego \
+  --new examples/server/allowed_server_v2.rego \
+  -e data.example.allow \
+  -i examples/server/input.json \
+  -s examples/server/input_schema.json \
+  --max-loops 3
+```
+
+Result: `"subsumes": true` — every input allowed by v1 is also allowed by v2,
+despite v2 using a completely different rule structure (comprehensions +
+function rules instead of partial sets + inline joins).
+
+```bash
+# Does v1 subsume v2? (No — v1 is stricter)
+regorus subsumes \
+  --old examples/server/allowed_server_v2.rego \
+  --new examples/server/allowed_server.rego \
+  -e data.example.allow \
+  -i examples/server/input.json \
+  -s examples/server/input_schema.json \
+  --max-loops 3
+```
+
+Result: `"subsumes": false` with a counterexample where v2 allows (telnet ok)
+but v1 denies (telnet banned).
+
+### Subsumption Example 2 — Network Segmentation
+
+Check whether the restructured v2 (object-comprehension maps + `every`,
+PII rule dropped) subsumes v1:
+
+```bash
+# Does v2 subsume v1? (Yes — v2 is more permissive)
+regorus subsumes \
+  --old examples/demos/network_segmentation.rego \
+  --new examples/demos/network_segmentation_v2.rego \
+  -e data.network_segmentation.compliant \
+  -i examples/demos/network_segmentation_input.json \
+  -s examples/demos/network_segmentation_schema.json \
+  --max-loops 3
+```
+
+Result: `"subsumes": true` — every compliant topology under v1 is also
+compliant under v2.
+
+```bash
+# Does v1 subsume v2? (No — v1 is stricter)
+regorus subsumes \
+  --old examples/demos/network_segmentation_v2.rego \
+  --new examples/demos/network_segmentation.rego \
+  -e data.network_segmentation.compliant \
+  -i examples/demos/network_segmentation_input.json \
+  -s examples/demos/network_segmentation_schema.json \
+  --max-loops 3
+```
+
+Result: `"subsumes": false` — Z3 produces a counterexample with a PII service
+using an unencrypted connection that v2 allows but v1 blocks.
+
+---
+
+## Test Suite Generation
+
+Automatically generate a set of test inputs that cover all reachable source
+lines in a policy:
+
+```bash
+regorus gen-tests \
+  -d policy.rego \
+  -e data.example.allow \
+  -o false \
+  -s input_schema.json \
+  --max-tests 20
+```
+
+The algorithm:
+1. Translates the program once, collecting per-PC path conditions.
+2. Groups PCs by source line → a set of coverable lines.
+3. For each uncovered line, asks Z3 for an input that covers it.
+4. Records the test case and all lines it additionally covers.
+5. Repeats until all lines are covered or proved unreachable.
+
+### Test Gen CLI Reference
+
+```
+regorus gen-tests [OPTIONS] --entrypoint <RULE>
+```
+
+| Flag | Description |
+|---|---|
+| `-d, --data <FILE>` | Policy or data files. Repeatable. |
+| `-b, --bundles <DIR>` | Bundle directories. Repeatable. |
+| `-e, --entrypoint <RULE>` | Entry point to generate tests for. |
+| `-o, --output <JSON>` | Desired output value for all tests (optional). |
+| `-i, --input <FILE>` | Example input JSON for type inference. |
+| `-s, --schema <FILE>` | JSON Schema for input constraints. |
+| `--max-tests <N>` | Maximum test cases to generate (default: 100). |
+| `--timeout <MS>` | Z3 timeout (default: 30000). |
+| `--max-loops <N>` | Loop unrolling depth (default: 5). |
+| `--dump-smt <FILE>` | Write base SMT-LIB2 assertions. |
+
+### Test Gen Output
+
+```json
+{
+  "test_cases": [
+    {
+      "input": { ... },
+      "covered_lines": ["policy.rego:14", "policy.rego:15", ...]
+    }
+  ],
+  "coverage_summary": {
+    "coverable_lines": 16,
+    "covered_lines": 16,
+    "coverage_pct": "100.0%"
+  },
+  "warnings": []
+}
+```
+
+### Test Gen Example
+
+Generate tests for the server infrastructure policy:
+
+```bash
+regorus gen-tests \
+  -d examples/server/allowed_server.rego \
+  -e data.example.allow \
+  -o false \
+  -i examples/server/input.json \
+  -s examples/server/input_schema.json \
+  --max-loops 3 \
+  --max-tests 10
+```
+
+Produces 2 test cases covering all 16 coverable lines (100%): one triggers
+the `"telnet"` ban rule, the other triggers the `"http"` on public network
+rule.
+
+Without `--output`, the tool generates tests for **all** paths (both
+`allow=true` and `allow=false`):
+
+```bash
+regorus gen-tests \
+  -d examples/server/allowed_server.rego \
+  -e data.example.allow \
+  -i examples/server/input.json \
+  -s examples/server/input_schema.json \
+  --max-loops 3
+```
 
 ---
 
@@ -925,9 +1247,20 @@ This exercises violation finding, compliance synthesis, targeted path
 exploration, Cedar permit/deny synthesis, and SMT/model file dumps across
 Rego and Cedar policies.
 
-The demo script also includes **Python analyzer demos** (Demos 9–11) that
-mirror the Rego demos using the two-step `regorus compile` →
+The demo script also includes **Python analyzer demos** (Demos 9–15) that
+mirror the Rego and Cedar demos using the two-step `regorus compile` →
 `python3 -m tools.z3analyze` workflow.  These require `pip install z3-solver`.
+
+**Demos 16–20** exercise the **policy diff**, **subsumption**, and **test
+suite generation** features:
+
+| Demo | Feature | Policies |
+|---|---|---|
+| 16 | Diff | Server v1 vs v2 (telnet rule removed, HTTP logic restructured) |
+| 17 | Subsumption | Server v1 ↔ v2 (both directions) |
+| 18 | Test Gen | Server infrastructure (with/without output constraint) |
+| 19 | Diff | Network segmentation v1 vs v2 (PII rule dropped, comprehension-based) |
+| 20 | Subsumption | Network segmentation v1 ↔ v2 (both directions) |
 
 ---
 

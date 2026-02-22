@@ -253,10 +253,8 @@ fn rego_compile(
     let ep: regorus::Rc<str> = regorus::Rc::from(entrypoints[0].as_str());
     let compiled = engine.compile_with_entrypoint(&ep)?;
     let ep_strs: Vec<&str> = entrypoints.iter().map(|s| s.as_str()).collect();
-    let program = regorus::languages::rego::compiler::Compiler::compile_from_policy(
-        &compiled,
-        &ep_strs,
-    )?;
+    let program =
+        regorus::languages::rego::compiler::Compiler::compile_from_policy(&compiled, &ep_strs)?;
 
     // Generate listing if requested.
     let listing_kind = listing.as_deref().or_else(|| {
@@ -363,6 +361,160 @@ enum RegorusCommand {
         /// JSON Schema file for input constraints. When provided, Z3
         /// constraints are generated to enforce types, required fields,
         /// minimum lengths, enums, and field uniqueness (`x-unique`).
+        #[arg(long, short, value_name = "schema.json")]
+        schema: Option<String>,
+    },
+
+    /// Find inputs where two policy versions disagree (policy diff).
+    ///
+    /// Translates both policies into SMT constraints over the same symbolic
+    /// input space and asks Z3 for an input where
+    /// `policy1(input) XOR policy2(input)`.  If SAT, the model is a
+    /// distinguishing input; if UNSAT, the policies are equivalent.
+    #[cfg(feature = "z3-analysis")]
+    Diff {
+        /// Directories containing Rego files for policy 1.
+        #[arg(long, value_name = "bundle")]
+        bundles1: Vec<String>,
+
+        /// Policy or data files for policy 1. Rego, Cedar, json or yaml.
+        #[arg(long, value_name = "FILE", required = true)]
+        policy1: Vec<String>,
+
+        /// Directories containing Rego files for policy 2.
+        #[arg(long, value_name = "bundle")]
+        bundles2: Vec<String>,
+
+        /// Policy or data files for policy 2. Rego, Cedar, json or yaml.
+        #[arg(long, value_name = "FILE", required = true)]
+        policy2: Vec<String>,
+
+        /// Entry point to analyze (e.g. "data.example.allow").
+        #[arg(long, short, value_name = "RULE")]
+        entrypoint: String,
+
+        /// Expected output value to compare against (default: true).
+        #[arg(long, short, value_name = "JSON")]
+        output: Option<String>,
+
+        /// Dump SMT-LIB2 assertions to the given file.
+        #[arg(long, value_name = "FILE")]
+        dump_smt: Option<String>,
+
+        /// Dump Z3 model (variable assignments) to the given file.
+        #[arg(long, value_name = "FILE")]
+        dump_model: Option<String>,
+
+        /// Z3 solver timeout in milliseconds (default: 30000).
+        #[arg(long, default_value = "30000")]
+        timeout: u32,
+
+        /// Maximum loop unrolling depth (default: 5).
+        #[arg(long, default_value = "5")]
+        max_loops: usize,
+
+        /// Example input file (JSON) for type inference.
+        #[arg(long, short, value_name = "input.json")]
+        input: Option<String>,
+
+        /// JSON Schema file for input constraints.
+        #[arg(long, short, value_name = "schema.json")]
+        schema: Option<String>,
+    },
+
+    /// Check whether one policy subsumes another.
+    ///
+    /// Proves whether `new_policy ⊇ old_policy`: every input that old_policy
+    /// accepts (produces `desired_output`) is also accepted by new_policy.
+    /// If a counterexample exists, it is printed.
+    #[cfg(feature = "z3-analysis")]
+    Subsumes {
+        /// Policy or data files for the OLD policy.
+        #[arg(long, value_name = "FILE", required = true)]
+        old: Vec<String>,
+
+        /// Policy or data files for the NEW policy.
+        #[arg(long, value_name = "FILE", required = true)]
+        new: Vec<String>,
+
+        /// Entry point to analyze (e.g. "data.example.allow").
+        #[arg(long, short, value_name = "RULE")]
+        entrypoint: String,
+
+        /// Expected output value (default: true).
+        #[arg(long, short, value_name = "JSON")]
+        output: Option<String>,
+
+        /// Dump SMT-LIB2 assertions to the given file.
+        #[arg(long, value_name = "FILE")]
+        dump_smt: Option<String>,
+
+        /// Dump Z3 model (variable assignments) to the given file.
+        #[arg(long, value_name = "FILE")]
+        dump_model: Option<String>,
+
+        /// Z3 solver timeout in milliseconds (default: 30000).
+        #[arg(long, default_value = "30000")]
+        timeout: u32,
+
+        /// Maximum loop unrolling depth (default: 5).
+        #[arg(long, default_value = "5")]
+        max_loops: usize,
+
+        /// Example input file (JSON) for type inference.
+        #[arg(long, short, value_name = "input.json")]
+        input: Option<String>,
+
+        /// JSON Schema file for input constraints.
+        #[arg(long, short, value_name = "schema.json")]
+        schema: Option<String>,
+    },
+
+    /// Generate a test suite by covering all reachable source lines.
+    ///
+    /// Iteratively invokes Z3 to produce one concrete input per reachable
+    /// source line.  The output is a JSON array of test cases, each with
+    /// the input and the lines it covers.
+    #[cfg(feature = "z3-analysis")]
+    GenTests {
+        /// Directories containing Rego files.
+        #[arg(long, short, value_name = "bundle")]
+        bundles: Vec<String>,
+
+        /// Policy or data files. Rego, Cedar, json or yaml.
+        #[arg(long, short, value_name = "policy.rego|data.json")]
+        data: Vec<String>,
+
+        /// Entry point to analyze (e.g. "data.example.allow").
+        #[arg(long, short, value_name = "RULE")]
+        entrypoint: String,
+
+        /// Expected output value (JSON literal). When omitted, the solver
+        /// only requires the result to be defined.
+        #[arg(long, short, value_name = "JSON")]
+        output: Option<String>,
+
+        /// Dump (base) SMT-LIB2 assertions to the given file.
+        #[arg(long, value_name = "FILE")]
+        dump_smt: Option<String>,
+
+        /// Z3 solver timeout in milliseconds (default: 30000).
+        #[arg(long, default_value = "30000")]
+        timeout: u32,
+
+        /// Maximum loop unrolling depth (default: 5).
+        #[arg(long, default_value = "5")]
+        max_loops: usize,
+
+        /// Maximum number of test cases to generate (default: 100).
+        #[arg(long, default_value = "100")]
+        max_tests: usize,
+
+        /// Example input file (JSON) for type inference.
+        #[arg(long, short, value_name = "input.json")]
+        input: Option<String>,
+
+        /// JSON Schema file for input constraints.
         #[arg(long, short, value_name = "schema.json")]
         schema: Option<String>,
     },
@@ -507,7 +659,14 @@ fn main() -> Result<()> {
             output,
             listing,
             listing_output,
-        } => rego_compile(&bundles, &data, &entrypoint, output, listing, listing_output),
+        } => rego_compile(
+            &bundles,
+            &data,
+            &entrypoint,
+            output,
+            listing,
+            listing_output,
+        ),
         #[cfg(feature = "z3-analysis")]
         RegorusCommand::Analyze {
             bundles,
@@ -525,6 +684,55 @@ fn main() -> Result<()> {
         } => analyze::rego_analyze(
             &bundles, &data, entrypoint, output, cover_line, avoid_line, dump_smt, dump_model,
             timeout, max_loops, input, schema,
+        ),
+        #[cfg(feature = "z3-analysis")]
+        RegorusCommand::Diff {
+            bundles1,
+            policy1,
+            bundles2,
+            policy2,
+            entrypoint,
+            output,
+            dump_smt,
+            dump_model,
+            timeout,
+            max_loops,
+            input,
+            schema,
+        } => analyze::rego_diff(
+            &bundles1, &policy1, &bundles2, &policy2, entrypoint, output, dump_smt, dump_model,
+            timeout, max_loops, input, schema,
+        ),
+        #[cfg(feature = "z3-analysis")]
+        RegorusCommand::Subsumes {
+            old,
+            new,
+            entrypoint,
+            output,
+            dump_smt,
+            dump_model,
+            timeout,
+            max_loops,
+            input,
+            schema,
+        } => analyze::rego_subsumes(
+            &old, &new, entrypoint, output, dump_smt, dump_model, timeout, max_loops, input, schema,
+        ),
+        #[cfg(feature = "z3-analysis")]
+        RegorusCommand::GenTests {
+            bundles,
+            data,
+            entrypoint,
+            output,
+            dump_smt,
+            timeout,
+            max_loops,
+            max_tests,
+            input,
+            schema,
+        } => analyze::rego_gen_tests(
+            &bundles, &data, entrypoint, output, dump_smt, timeout, max_loops, max_tests, input,
+            schema,
         ),
         #[cfg(feature = "cedar")]
         RegorusCommand::Cedar { command } => cedar_cli::run(command),

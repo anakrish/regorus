@@ -315,6 +315,149 @@ Mirrors Demo 7.
 
 ---
 
+## Policy Diff / Subsumption / Test Generation (Demos 16–20)
+
+Beyond input synthesis, the analyzer can **compare** two policies, check
+**subsumption** (is one at least as permissive as the other?), and
+**generate test suites** that cover all reachable source lines.
+
+---
+
+## Demo 16 — Policy Diff
+
+Compare `allowed_server.rego` (v1 — bans telnet) with
+`allowed_server_v2.rego` (v2 — telnet rule removed, HTTP-on-public logic
+restructured into function rules).
+
+```bash
+regorus diff \
+  --policy1 examples/server/allowed_server.rego \
+  --policy2 examples/server/allowed_server_v2.rego \
+  -e data.example.allow \
+  -i examples/server/input.json \
+  -s examples/server/input_schema.json \
+  --max-loops 3
+```
+
+Z3 finds an input where the two policies disagree — typically a server
+using telnet.  v1 denies it (telnet is banned), v2 allows it (telnet rule
+was removed).  The output includes the distinguishing input and each
+policy's result.
+
+---
+
+## Demo 17 — Policy Subsumption
+
+Check whether one policy is at least as permissive as another
+(∀ input: old permits → new permits).
+
+```bash
+# 17a) Does v2 subsume v1? (v2 is more permissive → expect yes)
+regorus subsumes \
+  --old examples/server/allowed_server.rego \
+  --new examples/server/allowed_server_v2.rego \
+  -e data.example.allow \
+  -i examples/server/input.json \
+  -s examples/server/input_schema.json \
+  --max-loops 3
+
+# 17b) Does v1 subsume v2? (v1 is stricter → expect no)
+regorus subsumes \
+  --old examples/server/allowed_server_v2.rego \
+  --new examples/server/allowed_server.rego \
+  -e data.example.allow \
+  -i examples/server/input.json \
+  -s examples/server/input_schema.json \
+  --max-loops 3
+```
+
+v2 ⊇ v1 holds — every input that v1 allows, v2 also allows.
+v1 ⊇ v2 fails — Z3 provides a counterexample (a telnet server that v2
+allows but v1 denies).
+
+---
+
+## Demo 18 — Test Suite Generation
+
+Automatically generate test inputs that cover all reachable source lines
+in a policy.
+
+```bash
+# 18a) Tests targeting allow = false
+regorus gen-tests \
+  -d examples/server/allowed_server.rego \
+  -e data.example.allow \
+  -o false \
+  -i examples/server/input.json \
+  -s examples/server/input_schema.json \
+  --max-loops 3 --max-tests 10
+
+# 18b) Tests for all paths (no output constraint)
+regorus gen-tests \
+  -d examples/server/allowed_server.rego \
+  -e data.example.allow \
+  -i examples/server/input.json \
+  -s examples/server/input_schema.json \
+  --max-loops 3 --max-tests 10
+```
+
+With `-o false`, 2 test cases cover 100% of denial-path lines.  Without
+`-o`, a few more tests are needed to also cover the `allow = true` paths.
+
+---
+
+## Demo 19 — Network Segmentation: Diff v1 vs v2
+
+v2 uses object-comprehension maps, function rules, and `every` — plus
+drops the PII rule (more permissive).
+
+```bash
+regorus diff \
+  --policy1 examples/demos/network_segmentation.rego \
+  --policy2 examples/demos/network_segmentation_v2.rego \
+  -e data.network_segmentation.compliant \
+  -i examples/demos/network_segmentation_input.json \
+  -s examples/demos/network_segmentation_schema.json \
+  --max-loops 3
+```
+
+Z3 finds a PII-related input — a service handling PII with an unencrypted
+connection.  v1 flags it as non-compliant, v2 allows it because v2 dropped
+the PII rule.
+
+---
+
+## Demo 20 — Network Segmentation: Subsumption v1 vs v2
+
+Prove v2 ⊇ v1 (v2 is more permissive) and disprove v1 ⊇ v2 (with
+counterexample).
+
+```bash
+# 20a) Does v2 subsume v1? (v2 is more permissive → expect yes)
+regorus subsumes \
+  --old examples/demos/network_segmentation.rego \
+  --new examples/demos/network_segmentation_v2.rego \
+  -e data.network_segmentation.compliant \
+  -i examples/demos/network_segmentation_input.json \
+  -s examples/demos/network_segmentation_schema.json \
+  --max-loops 3
+
+# 20b) Does v1 subsume v2? (v1 is stricter → expect no)
+regorus subsumes \
+  --old examples/demos/network_segmentation_v2.rego \
+  --new examples/demos/network_segmentation.rego \
+  -e data.network_segmentation.compliant \
+  -i examples/demos/network_segmentation_input.json \
+  -s examples/demos/network_segmentation_schema.json \
+  --max-loops 3
+```
+
+v2 ⊇ v1 holds — every compliant topology under v1 is also compliant under
+v2.  v1 ⊇ v2 fails — Z3 provides a counterexample involving a PII service
+with an unencrypted connection.
+
+---
+
 ## Key capabilities demonstrated
 
 | Capability | How it's shown |
@@ -329,3 +472,6 @@ Mirrors Demo 7.
 | **Path avoidance** | `--avoid-line FILE:LINE` prevents a specific code path (Rego) |
 | **Soundness** | Every generated input is verified by the concrete engine |
 | **SMT debugging** | `--dump-smt` / `--dump-model` dump the full Z3 encoding |
+| **Policy diff** | `regorus diff` finds a concrete input where two policies disagree |
+| **Subsumption** | `regorus subsumes` proves (or disproves) that one policy is at least as permissive |
+| **Test generation** | `regorus gen-tests` synthesises a minimal test suite covering all reachable source lines |

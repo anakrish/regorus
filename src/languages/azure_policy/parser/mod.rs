@@ -1,0 +1,178 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+//! Custom recursive-descent JSON parser for Azure Policy rules.
+//!
+//! Parses Azure Policy JSON directly from [`Lexer`] tokens, building span-annotated
+//! AST nodes in a single pass. No intermediate `serde_json::Value` is created.
+//!
+//! The parser is policy-aware: when parsing JSON objects, it dispatches on key names
+//! (`allOf`, `anyOf`, `not`, `field`, `value`, `count`, operator names) to build
+//! the appropriate AST nodes.
+//!
+//! ## Usage
+//!
+//! ```ignore
+//! use regorus::lexer::Source;
+//! use regorus::languages::azure_policy::parser;
+//!
+//! let json = r#"{ "if": { "field": "type", "equals": "Microsoft.Compute/virtualMachines" },
+//!                 "then": { "effect": "deny" } }"#;
+//! let source = Source::from_contents("policy.json".into(), json.into())?;
+//! let rule = parser::parse_policy_rule(&source)?;
+//! ```
+
+mod constraint;
+mod core;
+mod error;
+mod policy_definition;
+mod policy_rule;
+
+pub use error::ParseError;
+
+use alloc::string::ToString as _;
+
+use crate::lexer::{Source, TokenKind};
+
+use super::ast::{Constraint, FieldKind, OperatorKind, PolicyDefinition, PolicyRule};
+use super::expr::ExprParser;
+
+use self::core::Parser;
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+/// Parse an Azure Policy rule from a JSON source.
+///
+/// The source should contain a complete `policyRule` JSON object:
+/// ```json
+/// {
+///   "if": { "field": "type", "equals": "Microsoft.Compute/virtualMachines" },
+///   "then": { "effect": "deny" }
+/// }
+/// ```
+///
+/// Returns a span-annotated [`PolicyRule`] AST.
+pub fn parse_policy_rule(source: &Source) -> Result<PolicyRule, ParseError> {
+    let mut parser = Parser::new(source)?;
+    let rule = parser.parse_policy_rule()?;
+
+    if parser.tok.0 != TokenKind::Eof {
+        return Err(ParseError::UnexpectedToken {
+            span: parser.tok.1.clone(),
+            expected: "end of input",
+        });
+    }
+
+    Ok(rule)
+}
+
+/// Parse a full Azure Policy definition from a JSON source.
+///
+/// Accepts two forms:
+/// 1. **Wrapped**: `{ "properties": { "policyRule": ..., ... }, "id": ..., ... }`
+/// 2. **Unwrapped**: `{ "displayName": ..., "policyRule": ..., ... }`
+///
+/// Returns a [`PolicyDefinition`] with typed fields for known properties
+/// and a catch-all `extra` map for everything else.
+pub fn parse_policy_definition(source: &Source) -> Result<PolicyDefinition, ParseError> {
+    let mut parser = Parser::new(source)?;
+    let defn = parser.parse_policy_definition()?;
+
+    if parser.tok.0 != TokenKind::Eof {
+        return Err(ParseError::UnexpectedToken {
+            span: parser.tok.1.clone(),
+            expected: "end of input",
+        });
+    }
+
+    Ok(defn)
+}
+
+/// Parse a standalone constraint from a JSON source.
+///
+/// Useful for parsing just the `"if"` part of a policy rule.
+pub fn parse_constraint(source: &Source) -> Result<Constraint, ParseError> {
+    let mut parser = Parser::new(source)?;
+    let constraint = parser.parse_constraint()?;
+
+    if parser.tok.0 != TokenKind::Eof {
+        return Err(ParseError::UnexpectedToken {
+            span: parser.tok.1.clone(),
+            expected: "end of input",
+        });
+    }
+
+    Ok(constraint)
+}
+
+// ============================================================================
+// Helper functions (used across submodules)
+// ============================================================================
+
+/// Check if a string is an ARM template expression (`[...]` but not `[[...`).
+pub(super) fn is_template_expr(s: &str) -> bool {
+    s.starts_with('[') && s.ends_with(']') && !s.starts_with("[[")
+}
+
+/// Classify a field string into a [`FieldKind`].
+pub(super) fn classify_field(
+    text: &str,
+    span: &crate::lexer::Span,
+) -> Result<FieldKind, ParseError> {
+    match text.to_lowercase().as_str() {
+        "type" => Ok(FieldKind::Type),
+        "id" => Ok(FieldKind::Id),
+        "kind" => Ok(FieldKind::Kind),
+        "name" => Ok(FieldKind::Name),
+        "location" => Ok(FieldKind::Location),
+        "fullname" => Ok(FieldKind::FullName),
+        "tags" => Ok(FieldKind::Tags),
+        "identity.type" => Ok(FieldKind::IdentityType),
+        "apiversion" => Ok(FieldKind::ApiVersion),
+        _ if text.to_lowercase().starts_with("tags.") => Ok(FieldKind::Tag(text[5..].into())),
+        _ if text.to_lowercase().starts_with("tags['") && text.ends_with("']") => {
+            let end = text.len().saturating_sub(2);
+            Ok(FieldKind::Tag(text[6..end].into()))
+        }
+        _ if text.starts_with('[') && text.ends_with(']') => {
+            let end = text.len().saturating_sub(1);
+            let inner = &text[1..end];
+            let expr = ExprParser::parse_from_brackets(inner, span).map_err(|e| {
+                ParseError::ExprParse {
+                    span: span.clone(),
+                    message: e.to_string(),
+                }
+            })?;
+            Ok(FieldKind::Expr(expr))
+        }
+        _ => Ok(FieldKind::Alias(text.into())),
+    }
+}
+
+/// Try to parse a lowercase key as an operator kind.
+pub(super) fn parse_operator_kind(key: &str) -> Option<OperatorKind> {
+    match key {
+        "contains" => Some(OperatorKind::Contains),
+        "containskey" => Some(OperatorKind::ContainsKey),
+        "equals" => Some(OperatorKind::Equals),
+        "greater" => Some(OperatorKind::Greater),
+        "greaterorequals" => Some(OperatorKind::GreaterOrEquals),
+        "exists" => Some(OperatorKind::Exists),
+        "in" => Some(OperatorKind::In),
+        "less" => Some(OperatorKind::Less),
+        "lessorequals" => Some(OperatorKind::LessOrEquals),
+        "like" => Some(OperatorKind::Like),
+        "match" => Some(OperatorKind::Match),
+        "matchinsensitively" => Some(OperatorKind::MatchInsensitively),
+        "notcontains" => Some(OperatorKind::NotContains),
+        "notcontainskey" => Some(OperatorKind::NotContainsKey),
+        "notequals" => Some(OperatorKind::NotEquals),
+        "notin" => Some(OperatorKind::NotIn),
+        "notlike" => Some(OperatorKind::NotLike),
+        "notmatch" => Some(OperatorKind::NotMatch),
+        "notmatchinsensitively" => Some(OperatorKind::NotMatchInsensitively),
+        _ => None,
+    }
+}

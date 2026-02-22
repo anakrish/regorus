@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 // SAFETY: Arithmetic operations in this module are safe by design:
-// 1. MAX_COL=1024 prevents column counter overflow (enforced by advance_col)
+// 1. MAX_COL=8192 prevents column counter overflow (enforced by advance_col)
 // 2. File size is capped by MAX_FILE_BYTES at load time
 // 3. Total line count is capped by MAX_LINES at load time
 // 4. State-modifying operations (advance_col/advance_line) use checked arithmetic
@@ -27,7 +27,7 @@ fn check_memory_limit() -> Result<()> {
 
 // Maximum column width to prevent overflow and catch pathological input.
 // Lines exceeding this are likely minified/generated code or attack attempts.
-const MAX_COL: u32 = 1024;
+const MAX_COL: u32 = 8192;
 // Maximum allowed policy file size in bytes (1 MiB) to reject pathological inputs early.
 const MAX_FILE_BYTES: usize = 1_048_576;
 // Maximum allowed number of lines to avoid pathological or minified inputs.

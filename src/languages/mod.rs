@@ -3,6 +3,9 @@
 
 //! Language-specific modules for specialized parsing and evaluation
 
+#[cfg(feature = "azure_policy")]
+pub mod azure_policy;
+
 #[cfg(feature = "azure-rbac")]
 pub mod azure_rbac;
 

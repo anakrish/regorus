@@ -106,6 +106,49 @@ pub fn generate_assembly_listing(program: &Program, config: &AssemblyListingConf
         }
     }
 
+    // Add metadata section
+    {
+        push_line(&mut output, format_args!(";"));
+        push_line(&mut output, format_args!("; METADATA:"));
+        push_line(
+            &mut output,
+            format_args!(
+                ";   compiler_version: {}",
+                program.metadata.compiler_version
+            ),
+        );
+        push_line(
+            &mut output,
+            format_args!(";   compiled_at: {}", program.metadata.compiled_at),
+        );
+        if !program.metadata.source_info.is_empty() {
+            push_line(
+                &mut output,
+                format_args!(";   source_info: {}", program.metadata.source_info),
+            );
+        }
+        push_line(
+            &mut output,
+            format_args!(
+                ";   optimization_level: {}",
+                program.metadata.optimization_level
+            ),
+        );
+        if !program.metadata.language.is_empty() {
+            push_line(
+                &mut output,
+                format_args!(";   language: {}", program.metadata.language),
+            );
+        }
+        if !program.metadata.annotations.is_empty() {
+            push_line(&mut output, format_args!(";   annotations:"));
+            for (key, value) in &program.metadata.annotations {
+                let json = serde_json::to_string(value).unwrap_or_else(|_| "<invalid>".to_string());
+                push_line(&mut output, format_args!(";     {}: {}", key, json));
+            }
+        }
+    }
+
     push_line(&mut output, format_args!(";"));
 
     for (pc, instruction) in program.instructions.iter().enumerate() {
@@ -264,6 +307,14 @@ fn format_instruction_readable(
         Instruction::LoadInput { dest } => {
             let base = format!("{}LoadInput    r{} ← input", indent, dest);
             align_comment(&base, "Load global input document", config.comment_column)
+        }
+        Instruction::LoadContext { dest } => {
+            let base = format!("{}LoadContext  r{} ← context", indent, dest);
+            align_comment(&base, "Load evaluation context", config.comment_column)
+        }
+        Instruction::LoadMetadata { dest } => {
+            let base = format!("{}LoadMetadata r{} ← metadata", indent, dest);
+            align_comment(&base, "Load program metadata", config.comment_column)
         }
         Instruction::Move { dest, src } => {
             let base = format!("{}Move         r{} ← r{}", indent, dest, src);
@@ -588,6 +639,25 @@ fn format_instruction_readable(
             let comment = format!("Assert r{} is not undefined (exit if undefined)", register);
             align_comment(&base, &comment, config.comment_column)
         }
+        Instruction::ReturnUndefinedIfNotTrue { condition } => {
+            let base = format!(
+                "{}ReturnUndefinedIfNotTrue if r{} != true return undefined",
+                indent, condition
+            );
+            let comment = format!(
+                "Return undefined unless r{} is exactly boolean true",
+                condition
+            );
+            align_comment(&base, &comment, config.comment_column)
+        }
+        Instruction::CoalesceUndefinedToNull { register } => {
+            let base = format!(
+                "{}CoalesceUndefinedToNull r{} = null if undefined",
+                indent, register
+            );
+            let comment = format!("Azure Policy: absent field → null (r{})", register);
+            align_comment(&base, &comment, config.comment_column)
+        }
         Instruction::LoopStart { params_index } => {
             if let Some(params) = instruction_data.get_loop_params(params_index) {
                 let mode_str = match params.mode {
@@ -788,6 +858,12 @@ fn format_instruction_readable(
             let base = format!("{}}} CompEnd", indent);
             align_comment(&base, "End comprehension block", config.comment_column)
         }
+
+        // Azure Policy & allOf/anyOf instructions — use Display impl
+        instruction => {
+            let base = format!("{}{}", indent, instruction);
+            align_comment(&base, "", config.comment_column)
+        }
     }
 }
 
@@ -868,6 +944,8 @@ const fn get_instruction_name(instruction: &Instruction) -> &'static str {
         Instruction::LoadBool { .. } => "LOAD_BOOL",
         Instruction::LoadData { .. } => "LOAD_DATA",
         Instruction::LoadInput { .. } => "LOAD_INPUT",
+        Instruction::LoadContext { .. } => "LOAD_CONTEXT",
+        Instruction::LoadMetadata { .. } => "LOAD_METADATA",
         Instruction::Move { .. } => "MOVE",
         Instruction::Add { .. } => "ADD",
         Instruction::Sub { .. } => "SUB",
@@ -901,6 +979,8 @@ const fn get_instruction_name(instruction: &Instruction) -> &'static str {
         Instruction::Count { .. } => "COUNT",
         Instruction::AssertCondition { .. } => "ASSERT",
         Instruction::AssertNotUndefined { .. } => "ASSERT_NOT_UNDEF",
+        Instruction::ReturnUndefinedIfNotTrue { .. } => "RET_UNDEF_IF_NOT_TRUE",
+        Instruction::CoalesceUndefinedToNull { .. } => "COALESCE_NULL",
         Instruction::LoopStart { .. } => "LOOP_START",
         Instruction::LoopNext { .. } => "LOOP_NEXT",
         Instruction::CallRule { .. } => "CALL_RULE",
@@ -913,6 +993,34 @@ const fn get_instruction_name(instruction: &Instruction) -> &'static str {
         Instruction::ComprehensionBegin { .. } => "COMP_BEGIN",
         Instruction::ComprehensionYield { .. } => "COMP_YIELD",
         Instruction::ComprehensionEnd {} => "COMP_END",
+        // Azure Policy instructions
+        Instruction::PolicyEquals { .. } => "POLICY_EQ",
+        Instruction::PolicyNotEquals { .. } => "POLICY_NE",
+        Instruction::PolicyGreater { .. } => "POLICY_GT",
+        Instruction::PolicyGreaterOrEquals { .. } => "POLICY_GE",
+        Instruction::PolicyLess { .. } => "POLICY_LT",
+        Instruction::PolicyLessOrEquals { .. } => "POLICY_LE",
+        Instruction::PolicyIn { .. } => "POLICY_IN",
+        Instruction::PolicyNotIn { .. } => "POLICY_NOT_IN",
+        Instruction::PolicyContains { .. } => "POLICY_CONTAINS",
+        Instruction::PolicyNotContains { .. } => "POLICY_NOT_CONTAINS",
+        Instruction::PolicyContainsKey { .. } => "POLICY_CONTAINS_KEY",
+        Instruction::PolicyNotContainsKey { .. } => "POLICY_NOT_CK",
+        Instruction::PolicyLike { .. } => "POLICY_LIKE",
+        Instruction::PolicyNotLike { .. } => "POLICY_NOT_LIKE",
+        Instruction::PolicyMatch { .. } => "POLICY_MATCH",
+        Instruction::PolicyNotMatch { .. } => "POLICY_NOT_MATCH",
+        Instruction::PolicyMatchInsensitively { .. } => "POLICY_MATCH_CI",
+        Instruction::PolicyNotMatchInsensitively { .. } => "POLICY_NOT_MATCH_CI",
+        Instruction::PolicyExists { .. } => "POLICY_EXISTS",
+        Instruction::PolicyNot { .. } => "POLICY_NOT",
+        // AllOf / AnyOf
+        Instruction::AllOfStart { .. } => "ALL_OF_START",
+        Instruction::AllOfNext { .. } => "ALL_OF_NEXT",
+        Instruction::AllOfEnd { .. } => "ALL_OF_END",
+        Instruction::AnyOfStart { .. } => "ANY_OF_START",
+        Instruction::AnyOfNext { .. } => "ANY_OF_NEXT",
+        Instruction::AnyOfEnd {} => "ANY_OF_END",
     }
 }
 
@@ -931,6 +1039,12 @@ fn format_operation_compact(
         }
         Instruction::LoadData { dest } => {
             format!("{}r{} ← data", indent, dest)
+        }
+        Instruction::LoadContext { dest } => {
+            format!("{}r{} ← context", indent, dest)
+        }
+        Instruction::LoadMetadata { dest } => {
+            format!("{}r{} ← metadata", indent, dest)
         }
         Instruction::Move { dest, src } => {
             format!("{}r{} ← r{}", indent, dest, src)

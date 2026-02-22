@@ -260,6 +260,7 @@ impl Program {
                 program.rule_tree = rule_tree;
                 program.rego_v0 = rego_v0;
                 program.needs_recompilation = needs_recompilation;
+                program.recompute_host_await_presence();
 
                 if !program.builtin_info_table.is_empty() {
                     if let Err(_e) = program.initialize_resolved_builtins() {
@@ -373,6 +374,7 @@ impl Program {
                 program.rule_tree = rule_tree;
                 program.rego_v0 = rego_v0;
                 program.needs_recompilation = needs_recompilation;
+                program.recompute_host_await_presence();
 
                 if !program.builtin_info_table.is_empty() {
                     if let Err(_e) = program.initialize_resolved_builtins() {

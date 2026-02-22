@@ -119,7 +119,7 @@ extern crate std;
 mimalloc::assign_global!();
 
 mod ast;
-mod builtins;
+pub(crate) mod builtins;
 mod compile;
 mod compiled_policy;
 mod compiler;
@@ -128,6 +128,9 @@ mod indexchecker;
 mod interpreter;
 
 pub mod languages {
+    #[cfg(feature = "azure_policy")]
+    pub mod azure_policy;
+
     #[cfg(feature = "azure-rbac")]
     pub mod azure_rbac;
 

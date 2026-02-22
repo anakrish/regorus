@@ -24,6 +24,7 @@ impl Program {
                 "optimization_level": self.metadata.optimization_level,
                 "rego_v0": self.rego_v0,
                 "needs_runtime_recursion_check": self.needs_runtime_recursion_check,
+                "has_host_await": self.has_host_await,
                 "needs_recompilation": self.needs_recompilation
             },
             "program_structure": {
@@ -84,12 +85,37 @@ impl Program {
             .and_then(|v| v.as_u64())
             .and_then(|v| u8::try_from(v).ok())
             .unwrap_or(0);
+        let language = metadata
+            .get("language")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let annotations: alloc::collections::BTreeMap<String, Value> = metadata
+            .get("annotations")
+            .and_then(|v| match *v {
+                // Deserialize JSON annotations into Value map
+                serde_json::Value::Object(ref map) => {
+                    let mut result = alloc::collections::BTreeMap::new();
+                    for (k, json_val) in map {
+                        if let Ok(val) = serde_json::from_value::<Value>(json_val.clone()) {
+                            result.insert(k.clone(), val);
+                        }
+                    }
+                    Some(result)
+                }
+                _ => None,
+            })
+            .unwrap_or_default();
         let rego_v0 = metadata
             .get("rego_v0")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let needs_runtime_recursion_check = metadata
             .get("needs_runtime_recursion_check")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let has_host_await = metadata
+            .get("has_host_await")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let needs_recompilation = metadata
@@ -183,15 +209,20 @@ impl Program {
                 compiled_at,
                 source_info,
                 optimization_level,
+                language,
+                annotations,
             },
             rule_tree,
             resolved_builtins: Vec::new(),
             #[cfg(feature = "cedar")]
             resolved_context_builtins: Vec::new(),
             needs_runtime_recursion_check,
+            has_host_await,
             needs_recompilation,
             rego_v0,
         };
+
+        program.recompute_host_await_presence();
 
         if !program.builtin_info_table.is_empty() {
             let _ = program.initialize_resolved_builtins();

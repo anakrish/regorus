@@ -1,0 +1,39 @@
+{
+  "type": "object",
+  "required": ["resource"],
+  "properties": {
+    "resource": {
+      "type": "object",
+      "required": [
+        "type",
+        "minimumTlsVersion",
+        "publicNetworkAccess",
+        "restrictOutboundNetworkAccess"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["Microsoft.Sql/servers"]
+        },
+        "minimumTlsVersion": {
+          "type": "string",
+          "enum": ["1.0", "1.1", "1.2"]
+        },
+        "publicNetworkAccess": {
+          "type": "string",
+          "enum": ["Enabled", "Disabled"]
+        },
+        "restrictOutboundNetworkAccess": {
+          "type": "string",
+          "enum": ["Enabled", "Disabled"]
+        }
+      }
+    },
+    "parameters": {
+      "type": "object"
+    },
+    "context": {
+      "type": "object"
+    }
+  }
+}

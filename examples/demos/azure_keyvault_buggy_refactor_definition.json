@@ -1,0 +1,70 @@
+{
+  "properties": {
+    "displayName": "Key Vault – enterprise hardening baseline (BUGGY refactor)",
+    "policyType": "Custom",
+    "mode": "Indexed",
+    "description": "Attempted De Morgan refactoring with a subtle bug in the access-control group.  The author correctly inverted the network and data-protection groups, but forgot to flip allOf→anyOf for the access-control condition.  The original says allOf(sku=premium, rbac=false); the correct De Morgan dual is anyOf(sku≠premium, rbac=true).  This buggy version uses allOf(sku≠premium, rbac=true), which means premium vaults with RBAC enabled but also standard vaults without RBAC now behave differently.  Z3 finds a distinguishing input instantly.",
+    "parameters": {
+      "effect": {
+        "type": "String",
+        "allowedValues": ["deny", "audit", "disabled"],
+        "defaultValue": "deny"
+      }
+    },
+    "policyRule": {
+      "if": {
+        "allOf": [
+          {
+            "field": "type",
+            "equals": "Microsoft.KeyVault/vaults"
+          },
+          {
+            "not": {
+              "allOf": [
+                {
+                  "anyOf": [
+                    {
+                      "field": "Microsoft.KeyVault/vaults/publicNetworkAccess",
+                      "equals": "Disabled"
+                    },
+                    {
+                      "field": "Microsoft.KeyVault/vaults/networkAcls.defaultAction",
+                      "equals": "Deny"
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "field": "Microsoft.KeyVault/vaults/enableSoftDelete",
+                      "equals": true
+                    },
+                    {
+                      "field": "Microsoft.KeyVault/vaults/enablePurgeProtection",
+                      "equals": true
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "field": "Microsoft.KeyVault/vaults/sku.name",
+                      "notEquals": "premium"
+                    },
+                    {
+                      "field": "Microsoft.KeyVault/vaults/enableRbacAuthorization",
+                      "equals": true
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "then": {
+        "effect": "[parameters('effect')]"
+      }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "resource": {
+    "type": "Microsoft.Storage/storageAccounts",
+    "supportsHttpsTrafficOnly": true,
+    "minimumTlsVersion": "TLS1_2"
+  },
+  "parameters": {},
+  "context": {}
+}

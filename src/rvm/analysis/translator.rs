@@ -24,6 +24,12 @@ use crate::rvm::instructions::{Instruction, LiteralOrRegister};
 use crate::rvm::program::{Program, RuleType};
 use crate::value::Value;
 
+#[cfg(feature = "azure_policy")]
+use crate::builtins::azure_policy::helpers::{
+    as_boolish, case_insensitive_equals, compare_values, match_like_pattern_ci, match_pattern,
+    resolve_path,
+};
+
 use super::path_registry::PathRegistry;
 use super::types::{
     ComprehensionAccumulator, ComprehensionYieldEntry, Definedness, SymRegister, SymSetElement,
@@ -258,6 +264,20 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 );
                 Ok(InstructionAction::Continue)
             }
+            LoadContext { dest } => {
+                // Context is symbolic (Azure Policy / Cedar-style ambient context).
+                self.set_register_sym(
+                    dest,
+                    SymValue::Concrete(Value::new_object()),
+                    Definedness::Defined,
+                    Some("context".to_string()),
+                );
+                Ok(InstructionAction::Continue)
+            }
+            LoadMetadata { dest } => {
+                self.set_register_concrete(dest, self.program.metadata.to_value());
+                Ok(InstructionAction::Continue)
+            }
             Move { dest, src } => {
                 let reg = self.get_register(src).clone();
                 self.registers[dest as usize] = reg;
@@ -287,6 +307,12 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             // -- Assertions (control flow) --
             AssertCondition { condition } => self.translate_assert_condition(condition),
             AssertNotUndefined { register } => self.translate_assert_not_undefined(register),
+            ReturnUndefinedIfNotTrue { condition } => {
+                self.translate_return_undefined_if_not_true(condition)
+            }
+            CoalesceUndefinedToNull { register } => {
+                self.translate_coalesce_undefined_to_null(register)
+            }
 
             // -- Indexing --
             Index {
@@ -499,6 +525,78 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
 
             // -- Function calls --
             FunctionCall { params_index } => self.translate_function_call(params_index),
+
+            // -- Azure Policy condition operators --
+            PolicyEquals { dest, left, right } => {
+                self.translate_policy_equals_like(dest, left, right, false)
+            }
+            PolicyNotEquals { dest, left, right } => {
+                self.translate_policy_equals_like(dest, left, right, true)
+            }
+            PolicyGreater { dest, left, right } => {
+                self.translate_policy_order_compare(dest, left, right, CmpOp::Gt)
+            }
+            PolicyGreaterOrEquals { dest, left, right } => {
+                self.translate_policy_order_compare(dest, left, right, CmpOp::Ge)
+            }
+            PolicyLess { dest, left, right } => {
+                self.translate_policy_order_compare(dest, left, right, CmpOp::Lt)
+            }
+            PolicyLessOrEquals { dest, left, right } => {
+                self.translate_policy_order_compare(dest, left, right, CmpOp::Le)
+            }
+            PolicyIn { dest, left, right } => self.translate_policy_collection_pred(dest, left, right, "in"),
+            PolicyNotIn { dest, left, right } => {
+                self.translate_policy_collection_pred(dest, left, right, "not_in")
+            }
+            PolicyContains { dest, left, right } => {
+                self.translate_policy_collection_pred(dest, left, right, "contains")
+            }
+            PolicyNotContains { dest, left, right } => {
+                self.translate_policy_collection_pred(dest, left, right, "not_contains")
+            }
+            PolicyContainsKey { dest, left, right } => {
+                self.translate_policy_collection_pred(dest, left, right, "contains_key")
+            }
+            PolicyNotContainsKey { dest, left, right } => {
+                self.translate_policy_collection_pred(dest, left, right, "not_contains_key")
+            }
+            PolicyLike { dest, left, right } => {
+                self.translate_policy_pattern(dest, left, right, "like", false)
+            }
+            PolicyNotLike { dest, left, right } => {
+                self.translate_policy_pattern(dest, left, right, "like", true)
+            }
+            PolicyMatch { dest, left, right } => {
+                self.translate_policy_pattern(dest, left, right, "match", false)
+            }
+            PolicyNotMatch { dest, left, right } => {
+                self.translate_policy_pattern(dest, left, right, "match", true)
+            }
+            PolicyMatchInsensitively { dest, left, right } => {
+                self.translate_policy_pattern(dest, left, right, "match_i", false)
+            }
+            PolicyNotMatchInsensitively { dest, left, right } => {
+                self.translate_policy_pattern(dest, left, right, "match_i", true)
+            }
+            PolicyExists { dest, left, right } => self.translate_policy_exists(dest, left, right),
+            PolicyNot { dest, operand } => self.translate_policy_not(dest, operand),
+
+            // -- Structured allOf / anyOf --
+            AllOfStart { result, end_pc: _ } => self.translate_allof_start(result),
+            AllOfNext {
+                check,
+                result,
+                end_pc: _,
+            } => self.translate_allof_next(check, result),
+            AllOfEnd { result: _ } => Ok(InstructionAction::Continue),
+            AnyOfStart { result, end_pc: _ } => self.translate_anyof_start(result),
+            AnyOfNext {
+                check,
+                result,
+                end_pc: _,
+            } => self.translate_anyof_next(check, result),
+            AnyOfEnd {} => Ok(InstructionAction::Continue),
 
             // -- Virtual data document --
             VirtualDataDocumentLookup { params_index } => {
@@ -954,6 +1052,441 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         Ok(InstructionAction::Continue)
     }
 
+    fn translate_return_undefined_if_not_true(
+        &mut self,
+        condition: u8,
+    ) -> anyhow::Result<InstructionAction<'ctx>> {
+        let reg = self.get_register(condition).clone();
+
+        if let SymValue::Concrete(v) = &reg.value {
+            if matches!(v, Value::Bool(true)) {
+                return Ok(InstructionAction::Continue);
+            }
+            return Ok(InstructionAction::Return(SymValue::Concrete(Value::Undefined)));
+        }
+
+        // Symbolic approximation: constrain this execution path to the
+        // "condition is true" branch; the false branch would return Undefined.
+        let is_true = self.policy_is_true_reg(condition)?;
+        self.path_condition = Z3Bool::and(self.ctx, &[&self.path_condition, &is_true]);
+        Ok(InstructionAction::Continue)
+    }
+
+    fn translate_coalesce_undefined_to_null(
+        &mut self,
+        register: u8,
+    ) -> anyhow::Result<InstructionAction<'ctx>> {
+        let reg = self.get_register(register).clone();
+
+        // Path registers use Concrete(Undefined) as a placeholder whose sort
+        // is determined lazily on first use.  They must NOT be coalesced to Null
+        // because that would destroy the symbolic path information.
+        if reg.source_path.is_some() {
+            return Ok(InstructionAction::Continue);
+        }
+
+        if reg.defined.is_undefined() || matches!(reg.value, SymValue::Concrete(Value::Undefined)) {
+            self.set_register_concrete(register, Value::Null);
+            return Ok(InstructionAction::Continue);
+        }
+
+        if !reg.defined.is_defined() {
+            self.warnings.push(format!(
+                "PC {}: CoalesceUndefinedToNull on symbolic definedness — precision loss",
+                self.pc
+            ));
+        }
+        Ok(InstructionAction::Continue)
+    }
+
+    fn translate_policy_equals_like(
+        &mut self,
+        dest: u8,
+        left: u8,
+        right: u8,
+        negate: bool,
+    ) -> anyhow::Result<InstructionAction<'ctx>> {
+        self.promote_path_registers(left, right);
+
+        let l = self.get_register(left).clone();
+        let r = self.get_register(right).clone();
+        let has_symbolic_path = l.source_path.is_some() || r.source_path.is_some();
+
+        if !has_symbolic_path {
+            if let (SymValue::Concrete(lv), SymValue::Concrete(rv)) = (&l.value, &r.value) {
+            #[cfg(feature = "azure_policy")]
+            let mut result = case_insensitive_equals(lv, rv);
+            #[cfg(not(feature = "azure_policy"))]
+            let mut result = match (lv, rv) {
+                (Value::Undefined, _) | (_, Value::Undefined) => false,
+                (Value::String(a), Value::String(b)) => a.to_lowercase() == b.to_lowercase(),
+                _ => lv == rv,
+            };
+
+            if negate {
+                // PolicyNotEquals: undefined left evaluates to true.
+                if matches!(lv, Value::Undefined) {
+                    result = true;
+                } else {
+                    result = !result;
+                }
+            }
+
+                self.set_register_concrete(dest, Value::Bool(result));
+                return Ok(InstructionAction::Continue);
+            }
+        }
+
+        let eq = self.make_comparison(&l.value, &r.value, CmpOp::Eq);
+        if let Ok(eq_bool) = eq {
+            let out = if negate {
+                let left_undef = l.defined.to_z3_bool(self.ctx).not();
+                Z3Bool::or(self.ctx, &[&left_undef, &eq_bool.not()])
+            } else {
+                eq_bool
+            };
+            self.set_register_sym(dest, SymValue::Bool(out), Definedness::Defined, None);
+            return Ok(InstructionAction::Continue);
+        }
+
+        self.warnings.push(format!(
+            "PC {}: Policy equals operator on symbolic values — using unconstrained Bool",
+            self.pc
+        ));
+        let name = self.pname(&format!("policy_eq_{}", self.pc));
+        let var = Z3Bool::new_const(self.ctx, name.as_str());
+        let out = if negate {
+            let left_undef = l.defined.to_z3_bool(self.ctx).not();
+            Z3Bool::or(self.ctx, &[&left_undef, &var.not()])
+        } else {
+            var
+        };
+        self.set_register_sym(dest, SymValue::Bool(out), Definedness::Defined, None);
+        Ok(InstructionAction::Continue)
+    }
+
+    fn translate_policy_order_compare(
+        &mut self,
+        dest: u8,
+        left: u8,
+        right: u8,
+        op: CmpOp,
+    ) -> anyhow::Result<InstructionAction<'ctx>> {
+        let l = self.get_register(left).clone();
+        let r = self.get_register(right).clone();
+
+        if let (SymValue::Concrete(_lv), SymValue::Concrete(_rv)) = (&l.value, &r.value) {
+            #[cfg(feature = "azure_policy")]
+            let cmp = compare_values(&[_lv.clone(), _rv.clone()]);
+            #[cfg(not(feature = "azure_policy"))]
+            let cmp = None::<i8>;
+
+            let result = match (cmp, op) {
+                (Some(c), CmpOp::Lt) => c < 0,
+                (Some(c), CmpOp::Le) => c <= 0,
+                (Some(c), CmpOp::Gt) => c > 0,
+                (Some(c), CmpOp::Ge) => c >= 0,
+                _ => false,
+            };
+
+            self.set_register_concrete(dest, Value::Bool(result));
+            return Ok(InstructionAction::Continue);
+        }
+
+        // Symbolic numeric comparison fallback.
+        self.promote_path_registers(left, right);
+        let l2 = self.get_register(left).clone();
+        let r2 = self.get_register(right).clone();
+        let cmp = self.make_comparison(&l2.value, &r2.value, op)?;
+        self.set_register_sym(dest, SymValue::Bool(cmp), Definedness::Defined, None);
+        Ok(InstructionAction::Continue)
+    }
+
+    fn translate_policy_collection_pred(
+        &mut self,
+        dest: u8,
+        left: u8,
+        right: u8,
+        mode: &str,
+    ) -> anyhow::Result<InstructionAction<'ctx>> {
+        self.promote_path_registers(left, right);
+
+        let l = self.get_register(left).clone();
+        let r = self.get_register(right).clone();
+
+        if let (SymValue::Concrete(lv), SymValue::Concrete(rv)) = (&l.value, &r.value) {
+            #[cfg(feature = "azure_policy")]
+            let ci_eq = |a: &Value, b: &Value| case_insensitive_equals(a, b);
+            #[cfg(not(feature = "azure_policy"))]
+            let ci_eq = |a: &Value, b: &Value| a == b;
+
+            let result = match mode {
+                "in" => {
+                    if matches!(lv, Value::Undefined) || matches!(rv, Value::Undefined) {
+                        false
+                    } else {
+                        match rv {
+                            Value::Array(items) => items.iter().any(|item| ci_eq(item, lv)),
+                            Value::Set(items) => items.iter().any(|item| ci_eq(item, lv)),
+                            _ => false,
+                        }
+                    }
+                }
+                "not_in" => {
+                    if matches!(lv, Value::Undefined) {
+                        true
+                    } else if matches!(rv, Value::Undefined) {
+                        false
+                    } else {
+                        let in_result = match rv {
+                            Value::Array(items) => items.iter().any(|item| ci_eq(item, lv)),
+                            Value::Set(items) => items.iter().any(|item| ci_eq(item, lv)),
+                            _ => false,
+                        };
+                        !in_result
+                    }
+                }
+                "contains" => {
+                    if matches!(lv, Value::Undefined) || matches!(rv, Value::Undefined) {
+                        false
+                    } else {
+                        match lv {
+                            Value::String(haystack) => {
+                                if let Value::String(needle) = rv {
+                                    haystack.to_lowercase().contains(&needle.to_lowercase())
+                                } else {
+                                    false
+                                }
+                            }
+                            Value::Array(items) => items.iter().any(|item| ci_eq(item, rv)),
+                            Value::Set(items) => items.iter().any(|item| ci_eq(item, rv)),
+                            _ => false,
+                        }
+                    }
+                }
+                "not_contains" => {
+                    if matches!(lv, Value::Undefined) {
+                        true
+                    } else if matches!(rv, Value::Undefined) {
+                        false
+                    } else {
+                        let c = match lv {
+                            Value::String(haystack) => {
+                                if let Value::String(needle) = rv {
+                                    haystack.to_lowercase().contains(&needle.to_lowercase())
+                                } else {
+                                    false
+                                }
+                            }
+                            Value::Array(items) => items.iter().any(|item| ci_eq(item, rv)),
+                            Value::Set(items) => items.iter().any(|item| ci_eq(item, rv)),
+                            _ => false,
+                        };
+                        !c
+                    }
+                }
+                "contains_key" => {
+                    if matches!(lv, Value::Undefined) || matches!(rv, Value::Undefined) {
+                        false
+                    } else {
+                        match lv {
+                            Value::Object(map) => map.keys().any(|k| ci_eq(k, rv)),
+                            _ => false,
+                        }
+                    }
+                }
+                "not_contains_key" => {
+                    if matches!(lv, Value::Undefined) {
+                        true
+                    } else if matches!(rv, Value::Undefined) {
+                        false
+                    } else {
+                        let ck = match lv {
+                            Value::Object(map) => map.keys().any(|k| ci_eq(k, rv)),
+                            _ => false,
+                        };
+                        !ck
+                    }
+                }
+                _ => false,
+            };
+
+            self.set_register_concrete(dest, Value::Bool(result));
+            return Ok(InstructionAction::Continue);
+        }
+
+        self.warnings.push(format!(
+            "PC {}: Policy {} on symbolic values — using unconstrained Bool",
+            self.pc, mode
+        ));
+        let name = self.pname(&format!("policy_{}_{}", mode, self.pc));
+        let var = Z3Bool::new_const(self.ctx, name.as_str());
+        self.set_register_sym(dest, SymValue::Bool(var), Definedness::Defined, None);
+        Ok(InstructionAction::Continue)
+    }
+
+    fn translate_policy_pattern(
+        &mut self,
+        dest: u8,
+        left: u8,
+        right: u8,
+        mode: &str,
+        negate: bool,
+    ) -> anyhow::Result<InstructionAction<'ctx>> {
+        let l = self.get_register(left).clone();
+        let r = self.get_register(right).clone();
+
+        if let (SymValue::Concrete(lv), SymValue::Concrete(_rv)) = (&l.value, &r.value) {
+            #[cfg(feature = "azure_policy")]
+            let mut result = match mode {
+                "like" => match (lv, _rv) {
+                    (Value::String(input), Value::String(pattern)) => {
+                        match_like_pattern_ci(&input.to_lowercase(), &pattern.to_lowercase())
+                    }
+                    _ => false,
+                },
+                "match" => match_pattern(&[lv.clone(), _rv.clone()], false),
+                "match_i" => match_pattern(&[lv.clone(), _rv.clone()], true),
+                _ => false,
+            };
+
+            #[cfg(not(feature = "azure_policy"))]
+            let mut result = false;
+
+            if negate {
+                if matches!(lv, Value::Undefined) {
+                    result = true;
+                } else {
+                    result = !result;
+                }
+            }
+
+            self.set_register_concrete(dest, Value::Bool(result));
+            return Ok(InstructionAction::Continue);
+        }
+
+        self.warnings.push(format!(
+            "PC {}: Policy pattern op ({}) on symbolic values — using unconstrained Bool",
+            self.pc, mode
+        ));
+        let name = self.pname(&format!("policy_{}_{}", mode, self.pc));
+        let var = Z3Bool::new_const(self.ctx, name.as_str());
+        let out = if negate {
+            let left_undef = l.defined.to_z3_bool(self.ctx).not();
+            Z3Bool::or(self.ctx, &[&left_undef, &var.not()])
+        } else {
+            var
+        };
+        self.set_register_sym(dest, SymValue::Bool(out), Definedness::Defined, None);
+        Ok(InstructionAction::Continue)
+    }
+
+    fn translate_policy_exists(
+        &mut self,
+        dest: u8,
+        left: u8,
+        right: u8,
+    ) -> anyhow::Result<InstructionAction<'ctx>> {
+        let l = self.get_register(left).clone();
+        let r = self.get_register(right).clone();
+
+        if let (SymValue::Concrete(lv), SymValue::Concrete(rv)) = (&l.value, &r.value) {
+            #[cfg(feature = "azure_policy")]
+            let expected = as_boolish(rv).unwrap_or(false);
+            #[cfg(not(feature = "azure_policy"))]
+            let expected = matches!(rv, Value::Bool(true));
+
+            let is_defined = lv != &Value::Undefined && lv != &Value::Null;
+            self.set_register_concrete(dest, Value::Bool(is_defined == expected));
+            return Ok(InstructionAction::Continue);
+        }
+
+        // Symbolic approximation: expected defaults to false unless concrete true.
+        let expected = match &r.value {
+            SymValue::Concrete(Value::Bool(b)) => *b,
+            _ => false,
+        };
+
+        let left_defined = l.defined.to_z3_bool(self.ctx);
+        let eq = if expected { left_defined } else { left_defined.not() };
+        self.set_register_sym(dest, SymValue::Bool(eq), Definedness::Defined, None);
+        Ok(InstructionAction::Continue)
+    }
+
+    fn translate_policy_not(
+        &mut self,
+        dest: u8,
+        operand: u8,
+    ) -> anyhow::Result<InstructionAction<'ctx>> {
+        let is_true = self.policy_is_true_reg(operand)?;
+        self.set_register_sym(dest, SymValue::Bool(is_true.not()), Definedness::Defined, None);
+        Ok(InstructionAction::Continue)
+    }
+
+    fn translate_allof_start(&mut self, result: u8) -> anyhow::Result<InstructionAction<'ctx>> {
+        // Logical allOf identity.
+        self.set_register_concrete(result, Value::Bool(true));
+        Ok(InstructionAction::Continue)
+    }
+
+    fn translate_allof_next(
+        &mut self,
+        check: u8,
+        result: u8,
+    ) -> anyhow::Result<InstructionAction<'ctx>> {
+        let prev = self.policy_is_true_reg(result)?;
+        let next = self.policy_is_true_reg(check)?;
+        let out = Z3Bool::and(self.ctx, &[&prev, &next]);
+        self.set_register_sym(result, SymValue::Bool(out), Definedness::Defined, None);
+        Ok(InstructionAction::Continue)
+    }
+
+    fn translate_anyof_start(&mut self, result: u8) -> anyhow::Result<InstructionAction<'ctx>> {
+        // Logical anyOf identity.
+        self.set_register_concrete(result, Value::Bool(false));
+        Ok(InstructionAction::Continue)
+    }
+
+    fn translate_anyof_next(
+        &mut self,
+        check: u8,
+        result: u8,
+    ) -> anyhow::Result<InstructionAction<'ctx>> {
+        let prev = self.policy_is_true_reg(result)?;
+        let next = self.policy_is_true_reg(check)?;
+        let out = Z3Bool::or(self.ctx, &[&prev, &next]);
+        self.set_register_sym(result, SymValue::Bool(out), Definedness::Defined, None);
+        Ok(InstructionAction::Continue)
+    }
+
+    fn policy_is_true_reg(&mut self, reg: u8) -> anyhow::Result<Z3Bool<'ctx>> {
+        let value = self.get_register(reg).clone();
+
+        if value.source_path.is_some() {
+            self.ensure_register_sort(reg, ValueSort::Bool)?;
+            let value = self.get_register(reg).clone();
+            let b = value.value.to_z3_bool(self.ctx)?;
+            let def = value.defined.to_z3_bool(self.ctx);
+            return Ok(Z3Bool::and(self.ctx, &[&def, &b]));
+        }
+
+        match value.value {
+            SymValue::Concrete(Value::Bool(b)) => {
+                let vb = Z3Bool::from_bool(self.ctx, b);
+                Ok(Z3Bool::and(
+                    self.ctx,
+                    &[&value.defined.to_z3_bool(self.ctx), &vb],
+                ))
+            }
+            SymValue::Bool(b) => match value.defined {
+                Definedness::Defined => Ok(b),
+                Definedness::Undefined => Ok(Z3Bool::from_bool(self.ctx, false)),
+                Definedness::Symbolic(def) => Ok(Z3Bool::and(self.ctx, &[&def, &b])),
+            },
+            _ => Ok(Z3Bool::from_bool(self.ctx, false)),
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Indexing
     // -----------------------------------------------------------------------
@@ -1079,8 +1612,8 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         }
 
         // Static path → path variable.
-        if let Some(path) = current_path {
-            return self.create_path_register(params.dest, &path, ValueSort::Unknown);
+        if let Some(ref path) = current_path {
+            return self.create_path_register(params.dest, path, ValueSort::Unknown);
         }
 
         // Mixed/dynamic path → concrete evaluation if possible.
@@ -2757,6 +3290,93 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         // Handle well-known builtins with proper Z3 semantics.
         match builtin_name {
             // ---------------------------------------------------------------
+            // ARM template aliases commonly emitted by Azure Policy compiler
+            // ---------------------------------------------------------------
+            "concat" => {
+                self.translate_builtin_concat(&params)?;
+            }
+            "lower" => {
+                self.translate_builtin_lower_upper(&params, true)?;
+            }
+            "upper" => {
+                self.translate_builtin_lower_upper(&params, false)?;
+            }
+
+            // ---------------------------------------------------------------
+            // Azure Policy utility builtins
+            // ---------------------------------------------------------------
+            "azure.policy.logic_all" => {
+                self.translate_builtin_azure_logic_fold(&params, true)?;
+            }
+            "azure.policy.logic_any" => {
+                self.translate_builtin_azure_logic_fold(&params, false)?;
+            }
+            "azure.policy.if" => {
+                self.translate_builtin_azure_if(&params)?;
+            }
+            "azure.policy.resolve_field" => {
+                self.translate_builtin_azure_resolve_field(&params)?;
+            }
+            "azure.policy.get_parameter" => {
+                self.translate_builtin_azure_get_parameter(&params)?;
+            }
+
+            // ---------------------------------------------------------------
+            // Azure Policy ARM-template function builtins (P0)
+            // ---------------------------------------------------------------
+            "azure.policy.fn.starts_with" => {
+                self.translate_builtin_string_bool(&params, builtin_name, |s, arg| arg.prefix(&s))?;
+            }
+            "azure.policy.fn.ends_with" => {
+                self.translate_builtin_string_bool(&params, builtin_name, |s, arg| arg.suffix(&s))?;
+            }
+            "azure.policy.fn.index_of" => {
+                self.translate_builtin_indexof(&params)?;
+            }
+            "azure.policy.fn.last_index_of" => {
+                self.translate_builtin_last_indexof(&params)?;
+            }
+            "azure.policy.fn.trim" => {
+                self.translate_builtin_trim(&params)?;
+            }
+            "azure.policy.fn.int" => {
+                self.translate_builtin_azure_to_int(&params)?;
+            }
+            "azure.policy.fn.float" => {
+                self.translate_builtin_azure_to_float(&params)?;
+            }
+            "azure.policy.fn.string" => {
+                self.translate_builtin_azure_to_string(&params)?;
+            }
+            "azure.policy.fn.bool" => {
+                self.translate_builtin_azure_to_bool(&params)?;
+            }
+            "azure.policy.fn.int_div" => {
+                self.translate_builtin_azure_int_divmod(&params, false)?;
+            }
+            "azure.policy.fn.int_mod" => {
+                self.translate_builtin_azure_int_divmod(&params, true)?;
+            }
+            "azure.policy.fn.min" => {
+                self.translate_builtin_azure_minmax(&params, true)?;
+            }
+            "azure.policy.fn.max" => {
+                self.translate_builtin_azure_minmax(&params, false)?;
+            }
+            "azure.policy.fn.coalesce" => {
+                self.translate_builtin_azure_coalesce(&params)?;
+            }
+            "azure.policy.fn.empty" => {
+                self.translate_builtin_azure_empty(&params)?;
+            }
+            "azure.policy.fn.first" => {
+                self.translate_builtin_azure_first_last(&params, true)?;
+            }
+            "azure.policy.fn.last" => {
+                self.translate_builtin_azure_first_last(&params, false)?;
+            }
+
+            // ---------------------------------------------------------------
             // count — special handling (SetCardinality, concrete, string len)
             // ---------------------------------------------------------------
             "count" => {
@@ -2947,6 +3567,615 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
     // ===================================================================
     // Builtin implementation helpers
     // ===================================================================
+
+    fn set_register_from(&mut self, dest: u8, src: u8) {
+        let reg = self.get_register(src).clone();
+        self.set_register_sym(dest, reg.value, reg.defined, reg.source_path);
+    }
+
+    fn translate_builtin_concat(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() >= 2 {
+            let delim_reg = self.get_register(params.args[0]).clone();
+            let list_reg = self.get_register(params.args[1]).clone();
+            if let (SymValue::Concrete(Value::String(delim)), SymValue::Concrete(Value::Array(items))) =
+                (&delim_reg.value, &list_reg.value)
+            {
+                let mut parts = Vec::with_capacity(items.len());
+                for v in items.iter() {
+                    if let Value::String(s) = v {
+                        parts.push(s.as_ref().to_string());
+                    } else {
+                        self.set_register_concrete(params.dest, Value::Undefined);
+                        return Ok(());
+                    }
+                }
+                self.set_register_concrete(params.dest, Value::from(parts.join(delim.as_ref())));
+                return Ok(());
+            }
+        }
+
+        self.warnings.push(format!(
+            "PC {}: Builtin 'concat' modeled as unconstrained String",
+            self.pc
+        ));
+        let name = self.pname(&format!("builtin_concat_{}", self.pc));
+        let var = Z3String::new_const(self.ctx, name.as_str());
+        self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    fn translate_builtin_lower_upper(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+        lower: bool,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() >= 1 {
+            let arg = self.get_register(params.args[0]).clone();
+            if let SymValue::Concrete(Value::String(s)) = &arg.value {
+                let out = if lower {
+                    s.to_lowercase()
+                } else {
+                    s.to_uppercase()
+                };
+                self.set_register_concrete(params.dest, Value::from(out));
+                return Ok(());
+            }
+        }
+
+        let op = if lower { "lower" } else { "upper" };
+        self.warnings.push(format!(
+            "PC {}: Builtin '{}' modeled as unconstrained String",
+            self.pc, op
+        ));
+        let name = self.pname(&format!("builtin_{}_{}", op, self.pc));
+        let var = Z3String::new_const(self.ctx, name.as_str());
+        self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    fn translate_builtin_azure_logic_fold(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+        all_mode: bool,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() == 0 {
+            self.set_register_concrete(params.dest, Value::Bool(all_mode));
+            return Ok(());
+        }
+
+        let mut terms = Vec::new();
+        for index in 0..params.arg_count() {
+            terms.push(self.policy_is_true_reg(params.args[index])?);
+        }
+
+        let refs: Vec<&Z3Bool<'ctx>> = terms.iter().collect();
+        let out = if all_mode {
+            Z3Bool::and(self.ctx, &refs)
+        } else {
+            Z3Bool::or(self.ctx, &refs)
+        };
+
+        self.set_register_sym(params.dest, SymValue::Bool(out), Definedness::Defined, None);
+        Ok(())
+    }
+
+    fn translate_builtin_azure_if(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() != 3 {
+            self.set_register_concrete(params.dest, Value::Undefined);
+            return Ok(());
+        }
+
+        let cond = params.args[0];
+        let when_true = params.args[1];
+        let when_false = params.args[2];
+
+        let cond_reg = self.get_register(cond).clone();
+        if let SymValue::Concrete(Value::Bool(b)) = cond_reg.value {
+            self.set_register_from(params.dest, if b { when_true } else { when_false });
+            return Ok(());
+        }
+
+        let cond_z3 = self.policy_is_true_reg(cond)?;
+        let left = self.get_register(when_true).clone();
+        let right = self.get_register(when_false).clone();
+
+        if let (Ok(lb), Ok(rb)) = (left.value.to_z3_bool(self.ctx), right.value.to_z3_bool(self.ctx)) {
+            let out = cond_z3.ite(&lb, &rb);
+            self.set_register_sym(params.dest, SymValue::Bool(out), Definedness::Defined, None);
+            return Ok(());
+        }
+        if let (Ok(li), Ok(ri)) = (left.value.to_z3_int(self.ctx), right.value.to_z3_int(self.ctx)) {
+            let out = cond_z3.ite(&li, &ri);
+            self.set_register_sym(params.dest, SymValue::Int(out), Definedness::Defined, None);
+            return Ok(());
+        }
+        if let (Ok(ls), Ok(rs)) = (
+            left.value.to_z3_string(self.ctx),
+            right.value.to_z3_string(self.ctx),
+        ) {
+            let out = cond_z3.ite(&ls, &rs);
+            self.set_register_sym(params.dest, SymValue::Str(out), Definedness::Defined, None);
+            return Ok(());
+        }
+
+        self.warnings.push(format!(
+            "PC {}: Builtin 'azure.policy.if' branch types unsupported; using fallback String",
+            self.pc
+        ));
+        let name = self.pname(&format!("builtin_azure_if_{}", self.pc));
+        let var = Z3String::new_const(self.ctx, name.as_str());
+        self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    fn translate_builtin_azure_resolve_field(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() != 2 {
+            self.set_register_concrete(params.dest, Value::Undefined);
+            return Ok(());
+        }
+
+        let root = self.get_register(params.args[0]).clone();
+        let path_reg = self.get_register(params.args[1]).clone();
+
+        if let (Some(root_path), SymValue::Concrete(Value::String(path))) =
+            (root.source_path.as_ref(), &path_reg.value)
+        {
+            let full = if path.starts_with('[') {
+                format!("{}{}", root_path, path)
+            } else {
+                format!("{}.{}", root_path, path)
+            };
+            let _ = self.create_path_register(params.dest, &full, ValueSort::Unknown)?;
+            return Ok(());
+        }
+
+        if let (SymValue::Concrete(_root_val), SymValue::Concrete(Value::String(_path))) =
+            (&root.value, &path_reg.value)
+        {
+            #[cfg(feature = "azure_policy")]
+            {
+                self.set_register_concrete(params.dest, resolve_path(_root_val, _path));
+                return Ok(());
+            }
+            #[cfg(not(feature = "azure_policy"))]
+            {
+                self.set_register_concrete(params.dest, Value::Undefined);
+                return Ok(());
+            }
+        }
+
+        self.warnings.push(format!(
+            "PC {}: Builtin 'azure.policy.resolve_field' modeled as unconstrained String",
+            self.pc
+        ));
+        let name = self.pname(&format!("builtin_azure_resolve_field_{}", self.pc));
+        let var = Z3String::new_const(self.ctx, name.as_str());
+        self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    fn translate_builtin_azure_get_parameter(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() != 3 {
+            self.set_register_concrete(params.dest, Value::Undefined);
+            return Ok(());
+        }
+
+        let params_obj = self.get_register(params.args[0]).clone();
+        let defaults_obj = self.get_register(params.args[1]).clone();
+        let name_reg = self.get_register(params.args[2]).clone();
+
+        if let (
+            SymValue::Concrete(params_val),
+            SymValue::Concrete(defaults_val),
+            SymValue::Concrete(name_val),
+        ) = (&params_obj.value, &defaults_obj.value, &name_reg.value)
+        {
+            let val = &params_val[name_val];
+            if !matches!(val, Value::Undefined) {
+                self.set_register_concrete(params.dest, val.clone());
+            } else {
+                self.set_register_concrete(params.dest, defaults_val[name_val].clone());
+            }
+            return Ok(());
+        }
+
+        self.warnings.push(format!(
+            "PC {}: Builtin 'azure.policy.get_parameter' modeled as unconstrained String",
+            self.pc
+        ));
+        let name = self.pname(&format!("builtin_azure_get_parameter_{}", self.pc));
+        let var = Z3String::new_const(self.ctx, name.as_str());
+        self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    fn translate_builtin_last_indexof(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() >= 2 {
+            let a0 = self.get_register(params.args[0]).clone();
+            let a1 = self.get_register(params.args[1]).clone();
+            if let (SymValue::Concrete(Value::String(s0)), SymValue::Concrete(Value::String(s1))) =
+                (&a0.value, &a1.value)
+            {
+                let idx = s0.rfind(s1.as_ref()).map(|i| i as i64).unwrap_or(-1);
+                self.set_register_concrete(params.dest, Value::from(idx));
+                return Ok(());
+            }
+        }
+        let name = self.pname(&format!("builtin_last_indexof_{}", self.pc));
+        let var = Z3Int::new_const(self.ctx, name.as_str());
+        self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    fn translate_builtin_trim(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() >= 1 {
+            let arg = self.get_register(params.args[0]).clone();
+            if let SymValue::Concrete(Value::String(s)) = &arg.value {
+                self.set_register_concrete(params.dest, Value::from(s.trim().to_string()));
+                return Ok(());
+            }
+        }
+        let name = self.pname(&format!("builtin_trim_{}", self.pc));
+        let var = Z3String::new_const(self.ctx, name.as_str());
+        self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    fn translate_builtin_azure_to_int(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() < 1 {
+            self.set_register_concrete(params.dest, Value::Undefined);
+            return Ok(());
+        }
+        let arg = self.get_register(params.args[0]).clone();
+        match &arg.value {
+            SymValue::Concrete(Value::Number(n)) => {
+                if let Some(i) = n.as_i64() {
+                    self.set_register_concrete(params.dest, Value::from(i));
+                    return Ok(());
+                }
+                if let Some(f) = n.as_f64() {
+                    self.set_register_concrete(params.dest, Value::from(f as i64));
+                    return Ok(());
+                }
+            }
+            SymValue::Concrete(Value::String(s)) => {
+                if let Ok(i) = s.as_ref().parse::<i64>() {
+                    self.set_register_concrete(params.dest, Value::from(i));
+                    return Ok(());
+                }
+            }
+            _ => {}
+        }
+        if let Ok(i) = arg.value.to_z3_int(self.ctx) {
+            self.set_register_sym(params.dest, SymValue::Int(i), arg.defined, None);
+            return Ok(());
+        }
+        self.set_register_concrete(params.dest, Value::Undefined);
+        Ok(())
+    }
+
+    fn translate_builtin_azure_to_float(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() < 1 {
+            self.set_register_concrete(params.dest, Value::Undefined);
+            return Ok(());
+        }
+        let arg = self.get_register(params.args[0]).clone();
+        match &arg.value {
+            SymValue::Concrete(Value::Number(n)) => {
+                if let Some(f) = n.as_f64() {
+                    self.set_register_concrete(params.dest, Value::from(f));
+                    return Ok(());
+                }
+            }
+            SymValue::Concrete(Value::String(s)) => {
+                if let Ok(f) = s.as_ref().parse::<f64>() {
+                    self.set_register_concrete(params.dest, Value::from(f));
+                    return Ok(());
+                }
+            }
+            _ => {}
+        }
+        if let Ok(r) = arg.value.to_z3_real(self.ctx) {
+            self.set_register_sym(params.dest, SymValue::Real(r), arg.defined, None);
+            return Ok(());
+        }
+        self.set_register_concrete(params.dest, Value::Undefined);
+        Ok(())
+    }
+
+    fn translate_builtin_azure_to_string(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() < 1 {
+            self.set_register_concrete(params.dest, Value::Undefined);
+            return Ok(());
+        }
+        let arg = self.get_register(params.args[0]).clone();
+        match &arg.value {
+            SymValue::Concrete(Value::String(s)) => {
+                self.set_register_concrete(params.dest, Value::String(s.clone()));
+                return Ok(());
+            }
+            SymValue::Concrete(Value::Bool(b)) => {
+                self.set_register_concrete(params.dest, Value::from(b.to_string()));
+                return Ok(());
+            }
+            SymValue::Concrete(Value::Number(n)) => {
+                self.set_register_concrete(params.dest, Value::from(n.format_decimal()));
+                return Ok(());
+            }
+            SymValue::Concrete(Value::Null) => {
+                self.set_register_concrete(params.dest, Value::from("null"));
+                return Ok(());
+            }
+            SymValue::Concrete(Value::Undefined) => {
+                self.set_register_concrete(params.dest, Value::Undefined);
+                return Ok(());
+            }
+            _ => {}
+        }
+        if let Ok(s) = arg.value.to_z3_string(self.ctx) {
+            self.set_register_sym(params.dest, SymValue::Str(s), arg.defined, None);
+            return Ok(());
+        }
+        let name = self.pname(&format!("builtin_azure_string_{}", self.pc));
+        let var = Z3String::new_const(self.ctx, name.as_str());
+        self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    fn translate_builtin_azure_to_bool(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() < 1 {
+            self.set_register_concrete(params.dest, Value::Undefined);
+            return Ok(());
+        }
+
+        let arg_reg = params.args[0];
+        let arg = self.get_register(arg_reg).clone();
+        if let SymValue::Concrete(v) = &arg.value {
+            let out = match v {
+                Value::Bool(b) => Some(*b),
+                Value::String(s) => match s.to_lowercase().as_str() {
+                    "true" | "1" => Some(true),
+                    "false" | "0" => Some(false),
+                    _ => None,
+                },
+                Value::Number(n) => {
+                    if let Some(i) = n.as_i64() {
+                        Some(i != 0)
+                    } else {
+                        n.as_f64().map(|f| f != 0.0)
+                    }
+                }
+                _ => None,
+            };
+            if let Some(b) = out {
+                self.set_register_concrete(params.dest, Value::Bool(b));
+            } else {
+                self.set_register_concrete(params.dest, Value::Undefined);
+            }
+            return Ok(());
+        }
+
+        let out = self.policy_is_true_reg(arg_reg)?;
+        self.set_register_sym(params.dest, SymValue::Bool(out), Definedness::Defined, None);
+        Ok(())
+    }
+
+    fn translate_builtin_azure_int_divmod(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+        modulo: bool,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() != 2 {
+            self.set_register_concrete(params.dest, Value::Undefined);
+            return Ok(());
+        }
+
+        let a = self.resolve_arg_as_z3_int(params.args[0]);
+        let b = self.resolve_arg_as_z3_int(params.args[1]);
+        if let (Some(lhs), Some(rhs)) = (a, b) {
+            let zero = Z3Int::from_i64(self.ctx, 0);
+            self.constraints.push(rhs._eq(&zero).not());
+            let out = if modulo { lhs.rem(&rhs) } else { lhs / rhs };
+            self.set_register_sym(params.dest, SymValue::Int(out), Definedness::Defined, None);
+            return Ok(());
+        }
+
+        self.set_register_concrete(params.dest, Value::Undefined);
+        Ok(())
+    }
+
+    fn translate_builtin_azure_minmax(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+        min_mode: bool,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() == 0 {
+            self.set_register_concrete(params.dest, Value::Undefined);
+            return Ok(());
+        }
+
+        let mut values = Vec::new();
+        if params.arg_count() == 1 {
+            let arg0 = self.get_register(params.args[0]).clone();
+            if let SymValue::Concrete(Value::Array(items)) = arg0.value {
+                for item in items.iter() {
+                    if let Value::Number(n) = item {
+                        if let Some(i) = n.as_i64() {
+                            values.push(Z3Int::from_i64(self.ctx, i));
+                        } else {
+                            self.set_register_concrete(params.dest, Value::Undefined);
+                            return Ok(());
+                        }
+                    } else {
+                        self.set_register_concrete(params.dest, Value::Undefined);
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        if values.is_empty() {
+            for index in 0..params.arg_count() {
+                if let Some(v) = self.resolve_arg_as_z3_int(params.args[index]) {
+                    values.push(v);
+                } else {
+                    self.set_register_concrete(params.dest, Value::Undefined);
+                    return Ok(());
+                }
+            }
+        }
+
+        if values.is_empty() {
+            self.set_register_concrete(params.dest, Value::Undefined);
+            return Ok(());
+        }
+
+        let mut cur = values[0].clone();
+        for next in values.iter().skip(1) {
+            cur = if min_mode {
+                cur.le(next).ite(&cur, next)
+            } else {
+                cur.ge(next).ite(&cur, next)
+            };
+        }
+
+        self.set_register_sym(params.dest, SymValue::Int(cur), Definedness::Defined, None);
+        Ok(())
+    }
+
+    fn translate_builtin_azure_coalesce(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        for index in 0..params.arg_count() {
+            let reg = self.get_register(params.args[index]).clone();
+            if reg.defined.is_undefined() {
+                continue;
+            }
+            if let SymValue::Concrete(Value::Undefined) = reg.value {
+                continue;
+            }
+            if let SymValue::Concrete(Value::Null) = reg.value {
+                continue;
+            }
+            self.set_register_sym(params.dest, reg.value, reg.defined, reg.source_path);
+            return Ok(());
+        }
+        self.set_register_concrete(params.dest, Value::Undefined);
+        Ok(())
+    }
+
+    fn translate_builtin_azure_empty(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() == 0 {
+            self.set_register_concrete(params.dest, Value::Bool(true));
+            return Ok(());
+        }
+        let arg = self.get_register(params.args[0]).clone();
+        if let SymValue::Concrete(v) = arg.value {
+            let result = match v {
+                Value::String(s) => s.is_empty(),
+                Value::Array(a) => a.is_empty(),
+                Value::Object(o) => o.is_empty(),
+                Value::Null | Value::Undefined => true,
+                _ => false,
+            };
+            self.set_register_concrete(params.dest, Value::Bool(result));
+            return Ok(());
+        }
+        let name = self.pname(&format!("builtin_azure_empty_{}", self.pc));
+        let var = Z3Bool::new_const(self.ctx, name.as_str());
+        self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    fn translate_builtin_azure_first_last(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+        first_mode: bool,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() == 0 {
+            self.set_register_concrete(params.dest, Value::Undefined);
+            return Ok(());
+        }
+        let arg = self.get_register(params.args[0]).clone();
+        if let SymValue::Concrete(v) = arg.value {
+            match v {
+                Value::Array(a) => {
+                    let out = if first_mode {
+                        a.first().cloned()
+                    } else {
+                        a.last().cloned()
+                    }
+                    .unwrap_or(Value::Undefined);
+                    self.set_register_concrete(params.dest, out);
+                    return Ok(());
+                }
+                Value::String(s) => {
+                    let ch = if first_mode {
+                        s.chars().next()
+                    } else {
+                        s.chars().last()
+                    };
+                    let out = ch
+                        .map(|c| Value::from(c.to_string()))
+                        .unwrap_or(Value::Undefined);
+                    self.set_register_concrete(params.dest, out);
+                    return Ok(());
+                }
+                _ => {
+                    self.set_register_concrete(params.dest, Value::Undefined);
+                    return Ok(());
+                }
+            }
+        }
+
+        self.warnings.push(format!(
+            "PC {}: Builtin '{}' on symbolic value; using unconstrained String",
+            self.pc,
+            if first_mode { "azure.policy.fn.first" } else { "azure.policy.fn.last" }
+        ));
+        let name = self.pname(&format!(
+            "builtin_azure_{}_{}",
+            if first_mode { "first" } else { "last" },
+            self.pc
+        ));
+        let var = Z3String::new_const(self.ctx, name.as_str());
+        self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
+        Ok(())
+    }
 
     /// `count(x)` — returns the cardinality/length of a collection or string.
     fn translate_builtin_count(

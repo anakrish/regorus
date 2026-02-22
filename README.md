@@ -215,6 +215,46 @@ See [Engine::get_coverage_report](https://docs.rs/regorus/latest/regorus/struct.
 Policy coverage information is useful for debugging your policy as well as to write tests for your policy so that all
 lines of the policy are exercised by the tests.
 
+## Z3 Symbolic Analysis
+
+Regorus includes an optional Z3-backed symbolic analyzer that can automatically
+synthesise concrete inputs satisfying (or violating) a policy — without executing
+it.  Enable it with the `z3-analysis` feature (requires [Z3](https://github.com/Z3Prover/z3)):
+
+```bash
+BINDGEN_EXTRA_CLANG_ARGS="-I/opt/homebrew/include" \
+LIBRARY_PATH="/opt/homebrew/lib" \
+cargo build --example regorus --features z3-analysis,cedar,azure_policy
+```
+
+**Capabilities:**
+
+| Command | Purpose |
+|---|---|
+| `regorus analyze` | Synthesise a concrete input that produces a given output |
+| `regorus diff` | Find an input where two policies disagree (or prove equivalence) |
+| `regorus subsumes` | Prove (or disprove) that one policy is at least as restrictive as another |
+| `regorus gen-tests` | Generate a minimal test suite covering all reachable source lines |
+
+The analyzer supports Rego, Cedar, and Azure Policy definitions.  Azure Policy
+demos use `--azure-aliases` to supply the alias catalog.
+
+**Demo scenarios** (33 demos across Rego, Cedar, and Azure Policy):
+
+- **Container admission** — cross-collection joins across containers, hosts, and volumes
+- **Network segmentation** — policy diff and subsumption with path targeting
+- **Cedar** — IAM, healthcare, financial trading, and Kubernetes RBAC with entity hierarchies
+- **Azure Storage** — HTTPS + TLS enforcement, diff, subsumption, and test generation
+- **Azure SQL Server** — 3-policy subsumption lattice (V1/V2 incomparable, both subsume V3)
+- **Azure Key Vault** — migration safety (De Morgan structural inversion proven equivalent),
+  bug detection (Z3 catches allOf↔anyOf mistake), and gap analysis (missing RBAC requirement)
+
+See the full [Demo Gallery](examples/demos/README.md) and run all demos with:
+
+```bash
+./examples/demos/run_demos.sh
+```
+
 ## ACI Policies
 
 Regorus successfully passes the ACI policy test-suite. It is fast and can run each of the tests in a few milliseconds.

@@ -1,0 +1,56 @@
+{
+  "properties": {
+    "displayName": "Key Vault – network and data protection only (INCOMPLETE)",
+    "policyType": "Custom",
+    "mode": "Indexed",
+    "description": "Incomplete version of the enterprise baseline.  Covers the network-isolation and data-protection groups but entirely omits the access-control requirement (premium vaults must use RBAC).  This gap allows premium Key Vaults to use legacy access policies instead of RBAC — a real privilege-escalation risk.  Z3 subsumption analysis reveals the gap and produces a counterexample: a premium vault with RBAC disabled that this policy allows but the original would deny.",
+    "parameters": {
+      "effect": {
+        "type": "String",
+        "allowedValues": ["deny", "audit", "disabled"],
+        "defaultValue": "deny"
+      }
+    },
+    "policyRule": {
+      "if": {
+        "allOf": [
+          {
+            "field": "type",
+            "equals": "Microsoft.KeyVault/vaults"
+          },
+          {
+            "anyOf": [
+              {
+                "allOf": [
+                  {
+                    "field": "Microsoft.KeyVault/vaults/publicNetworkAccess",
+                    "notEquals": "Disabled"
+                  },
+                  {
+                    "field": "Microsoft.KeyVault/vaults/networkAcls.defaultAction",
+                    "notEquals": "Deny"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "field": "Microsoft.KeyVault/vaults/enableSoftDelete",
+                    "equals": false
+                  },
+                  {
+                    "field": "Microsoft.KeyVault/vaults/enablePurgeProtection",
+                    "equals": false
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "then": {
+        "effect": "[parameters('effect')]"
+      }
+    }
+  }
+}

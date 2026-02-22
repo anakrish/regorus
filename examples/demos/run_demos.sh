@@ -11,13 +11,13 @@
 #   # Build once:
 #   BINDGEN_EXTRA_CLANG_ARGS="-I/opt/homebrew/include" \
 #   LIBRARY_PATH="/opt/homebrew/lib" \
-#   cargo build --example regorus --features z3-analysis,cedar
+#   cargo build --example regorus --features z3-analysis,cedar,azure_policy
 # ============================================================
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-BIN="cargo run --example regorus --features z3-analysis,cedar --"
+BIN="cargo run --example regorus --features z3-analysis,cedar,azure_policy --"
 export BINDGEN_EXTRA_CLANG_ARGS="${BINDGEN_EXTRA_CLANG_ARGS:--I/opt/homebrew/include}"
 export LIBRARY_PATH="${LIBRARY_PATH:-/opt/homebrew/lib}"
 
@@ -521,6 +521,220 @@ run $BIN subsumes \
 echo "▸ Insight: v2⊇v1 holds — every compliant topology under v1 is also"
 echo "   compliant under v2.  v1⊇v2 fails — Z3 provides a counterexample"
 echo "   involving a PII service with an unencrypted connection."
+
+# ==============================================================
+title "DEMO 21 — Azure Policy: Input Synthesis" \
+      "Find a resource that triggers effect=deny" \
+      "(requires alias catalog via --azure-aliases)."
+# ==============================================================
+
+echo "▸ 21a) Find a Storage Account input that violates HTTPS-only policy (v1):"
+run $BIN analyze \
+  -d examples/demos/azure_storage_https_v1_definition.json \
+  -e main \
+  -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -i examples/demos/azure_storage_input.json \
+  -s examples/demos/azure_storage_schema.json \
+  --max-loops 3
+
+echo "▸ Insight: Z3 drives supportsHttpsTrafficOnly=false while keeping"
+echo "   resource.type fixed to Microsoft.Storage/storageAccounts."
+
+# ==============================================================
+title "DEMO 22 — Azure Policy Diff (v1 vs v2)" \
+      "v2 adds minimumTlsVersion == TLS1_2 requirement" \
+      "and should disagree with v1 on TLS-only violations."
+# ==============================================================
+
+echo "▸ 22a) Find a distinguishing input where outputs differ (target deny):"
+run $BIN diff \
+  --policy1 examples/demos/azure_storage_https_v1_definition.json \
+  --policy2 examples/demos/azure_storage_https_v2_definition.json \
+  -e main \
+  -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -i examples/demos/azure_storage_input.json \
+  -s examples/demos/azure_storage_schema.json \
+  --max-loops 3
+
+# ==============================================================
+title "DEMO 23 — Azure Policy Subsumption (v1 vs v2)" \
+      "Check strictness relation for deny behavior."
+# ==============================================================
+
+echo "▸ 23a) Does v2 subsume v1 for deny? (expect true):"
+run $BIN subsumes \
+  --old examples/demos/azure_storage_https_v1_definition.json \
+  --new examples/demos/azure_storage_https_v2_definition.json \
+  -e main \
+  -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -i examples/demos/azure_storage_input.json \
+  -s examples/demos/azure_storage_schema.json \
+  --max-loops 3
+
+echo "▸ 23b) Does v1 subsume v2 for deny? (expect false):"
+run $BIN subsumes \
+  --old examples/demos/azure_storage_https_v2_definition.json \
+  --new examples/demos/azure_storage_https_v1_definition.json \
+  -e main \
+  -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -i examples/demos/azure_storage_input.json \
+  -s examples/demos/azure_storage_schema.json \
+  --max-loops 3
+
+# ==============================================================
+title "DEMO 24 — Azure Policy Test Generation" \
+      "Generate deny-oriented tests for the stricter v2 policy."
+# ==============================================================
+
+echo "▸ 24a) Generate test cases targeting output=deny:"
+run $BIN gen-tests \
+  -d examples/demos/azure_storage_https_v2_definition.json \
+  -e main \
+  -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -i examples/demos/azure_storage_input.json \
+  -s examples/demos/azure_storage_schema.json \
+  --max-loops 3 \
+  --max-tests 10
+
+# ==============================================================
+title "DEMOS 25–28 — SQL Server Hardening (3-Policy Lattice)" \
+      "V1: inbound focus (public access)" \
+      "V2: outbound focus (restrict outbound)" \
+      "V3: balanced (public AND outbound)." \
+      "Z3 proves the full subsumption lattice."
+# ==============================================================
+
+echo "▸ 25a) Analyze SQL V1 (deny synthesis):"
+run $BIN analyze \
+  -d examples/demos/azure_sql_v1_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json
+
+echo "▸ 25b) Analyze SQL V2:"
+run $BIN analyze \
+  -d examples/demos/azure_sql_v2_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json
+
+echo "▸ 25c) Analyze SQL V3:"
+run $BIN analyze \
+  -d examples/demos/azure_sql_v3_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json
+
+echo "▸ 26) Diff V1 vs V2 (expect not equivalent — orthogonal concerns):"
+run $BIN diff \
+  --policy1 examples/demos/azure_sql_v1_definition.json \
+  --policy2 examples/demos/azure_sql_v2_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json
+
+echo "▸ 27a) Subsumes: V1 ⊇ V3? (expect true — V1 is stricter):"
+run $BIN subsumes \
+  --old examples/demos/azure_sql_v3_definition.json \
+  --new examples/demos/azure_sql_v1_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json
+
+echo "▸ 27b) Subsumes: V3 ⊇ V1? (expect false):"
+run $BIN subsumes \
+  --old examples/demos/azure_sql_v1_definition.json \
+  --new examples/demos/azure_sql_v3_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json
+
+echo "▸ 27c) Subsumes: V2 ⊇ V3? (expect true — V2 is stricter):"
+run $BIN subsumes \
+  --old examples/demos/azure_sql_v3_definition.json \
+  --new examples/demos/azure_sql_v2_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json
+
+echo "▸ 27d) Subsumes: V1 ⊇ V2? (expect false — incomparable):"
+run $BIN subsumes \
+  --old examples/demos/azure_sql_v2_definition.json \
+  --new examples/demos/azure_sql_v1_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json
+
+echo "▸ 27e) Subsumes: V2 ⊇ V1? (expect false — incomparable):"
+run $BIN subsumes \
+  --old examples/demos/azure_sql_v1_definition.json \
+  --new examples/demos/azure_sql_v2_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json
+
+echo "▸ 28) Test generation for SQL V3:"
+run $BIN gen-tests \
+  -d examples/demos/azure_sql_v3_definition.json \
+  -e main \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json \
+  --max-loops 3 --max-tests 10
+
+# ==============================================================
+title "DEMOS 29–33 — Key Vault Enterprise Hardening" \
+      "Migration Safety + Gap Analysis." \
+      "6 fields, 3 nesting levels, 3 compliance groups." \
+      "Original vs De Morgan refactoring vs buggy vs incomplete."
+# ==============================================================
+
+echo "▸ 29) Analyze original Key Vault baseline (deny synthesis):"
+run $BIN analyze \
+  -d examples/demos/azure_keyvault_original_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_keyvault_schema.json
+
+echo "▸ 30) Migration Safety: diff original vs refactored (expect equivalent):"
+echo "   Full De Morgan inversion — every operator at every level is flipped."
+run $BIN diff \
+  --policy1 examples/demos/azure_keyvault_original_definition.json \
+  --policy2 examples/demos/azure_keyvault_refactored_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_keyvault_schema.json
+
+echo "▸ 31) Migration Safety: diff original vs BUGGY refactoring (expect NOT equivalent):"
+echo "   Bug: allOf instead of anyOf in access-control group."
+run $BIN diff \
+  --policy1 examples/demos/azure_keyvault_original_definition.json \
+  --policy2 examples/demos/azure_keyvault_buggy_refactor_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_keyvault_schema.json
+
+echo "▸ 32) Gap Analysis: does original subsume incomplete? (expect false):"
+echo "   Incomplete policy drops the RBAC requirement for premium vaults."
+run $BIN subsumes \
+  --old examples/demos/azure_keyvault_original_definition.json \
+  --new examples/demos/azure_keyvault_incomplete_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_keyvault_schema.json
+
+echo "▸ 33) Gap Analysis: does incomplete subsume original? (expect true):"
+echo "   Original is strictly more restrictive — covers everything incomplete does."
+run $BIN subsumes \
+  --old examples/demos/azure_keyvault_incomplete_definition.json \
+  --new examples/demos/azure_keyvault_original_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_keyvault_schema.json
 
 sep
 echo "  All demos completed successfully."

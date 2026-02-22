@@ -1,0 +1,40 @@
+{
+  "properties": {
+    "displayName": "SQL Server – require TLS 1.2 and restrict outbound traffic",
+    "policyType": "Custom",
+    "mode": "Indexed",
+    "description": "Denies Azure SQL servers that use a TLS version below 1.2 or that do not restrict outbound network access.  This policy focuses on data-exfiltration prevention: the server must restrict outbound traffic, but inbound public access is permitted when outbound is locked down.",
+    "parameters": {
+      "effect": {
+        "type": "String",
+        "allowedValues": ["deny", "audit", "disabled"],
+        "defaultValue": "deny"
+      }
+    },
+    "policyRule": {
+      "if": {
+        "allOf": [
+          {
+            "field": "type",
+            "equals": "Microsoft.Sql/servers"
+          },
+          {
+            "anyOf": [
+              {
+                "field": "Microsoft.Sql/servers/minimumTlsVersion",
+                "notEquals": "1.2"
+              },
+              {
+                "field": "Microsoft.Sql/servers/restrictOutboundNetworkAccess",
+                "notEquals": "Enabled"
+              }
+            ]
+          }
+        ]
+      },
+      "then": {
+        "effect": "[parameters('effect')]"
+      }
+    }
+  }
+}

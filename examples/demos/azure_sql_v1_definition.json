@@ -1,0 +1,40 @@
+{
+  "properties": {
+    "displayName": "SQL Server – require TLS 1.2 and block public network access",
+    "policyType": "Custom",
+    "mode": "Indexed",
+    "description": "Denies Azure SQL servers that use a TLS version below 1.2 or that have public network access enabled.  This is a strict network-isolation stance: any exposure to the public internet is denied regardless of other compensating controls.",
+    "parameters": {
+      "effect": {
+        "type": "String",
+        "allowedValues": ["deny", "audit", "disabled"],
+        "defaultValue": "deny"
+      }
+    },
+    "policyRule": {
+      "if": {
+        "allOf": [
+          {
+            "field": "type",
+            "equals": "Microsoft.Sql/servers"
+          },
+          {
+            "anyOf": [
+              {
+                "field": "Microsoft.Sql/servers/minimumTlsVersion",
+                "notEquals": "1.2"
+              },
+              {
+                "field": "Microsoft.Sql/servers/publicNetworkAccess",
+                "equals": "Enabled"
+              }
+            ]
+          }
+        ]
+      },
+      "then": {
+        "effect": "[parameters('effect')]"
+      }
+    }
+  }
+}

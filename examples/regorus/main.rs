@@ -363,6 +363,11 @@ enum RegorusCommand {
         /// minimum lengths, enums, and field uniqueness (`x-unique`).
         #[arg(long, short, value_name = "schema.json")]
         schema: Option<String>,
+
+        /// Azure Policy alias catalog JSON.
+        /// Required when input files include Azure Policy definition JSON.
+        #[arg(long, value_name = "aliases.json")]
+        azure_aliases: Option<String>,
     },
 
     /// Find inputs where two policy versions disagree (policy diff).
@@ -420,6 +425,11 @@ enum RegorusCommand {
         /// JSON Schema file for input constraints.
         #[arg(long, short, value_name = "schema.json")]
         schema: Option<String>,
+
+        /// Azure Policy alias catalog JSON.
+        /// Required when policy files include Azure Policy definition JSON.
+        #[arg(long, value_name = "aliases.json")]
+        azure_aliases: Option<String>,
     },
 
     /// Check whether one policy subsumes another.
@@ -468,6 +478,11 @@ enum RegorusCommand {
         /// JSON Schema file for input constraints.
         #[arg(long, short, value_name = "schema.json")]
         schema: Option<String>,
+
+        /// Azure Policy alias catalog JSON.
+        /// Required when old/new files include Azure Policy definition JSON.
+        #[arg(long, value_name = "aliases.json")]
+        azure_aliases: Option<String>,
     },
 
     /// Generate a test suite by covering all reachable source lines.
@@ -517,6 +532,11 @@ enum RegorusCommand {
         /// JSON Schema file for input constraints.
         #[arg(long, short, value_name = "schema.json")]
         schema: Option<String>,
+
+        /// Azure Policy alias catalog JSON.
+        /// Required when input files include Azure Policy definition JSON.
+        #[arg(long, value_name = "aliases.json")]
+        azure_aliases: Option<String>,
     },
 
     /// Parse a Rego policy and dump AST.
@@ -681,9 +701,10 @@ fn main() -> Result<()> {
             max_loops,
             input,
             schema,
+            azure_aliases,
         } => analyze::rego_analyze(
             &bundles, &data, entrypoint, output, cover_line, avoid_line, dump_smt, dump_model,
-            timeout, max_loops, input, schema,
+            timeout, max_loops, input, schema, azure_aliases,
         ),
         #[cfg(feature = "z3-analysis")]
         RegorusCommand::Diff {
@@ -699,9 +720,10 @@ fn main() -> Result<()> {
             max_loops,
             input,
             schema,
+            azure_aliases,
         } => analyze::rego_diff(
             &bundles1, &policy1, &bundles2, &policy2, entrypoint, output, dump_smt, dump_model,
-            timeout, max_loops, input, schema,
+            timeout, max_loops, input, schema, azure_aliases,
         ),
         #[cfg(feature = "z3-analysis")]
         RegorusCommand::Subsumes {
@@ -715,8 +737,19 @@ fn main() -> Result<()> {
             max_loops,
             input,
             schema,
+            azure_aliases,
         } => analyze::rego_subsumes(
-            &old, &new, entrypoint, output, dump_smt, dump_model, timeout, max_loops, input, schema,
+            &old,
+            &new,
+            entrypoint,
+            output,
+            dump_smt,
+            dump_model,
+            timeout,
+            max_loops,
+            input,
+            schema,
+            azure_aliases,
         ),
         #[cfg(feature = "z3-analysis")]
         RegorusCommand::GenTests {
@@ -730,9 +763,10 @@ fn main() -> Result<()> {
             max_tests,
             input,
             schema,
+            azure_aliases,
         } => analyze::rego_gen_tests(
             &bundles, &data, entrypoint, output, dump_smt, timeout, max_loops, max_tests, input,
-            schema,
+            schema, azure_aliases,
         ),
         #[cfg(feature = "cedar")]
         RegorusCommand::Cedar { command } => cedar_cli::run(command),

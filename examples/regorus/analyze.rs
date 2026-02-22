@@ -21,66 +21,10 @@ pub fn rego_analyze(
     max_loops: usize,
     input_file: Option<String>,
     schema_file: Option<String>,
+    azure_aliases_file: Option<String>,
 ) -> Result<()> {
-    // Create engine and load policies/data.
-    let mut engine = regorus::Engine::new();
-    let mut cedar_sources: Vec<(String, String)> = Vec::new();
-    let mut cedar_entities: Option<regorus::Value> = None;
-
-    for dir in bundles.iter() {
-        let entries =
-            std::fs::read_dir(dir).or_else(|e| bail!("failed to read bundle {dir}.\n{e}"))?;
-        for entry in entries {
-            let entry = entry.or_else(|e| bail!("failed to unwrap entry. {e}"))?;
-            let path = entry.path();
-            match (path.is_file(), path.extension()) {
-                (true, Some(ext)) if ext == "rego" => {}
-                _ => continue,
-            }
-            super::add_policy_from_file(&mut engine, entry.path().display().to_string())?;
-        }
-    }
-
-    for file in files.iter() {
-        if file.ends_with(".rego") {
-            super::add_policy_from_file(&mut engine, file.clone())?;
-        } else if file.ends_with(".cedar") {
-            let contents = std::fs::read_to_string(file)
-                .map_err(|e| anyhow!("Failed to read Cedar file '{}': {}", file, e))?;
-            cedar_sources.push((file.clone(), contents));
-        } else if file.ends_with(".json") {
-            let d = super::read_value_from_json_file(file)?;
-            if !cedar_sources.is_empty() {
-                // For Cedar policies, JSON files contain entity data.
-                // Stash it to inject as concrete input.entities later.
-                cedar_entities = Some(d);
-            } else {
-                engine.add_data(d)?;
-            }
-        } else if file.ends_with(".yaml") {
-            let d = super::read_value_from_yaml_file(file)?;
-            engine.add_data(d)?;
-        } else {
-            bail!("Unsupported data file `{file}`. Must be rego, cedar, json or yaml.");
-        }
-    }
-
-    // Compile to RVM bytecode — Cedar or Rego path.
-    let is_cedar = !cedar_sources.is_empty();
-    let (program_owned, program_rc);
-    let program: &regorus::rvm::program::Program = if is_cedar {
-        program_owned = compile_cedar_to_program(&cedar_sources)?;
-        &program_owned
-    } else {
-        let ep: regorus::Rc<str> = regorus::Rc::from(entrypoint.as_str());
-        let compiled = engine.compile_with_entrypoint(&ep)?;
-        program_rc = regorus::languages::rego::compiler::Compiler::compile_from_policy(
-            &compiled,
-            &[entrypoint.as_str()],
-        )?;
-        &program_rc
-    };
-    let data = engine.get_data();
+    let (program, data, cedar_entities) =
+        compile_policy_set(bundles, files, &entrypoint, azure_aliases_file.as_ref())?;
 
     // Parse the expected output value (if given).
     let desired_value: Option<regorus::Value> = match &output {
@@ -163,10 +107,8 @@ pub fn rego_analyze(
     };
 
     let mut concrete_input = std::collections::HashMap::new();
-    if is_cedar {
-        if let Some(entities) = cedar_entities {
-            concrete_input.insert("entities".to_string(), entities);
-        }
+    if let Some(entities) = cedar_entities {
+        concrete_input.insert("entities".to_string(), entities);
     }
 
     let config = AnalysisConfig {
@@ -219,6 +161,7 @@ fn compile_policy_set(
     bundles: &[String],
     files: &[String],
     entrypoint: &str,
+    azure_aliases_file: Option<&String>,
 ) -> Result<(
     regorus::Rc<regorus::rvm::program::Program>,
     regorus::Value,
@@ -226,7 +169,9 @@ fn compile_policy_set(
 )> {
     let mut engine = regorus::Engine::new();
     let mut cedar_sources: Vec<(String, String)> = Vec::new();
+    let mut azure_sources: Vec<(String, String)> = Vec::new();
     let mut cedar_entities: Option<regorus::Value> = None;
+    let mut rego_sources_present = false;
 
     for dir in bundles.iter() {
         let entries =
@@ -239,22 +184,31 @@ fn compile_policy_set(
                 _ => continue,
             }
             super::add_policy_from_file(&mut engine, entry.path().display().to_string())?;
+            rego_sources_present = true;
         }
     }
 
     for file in files.iter() {
         if file.ends_with(".rego") {
             super::add_policy_from_file(&mut engine, file.clone())?;
+            rego_sources_present = true;
         } else if file.ends_with(".cedar") {
             let contents = std::fs::read_to_string(file)
                 .map_err(|e| anyhow!("Failed to read Cedar file '{}': {}", file, e))?;
             cedar_sources.push((file.clone(), contents));
         } else if file.ends_with(".json") {
-            let d = super::read_value_from_json_file(file)?;
-            if !cedar_sources.is_empty() {
-                cedar_entities = Some(d);
+            let raw = std::fs::read_to_string(file)
+                .map_err(|e| anyhow!("Failed to read JSON file '{}': {}", file, e))?;
+            if looks_like_azure_policy_definition(&raw) {
+                azure_sources.push((file.clone(), raw));
             } else {
-                engine.add_data(d)?;
+                let d = regorus::Value::from_json_str(&raw)
+                    .map_err(|e| anyhow!("Failed to parse JSON file '{}': {}", file, e))?;
+                if !cedar_sources.is_empty() {
+                    cedar_entities = Some(d);
+                } else {
+                    engine.add_data(d)?;
+                }
             }
         } else if file.ends_with(".yaml") {
             let d = super::read_value_from_yaml_file(file)?;
@@ -264,8 +218,23 @@ fn compile_policy_set(
         }
     }
 
+    if !azure_sources.is_empty() && (!cedar_sources.is_empty() || rego_sources_present) {
+        bail!(
+            "Cannot mix Azure Policy definitions with Rego/Cedar sources in the same command"
+        );
+    }
+
     let is_cedar = !cedar_sources.is_empty();
-    let program = if is_cedar {
+    let is_azure = !azure_sources.is_empty();
+    let program = if is_azure {
+        if azure_sources.len() != 1 {
+            bail!("Exactly one Azure Policy definition JSON file is supported per command");
+        }
+        let aliases = azure_aliases_file
+            .ok_or_else(|| anyhow!("Azure Policy input requires --azure-aliases <aliases.json>"))?;
+        let (path, contents) = azure_sources.into_iter().next().unwrap();
+        compile_azure_policy_to_program(&path, &contents, aliases)?
+    } else if is_cedar {
         regorus::Rc::new(compile_cedar_to_program(&cedar_sources)?)
     } else {
         let ep: regorus::Rc<str> = regorus::Rc::from(entrypoint);
@@ -275,6 +244,18 @@ fn compile_policy_set(
 
     let data = engine.get_data();
     Ok((program, data, cedar_entities))
+}
+
+fn looks_like_azure_policy_definition(raw_json: &str) -> bool {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(raw_json) else {
+        return false;
+    };
+    if v.get("policyRule").is_some() {
+        return true;
+    }
+    v.get("properties")
+        .and_then(|p| p.get("policyRule"))
+        .is_some()
 }
 
 // ---------------------------------------------------------------------------
@@ -342,11 +323,12 @@ pub fn rego_diff(
     max_loops: usize,
     input_file: Option<String>,
     schema_file: Option<String>,
+    azure_aliases_file: Option<String>,
 ) -> Result<()> {
     let (program1, data1, cedar_entities1) =
-        compile_policy_set(bundles1, policy1_files, &entrypoint)?;
+        compile_policy_set(bundles1, policy1_files, &entrypoint, azure_aliases_file.as_ref())?;
     let (program2, _data2, cedar_entities2) =
-        compile_policy_set(bundles2, policy2_files, &entrypoint)?;
+        compile_policy_set(bundles2, policy2_files, &entrypoint, azure_aliases_file.as_ref())?;
 
     let example_input = load_example_input(&input_file)?;
     let input_schema = load_schema(&schema_file)?;
@@ -418,10 +400,12 @@ pub fn rego_subsumes(
     max_loops: usize,
     input_file: Option<String>,
     schema_file: Option<String>,
+    azure_aliases_file: Option<String>,
 ) -> Result<()> {
-    let (old_program, data, cedar_entities_old) = compile_policy_set(&[], old_files, &entrypoint)?;
+    let (old_program, data, cedar_entities_old) =
+        compile_policy_set(&[], old_files, &entrypoint, azure_aliases_file.as_ref())?;
     let (new_program, _data2, cedar_entities_new) =
-        compile_policy_set(&[], new_files, &entrypoint)?;
+        compile_policy_set(&[], new_files, &entrypoint, azure_aliases_file.as_ref())?;
 
     let example_input = load_example_input(&input_file)?;
     let input_schema = load_schema(&schema_file)?;
@@ -489,8 +473,10 @@ pub fn rego_gen_tests(
     max_tests: usize,
     input_file: Option<String>,
     schema_file: Option<String>,
+    azure_aliases_file: Option<String>,
 ) -> Result<()> {
-    let (program, data, cedar_entities) = compile_policy_set(bundles, files, &entrypoint)?;
+    let (program, data, cedar_entities) =
+        compile_policy_set(bundles, files, &entrypoint, azure_aliases_file.as_ref())?;
 
     let example_input = load_example_input(&input_file)?;
     let input_schema = load_schema(&schema_file)?;
@@ -583,6 +569,45 @@ fn compile_cedar_to_program(
     let program = compiler::compile_to_program(&all_policies)
         .map_err(|e| anyhow!("Failed to compile Cedar policies: {}", e))?;
     Ok(program)
+}
+
+#[cfg(feature = "azure_policy")]
+fn compile_azure_policy_to_program(
+    path: &str,
+    contents: &str,
+    aliases_file: &str,
+) -> Result<regorus::Rc<regorus::rvm::program::Program>> {
+    use regorus::languages::azure_policy::{aliases::AliasRegistry, compiler, parser};
+
+    let aliases_json = std::fs::read_to_string(aliases_file)
+        .map_err(|e| anyhow!("Failed to read Azure aliases file '{}': {}", aliases_file, e))?;
+    let mut registry = AliasRegistry::new();
+    registry
+        .load_from_json(&aliases_json)
+        .map_err(|e| anyhow!("Failed to parse Azure aliases file '{}': {}", aliases_file, e))?;
+    let alias_map = registry.alias_map();
+
+    let source = regorus::Source::from_contents(path.to_string(), contents.to_string())
+        .map_err(|e| anyhow!("Failed to create source for '{}': {}", path, e))?;
+
+    if let Ok(defn) = parser::parse_policy_definition(&source) {
+        return compiler::compile_policy_definition_with_aliases(&defn, alias_map)
+            .map_err(|e| anyhow!("Failed to compile Azure Policy definition '{}': {}", path, e));
+    }
+
+    let rule = parser::parse_policy_rule(&source)
+        .map_err(|e| anyhow!("Failed to parse Azure Policy '{}': {}", path, e))?;
+    compiler::compile_policy_rule_with_aliases(&rule, alias_map)
+        .map_err(|e| anyhow!("Failed to compile Azure Policy rule '{}': {}", path, e))
+}
+
+#[cfg(not(feature = "azure_policy"))]
+fn compile_azure_policy_to_program(
+    _path: &str,
+    _contents: &str,
+    _aliases_file: &str,
+) -> Result<regorus::Rc<regorus::rvm::program::Program>> {
+    bail!("Azure Policy support requires the `azure_policy` feature")
 }
 
 #[cfg(not(feature = "cedar"))]

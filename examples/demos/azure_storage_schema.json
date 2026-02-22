@@ -1,0 +1,41 @@
+{
+  "type": "object",
+  "required": [
+    "resource"
+  ],
+  "properties": {
+    "resource": {
+      "type": "object",
+      "required": [
+        "type",
+        "supportsHttpsTrafficOnly",
+        "minimumTlsVersion"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "Microsoft.Storage/storageAccounts"
+          ]
+        },
+        "supportsHttpsTrafficOnly": {
+          "type": "boolean"
+        },
+        "minimumTlsVersion": {
+          "type": "string",
+          "enum": [
+            "TLS1_0",
+            "TLS1_1",
+            "TLS1_2"
+          ]
+        }
+      }
+    },
+    "parameters": {
+      "type": "object"
+    },
+    "context": {
+      "type": "object"
+    }
+  }
+}

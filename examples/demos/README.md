@@ -18,6 +18,14 @@ cargo build --example regorus --features z3-analysis,cedar
 ./examples/demos/run_demos.sh
 ```
 
+For Azure Policy demos (21–33), build with `azure_policy` as well:
+
+```bash
+BINDGEN_EXTRA_CLANG_ARGS="-I/opt/homebrew/include" \
+LIBRARY_PATH="/opt/homebrew/lib" \
+cargo build --example regorus --features z3-analysis,cedar,azure_policy
+```
+
 **Python-only alternative** (no C toolchain needed):
 
 ```bash
@@ -458,6 +466,342 @@ with an unencrypted connection.
 
 ---
 
+## Azure Policy Z3 Demos (Demos 21–24)
+
+Azure Policy demos require an alias catalog file via `--azure-aliases`.
+The demos use [azure_policy_aliases.json](azure_policy_aliases.json).
+
+## Demo 21 — Azure Policy Analyze (deny synthesis)
+
+```bash
+regorus analyze \
+  -d examples/demos/azure_storage_https_v1_definition.json \
+  -e main \
+  -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -i examples/demos/azure_storage_input.json \
+  -s examples/demos/azure_storage_schema.json \
+  --max-loops 3
+```
+
+## Demo 22 — Azure Policy Diff (v1 vs v2)
+
+```bash
+regorus diff \
+  --policy1 examples/demos/azure_storage_https_v1_definition.json \
+  --policy2 examples/demos/azure_storage_https_v2_definition.json \
+  -e main \
+  -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -i examples/demos/azure_storage_input.json \
+  -s examples/demos/azure_storage_schema.json \
+  --max-loops 3
+```
+
+## Demo 23 — Azure Policy Subsumption
+
+```bash
+# v2 subsumes v1 for deny behavior
+regorus subsumes \
+  --old examples/demos/azure_storage_https_v1_definition.json \
+  --new examples/demos/azure_storage_https_v2_definition.json \
+  -e main \
+  -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -i examples/demos/azure_storage_input.json \
+  -s examples/demos/azure_storage_schema.json \
+  --max-loops 3
+```
+
+## Demo 24 — Azure Policy Test Generation
+
+```bash
+regorus gen-tests \
+  -d examples/demos/azure_storage_https_v2_definition.json \
+  -e main \
+  -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -i examples/demos/azure_storage_input.json \
+  -s examples/demos/azure_storage_schema.json \
+  --max-loops 3 \
+  --max-tests 10
+```
+
+---
+
+## Azure SQL Server Hardening — 3-Policy Z3 Showcase (Demos 25–28)
+
+This scenario uses **three** Azure Policy variants for SQL Server
+hardening.  Each emphasises a different security dimension, so the
+subsumption and diff relationships are *non-trivial* — exactly the kind
+of reasoning that is difficult by inspection but trivial for Z3.
+
+| Policy | File | Strategy |
+|---|---|---|
+| **V1** | [azure_sql_v1_definition.json](azure_sql_v1_definition.json) | Deny if TLS ≠ 1.2 **or** public network access enabled |
+| **V2** | [azure_sql_v2_definition.json](azure_sql_v2_definition.json) | Deny if TLS ≠ 1.2 **or** outbound network access not restricted |
+| **V3** | [azure_sql_v3_definition.json](azure_sql_v3_definition.json) | Deny if TLS ≠ 1.2 **or** (public access enabled **and** outbound not restricted) |
+
+V1 and V2 have orthogonal secondary concerns (inbound vs outbound).
+V3 is a balanced compromise with a nested `allOf` inside the `anyOf` — it
+only denies public access when outbound isn't also locked down.
+
+**Expected relationships** (all proven by Z3):
+
+| Question | Answer | Why |
+|---|---|---|
+| V1 ≡ V2? | **No** — not equivalent | V1 blocks *inbound*; V2 blocks *outbound* |
+| V2 ⊇ V1? | **No** | Counterexample: TLS=1.2, public=Enabled, outbound=Enabled → V1 denies, V2 allows |
+| V1 ⊇ V2? | **No** | Counterexample: TLS=1.2, public=Disabled, outbound=Disabled → V2 denies, V1 allows |
+| V1 ⊇ V3? | **Yes** | V1 is strictly more restrictive than the balanced V3 |
+| V3 ⊇ V1? | **No** | Counterexample: TLS=1.2, public=Enabled, outbound=Enabled → V1 denies, V3 allows |
+| V2 ⊇ V3? | **Yes** | V2 is strictly more restrictive than V3 |
+| V3 ⊇ V2? | **No** | Counterexample: TLS=1.2, public=Disabled, outbound=Disabled → V2 denies, V3 allows |
+
+### Demo 25 — SQL Server Analyze (all 3 variants)
+
+```bash
+# V1: find a deny input (strict inbound)
+regorus analyze \
+  -d examples/demos/azure_sql_v1_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json
+
+# V2: find a deny input (strict outbound)
+regorus analyze \
+  -d examples/demos/azure_sql_v2_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json
+
+# V3: find a deny input (balanced)
+regorus analyze \
+  -d examples/demos/azure_sql_v3_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json
+```
+
+### Demo 26 — SQL Server Policy Diff (V1 vs V2: orthogonal concerns)
+
+V1 and V2 address different attack surfaces.  Z3 finds a concrete SQL
+server configuration where exactly one policy denies and the other allows.
+
+```bash
+regorus diff \
+  --policy1 examples/demos/azure_sql_v1_definition.json \
+  --policy2 examples/demos/azure_sql_v2_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json
+```
+
+Z3 discovers: `TLS=1.2, publicNetworkAccess=Enabled,
+restrictOutbound=Enabled`.  V1 denies (public access), V2 allows (outbound
+is restricted, TLS is fine).
+
+```bash
+# V1 vs V3: V3 is the balanced compromise
+regorus diff \
+  --policy1 examples/demos/azure_sql_v1_definition.json \
+  --policy2 examples/demos/azure_sql_v3_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json
+```
+
+### Demo 27 — SQL Server Subsumption (complete lattice)
+
+This is the most interesting demo.  Z3 proves the full **subsumption
+lattice** among three policies — including both positive proofs (UNSAT →
+"yes, subsumes") and counterexamples (SAT → "no, here's why").
+
+```bash
+# V1 ⊇ V3?  YES — V1 is strictly more restrictive
+regorus subsumes \
+  --old examples/demos/azure_sql_v3_definition.json \
+  --new examples/demos/azure_sql_v1_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json
+
+# V3 ⊇ V1?  NO — counterexample provided
+regorus subsumes \
+  --old examples/demos/azure_sql_v1_definition.json \
+  --new examples/demos/azure_sql_v3_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json
+
+# V2 ⊇ V3?  YES — V2 is also strictly more restrictive
+regorus subsumes \
+  --old examples/demos/azure_sql_v3_definition.json \
+  --new examples/demos/azure_sql_v2_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json
+
+# V3 ⊇ V2?  NO — counterexample provided
+regorus subsumes \
+  --old examples/demos/azure_sql_v2_definition.json \
+  --new examples/demos/azure_sql_v3_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json
+
+# V1 ⊇ V2?  NO — neither subsumes the other (orthogonal!)
+regorus subsumes \
+  --old examples/demos/azure_sql_v2_definition.json \
+  --new examples/demos/azure_sql_v1_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json
+
+# V2 ⊇ V1?  NO — confirming mutual non-subsumption
+regorus subsumes \
+  --old examples/demos/azure_sql_v1_definition.json \
+  --new examples/demos/azure_sql_v2_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json
+```
+
+The subsumption lattice:
+
+```
+    V1 (inbound)          V2 (outbound)
+         \                  /
+          ⊇                ⊇
+            \            /
+             V3 (balanced)
+```
+
+V1 and V2 are **incomparable** — neither subsumes the other.  V3 is
+subsumed by *both* V1 and V2 because it only denies the *intersection*
+of their secondary conditions (public access AND no outbound restriction).
+
+### Demo 28 — SQL Server Test Generation
+
+```bash
+regorus gen-tests \
+  -d examples/demos/azure_sql_v3_definition.json \
+  -e main \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_sql_schema.json \
+  --max-loops 3 --max-tests 10
+```
+
+---
+
+## Key Vault Enterprise Hardening — Migration Safety & Gap Analysis (Demos 29–33)
+
+This scenario demonstrates two critical Z3 use cases for policy authors:
+**migration safety** (proving that a refactoring preserves behavior) and
+**gap analysis** (detecting missing coverage in a simplified policy).
+
+The policies use **6 fields**, **3 nesting levels**, and **3 compliance
+groups** — enough complexity that manual equivalence review is impractical.
+
+| Policy | File | Structure |
+|---|---|---|
+| **Original** | [azure_keyvault_original_definition.json](azure_keyvault_original_definition.json) | "List violations": `anyOf(allOf(network-bad), anyOf(data-bad), allOf(sku=premium ∧ rbac=false))` |
+| **Refactored** | [azure_keyvault_refactored_definition.json](azure_keyvault_refactored_definition.json) | "Require compliance": `not(allOf(anyOf(network-ok), allOf(data-ok), anyOf(sku≠premium, rbac=true)))` |
+| **Buggy refactor** | [azure_keyvault_buggy_refactor_definition.json](azure_keyvault_buggy_refactor_definition.json) | Same intent as refactored, but uses `allOf` instead of `anyOf` in the access-control group |
+| **Incomplete** | [azure_keyvault_incomplete_definition.json](azure_keyvault_incomplete_definition.json) | Drops the access-control group entirely (no RBAC check for premium vaults) |
+
+**Three compliance groups** in the original:
+
+| Group | Condition (deny when…) | Fields |
+|---|---|---|
+| **Network isolation** | Public access enabled **AND** no firewall default-deny | `publicNetworkAccess`, `networkAcls.defaultAction` |
+| **Data protection** | Soft-delete **OR** purge-protection missing | `enableSoftDelete`, `enablePurgeProtection` |
+| **Access control** | Premium SKU **AND** RBAC disabled (material implication) | `sku.name`, `enableRbacAuthorization` |
+
+The refactoring applies **De Morgan's law at every level**: `anyOf↔allOf`,
+`equals↔notEquals`, `false↔true`, plus the access-control group transforms
+`allOf(sku=premium, rbac=false)` into its dual `anyOf(sku≠premium, rbac=true)`.
+With 6 inverted conditions across 3 nesting levels, a human reviewer cannot
+easily verify that the transform is correct.
+
+### Demo 29 — Key Vault Analyze (original baseline)
+
+```bash
+regorus analyze \
+  -d examples/demos/azure_keyvault_original_definition.json \
+  -e main \
+  -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_keyvault_schema.json
+```
+
+Z3 finds a vault that triggers denial — e.g. `publicNetworkAccess: "Enabled"`
+with `networkAcls.defaultAction: "Allow"` (network isolation group fires).
+
+### Demo 30 — Migration Safety: correct refactoring (Z3 proves equivalence)
+
+```bash
+regorus diff \
+  --policy1 examples/demos/azure_keyvault_original_definition.json \
+  --policy2 examples/demos/azure_keyvault_refactored_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_keyvault_schema.json
+```
+
+**Result**: `equivalent: true` — Z3 proves the full De Morgan's inversion
+preserves semantics across all $2 \times 2 \times 2 \times 2 \times 2 \times 2 = 64$
+possible input combinations.
+
+### Demo 31 — Migration Safety: buggy refactoring (Z3 catches the bug)
+
+```bash
+regorus diff \
+  --policy1 examples/demos/azure_keyvault_original_definition.json \
+  --policy2 examples/demos/azure_keyvault_buggy_refactor_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_keyvault_schema.json
+```
+
+**Result**: `equivalent: false` — the buggy version uses `allOf(sku≠premium,
+rbac=true)` instead of `anyOf(...)`.  Z3 finds a distinguishing input:
+a **standard-tier** vault with `enableRbacAuthorization: false`.  The original
+correctly allows it (RBAC is only required for premium vaults), but the buggy
+refactoring incorrectly denies it.
+
+### Demo 32 — Gap Analysis: incomplete policy (Z3 finds the gap)
+
+```bash
+regorus subsumes \
+  --old examples/demos/azure_keyvault_original_definition.json \
+  --new examples/demos/azure_keyvault_incomplete_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_keyvault_schema.json
+```
+
+**Result**: `subsumes: false` — the incomplete policy drops the access-control
+group.  Z3 finds a counterexample: a **premium-tier** vault with
+`enableRbacAuthorization: false` that the original would deny but the
+incomplete policy allows — a privilege-escalation gap.
+
+### Demo 33 — Gap Analysis: reverse subsumption (original covers all)
+
+```bash
+regorus subsumes \
+  --old examples/demos/azure_keyvault_incomplete_definition.json \
+  --new examples/demos/azure_keyvault_original_definition.json \
+  -e main -o '"deny"' \
+  --azure-aliases examples/demos/azure_policy_aliases.json \
+  -s examples/demos/azure_keyvault_schema.json
+```
+
+**Result**: `subsumes: true` — every input denied by the incomplete policy
+is also denied by the original.  The original is strictly more restrictive.
+
+---
+
 ## Key capabilities demonstrated
 
 | Capability | How it's shown |
@@ -475,3 +819,10 @@ with an unencrypted connection.
 | **Policy diff** | `regorus diff` finds a concrete input where two policies disagree |
 | **Subsumption** | `regorus subsumes` proves (or disproves) that one policy is at least as permissive |
 | **Test generation** | `regorus gen-tests` synthesises a minimal test suite covering all reachable source lines |
+| **Azure alias-aware analysis** | `--azure-aliases` enables Azure Policy definition compilation and symbolic analysis |
+| **Non-trivial subsumption lattice** | SQL Server demos prove a 3-policy partial order with both proofs and counterexamples |
+| **Nested boolean logic** | V3's `anyOf( notEquals, allOf( equals, notEquals ) )` is translated to Z3 constraints automatically |
+| **Migration safety** | Key Vault demos prove a full De Morgan's structural inversion preserves semantics across 6 fields and 3 nesting levels |
+| **Bug detection in refactoring** | Z3 catches a subtle `allOf`↔`anyOf` mistake and produces a precise counterexample |
+| **Gap analysis** | Subsumption analysis detects a missing access-control requirement and identifies the exact security gap |
+| **Material implication** | Premium SKU → RBAC requirement expressed as `allOf(sku=premium, rbac=false)` and its dual `anyOf(sku≠premium, rbac=true)` |

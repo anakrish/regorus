@@ -1,0 +1,48 @@
+{
+  "properties": {
+    "displayName": "SQL Server – require TLS 1.2 and deny unprotected public exposure",
+    "policyType": "Custom",
+    "mode": "Indexed",
+    "description": "Denies Azure SQL servers that use a TLS version below 1.2, or that have public network access enabled WITHOUT also restricting outbound traffic.  This is a balanced policy: public access is acceptable as long as outbound is restricted (defense-in-depth), but weak TLS is always denied.",
+    "parameters": {
+      "effect": {
+        "type": "String",
+        "allowedValues": ["deny", "audit", "disabled"],
+        "defaultValue": "deny"
+      }
+    },
+    "policyRule": {
+      "if": {
+        "allOf": [
+          {
+            "field": "type",
+            "equals": "Microsoft.Sql/servers"
+          },
+          {
+            "anyOf": [
+              {
+                "field": "Microsoft.Sql/servers/minimumTlsVersion",
+                "notEquals": "1.2"
+              },
+              {
+                "allOf": [
+                  {
+                    "field": "Microsoft.Sql/servers/publicNetworkAccess",
+                    "equals": "Enabled"
+                  },
+                  {
+                    "field": "Microsoft.Sql/servers/restrictOutboundNetworkAccess",
+                    "notEquals": "Enabled"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "then": {
+        "effect": "[parameters('effect')]"
+      }
+    }
+  }
+}

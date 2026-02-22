@@ -238,3 +238,78 @@ In future, each builtin will be associated with a feature (many builtins could b
    | Builtin                                                                                      | Feature |
    |----------------------------------------------------------------------------------------------|---------|
    | [trace](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-tracing-trace) | _       |
+
+## Azure Policy Builtins and Z3 Mapping (Tracking)
+
+This section tracks symbolic (Z3) support for Azure Policy builtins.
+
+Current status: **P0 builtins are now wired to dedicated handlers in `src/rvm/analysis/translator.rs::translate_builtin_call`**.
+
+### Classification: mappability + value (implementation priority)
+
+This is a mappability + value classification. P0 is implemented; P1–P3 remain the next phases.
+
+| Bucket | Meaning |
+|---|---|
+| P0 | Mappable now, highest value |
+| P1 | Mappable now/soon, medium value |
+| P2 | Mappable but lower value or higher precision risk |
+| P3 | Hard to map precisely in current model; keep uninterpreted for now |
+
+#### P0 — Mappable now + highest value
+
+Status: **Implemented**
+
+- `azure.policy.logic_all`, `azure.policy.logic_any`, `azure.policy.if`
+- `azure.policy.resolve_field`, `azure.policy.get_parameter`
+- `azure.policy.fn.bool`, `azure.policy.fn.int`, `azure.policy.fn.float`, `azure.policy.fn.string`
+- `azure.policy.fn.int_div`, `azure.policy.fn.int_mod`, `azure.policy.fn.min`, `azure.policy.fn.max`
+- `azure.policy.fn.coalesce`, `azure.policy.fn.empty`, `azure.policy.fn.first`, `azure.policy.fn.last`
+- `azure.policy.fn.starts_with`, `azure.policy.fn.ends_with`, `azure.policy.fn.index_of`, `azure.policy.fn.last_index_of`, `azure.policy.fn.trim`
+
+#### P1 — Mappable, medium value
+
+- `azure.policy.fn.split`, `azure.policy.fn.pad_left`, `azure.policy.fn.join`, `azure.policy.fn.format`
+- `azure.policy.fn.range`, `azure.policy.fn.take`, `azure.policy.fn.skip`
+- `azure.policy.fn.try_get`, `azure.policy.fn.index_from_end`, `azure.policy.fn.try_index_from_end`
+- `azure.policy.fn.array`, `azure.policy.fn.create_object`, `azure.policy.fn.items`
+- `azure.policy.fn.union`, `azure.policy.fn.intersection`, `azure.policy.fn.json`
+
+#### P2 — Mappable but lower value / higher modeling complexity
+
+- `azure.policy.fn.base64`, `azure.policy.fn.base64_to_string`, `azure.policy.fn.base64_to_json`
+- `azure.policy.fn.uri`, `azure.policy.fn.uri_component`, `azure.policy.fn.uri_component_to_string`
+- `azure.policy.fn.data_uri`, `azure.policy.fn.data_uri_to_string`
+- `azure.policy.fn.date_time_add`, `azure.policy.fn.date_time_from_epoch`, `azure.policy.fn.date_time_to_epoch`, `azure.policy.fn.add_days`
+- `azure.policy.fn.ip_range_contains`
+
+#### P3 — Hard/non-priority in current scalar-first Z3 model
+
+- `azure.policy.fn.guid`
+- `azure.policy.fn.unique_string`
+
+### ARM template dispatch accounting
+
+The ARM template compiler dispatch (`src/languages/azure_policy/compiler/template_dispatch.rs`) uses two builtin paths:
+
+1. **Azure-prefixed builtins** (`azure.policy.*`, `azure.policy.fn.*`):
+  - Fully accounted for in the P0–P3 classification above.
+
+2. **Core builtin aliases** used by ARM templates:
+  - `count`, `replace`, `substring` — already have dedicated symbolic handling in `translate_builtin_call`.
+  - `concat`, `lower`, `upper` — now explicitly handled in `translate_builtin_call`.
+
+So ARM template builtins are accounted for in this section; remaining work is primarily P1–P3 depth/precision improvements.
+
+### Related Azure Policy semantics that are symbolically modeled (non-builtin path)
+
+Azure Policy condition operators are translated to dedicated RVM instructions and have symbolic handling in `translator.rs`:
+
+- `PolicyEquals`, `PolicyNotEquals`
+- `PolicyGreater`, `PolicyGreaterOrEquals`, `PolicyLess`, `PolicyLessOrEquals`
+- `PolicyIn`, `PolicyNotIn`, `PolicyContains`, `PolicyNotContains`
+- `PolicyContainsKey`, `PolicyNotContainsKey`
+- `PolicyLike`, `PolicyNotLike`, `PolicyMatch`, `PolicyNotMatch`
+- `PolicyMatchInsensitively`, `PolicyNotMatchInsensitively`
+- `PolicyExists`, `PolicyNot`
+- `AllOfStart/Next/End`, `AnyOfStart/Next/End`

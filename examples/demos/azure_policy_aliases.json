@@ -1,0 +1,120 @@
+[
+  {
+    "namespace": "Microsoft.Storage",
+    "resourceTypes": [
+      {
+        "resourceType": "storageAccounts",
+        "aliases": [
+          {
+            "name": "Microsoft.Storage/storageAccounts/supportsHttpsTrafficOnly",
+            "defaultPath": "properties.supportsHttpsTrafficOnly",
+            "defaultMetadata": {
+              "type": "Boolean"
+            },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/minimumTlsVersion",
+            "defaultPath": "properties.minimumTlsVersion",
+            "defaultMetadata": {
+              "type": "String"
+            },
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.Sql",
+    "resourceTypes": [
+      {
+        "resourceType": "servers",
+        "aliases": [
+          {
+            "name": "Microsoft.Sql/servers/minimumTlsVersion",
+            "defaultPath": "properties.minimumTlsVersion",
+            "defaultMetadata": {
+              "type": "String"
+            },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Sql/servers/publicNetworkAccess",
+            "defaultPath": "properties.publicNetworkAccess",
+            "defaultMetadata": {
+              "type": "String"
+            },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Sql/servers/restrictOutboundNetworkAccess",
+            "defaultPath": "properties.restrictOutboundNetworkAccess",
+            "defaultMetadata": {
+              "type": "String"
+            },
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.KeyVault",
+    "resourceTypes": [
+      {
+        "resourceType": "vaults",
+        "aliases": [
+          {
+            "name": "Microsoft.KeyVault/vaults/publicNetworkAccess",
+            "defaultPath": "properties.publicNetworkAccess",
+            "defaultMetadata": {
+              "type": "String"
+            },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.KeyVault/vaults/enableSoftDelete",
+            "defaultPath": "properties.enableSoftDelete",
+            "defaultMetadata": {
+              "type": "Boolean"
+            },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.KeyVault/vaults/enablePurgeProtection",
+            "defaultPath": "properties.enablePurgeProtection",
+            "defaultMetadata": {
+              "type": "Boolean"
+            },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.KeyVault/vaults/enableRbacAuthorization",
+            "defaultPath": "properties.enableRbacAuthorization",
+            "defaultMetadata": {
+              "type": "Boolean"
+            },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.KeyVault/vaults/networkAcls.defaultAction",
+            "defaultPath": "properties.networkAcls.defaultAction",
+            "defaultMetadata": {
+              "type": "String"
+            },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.KeyVault/vaults/sku.name",
+            "defaultPath": "properties.sku.name",
+            "defaultMetadata": {
+              "type": "String"
+            },
+            "paths": []
+          }
+        ]
+      }
+    ]
+  }
+]

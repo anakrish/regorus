@@ -682,13 +682,18 @@ pub fn policy_diff(
     for c in &schema_constraints {
         solver.assert(c);
     }
-    solver.assert(&path_cond1);
-    solver.assert(&path_cond2);
 
-    // Build the XOR constraint: result1 matches desired XOR result2 matches desired.
+    // Build the XOR constraint.
+    // Each policy "fires" when its path condition holds AND the result equals
+    // the desired output.  We look for an input where exactly one fires.
+    // NOTE: We do NOT assert path_cond1 / path_cond2 as hard constraints;
+    // instead, they become part of the goal so that the solver can explore
+    // inputs where one path condition holds but not the other.
     let desired = desired_output.cloned().unwrap_or(Value::Bool(true));
-    let r1_matches = result1.equals_value(&ctx, &desired)?;
-    let r2_matches = result2.equals_value(&ctx, &desired)?;
+    let r1_result_matches = result1.equals_value(&ctx, &desired)?;
+    let r2_result_matches = result2.equals_value(&ctx, &desired)?;
+    let r1_matches = z3::ast::Bool::and(&ctx, &[&path_cond1, &r1_result_matches]);
+    let r2_matches = z3::ast::Bool::and(&ctx, &[&path_cond2, &r2_result_matches]);
     let xor = z3::ast::Bool::xor(&r1_matches, &r2_matches);
     solver.assert(&xor);
 
@@ -852,14 +857,18 @@ pub fn policy_subsumes(
     for c in &schema_constraints {
         solver.assert(c);
     }
-    solver.assert(&old_path_cond);
-    solver.assert(&new_path_cond);
 
-    // ∃ input: old(input) == desired  ∧  new(input) ≠ desired
-    let old_matches = old_result.equals_value(&ctx, desired_output)?;
-    let new_matches = new_result.equals_value(&ctx, desired_output)?;
-    solver.assert(&old_matches);
-    solver.assert(&new_matches.not());
+    // ∃ input: old(input) fires  ∧  new(input) does NOT fire
+    // A policy "fires" when its path condition holds AND the result equals
+    // the desired output.  We do NOT hard-assert the path conditions; they
+    // are folded into the subsumption query so the solver can explore inputs
+    // where one path condition holds but not the other.
+    let old_result_matches = old_result.equals_value(&ctx, desired_output)?;
+    let new_result_matches = new_result.equals_value(&ctx, desired_output)?;
+    let old_fires = z3::ast::Bool::and(&ctx, &[&old_path_cond, &old_result_matches]);
+    let new_fires = z3::ast::Bool::and(&ctx, &[&new_path_cond, &new_result_matches]);
+    solver.assert(&old_fires);
+    solver.assert(&new_fires.not());
 
     let solver_smt = if config.dump_smt {
         Some(format!("{}", solver))

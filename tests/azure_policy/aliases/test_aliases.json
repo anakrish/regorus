@@ -249,6 +249,14 @@
               "type": "String"
             },
             "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/primaryEndpoints.blob",
+            "defaultPath": "properties.primaryEndpoints.blob",
+            "paths": [],
+            "defaultMetadata": {
+              "attributes": "None"
+            }
           }
         ]
       }

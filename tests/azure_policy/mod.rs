@@ -55,6 +55,15 @@ struct TestCase {
     #[serde(default)]
     pub want_effect: Option<String>,
 
+    /// Expected details object in the structured effect result.
+    /// When set, the test verifies `result.details == want_details`.
+    #[serde(default)]
+    pub want_details: Option<serde_yaml::Value>,
+
+    /// If true, the compilation is expected to fail (e.g. modifiable check).
+    #[serde(default)]
+    pub want_compile_error: Option<bool>,
+
     /// If true, the condition is expected to NOT match (for future evaluation).
     #[serde(default)]
     pub want_undefined: Option<bool>,
@@ -247,6 +256,7 @@ fn yaml_test_impl(file: &str) -> Result<()> {
                         compiler::compile_policy_definition_with_aliases(
                             &defn,
                             registry.alias_map(),
+                            registry.alias_modifiable_map(),
                         )
                     } else {
                         compiler::compile_policy_definition(&defn)
@@ -270,7 +280,11 @@ fn yaml_test_impl(file: &str) -> Result<()> {
                         );
                     }
                     if let Some(ref registry) = alias_registry {
-                        compiler::compile_policy_rule_with_aliases(&ast, registry.alias_map())
+                        compiler::compile_policy_rule_with_aliases(
+                            &ast,
+                            registry.alias_map(),
+                            registry.alias_modifiable_map(),
+                        )
                     } else {
                         compiler::compile_policy_rule(&ast)
                     }
@@ -285,7 +299,26 @@ fn yaml_test_impl(file: &str) -> Result<()> {
             }
         };
 
-        let program = compile_result?;
+        let expects_compile_error = case.want_compile_error == Some(true);
+
+        let program = match compile_result {
+            Ok(prog) => {
+                if expects_compile_error {
+                    panic!(
+                        "case '{}': expected compile error but compilation succeeded",
+                        case.note
+                    );
+                }
+                prog
+            }
+            Err(e) => {
+                if expects_compile_error {
+                    println!("passed (expected compile error: {})", e);
+                    continue;
+                }
+                return Err(e);
+            }
+        };
 
         let mut vm = RegoVM::new();
         vm.load_program(program);
@@ -323,12 +356,28 @@ fn yaml_test_impl(file: &str) -> Result<()> {
         }
 
         if let Some(effect) = &case.want_effect {
+            // The compiled result is now a structured object `{ "effect": "...", ... }`.
+            // Extract the "effect" field for comparison.
+            let effect_value = extract_effect_name(&value);
             let expected = Value::from(effect.clone());
             assert_eq!(
-                value, expected,
-                "case '{}': expected effect {:?}, got {}",
-                case.note, effect, value
+                effect_value, expected,
+                "case '{}': expected effect {:?}, got {} (full result: {})",
+                case.note, effect, effect_value, value
             );
+
+            // Check details if expected.
+            if let Some(ref want_details) = case.want_details {
+                let actual_details = extract_details(&value);
+                let expected_details =
+                    yaml_to_regorus_value(Some(want_details))?.unwrap_or(Value::Undefined);
+                assert_eq!(
+                    actual_details, expected_details,
+                    "case '{}': details mismatch.\n  actual:   {}\n  expected: {}",
+                    case.note, actual_details, expected_details
+                );
+            }
+
             println!("passed (compiled + effect={})", effect);
         } else {
             println!("passed (compiled)");
@@ -405,6 +454,31 @@ fn yaml_to_regorus_value(value: Option<&serde_yaml::Value>) -> Result<Option<Val
     let json = serde_json::to_string(value)?;
     let regorus_value = Value::from_json_str(&json)?;
     Ok(Some(regorus_value))
+}
+
+/// Extract the effect name from a structured result.
+///
+/// If the value is `{ "effect": "name", ... }`, returns `Value::from("name")`.
+/// If the value is a plain string (legacy), returns it directly.
+/// Otherwise returns `Value::Undefined`.
+fn extract_effect_name(value: &Value) -> Value {
+    if let Ok(obj) = value.as_object() {
+        if let Some(effect) = obj.get(&Value::from("effect")) {
+            return effect.clone();
+        }
+    }
+    // Legacy: plain string result
+    value.clone()
+}
+
+/// Extract the details object from a structured result.
+fn extract_details(value: &Value) -> Value {
+    if let Ok(obj) = value.as_object() {
+        if let Some(details) = obj.get(&Value::from("details")) {
+            return details.clone();
+        }
+    }
+    Value::Undefined
 }
 
 #[test_resources("tests/azure_policy/cases/*.yaml")]

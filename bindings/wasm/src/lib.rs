@@ -304,8 +304,12 @@ impl Program {
             .map_err(error_to_jsvalue)?;
         let rule = ap_parser::parse_policy_rule(&source).map_err(error_to_jsvalue)?;
         let alias_map = parse_alias_map_json(alias_map_json)?;
-        let program = ap_compiler::compile_policy_rule_with_aliases(&rule, alias_map)
-            .map_err(error_to_jsvalue)?;
+        let program = ap_compiler::compile_policy_rule_with_aliases(
+            &rule,
+            alias_map,
+            std::collections::BTreeMap::new(),
+        )
+        .map_err(error_to_jsvalue)?;
 
         Ok(Program { program })
     }
@@ -326,8 +330,12 @@ impl Program {
                 .map_err(error_to_jsvalue)?;
         let definition = ap_parser::parse_policy_definition(&source).map_err(error_to_jsvalue)?;
         let alias_map = parse_alias_map_json(alias_map_json)?;
-        let program = ap_compiler::compile_policy_definition_with_aliases(&definition, alias_map)
-            .map_err(error_to_jsvalue)?;
+        let program = ap_compiler::compile_policy_definition_with_aliases(
+            &definition,
+            alias_map,
+            std::collections::BTreeMap::new(),
+        )
+        .map_err(error_to_jsvalue)?;
 
         Ok(Program { program })
     }

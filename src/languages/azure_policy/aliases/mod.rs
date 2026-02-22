@@ -40,6 +40,10 @@ pub struct AliasRegistry {
     /// Built during [`load_provider`] so the compiler can resolve any alias
     /// to its short name without knowing the resource type.
     alias_to_short: BTreeMap<String, String>,
+    /// Global lookup: lowercase fully-qualified alias name → modifiable flag.
+    ///
+    /// `true` when `defaultMetadata.attributes == "Modifiable"`, `false` otherwise.
+    alias_modifiable: BTreeMap<String, bool>,
 }
 
 impl AliasRegistry {
@@ -48,6 +52,7 @@ impl AliasRegistry {
         Self {
             types: BTreeMap::new(),
             alias_to_short: BTreeMap::new(),
+            alias_modifiable: BTreeMap::new(),
         }
     }
 
@@ -70,14 +75,21 @@ impl AliasRegistry {
         let namespace = &provider.namespace;
         for rt in provider.resource_types {
             let fq_type = alloc::format!("{}/{}", namespace, rt.resource_type);
-            // Build the global FQ alias → short name lookup.
+            // Build the global FQ alias → short name lookup and modifiable map.
             let prefix = alloc::format!("{}/", fq_type);
             for alias in &rt.aliases {
                 if alias.name.len() > prefix.len()
                     && alias.name[..prefix.len()].eq_ignore_ascii_case(&prefix)
                 {
                     let short = alias.name[prefix.len()..].to_string();
-                    self.alias_to_short.insert(alias.name.to_lowercase(), short);
+                    let lc_name = alias.name.to_lowercase();
+                    self.alias_to_short.insert(lc_name.clone(), short);
+                    let is_modifiable = alias
+                        .default_metadata
+                        .as_ref()
+                        .and_then(|m| m.attributes.as_deref())
+                        .is_some_and(|a| a.eq_ignore_ascii_case("Modifiable"));
+                    self.alias_modifiable.insert(lc_name, is_modifiable);
                 }
             }
             let resolved = resolve_resource_type(&fq_type, &rt.aliases);
@@ -119,6 +131,14 @@ impl AliasRegistry {
     /// alias names without holding a reference to the registry.
     pub fn alias_map(&self) -> BTreeMap<String, String> {
         self.alias_to_short.clone()
+    }
+
+    /// Return a clone of the alias-to-modifiable map for use by the compiler.
+    ///
+    /// Maps lowercase fully-qualified alias names to `true` when the alias
+    /// has `defaultMetadata.attributes = "Modifiable"`.
+    pub fn alias_modifiable_map(&self) -> BTreeMap<String, bool> {
+        self.alias_modifiable.clone()
     }
 
     /// Normalize a raw ARM resource and wrap it in the input envelope.
@@ -194,6 +214,7 @@ fn resolve_resource_type(fq_type: &str, aliases: &[types::AliasEntry]) -> Resolv
                 short_name: short_name.to_string(),
                 default_path,
                 versioned_paths,
+                metadata: alias.default_metadata.clone(),
             },
         );
     }

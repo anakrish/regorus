@@ -139,7 +139,13 @@ impl Compiler {
                     bail!(span.error("field() requires one argument"));
                 };
                 let field_path = extract_string_literal(first_arg)?;
-                self.compile_field_path_expression(&field_path, span)
+                let reg = self.compile_field_path_expression(&field_path, span)?;
+                // Azure Policy: missing field → null.  Without this, the RVM's
+                // undefined-propagation would short-circuit any subsequent
+                // builtin calls (e.g. `empty(field('missing'))` → Undefined
+                // instead of true).
+                self.emit_coalesce_undefined_to_null(reg, span);
+                Ok(reg)
             }
             "current" => {
                 match args.first() {

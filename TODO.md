@@ -80,11 +80,11 @@ The alias system (`src/languages/azure_policy/aliases/`) supports:
 ## P1 — Important (needed for full effect fidelity)
 
 ### Effect Details Compilation
-- [ ] **Modify**: Compile `details.operations` array (`addOrReplace`, `add`, `remove` with field/value)
-- [ ] **Append**: Compile `details` array (field/value pairs to append)
-- [ ] Return structured effect result (not just effect name string) when details are present
-- [ ] Parse and validate `details.roleDefinitionIds` for modify/deployIfNotExists
-- [ ] Check `DefaultMetadata.Attributes = 'Modifiable'` before allowing modify operations on aliases
+- [x] **Modify**: Compile `details.operations` array (`addOrReplace`, `add`, `remove` with field/value)
+- [x] **Append**: Compile `details` array (field/value pairs to append)
+- [x] Return structured effect result (not just effect name string) when details are present
+- [x] Parse and validate `details.roleDefinitionIds` for modify/deployIfNotExists
+- [x] Check `DefaultMetadata.Attributes = 'Modifiable'` before allowing modify operations on aliases
 
 ### Parameter Validation
 - [ ] Parse parameter `type` constraints (`String`, `Integer`, `Boolean`, `Array`, `Object`, `Float`, `DateTime`)

@@ -124,6 +124,8 @@ pub struct ResolvedEntry {
     pub default_path: String,
     /// Versioned path overrides: `(api_version, arm_path)` pairs.
     pub versioned_paths: Vec<(String, String)>,
+    /// Optional metadata from the alias catalog (type, modifiability).
+    pub metadata: Option<AliasMetadata>,
 }
 
 impl ResolvedEntry {
@@ -159,6 +161,7 @@ mod tests {
                 .into_iter()
                 .map(|(v, p)| (v.to_string(), p.to_string()))
                 .collect(),
+            metadata: None,
         }
     }
 

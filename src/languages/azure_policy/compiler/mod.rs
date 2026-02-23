@@ -87,9 +87,19 @@ struct Compiler {
     /// back to these defaults when the caller does not supply a value.
     parameter_defaults: Option<Value>,
 
-    /// When set, field references resolve against this register instead of
-    /// `input.resource`. Used while compiling `existenceCondition` to resolve
-    /// fields against the related resource returned by `HostAwait`.
+    /// When set, the `"field":` **condition key** resolves against this
+    /// register instead of `input.resource`.  Used while compiling
+    /// `existenceCondition` to evaluate condition keys against the related
+    /// resource returned by `HostAwait`.
+    ///
+    /// **Important distinction**: the `field()` *template function* (inside
+    /// `[...]` value expressions) always resolves against the *primary*
+    /// resource (`input.resource`), even inside `existenceCondition`.
+    /// The `compile_call_expr("field", …)` path temporarily clears this
+    /// override so that `compile_resource_path_value` reads from
+    /// `input.resource`.
+    ///
+    /// See: <https://learn.microsoft.com/azure/governance/policy/concepts/effect-audit-if-not-exists>
     resource_override_reg: Option<u8>,
 
     // -- Metadata accumulators (populated during compilation) ---------------

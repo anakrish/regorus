@@ -387,7 +387,9 @@ fn yaml_test_impl(file: &str) -> Result<()> {
                     };
                     normalizer::normalize(&response_json, Some(registry), None)
                 } else {
-                    response_json
+                    // No alias registry — lowercase all keys in the
+                    // response to match the compiler's lowercased lookups.
+                    lowercase_json_keys(&response_json)
                 };
 
                 let response_value =
@@ -456,26 +458,50 @@ fn make_input(case: &TestCase, alias_registry: Option<&AliasRegistry>) -> Result
     let parameters =
         yaml_to_regorus_value(case.parameters.as_ref())?.unwrap_or_else(Value::new_object);
 
-    let mut resource = if let Some(registry) = alias_registry {
-        // Convert YAML resource → serde_json, run normalizer (which extracts
-        // the resource type from the JSON "type" field), convert to regorus Value.
+    let mut resource = if alias_registry.is_some() {
+        // When an alias registry is available, run the full normalizer:
+        // root-field extraction, `properties` flattening, key lowercasing,
+        // alias-specific path resolution.  This mirrors production behaviour
+        // where the host normalizes inputs before evaluation.
         let raw_json: serde_json::Value = case
             .resource
             .as_ref()
             .map(|y| serde_json::to_value(y).expect("YAML→JSON conversion failed"))
             .unwrap_or(serde_json::Value::Object(Default::default()));
         let normalized_json =
-            normalizer::normalize(&raw_json, Some(registry), case.api_version.as_deref());
+            normalizer::normalize(&raw_json, alias_registry, case.api_version.as_deref());
         Value::from_json_str(&serde_json::to_string(&normalized_json)?)
             .expect("normalized JSON→Value conversion failed")
     } else {
-        yaml_to_regorus_value(case.resource.as_ref())?.unwrap_or_else(Value::new_object)
+        // No alias registry — tests provide resources in already-flattened
+        // form (e.g. `properties.count` under `resource.properties.count`).
+        // Only lowercase all object keys so that built-in field lookups
+        // (`fullName` → `fullname`, `apiVersion` → `apiversion`, tag names)
+        // match the compiler's lowercased lookup paths.
+        let raw = yaml_to_regorus_value(case.resource.as_ref())?.unwrap_or_else(Value::new_object);
+        lowercase_value_keys(&raw)
     };
 
     // Inject api_version into the resource if specified.
+    // Use lowercase key to match normalizer-lowercased keys and
+    // the compiler's lowercased lookup paths.
     if let Some(ref api_ver) = case.api_version {
         let map = resource.as_object_mut()?;
-        map.insert(Value::from("apiVersion"), Value::from(api_ver.clone()));
+        map.insert(Value::from("apiversion"), Value::from(api_ver.clone()));
+    }
+
+    // Inject `fullname` when the resource has a `name` but no explicit
+    // `fullname`.  In Azure Policy, `field('fullName')` is a platform-
+    // provided built-in that returns the complete ancestor-qualified name.
+    // For test resources the YAML `name` already contains the full name
+    // (ARM names include ancestor segments for child resources).
+    {
+        let map = resource.as_object_mut()?;
+        if map.get(&Value::from("fullname")).is_none() {
+            if let Some(name_val) = map.get(&Value::from("name")).cloned() {
+                map.insert(Value::from("fullname"), name_val);
+            }
+        }
     }
 
     // Debug: print normalized resource for troubleshooting
@@ -540,6 +566,54 @@ fn yaml_to_regorus_value(value: Option<&serde_yaml::Value>) -> Result<Option<Val
     let json = serde_json::to_string(value)?;
     let regorus_value = Value::from_json_str(&json)?;
     Ok(Some(regorus_value))
+}
+
+/// Recursively lowercase all object keys in a `Value`.
+///
+/// Used for tests without an alias registry so that built-in field lookups
+/// (e.g. `fullName` → `fullname`, tag names) match the compiler's lowercased
+/// lookup paths without running the full normalizer (which also flattens
+/// `properties`).
+fn lowercase_value_keys(value: &Value) -> Value {
+    match value {
+        Value::Object(btree) => {
+            let mut result = Value::new_object();
+            let map = result.as_object_mut().unwrap();
+            for (k, v) in btree.iter() {
+                let lc_key = match k {
+                    Value::String(s) => Value::String(s.to_lowercase().into()),
+                    other => other.clone(),
+                };
+                map.insert(lc_key, lowercase_value_keys(v));
+            }
+            result
+        }
+        Value::Array(arr) => {
+            let items: Vec<Value> = arr.iter().map(lowercase_value_keys).collect();
+            Value::from(items)
+        }
+        _ => value.clone(),
+    }
+}
+
+/// Recursively lowercase all object keys in a `serde_json::Value`.
+///
+/// Used for host-await responses in tests without an alias registry, so that
+/// the compiler's lowercased field lookups match the response data.
+fn lowercase_json_keys(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(obj) => {
+            let mut result = serde_json::Map::new();
+            for (k, v) in obj {
+                result.insert(k.to_lowercase(), lowercase_json_keys(v));
+            }
+            serde_json::Value::Object(result)
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(lowercase_json_keys).collect())
+        }
+        _ => value.clone(),
+    }
 }
 
 /// Extract the effect name from a structured result.

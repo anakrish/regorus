@@ -456,7 +456,9 @@ impl Compiler {
         } else {
             suffix
         };
-        let parts = split_path_without_wildcards(nav_path)?;
+        // Lowercase to match normalizer-lowercased keys.
+        let nav_path = nav_path.to_lowercase();
+        let parts = split_path_without_wildcards(&nav_path)?;
         let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
         self.emit_chained_index_literal_path(base_reg, &refs, span)
     }

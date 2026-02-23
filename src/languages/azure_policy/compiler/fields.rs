@@ -7,9 +7,9 @@ use alloc::format;
 use alloc::string::{String, ToString as _};
 use alloc::vec::Vec;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 
-use crate::languages::azure_policy::ast::FieldKind;
+use crate::languages::azure_policy::ast::{Expr, ExprLiteral, FieldKind};
 use crate::rvm::instructions::{LoopMode, LoopStartParams};
 use crate::rvm::Instruction;
 
@@ -69,21 +69,104 @@ impl Compiler {
                 let short = self.resolve_alias_path(path)?;
                 self.compile_field_path_expression(&short, span)?
             }
-            FieldKind::Expr(expr) => {
-                self.observed_has_dynamic_fields = true;
-                let path_reg = self.compile_expr(expr)?;
-                let resource_reg = self.compile_resource_root(span)?;
-                self.emit_builtin_call(
-                    "azure.policy.resolve_field",
-                    &[resource_reg, path_reg],
-                    span,
-                )?
-            }
+            FieldKind::Expr(expr) => self.compile_dynamic_field_expr(expr, span)?,
         };
         // Azure Policy: missing field → null (prevents RVM undefined-propagation
         // from short-circuiting subsequent builtin calls).
         self.emit_coalesce_undefined_to_null(reg, span);
         Ok(reg)
+    }
+
+    /// Compile a dynamic field expression (`FieldKind::Expr`).
+    ///
+    /// Two patterns are supported:
+    ///
+    /// 1. **`if(cond, 'alias_A', 'alias_B')`** — both aliases are resolved at
+    ///    compile time and the correct field value is selected at runtime via
+    ///    `azure.policy.if`.
+    ///
+    /// 2. **`concat('tags…', …)`** — produces a short tag path (e.g.
+    ///    `tags.env`) that is resolved at runtime via `resolve_field`.
+    ///
+    /// Any other dynamic pattern is rejected at compile time because full
+    /// alias paths cannot be resolved at runtime against the normalized
+    /// resource structure.
+    fn compile_dynamic_field_expr(&mut self, expr: &Expr, span: &crate::lexer::Span) -> Result<u8> {
+        if let Expr::Call { func, args, .. } = expr {
+            if let Expr::Ident { name, .. } = func.as_ref() {
+                if name.eq_ignore_ascii_case("if") && args.len() == 3 {
+                    if let (
+                        Expr::Literal {
+                            value: ExprLiteral::String(alias_a),
+                            ..
+                        },
+                        Expr::Literal {
+                            value: ExprLiteral::String(alias_b),
+                            ..
+                        },
+                    ) = (&args[1], &args[2])
+                    {
+                        // Record alias observations for metadata.
+                        self.record_alias(alias_a);
+                        self.record_alias(alias_b);
+
+                        // Resolve both aliases at compile time.
+                        let short_a = self.resolve_alias_path(alias_a)?;
+                        let short_b = self.resolve_alias_path(alias_b)?;
+
+                        // Compile the condition expression.
+                        let cond_reg = self.compile_expr(&args[0])?;
+
+                        // Compile both branch field lookups (ChainedIndex).
+                        let then_reg = self.compile_field_path_expression(&short_a, span)?;
+                        self.emit_coalesce_undefined_to_null(then_reg, span);
+
+                        let else_reg = self.compile_field_path_expression(&short_b, span)?;
+                        self.emit_coalesce_undefined_to_null(else_reg, span);
+
+                        // Select the correct branch at runtime.
+                        return self.emit_builtin_call(
+                            "azure.policy.if",
+                            &[cond_reg, then_reg, else_reg],
+                            span,
+                        );
+                    }
+                }
+            }
+        }
+
+        // Handle concat() that produces a tag path, e.g.:
+        //   concat('tags.', parameters('tagName'))
+        //   concat('tags[', parameters('tagName'), ']')
+        // These produce short paths like "tags.env" that resolve_field handles.
+        if let Expr::Call { func, args, .. } = expr {
+            if let Expr::Ident { name, .. } = func.as_ref() {
+                if name.eq_ignore_ascii_case("concat") && !args.is_empty() {
+                    if let Expr::Literal {
+                        value: ExprLiteral::String(first),
+                        ..
+                    } = &args[0]
+                    {
+                        if first.starts_with("tags") {
+                            self.observed_has_dynamic_fields = true;
+                            let path_reg = self.compile_expr(expr)?;
+                            let resource_reg = self.compile_resource_root(span)?;
+                            return self.emit_builtin_call(
+                                "azure.policy.resolve_field",
+                                &[resource_reg, path_reg],
+                                span,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        bail!(
+            "unsupported dynamic field expression; only \
+             `if(cond, 'alias', 'alias')` and `concat('tags...', ...)` \
+             patterns are supported"
+        );
     }
 
     pub(super) fn compile_field_path_expression(
@@ -105,6 +188,14 @@ impl Compiler {
         field_path: &str,
         span: &crate::lexer::Span,
     ) -> Result<u8> {
+        // The normalizer lowercases all object keys (including tag names,
+        // which are case-insensitive in Azure).  Alias-resolved paths are
+        // already lowercase; this covers built-in field names like
+        // `fullName` → `fullname`, `apiVersion` → `apiversion`, and tag
+        // names like `tags.Created By` → `tags.created by`.
+        let field_path_lower = field_path.to_lowercase();
+        let field_path = field_path_lower.as_str();
+
         // When resource_override_reg is set (e.g., inside existenceCondition),
         // resolve fields against the override register directly instead of
         // input.resource.

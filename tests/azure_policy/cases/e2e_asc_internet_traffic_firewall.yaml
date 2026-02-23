@@ -212,8 +212,12 @@ cases:
   # =========================================================================
 
   - note: pass_firewall_matches_vnet
-    # Skip: existenceCondition count logic not yet fully supported.
-    skip: true
+    context:
+      resourceGroup:
+        name: "rg1"
+        location: "eastus"
+      subscription:
+        subscriptionId: "sub1"
     resource:
       type: "Microsoft.Network/virtualNetworks"
       name: "vnet-protected"

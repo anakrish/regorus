@@ -201,13 +201,35 @@ impl Compiler {
                 // Built-in field names (type, name, id, …) pass through directly
                 // to compile_field_path_expression where they become
                 // input.resource.<name>.
+                // Resolve alias names to their short property paths.
+                // Built-in field names (type, name, id, …) pass through directly
+                // to compile_field_path_expression where they become
+                // input.resource.<name>.
                 let resolved = match field_path.to_lowercase().as_str() {
                     "type" | "id" | "kind" | "name" | "location" | "fullname" | "tags"
                     | "identity.type" | "apiversion" => field_path.clone(),
                     s if s.starts_with("tags.") || s.starts_with("tags['") => field_path.clone(),
                     _ => self.resolve_alias_path(&field_path)?,
                 };
+
+                // Azure Policy semantics: the `field()` template function
+                // always reads from the **primary** resource (the one that
+                // matched the `if` condition), even when called inside an
+                // `existenceCondition`.  Only the `"field":` condition key
+                // resolves against the related resource (via
+                // resource_override_reg).
+                //
+                // See: https://learn.microsoft.com/azure/governance/policy/
+                //   concepts/effect-audit-if-not-exists
+                //   "Can use [field()] to check equivalence with values in
+                //    the if condition."
+                //
+                // Note: count-bound aliases (e.g. `field('alias[*].prop')`)
+                // resolve via CountBinding::current_reg and are unaffected
+                // by resource_override_reg.
+                let saved_override = self.resource_override_reg.take();
                 let reg = self.compile_field_path_expression(&resolved, span)?;
+                self.resource_override_reg = saved_override;
 
                 // Azure Policy: field('alias[*]') inside a count/where clause
                 // returns a single-element array containing the current

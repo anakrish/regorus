@@ -59,6 +59,21 @@ pub(crate) fn collision_safe_key(short_name: &str) -> String {
     alloc::format!("_p_{}", short_name.to_ascii_lowercase())
 }
 
+/// Lowercase all keys of a JSON object (shallow — values are untouched).
+/// Non-object values are returned as-is.
+fn lowercase_object_keys(value: &Value) -> Value {
+    match value {
+        Value::Object(obj) => {
+            let mut result = Map::new();
+            for (k, v) in obj {
+                result.insert(k.to_lowercase(), v.clone());
+            }
+            Value::Object(result)
+        }
+        _ => value.clone(),
+    }
+}
+
 /// Normalize a raw ARM resource JSON value into the `input.resource` structure.
 ///
 /// The resource type is extracted from the `type` field of `arm_resource` and
@@ -119,9 +134,19 @@ pub(crate) fn normalize_with_aliases(
     let mut result = Map::new();
 
     // Rule 2: Copy root-level fields as-is (keys lowercased).
+    // Special case: tag *names* are case-insensitive in Azure
+    // (see https://learn.microsoft.com/azure/azure-resource-manager/
+    // management/tag-resources#tag-usage-and-recommendations), so we
+    // lowercase the keys inside the `tags` object to match the
+    // compiler's lowercased lookup paths.
     for &field in ROOT_FIELDS {
         if let Some(val) = obj.get(field) {
-            result.insert(field.to_ascii_lowercase(), val.clone());
+            let val = if field.eq_ignore_ascii_case("tags") {
+                lowercase_object_keys(val)
+            } else {
+                val.clone()
+            };
+            result.insert(field.to_ascii_lowercase(), val);
         }
     }
 

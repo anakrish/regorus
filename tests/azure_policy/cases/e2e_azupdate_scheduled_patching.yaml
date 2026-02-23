@@ -1421,9 +1421,6 @@ cases:
   # =========================================================================
 
   - note: pass_old_api_version
-    # Skip: dynamic field (FieldKind::Expr) alias resolution bug — HostAwait fires
-    # because the apiVersion guard's allOf does not short-circuit correctly.
-    skip: true
     resource:
       id: "/subscriptions/sub1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-ubuntu-old-api"
       location: "eastus"

@@ -62,6 +62,10 @@ impl Compiler {
         );
 
         for child in constraints {
+            // Save register counter before compiling child — child's
+            // intermediate registers are dead after AllOfNext reads the
+            // result, so we reclaim them for the next sibling.
+            let saved_counter = self.register_counter;
             let child_reg = self.compile_constraint(child)?;
             self.emit_coalesce_undefined_to_null(child_reg, span);
             // AllOfNext — end_pc is a placeholder.
@@ -74,6 +78,8 @@ impl Compiler {
                 },
                 span,
             );
+            // Reclaim child's intermediate registers.
+            self.restore_register_counter(saved_counter);
         }
 
         // AllOfEnd — all children passed → set result to true.
@@ -109,6 +115,10 @@ impl Compiler {
         );
 
         for child in constraints {
+            // Save register counter before compiling child — child's
+            // intermediate registers are dead after AnyOfNext reads the
+            // result, so we reclaim them for the next sibling.
+            let saved_counter = self.register_counter;
             let child_reg = self.compile_constraint(child)?;
             self.emit_coalesce_undefined_to_null(child_reg, span);
             // AnyOfNext — end_pc is a placeholder.
@@ -121,6 +131,8 @@ impl Compiler {
                 },
                 span,
             );
+            // Reclaim child's intermediate registers.
+            self.restore_register_counter(saved_counter);
         }
 
         // AnyOfEnd — no child matched → result stays false.

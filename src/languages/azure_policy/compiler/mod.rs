@@ -57,9 +57,16 @@ struct CountBinding {
 struct Compiler {
     program: Program,
     register_counter: u8,
+    /// High-water mark of `register_counter` — tracks the maximum number of
+    /// registers ever live at once.  Used for `dispatch_window_size`.
+    register_high_water: u8,
     source_to_index: BTreeMap<String, usize>,
     builtin_index: BTreeMap<String, u16>,
     count_bindings: Vec<CountBinding>,
+    /// Cached register for `LoadInput` — allocated once on first use.
+    cached_input_reg: Option<u8>,
+    /// Cached register for `LoadContext` — allocated once on first use.
+    cached_context_reg: Option<u8>,
     /// Map from lowercase fully-qualified alias name → short name.
     ///
     /// Populated from [`AliasRegistry::alias_map()`] so the compiler can
@@ -133,7 +140,7 @@ impl Compiler {
 
         self.program.main_entry_point = 0;
         self.program.entry_points.insert("main".to_string(), 0);
-        self.program.dispatch_window_size = self.register_counter.max(2);
+        self.program.dispatch_window_size = self.register_high_water.max(2);
         self.program.max_rule_window_size = 0;
 
         if !self.program.builtin_info_table.is_empty() {
@@ -152,12 +159,29 @@ impl Compiler {
 
     // -- register / span / emit helpers ------------------------------------
 
+    /// Restore `register_counter` to `saved` while protecting any globally-
+    /// cached registers (`cached_input_reg`, `cached_context_reg`) from being
+    /// overwritten by future allocations.
+    fn restore_register_counter(&mut self, saved: u8) {
+        let mut floor = saved;
+        if let Some(r) = self.cached_input_reg {
+            floor = floor.max(r.saturating_add(1));
+        }
+        if let Some(r) = self.cached_context_reg {
+            floor = floor.max(r.saturating_add(1));
+        }
+        self.register_counter = floor;
+    }
+
     fn alloc_register(&mut self) -> Result<u8> {
         if self.register_counter == u8::MAX {
             bail!("azure-policy compiler exhausted RVM registers");
         }
         let reg = self.register_counter;
         self.register_counter = self.register_counter.saturating_add(1);
+        if self.register_counter > self.register_high_water {
+            self.register_high_water = self.register_counter;
+        }
         Ok(reg)
     }
 
@@ -280,14 +304,22 @@ impl Compiler {
     }
 
     fn load_input(&mut self, span: &crate::lexer::Span) -> Result<u8> {
+        if let Some(reg) = self.cached_input_reg {
+            return Ok(reg);
+        }
         let dest = self.alloc_register()?;
         self.emit(Instruction::LoadInput { dest }, span);
+        self.cached_input_reg = Some(dest);
         Ok(dest)
     }
 
     fn load_context(&mut self, span: &crate::lexer::Span) -> Result<u8> {
+        if let Some(reg) = self.cached_context_reg {
+            return Ok(reg);
+        }
         let dest = self.alloc_register()?;
         self.emit(Instruction::LoadContext { dest }, span);
+        self.cached_context_reg = Some(dest);
         Ok(dest)
     }
 

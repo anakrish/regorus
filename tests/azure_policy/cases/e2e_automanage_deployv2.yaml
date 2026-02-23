@@ -651,8 +651,6 @@ cases:
   # =========================================================================
 
   - note: dine_windows_vm_canonical
-    # Skip: policy exceeds u8 register limit (255 registers).
-    skip: true
     resource:
       type: "Microsoft.Compute/virtualMachines"
       name: "win-vm-01"
@@ -681,8 +679,6 @@ cases:
   # =========================================================================
 
   - note: pass_unsupported_region
-    # Skip: policy exceeds u8 register limit (255 registers).
-    skip: true
     resource:
       type: "Microsoft.Compute/virtualMachines"
       name: "vm-brazil"
@@ -704,8 +700,6 @@ cases:
   # =========================================================================
 
   - note: dine_linux_vm_canonical
-    # Skip: policy exceeds u8 register limit (255 registers).
-    skip: true
     resource:
       type: "Microsoft.Compute/virtualMachines"
       name: "linux-vm-01"
@@ -734,8 +728,6 @@ cases:
   # =========================================================================
 
   - note: pass_tag_filter_no_match
-    # Skip: policy exceeds u8 register limit (255 registers).
-    skip: true
     resource:
       type: "Microsoft.Compute/virtualMachines"
       name: "vm-tagged"
@@ -763,8 +755,6 @@ cases:
   # =========================================================================
 
   - note: skip_wrong_type
-    # Skip: policy exceeds u8 register limit (255 registers).
-    skip: true
     resource:
       type: "Microsoft.Storage/storageAccounts"
       name: "storageacct1"

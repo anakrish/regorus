@@ -897,8 +897,6 @@ cases:
   # =========================================================================
 
   - note: dine_linux_vm_canonical
-    # Skip: policy exceeds u8 register limit (255 registers).
-    skip: true
     resource:
       type: "Microsoft.Compute/virtualMachines"
       name: "vm-ubuntu-ssh"
@@ -930,8 +928,6 @@ cases:
   # =========================================================================
 
   - note: pass_aks_managed_vm
-    # Skip: policy exceeds u8 register limit (255 registers).
-    skip: true
     resource:
       type: "Microsoft.Compute/virtualMachines"
       name: "aks-node-vm"
@@ -959,8 +955,6 @@ cases:
   # =========================================================================
 
   - note: pass_windows_vm
-    # Skip: policy exceeds u8 register limit (255 registers).
-    skip: true
     resource:
       type: "Microsoft.Compute/virtualMachines"
       name: "vm-windows"
@@ -986,8 +980,6 @@ cases:
   # =========================================================================
 
   - note: dine_arc_machine_when_included
-    # Skip: policy exceeds u8 register limit (255 registers).
-    skip: true
     resource:
       type: "Microsoft.HybridCompute/machines"
       name: "arc-linux-ssh"
@@ -1010,8 +1002,6 @@ cases:
   # =========================================================================
 
   - note: pass_arc_machine_when_excluded
-    # Skip: policy exceeds u8 register limit (255 registers).
-    skip: true
     resource:
       type: "Microsoft.HybridCompute/machines"
       name: "arc-linux-excluded"
@@ -1028,8 +1018,6 @@ cases:
   # =========================================================================
 
   - note: skip_wrong_type
-    # Skip: policy exceeds u8 register limit (255 registers).
-    skip: true
     resource:
       type: "Microsoft.Storage/storageAccounts"
       name: "staccount1"

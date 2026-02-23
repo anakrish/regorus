@@ -1042,8 +1042,6 @@ cases:
   # =========================================================================
 
   - note: modify_windows_vm_needs_assessment
-    # Skip: policy exceeds u8 register limit (255 registers).
-    skip: true
     resource:
       type: "Microsoft.Compute/virtualMachines"
       name: "win-vm-1"
@@ -1075,8 +1073,6 @@ cases:
   # =========================================================================
 
   - note: modify_linux_vm_needs_assessment
-    # Skip: policy exceeds u8 register limit (255 registers).
-    skip: true
     resource:
       type: "Microsoft.Compute/virtualMachines"
       name: "linux-vm-1"
@@ -1108,7 +1104,8 @@ cases:
   # =========================================================================
 
   - note: pass_already_autoplatform
-    # Skip: policy exceeds u8 register limit (255 registers).
+    # Skip: dynamic field (FieldKind::Expr) alias resolution bug — resolve_field
+    # does not strip the resource-type prefix from the full alias path.
     skip: true
     resource:
       type: "Microsoft.Compute/virtualMachines"
@@ -1141,12 +1138,10 @@ cases:
   # =========================================================================
 
   - note: pass_old_api_version
-    # Skip: policy exceeds u8 register limit (255 registers).
+    # Skip: dynamic field (FieldKind::Expr) alias resolution bug — notEquals
+    # condition evaluates incorrectly because resolve_field returns wrong value.
     skip: true
     resource:
-      type: "Microsoft.Compute/virtualMachines"
-      name: "win-vm-old-api"
-      properties:
         storageProfile:
           imageReference:
             publisher: "MicrosoftWindowsServer"
@@ -1174,8 +1169,6 @@ cases:
   # =========================================================================
 
   - note: skip_wrong_type
-    # Skip: policy exceeds u8 register limit (255 registers).
-    skip: true
     resource:
       type: "Microsoft.Storage/storageAccounts"
       name: "mystorage"

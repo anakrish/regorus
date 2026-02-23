@@ -620,8 +620,6 @@ cases:
   # =========================================================================
 
   - note: dine_vmss_canonical_ubuntu
-    # Skip: policy exceeds u8 register limit (255 registers).
-    skip: true
     resource:
       type: "Microsoft.Compute/virtualMachineScaleSets"
       name: "vmss-ubuntu"
@@ -654,8 +652,6 @@ cases:
   # =========================================================================
 
   - note: pass_wrong_os_type
-    # Skip: policy exceeds u8 register limit (255 registers).
-    skip: true
     resource:
       type: "Microsoft.Compute/virtualMachineScaleSets"
       name: "vmss-windows"
@@ -682,8 +678,6 @@ cases:
   # =========================================================================
 
   - note: dine_vmss_scope_bypass
-    # Skip: policy exceeds u8 register limit (255 registers).
-    skip: true
     resource:
       type: "Microsoft.Compute/virtualMachineScaleSets"
       name: "vmss-custom"
@@ -716,8 +710,6 @@ cases:
   # =========================================================================
 
   - note: pass_unsupported_publisher_scoped
-    # Skip: policy exceeds u8 register limit (255 registers).
-    skip: true
     resource:
       type: "Microsoft.Compute/virtualMachineScaleSets"
       name: "vmss-custom-scoped"
@@ -744,8 +736,6 @@ cases:
   # =========================================================================
 
   - note: skip_wrong_type
-    # Skip: policy exceeds u8 register limit (255 registers).
-    skip: true
     resource:
       type: "Microsoft.Compute/virtualMachines"
       name: "vm-linux"

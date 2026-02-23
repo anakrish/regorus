@@ -8,7 +8,8 @@
 //! and collecting everything else into `extra`.
 
 use alloc::boxed::Box;
-use alloc::string::{String, ToString as _};
+use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::lexer::Span;

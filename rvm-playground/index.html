@@ -127,8 +127,19 @@
                 </div>
                 <div class="tab-content">
                     <div id="input-tab" class="tab-pane active">
-                        <div class="editor-container">
-                            <div id="input-editor" class="editor"></div>
+                        <div class="input-stack">
+                            <div class="editor-container">
+                                <div id="input-editor" class="editor"></div>
+                            </div>
+                            <div class="azure-normalized-section">
+                                <div class="azure-normalized-header">
+                                    <span>Normalized Resource</span>
+                                    <button id="normalized-copy-btn" class="btn btn-small" title="Copy normalized resource">
+                                        <i class="fas fa-copy"></i>
+                                    </button>
+                                </div>
+                                <pre id="normalized-resource-display" class="normalized-output"></pre>
+                            </div>
                         </div>
                     </div>
                     <div id="data-tab" class="tab-pane">
@@ -225,6 +236,6 @@
 
     <!-- Monaco Editor -->
     <script src="https://unpkg.com/monaco-editor@0.44.0/min/vs/loader.js"></script>
-    <script type="module" src="./app.js"></script>
+    <script type="module" src="./app.js?v=20260220"></script>
 </body>
 </html>

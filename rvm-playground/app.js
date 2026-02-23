@@ -5,6 +5,7 @@ class RVMPlayground {
         this.editors = {};
         this.wasmModule = null;
         this.currentProgram = null;
+        this.azureDefaultApiVersion = '2023-01-01';
         this.debugSession = {
             active: false,
             started: false,
@@ -46,6 +47,7 @@ class RVMPlayground {
     "resource": {
         "name": "example-vm",
         "type": "Microsoft.Compute/virtualMachines",
+        "apiVersion": "2023-01-01",
         "location": "westus2",
         "sku": {
             "name": "Standard_D2s_v3"
@@ -67,6 +69,7 @@ class RVMPlayground {
                         aliasMap: {},
                         aliasesByType: {}
                 };
+            this.normalizedUpdateTimer = null;
 
         this.lastComparativeExampleName = localStorage.getItem('rvmPlaygroundLastComparative') || null;
 
@@ -137,6 +140,7 @@ default required := false
 default allow := false
 
 # MFA required for admin actions
+        this.normalizedUpdateTimer = null;
 required if {
     input.action in ["delete", "admin", "configure"]
 }
@@ -147,21 +151,34 @@ required if {
 }
 
 # MFA required during off-hours
+        const normalizedCopy = document.getElementById('normalized-copy-btn');
+        if (normalizedCopy) {
+            normalizedCopy.addEventListener('click', () => this.copyNormalizedResource());
+        }
 required if {
     current_hour := time.clock([time.now_ns(), "UTC"])[0]
     current_hour < 8
 }
 required if {
+            if (this.language === 'azure') {
+                this.scheduleAzureNormalizedUpdate();
+            }
     current_hour := time.clock([time.now_ns(), "UTC"])[0]
     current_hour > 18
 }
 
+            if (this.language === 'azure') {
+                this.scheduleAzureNormalizedUpdate();
+            }
 # Allow if MFA not required OR MFA verified
 allow if not required
 allow if {
     required
     input.mfa_verified == true
     device_trusted
+            if (this.language === 'azure') {
+                this.scheduleAzureNormalizedUpdate();
+            }
 }
 
 device_trusted if {
@@ -1266,7 +1283,577 @@ when {
 }`,
                                                 language: 'azure'
                                         }
+                                ],
+                                'Azure Policy (Complex)': [
+                                        {
+                                                name: "Require HTTPS (Storage)",
+                                                description: "Deny storage accounts that allow HTTP",
+                                                policy: `{
+    "properties": {
+        "displayName": "Require HTTPS for storage accounts",
+        "policyType": "Custom",
+        "mode": "Indexed",
+        "description": "Deny storage accounts that allow HTTP traffic.",
+        "metadata": {
+            "version": "1.0.0",
+            "category": "Complex"
+        },
+        "version": "1.0.0",
+        "policyRule": {
+            "if": {
+                "allOf": [
+                    {
+                        "field": "type",
+                        "equals": "Microsoft.Storage/storageAccounts"
+                    },
+                    {
+                        "field": "properties.supportsHttpsTrafficOnly",
+                        "notEquals": true
+                    }
+                ]
+            },
+            "then": { "effect": "deny" }
+        }
+    },
+    "name": "require-https-storage",
+    "type": "Microsoft.Authorization/policyDefinitions"
+}`,
+                                                input: `{
+    "resource": {
+        "name": "storage-http",
+        "type": "Microsoft.Storage/storageAccounts",
+        "location": "westus2",
+        "properties": {
+            "supportsHttpsTrafficOnly": false
+        }
+    },
+    "context": {},
+    "parameters": {}
+}`,
+                                                language: 'azure'
+                                        },
+                                        {
+                                                name: "Allowed Locations (Parameterized)",
+                                                description: "Use parameters to enforce approved regions",
+                                                policy: `{
+    "properties": {
+        "displayName": "Allowed locations (parameterized)",
+        "policyType": "Custom",
+        "mode": "Indexed",
+        "description": "Restrict deployments to approved regions with a parameterized effect.",
+        "metadata": {
+            "version": "1.0.0",
+            "category": "Complex"
+        },
+        "version": "1.0.0",
+        "parameters": {
+            "allowedLocations": {
+                "type": "Array",
+                "metadata": {
+                    "displayName": "Allowed locations"
+                }
+            },
+            "effect": {
+                "type": "String",
+                "metadata": {
+                    "displayName": "Effect"
+                }
+            }
+        },
+        "policyRule": {
+            "if": {
+                "allOf": [
+                    {
+                        "field": "location",
+                        "notIn": "[parameters('allowedLocations')]"
+                    },
+                    {
+                        "field": "location",
+                        "notEquals": "global"
+                    },
+                    {
+                        "field": "type",
+                        "notEquals": "Microsoft.AzureActiveDirectory/b2cDirectories"
+                    }
+                ]
+            },
+            "then": {
+                "effect": "[parameters('effect')]"
+            }
+        }
+    },
+    "name": "allowed-locations-parameterized",
+    "type": "Microsoft.Authorization/policyDefinitions"
+}`,
+                                                input: `{
+    "resource": {
+        "name": "vm-north",
+        "type": "Microsoft.Compute/virtualMachines",
+        "location": "northeurope",
+        "properties": {}
+    },
+    "context": {},
+    "parameters": {
+        "allowedLocations": ["eastus", "westus"],
+        "effect": "deny"
+    }
+}`,
+                                                language: 'azure'
+                                        },
+                                        {
+                                                name: "Require Environment Tag",
+                                                description: "Use concat() to check dynamic tag names",
+                                                policy: `{
+    "properties": {
+        "displayName": "Require environment tag",
+        "policyType": "Custom",
+        "mode": "Indexed",
+        "description": "Require a specific tag using a parameterized tag name.",
+        "metadata": {
+            "version": "1.0.0",
+            "category": "Complex"
+        },
+        "version": "1.0.0",
+        "parameters": {
+            "tagName": {
+                "type": "String",
+                "metadata": {
+                    "displayName": "Tag name"
+                }
+            }
+        },
+        "policyRule": {
+            "if": {
+                "allOf": [
+                    {
+                        "field": "type",
+                        "notEquals": "Microsoft.Resources/subscriptions"
+                    },
+                    {
+                        "field": "[concat('tags[', parameters('tagName'), ']')]",
+                        "exists": false
+                    }
+                ]
+            },
+            "then": {
+                "effect": "deny",
+                "details": {
+                    "message": "Required tag is missing"
+                }
+            }
+        }
+    },
+    "name": "require-tag-environment",
+    "type": "Microsoft.Authorization/policyDefinitions"
+}`,
+                                                input: `{
+    "resource": {
+        "name": "vm-no-tags",
+        "type": "Microsoft.Compute/virtualMachines",
+        "location": "westus2",
+        "tags": {},
+        "properties": {}
+    },
+    "context": {},
+    "parameters": {
+        "tagName": "environment"
+    }
+}`,
+                                                language: 'azure'
+                                        },
+                                        {
+                                                name: "Deny Risky NSG Rules",
+                                                description: "Block inbound NSG rules with risky ports",
+                                                policy: `{
+    "properties": {
+        "displayName": "Deny risky inbound NSG rules",
+        "policyType": "Custom",
+        "mode": "All",
+        "description": "Deny inbound NSG rules that expose risky ports to the internet.",
+        "metadata": {
+            "version": "1.0.0",
+            "category": "Complex"
+        },
+        "version": "1.0.0",
+        "policyRule": {
+            "if": {
+                "allOf": [
+                    {
+                        "field": "type",
+                        "equals": "Microsoft.Network/networkSecurityGroups/securityRules"
+                    },
+                    {
+                        "field": "properties.direction",
+                        "equals": "Inbound"
+                    },
+                    {
+                        "field": "properties.access",
+                        "equals": "Allow"
+                    },
+                    {
+                        "anyOf": [
+                            {
+                                "field": "properties.destinationPortRange",
+                                "in": ["22", "3389", "*"]
+                            },
+                            {
+                                "field": "properties.sourceAddressPrefix",
+                                "in": ["*", "Internet", "0.0.0.0/0"]
+                            }
+                        ]
+                    }
+                ]
+            },
+            "then": {
+                "effect": "deny",
+                "details": {
+                    "message": "Risky inbound NSG rules are not allowed"
+                }
+            }
+        }
+    },
+    "name": "deny-risky-nsg",
+    "type": "Microsoft.Authorization/policyDefinitions"
+}`,
+                                                input: `{
+    "resource": {
+        "name": "nsg-rule",
+        "type": "Microsoft.Network/networkSecurityGroups/securityRules",
+        "properties": {
+            "direction": "Inbound",
+            "access": "Allow",
+            "destinationPortRange": "22",
+            "sourceAddressPrefix": "*"
+        }
+    },
+    "context": {},
+    "parameters": {}
+}`,
+                                                language: 'azure'
+                                        },
+                                        {
+                                                name: "Modify: Add Missing Tags",
+                                                description: "Use modify operations to add required tags",
+                                                policy: `{
+    "properties": {
+        "displayName": "Modify - add tags",
+        "policyType": "Custom",
+        "mode": "Indexed",
+        "description": "Add missing environment and costCenter tags.",
+        "metadata": {
+            "version": "1.0.0",
+            "category": "Complex"
+        },
+        "version": "1.0.0",
+        "policyRule": {
+            "if": {
+                "allOf": [
+                    {
+                        "field": "type",
+                        "equals": "Microsoft.Compute/virtualMachines"
+                    },
+                    {
+                        "anyOf": [
+                            { "field": "tags.environment", "exists": false },
+                            { "field": "tags.costCenter", "exists": false }
+                        ]
+                    }
+                ]
+            },
+            "then": {
+                "effect": "modify",
+                "details": {
+                    "roleDefinitionIds": [
+                        "/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c"
+                    ],
+                    "operations": [
+                        {
+                            "operation": "addOrReplace",
+                            "field": "tags['environment']",
+                            "value": "[if(empty(field('tags.environment')), 'unknown', field('tags.environment'))]"
+                        },
+                        {
+                            "operation": "addOrReplace",
+                            "field": "tags['costCenter']",
+                            "value": "[if(empty(field('tags.costCenter')), 'unassigned', field('tags.costCenter'))]"
+                        }
+                    ]
+                }
+            }
+        }
+    },
+    "name": "modify-add-tags",
+    "type": "Microsoft.Authorization/policyDefinitions"
+}`,
+                                                input: `{
+    "resource": {
+        "name": "vm-tags",
+        "type": "Microsoft.Compute/virtualMachines",
+        "tags": {
+            "environment": "prod"
+        },
+        "properties": {}
+    },
+    "context": {},
+    "parameters": {}
+}`,
+                                                language: 'azure'
+                                        },
+                                        {
+                                                name: "Count: Open NSG Rules",
+                                                description: "Use count/where to block open inbound rules",
+                                                policy: `{
+    "properties": {
+        "displayName": "Deny excessive open NSG rules",
+        "policyType": "Custom",
+        "mode": "All",
+        "description": "Deny NSGs with inbound allow rules from any source.",
+        "metadata": {
+            "version": "1.0.0",
+            "category": "Complex"
+        },
+        "version": "1.0.0",
+        "policyRule": {
+            "if": {
+                "allOf": [
+                    {
+                        "field": "type",
+                        "equals": "Microsoft.Network/networkSecurityGroups"
+                    },
+                    {
+                        "count": {
+                            "field": "securityRules[*]",
+                            "where": {
+                                "allOf": [
+                                    {
+                                        "field": "securityRules[*].access",
+                                        "equals": "Allow"
+                                    },
+                                    {
+                                        "field": "securityRules[*].direction",
+                                        "equals": "Inbound"
+                                    },
+                                    {
+                                        "field": "securityRules[*].sourceAddressPrefix",
+                                        "equals": "*"
+                                    }
                                 ]
+                            }
+                        },
+                        "greater": 0
+                    }
+                ]
+            },
+            "then": { "effect": "deny" }
+        }
+    },
+    "name": "deny-open-nsg",
+    "type": "Microsoft.Authorization/policyDefinitions"
+}`,
+                                                input: `{
+    "resource": {
+        "name": "nsg-open",
+        "type": "Microsoft.Network/networkSecurityGroups",
+        "securityRules": [
+            {
+                "access": "Allow",
+                "direction": "Inbound",
+                "sourceAddressPrefix": "*"
+            }
+        ]
+    },
+    "context": {},
+    "parameters": {}
+}`,
+                                                language: 'azure'
+                                        },
+                                        {
+                                                name: "Required Tags (Value Count)",
+                                                description: "Count required tags using value + current()",
+                                                policy: `{
+    "properties": {
+        "displayName": "Required tags (value count)",
+        "policyType": "Custom",
+        "mode": "Indexed",
+        "description": "Require all tags from the required list to be present.",
+        "metadata": {
+            "version": "1.0.0",
+            "category": "Complex"
+        },
+        "version": "1.0.0",
+        "parameters": {
+            "requiredTags": {
+                "type": "Array",
+                "metadata": {
+                    "displayName": "Required tags"
+                }
+            }
+        },
+        "policyRule": {
+            "if": {
+                "allOf": [
+                    {
+                        "field": "type",
+                        "notEquals": "Microsoft.Resources/subscriptions"
+                    },
+                    {
+                        "count": {
+                            "value": "[parameters('requiredTags')]",
+                            "name": "tagName",
+                            "where": {
+                                "field": "[concat('tags[', current('tagName'), ']')]",
+                                "exists": true
+                            }
+                        },
+                        "notEquals": "[length(parameters('requiredTags'))]"
+                    }
+                ]
+            },
+            "then": {
+                "effect": "deny",
+                "details": {
+                    "message": "Not all required tags are present"
+                }
+            }
+        }
+    },
+    "name": "required-tags-value-count",
+    "type": "Microsoft.Authorization/policyDefinitions"
+}`,
+                                                input: `{
+    "resource": {
+        "name": "vm-tags",
+        "type": "Microsoft.Compute/virtualMachines",
+        "tags": {
+            "environment": "prod",
+            "costCenter": "12345"
+        },
+        "properties": {}
+    },
+    "context": {},
+    "parameters": {
+        "requiredTags": ["environment", "costCenter", "owner"]
+    }
+}`,
+                                                language: 'azure'
+                                        },
+                                        {
+                                                name: "Multi-Type With Not",
+                                                description: "Combine not/anyOf with allowed locations",
+                                                policy: `{
+    "properties": {
+        "displayName": "Multi-resource type with not",
+        "policyType": "Custom",
+        "mode": "All",
+        "description": "Deny resources outside allowed locations unless excluded types.",
+        "metadata": {
+            "version": "1.0.0",
+            "category": "Complex"
+        },
+        "version": "1.0.0",
+        "parameters": {
+            "allowedLocations": {
+                "type": "Array",
+                "metadata": {
+                    "displayName": "Allowed locations"
+                }
+            },
+            "effect": {
+                "type": "String",
+                "metadata": {
+                    "displayName": "Effect"
+                }
+            }
+        },
+        "policyRule": {
+            "if": {
+                "allOf": [
+                    {
+                        "not": {
+                            "anyOf": [
+                                { "field": "type", "equals": "Microsoft.Resources/subscriptions" },
+                                { "field": "type", "equals": "Microsoft.Resources/subscriptions/resourceGroups" },
+                                { "field": "type", "equals": "Microsoft.Authorization/roleAssignments" }
+                            ]
+                        }
+                    },
+                    {
+                        "field": "location",
+                        "notIn": "[parameters('allowedLocations')]"
+                    }
+                ]
+            },
+            "then": {
+                "effect": "[parameters('effect')]",
+                "details": {
+                    "message": "Resource location is not in the allowed list"
+                }
+            }
+        }
+    },
+    "name": "multi-type-with-not",
+    "type": "Microsoft.Authorization/policyDefinitions"
+}`,
+                                                input: `{
+    "resource": {
+        "name": "vm-sea",
+        "type": "Microsoft.Compute/virtualMachines",
+        "location": "southeastasia",
+        "properties": {}
+    },
+    "context": {},
+    "parameters": {
+        "allowedLocations": ["eastus", "westus", "centralus"],
+        "effect": "deny"
+    }
+}`,
+                                                language: 'azure'
+                                        },
+                                        {
+                                                name: "Exists + Value Checks",
+                                                description: "Mix exists with value comparisons",
+                                                policy: `{
+    "properties": {
+        "displayName": "Exists and value checks",
+        "policyType": "Custom",
+        "mode": "Indexed",
+        "description": "Deny when networkAcls exist but default action is not Deny.",
+        "metadata": {
+            "version": "1.0.0",
+            "category": "Complex"
+        },
+        "version": "1.0.0",
+        "policyRule": {
+            "if": {
+                "allOf": [
+                    { "field": "type", "equals": "Microsoft.Storage/storageAccounts" },
+                    { "field": "properties.networkAcls", "exists": true },
+                    { "field": "properties.networkAcls.defaultAction", "notEquals": "Deny" }
+                ]
+            },
+            "then": { "effect": "deny" }
+        }
+    },
+    "name": "exists-and-value-check",
+    "type": "Microsoft.Authorization/policyDefinitions"
+}`,
+                                                input: `{
+    "resource": {
+        "name": "storage-allow",
+        "type": "Microsoft.Storage/storageAccounts",
+        "properties": {
+            "networkAcls": {
+                "defaultAction": "Allow"
+            }
+        }
+    },
+    "context": {},
+    "parameters": {}
+}`,
+                                                language: 'azure'
+                                        }
+                                ]
+                        }
                         }
                 };
 
@@ -2187,6 +2774,9 @@ when {
             if (this.settings.autoEvaluate) {
                 this.debounce(() => this.evaluate(), 500);
             }
+            if (this.language === 'azure') {
+                this.scheduleAzureNormalizedUpdate();
+            }
         });
 
         this.editors.data.onDidChangeModelContent(() => {
@@ -2227,7 +2817,8 @@ when {
 
     async loadAzureAliases() {
         try {
-            const response = await fetch('./azure-policy-aliases.json', { cache: 'force-cache' });
+            const cacheBust = Date.now();
+            const response = await fetch(`./azure-policy-aliases.json?cache=${cacheBust}`, { cache: 'no-store' });
             if (!response.ok) {
                 throw new Error(`alias catalog fetch failed (${response.status})`);
             }
@@ -2236,12 +2827,18 @@ when {
             this.azureAliases.aliasMap = this.buildAzureAliasMap(catalog);
             this.azureAliases.aliasesByType = this.buildAzureAliasIndex(catalog);
             this.updateAliasStatus();
+            if (this.language === 'azure') {
+                this.scheduleAzureNormalizedUpdate();
+            }
         } catch (error) {
             console.warn('Azure alias catalog unavailable:', error);
             this.azureAliases.catalog = null;
             this.azureAliases.aliasMap = {};
             this.azureAliases.aliasesByType = {};
             this.updateAliasStatus();
+            if (this.language === 'azure') {
+                this.scheduleAzureNormalizedUpdate();
+            }
         }
     }
 
@@ -2267,6 +2864,11 @@ when {
         });
         
         document.getElementById('data-examples-btn').addEventListener('click', () => this.showExamples('data'));
+
+        const normalizedCopy = document.getElementById('normalized-copy-btn');
+        if (normalizedCopy) {
+            normalizedCopy.addEventListener('click', () => this.copyNormalizedResource());
+        }
         
         // Tab switching
         document.querySelectorAll('.tab-button').forEach(button => {
@@ -3134,6 +3736,10 @@ when {
         }
 
         const resource = input.resource || input;
+        const resolvedResource = { ...resource };
+        if (input.apiVersion && !resolvedResource.apiVersion) {
+            resolvedResource.apiVersion = input.apiVersion;
+        }
         const context = input.context || {};
         const parameters = input.parameters || {};
 
@@ -3142,10 +3748,51 @@ when {
         }
 
         return {
-            resource: this.normalizeAzureResource(resource),
+            resource: this.normalizeAzureResource(resolvedResource),
             context,
             parameters
         };
+    }
+
+    scheduleAzureNormalizedUpdate() {
+        if (this.language !== 'azure') {
+            return;
+        }
+        clearTimeout(this.normalizedUpdateTimer);
+        this.normalizedUpdateTimer = setTimeout(() => {
+            this.updateAzureNormalizedResourceView();
+        }, 150);
+    }
+
+    updateAzureNormalizedResourceView() {
+        const output = document.getElementById('normalized-resource-display');
+        if (!output) {
+            return;
+        }
+        if (this.language !== 'azure') {
+            output.textContent = '';
+            return;
+        }
+        const inputJson = this.editors.input?.getValue() || '{}';
+        try {
+            const payload = this.buildAzureInputEnvelope(inputJson);
+            output.textContent = JSON.stringify(payload.resource || {}, null, 2);
+        } catch (error) {
+            const message = error && error.message ? error.message : String(error);
+            output.textContent = `Error: ${message}`;
+        }
+    }
+
+    copyNormalizedResource() {
+        const output = document.getElementById('normalized-resource-display');
+        if (!output || !output.textContent) {
+            return;
+        }
+        navigator.clipboard.writeText(output.textContent).then(() => {
+            this.updateStatus('Normalized resource copied to clipboard');
+        }).catch(err => {
+            console.error('Failed to copy normalized resource:', err);
+        });
     }
 
     normalizeAzureResource(resource) {
@@ -3179,6 +3826,10 @@ when {
                     normalized[key] = value;
                 }
             });
+        }
+
+        if (!Object.prototype.hasOwnProperty.call(normalized, 'apiVersion') && this.azureDefaultApiVersion) {
+            normalized.apiVersion = this.azureDefaultApiVersion;
         }
 
         const aliases = this.getAzureAliasesForType(resource.type);
@@ -3732,6 +4383,7 @@ when {
         this.currentProgram = null;
         this.clearAssembly();
         this.updateStatus(`Switched to ${this.language.toUpperCase()} mode`);
+        this.updateAzureNormalizedResourceView();
     }
 
     updateLanguageUI() {

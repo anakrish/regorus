@@ -352,26 +352,30 @@ fn yaml_test_impl(file: &str) -> Result<()> {
         // Load host-await responses (for auditIfNotExists / deployIfNotExists policies).
         // When an alias catalog is loaded, the response is normalized through
         // the same alias-driven normalizer that the primary resource receives.
-        // The resource type is derived from the policy's `details.type` (or
-        // overridden per-entry via `resource_type` in the YAML).
+        // The resource type is injected into the response from the policy's
+        // `details.type` (or overridden per-entry) so the normalizer can find
+        // the right alias entries.
         if !case.host_await.is_empty() {
             let mut responses: BTreeMap<Value, Vec<Value>> = BTreeMap::new();
             for entry in &case.host_await {
                 let response_json: serde_json::Value = serde_json::to_value(&entry.response)
                     .expect("host_await response YAML→JSON failed");
 
-                // Determine the resource type: per-entry override > policy details.type.
-                let effective_type = entry.resource_type.as_deref().or(details_type.as_deref());
-
-                let response_json =
-                    if let (Some(rt), Some(ref registry)) = (effective_type, &alias_registry) {
-                        // Normalize the response using the alias catalog, just
-                        // like make_input normalizes the primary resource.
-                        let resolved = registry.get(rt);
-                        normalizer::normalize(&response_json, resolved, None)
+                let response_json = if let Some(ref registry) = alias_registry {
+                    // Determine the resource type: per-entry override > policy details.type.
+                    let effective_type = entry.resource_type.as_deref().or(details_type.as_deref());
+                    // Inject the type into the response so the normalizer
+                    // can look up alias entries (real ARM responses always
+                    // include a "type" field).
+                    let response_json = if let Some(rt) = effective_type {
+                        inject_type_field(&response_json, rt)
                     } else {
                         response_json
                     };
+                    normalizer::normalize(&response_json, Some(registry), None)
+                } else {
+                    response_json
+                };
 
                 let response_value =
                     Value::from_json_str(&serde_json::to_string(&response_json).unwrap())
@@ -440,17 +444,15 @@ fn make_input(case: &TestCase, alias_registry: Option<&AliasRegistry>) -> Result
         yaml_to_regorus_value(case.parameters.as_ref())?.unwrap_or_else(Value::new_object);
 
     let mut resource = if let Some(registry) = alias_registry {
-        // Convert YAML resource → serde_json, resolve aliases for the resource
-        // type, run normalizer with sub-resource info, convert to regorus Value.
+        // Convert YAML resource → serde_json, run normalizer (which extracts
+        // the resource type from the JSON "type" field), convert to regorus Value.
         let raw_json: serde_json::Value = case
             .resource
             .as_ref()
             .map(|y| serde_json::to_value(y).expect("YAML→JSON conversion failed"))
             .unwrap_or(serde_json::Value::Object(Default::default()));
-        let resource_type = raw_json.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        let resolved = registry.get(resource_type);
         let normalized_json =
-            normalizer::normalize(&raw_json, resolved, case.api_version.as_deref());
+            normalizer::normalize(&raw_json, Some(registry), case.api_version.as_deref());
         Value::from_json_str(&serde_json::to_string(&normalized_json)?)
             .expect("normalized JSON→Value conversion failed")
     } else {
@@ -546,9 +548,9 @@ fn extract_details(value: &Value) -> Value {
 ///
 /// For AINE/DINE policies, `details.type` specifies the ARM resource type of
 /// the related resource that the host must look up.  The test harness uses
-/// this to automatically normalize host_await responses through the same
-/// alias-driven normalizer as the primary resource — no need for test authors
-/// to repeat the type in each `host_await` entry.
+/// this to inject the type into host_await responses so the normalizer can
+/// find the right alias entries — no need for test authors to repeat the type
+/// in each `host_await` entry.
 ///
 /// Handles both full policy definitions (`properties.policyRule.then.details.type`)
 /// and standalone policy rules (`then.details.type`).
@@ -564,6 +566,23 @@ fn extract_details_resource_type(source_text: &str, is_definition: bool) -> Opti
         .get("type")?
         .as_str()
         .map(String::from)
+}
+
+/// Inject a `type` field into a JSON object.
+///
+/// Used to add the resource type to host_await responses before normalization,
+/// since the normalizer derives the resource type from the resource's `type`
+/// field.  Real ARM responses always include `type`; the test YAML omits it
+/// for brevity.
+fn inject_type_field(json: &serde_json::Value, resource_type: &str) -> serde_json::Value {
+    if let Some(obj) = json.as_object() {
+        let mut obj = obj.clone();
+        obj.entry("type")
+            .or_insert_with(|| serde_json::Value::String(resource_type.to_string()));
+        serde_json::Value::Object(obj)
+    } else {
+        json.clone()
+    }
 }
 
 #[test_resources("tests/azure_policy/cases/*.yaml")]

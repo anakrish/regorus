@@ -15,6 +15,7 @@ use alloc::vec::Vec;
 use serde_json::{Map, Value};
 
 use super::types::{ResolvedAliases, ResolvedEntry};
+use super::AliasRegistry;
 
 /// Fields that exist at the ARM resource root (not under `properties`).
 const ROOT_FIELDS: &[&str] = &[
@@ -60,12 +61,18 @@ pub(crate) fn collision_safe_key(short_name: &str) -> String {
 
 /// Normalize a raw ARM resource JSON value into the `input.resource` structure.
 ///
+/// The resource type is extracted from the `type` field of `arm_resource` and
+/// used to look up alias entries in the registry.  This means callers don't
+/// need to know or pass the resource type separately — it's derived from the
+/// resource itself.
+///
 /// # Arguments
 ///
 /// * `arm_resource` — The raw ARM JSON object for the resource.
-/// * `aliases` — Resolved alias data for the resource type. Used to determine
-///   which array fields contain sub-resources and to perform per-alias
-///   path resolution. If `None`, only root `properties` flattening is performed.
+/// * `registry` — Optional alias registry.  When provided, the resource's
+///   `type` field is used to look up alias entries for sub-resource array
+///   detection and per-alias path resolution.  If `None`, only root
+///   `properties` flattening is performed.
 /// * `api_version` — Optional API version string. When provided, versioned
 ///   alias paths are selected via [`ResolvedEntry::select_path`]. This enables
 ///   correct normalization for resources whose ARM JSON structure varies across
@@ -80,6 +87,25 @@ pub(crate) fn collision_safe_key(short_name: &str) -> String {
 /// - Per-alias path resolution places values at alias short name paths,
 ///   handling versioned ARM paths when `api_version` is supplied.
 pub fn normalize(
+    arm_resource: &Value,
+    registry: Option<&AliasRegistry>,
+    api_version: Option<&str>,
+) -> Value {
+    let aliases = registry.and_then(|r| {
+        arm_resource
+            .get("type")
+            .and_then(|t| t.as_str())
+            .and_then(|rt| r.get(rt))
+    });
+    normalize_with_aliases(arm_resource, aliases, api_version)
+}
+
+/// Internal normalization with pre-resolved alias data.
+///
+/// This is the core implementation used by [`normalize`] after looking up
+/// the alias entries from the registry.  Also used directly in unit tests
+/// that construct `ResolvedAliases` by hand.
+pub(crate) fn normalize_with_aliases(
     arm_resource: &Value,
     aliases: Option<&ResolvedAliases>,
     api_version: Option<&str>,
@@ -501,7 +527,7 @@ mod tests {
             }
         });
 
-        let result = normalize(&arm, Some(&aliases), None);
+        let result = normalize_with_aliases(&arm, Some(&aliases), None);
         let rules = result["securityrules"].as_array().unwrap();
         assert_eq!(rules.len(), 2);
         assert_eq!(rules[0]["name"], "rule1");
@@ -669,7 +695,7 @@ mod tests {
             }
         });
 
-        let result = normalize(&arm, Some(&aliases), None);
+        let result = normalize_with_aliases(&arm, Some(&aliases), None);
         let subnets = result["subnets"].as_array().unwrap();
         assert_eq!(subnets.len(), 1);
         // First level flatten: subnet element has name + addressPrefix merged
@@ -701,7 +727,7 @@ mod tests {
             }
         });
 
-        let result = normalize(&arm, Some(&aliases), None);
+        let result = normalize_with_aliases(&arm, Some(&aliases), None);
         let items = result["items"].as_array().unwrap();
         assert_eq!(items[0]["name"], "plain-object");
         assert_eq!(items[0]["enabled"], true);
@@ -767,7 +793,7 @@ mod tests {
 
         // The sub_resource_arrays entry is "SecurityRules" but the ARM JSON
         // field is "securityRules" — should still match case-insensitively.
-        let result = normalize(&arm, Some(&aliases), None);
+        let result = normalize_with_aliases(&arm, Some(&aliases), None);
         let rules = result["securityrules"].as_array().unwrap();
         assert_eq!(rules[0]["protocol"], "Tcp");
         assert!(rules[0].get("properties").is_none());

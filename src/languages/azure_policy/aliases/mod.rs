@@ -156,25 +156,23 @@ impl AliasRegistry {
     /// Normalize a raw ARM resource and wrap it in the input envelope.
     ///
     /// Convenience method that combines alias lookup, normalization, and
-    /// envelope construction.
+    /// envelope construction.  The resource type is extracted from the
+    /// `type` field of `arm_resource` automatically.
     ///
     /// # Arguments
     ///
-    /// * `resource_type` — The ARM resource type (e.g., `"Microsoft.Storage/storageAccounts"`).
     /// * `arm_resource` — The raw ARM JSON for the resource.
     /// * `api_version` — Optional API version to select versioned alias paths.
     /// * `context` — Optional context object for the input envelope.
     /// * `parameters` — Optional parameters object for the input envelope.
     pub fn normalize_and_wrap(
         &self,
-        resource_type: &str,
         arm_resource: &serde_json::Value,
         api_version: Option<&str>,
         context: Option<serde_json::Value>,
         parameters: Option<serde_json::Value>,
     ) -> serde_json::Value {
-        let aliases = self.get(resource_type);
-        let normalized = normalizer::normalize(arm_resource, aliases, api_version);
+        let normalized = normalizer::normalize(arm_resource, Some(self), api_version);
         normalizer::build_input_envelope(normalized, context, parameters)
     }
 }
@@ -601,7 +599,6 @@ mod tests {
         });
 
         let envelope = registry.normalize_and_wrap(
-            "Microsoft.Network/networkSecurityGroups",
             &arm_resource,
             None,
             Some(serde_json::json!({"resourceGroup": {"name": "rg1"}})),

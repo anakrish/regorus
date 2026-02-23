@@ -121,7 +121,7 @@ pub(super) fn classify_field(
     text: &str,
     span: &crate::lexer::Span,
 ) -> Result<FieldKind, ParseError> {
-    match text.to_ascii_lowercase().as_str() {
+    match text.to_lowercase().as_str() {
         "type" => Ok(FieldKind::Type),
         "id" => Ok(FieldKind::Id),
         "kind" => Ok(FieldKind::Kind),
@@ -131,8 +131,8 @@ pub(super) fn classify_field(
         "tags" => Ok(FieldKind::Tags),
         "identity.type" => Ok(FieldKind::IdentityType),
         "apiversion" => Ok(FieldKind::ApiVersion),
-        _ if text.to_ascii_lowercase().starts_with("tags.") => Ok(FieldKind::Tag(text[5..].into())),
-        _ if text.to_ascii_lowercase().starts_with("tags['") && text.ends_with("']") => {
+        _ if text.to_lowercase().starts_with("tags.") => Ok(FieldKind::Tag(text[5..].into())),
+        _ if text.to_lowercase().starts_with("tags['") && text.ends_with("']") => {
             let end = text.len().saturating_sub(2);
             Ok(FieldKind::Tag(text[6..end].into()))
         }

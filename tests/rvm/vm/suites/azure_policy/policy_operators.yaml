@@ -696,14 +696,14 @@ cases:
     want_result: false
 
   - note: policy_equals_bool_vs_string
-    description: "bool true vs string 'true' — not equal (different types, no coercion)"
+    description: "bool true vs string 'true' — equal (String↔Bool coercion)"
     literals: ["true"]
     instructions:
       - "LoadTrue { dest: 1 }"
       - "Load { dest: 2, literal_idx: 0 }"
       - "PolicyEquals { dest: 0, left: 1, right: 2 }"
       - "Return { value: 0 }"
-    want_result: false
+    want_result: true
 
   - note: policy_equals_empty_strings
     literals: ["", ""]

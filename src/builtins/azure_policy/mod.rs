@@ -17,6 +17,7 @@ mod template_functions;
 mod template_functions_collection;
 mod template_functions_datetime;
 mod template_functions_encoding;
+mod template_functions_misc;
 mod template_functions_numeric;
 mod template_functions_string;
 
@@ -25,6 +26,7 @@ use crate::builtins;
 pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     // Logic functions
     m.insert("azure.policy.logic_all", (operators::logic_all, 0));
+    m.insert("azure.policy.logic_any", (operators::logic_any, 0));
     m.insert("azure.policy.if", (operators::if_fn, 3));
 
     // Field resolution
@@ -40,4 +42,5 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
     template_functions_collection::register(m);
     template_functions_numeric::register(m);
     template_functions_datetime::register(m);
+    template_functions_misc::register(m);
 }

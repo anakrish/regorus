@@ -29,6 +29,8 @@ use anyhow::Result;
 
 use types::{ProviderAliases, ResolvedAliases, ResolvedEntry};
 
+use normalizer::{collision_safe_key, is_root_field_collision};
+
 /// Registry of resolved alias data, keyed by fully-qualified resource type
 /// (case-insensitive, stored lowercase).
 #[derive(Debug, Clone, Default)]
@@ -40,6 +42,10 @@ pub struct AliasRegistry {
     /// Built during [`load_provider`] so the compiler can resolve any alias
     /// to its short name without knowing the resource type.
     alias_to_short: BTreeMap<String, String>,
+    /// Global lookup: lowercase fully-qualified alias name → modifiable flag.
+    ///
+    /// `true` when `defaultMetadata.attributes == "Modifiable"`, `false` otherwise.
+    alias_modifiable: BTreeMap<String, bool>,
 }
 
 impl AliasRegistry {
@@ -48,6 +54,7 @@ impl AliasRegistry {
         Self {
             types: BTreeMap::new(),
             alias_to_short: BTreeMap::new(),
+            alias_modifiable: BTreeMap::new(),
         }
     }
 
@@ -70,14 +77,31 @@ impl AliasRegistry {
         let namespace = &provider.namespace;
         for rt in provider.resource_types {
             let fq_type = alloc::format!("{}/{}", namespace, rt.resource_type);
-            // Build the global FQ alias → short name lookup.
+            // Build the global FQ alias → short name lookup and modifiable map.
             let prefix = alloc::format!("{}/", fq_type);
             for alias in &rt.aliases {
                 if alias.name.len() > prefix.len()
                     && alias.name[..prefix.len()].eq_ignore_ascii_case(&prefix)
                 {
-                    let short = alias.name[prefix.len()..].to_string();
-                    self.alias_to_short.insert(alias.name.to_lowercase(), short);
+                    let raw_short = alias.name[prefix.len()..].to_string();
+                    let default_path = alias.default_path.as_deref().unwrap_or("");
+                    // When an alias short name collides with a reserved ARM
+                    // root field (name, type, id, etc.), use a collision-safe
+                    // key so the compiler and normalizer agree on where the
+                    // alias value lives in the normalized resource.
+                    let short = if is_root_field_collision(&raw_short, default_path) {
+                        collision_safe_key(&raw_short)
+                    } else {
+                        raw_short
+                    };
+                    let lc_name = alias.name.to_lowercase();
+                    self.alias_to_short.insert(lc_name.clone(), short);
+                    let is_modifiable = alias
+                        .default_metadata
+                        .as_ref()
+                        .and_then(|m| m.attributes.as_deref())
+                        .is_some_and(|a| a.eq_ignore_ascii_case("Modifiable"));
+                    self.alias_modifiable.insert(lc_name, is_modifiable);
                 }
             }
             let resolved = resolve_resource_type(&fq_type, &rt.aliases);
@@ -121,28 +145,34 @@ impl AliasRegistry {
         self.alias_to_short.clone()
     }
 
+    /// Return a clone of the alias-to-modifiable map for use by the compiler.
+    ///
+    /// Maps lowercase fully-qualified alias names to `true` when the alias
+    /// has `defaultMetadata.attributes = "Modifiable"`.
+    pub fn alias_modifiable_map(&self) -> BTreeMap<String, bool> {
+        self.alias_modifiable.clone()
+    }
+
     /// Normalize a raw ARM resource and wrap it in the input envelope.
     ///
     /// Convenience method that combines alias lookup, normalization, and
-    /// envelope construction.
+    /// envelope construction.  The resource type is extracted from the
+    /// `type` field of `arm_resource` automatically.
     ///
     /// # Arguments
     ///
-    /// * `resource_type` — The ARM resource type (e.g., `"Microsoft.Storage/storageAccounts"`).
     /// * `arm_resource` — The raw ARM JSON for the resource.
     /// * `api_version` — Optional API version to select versioned alias paths.
     /// * `context` — Optional context object for the input envelope.
     /// * `parameters` — Optional parameters object for the input envelope.
     pub fn normalize_and_wrap(
         &self,
-        resource_type: &str,
         arm_resource: &serde_json::Value,
         api_version: Option<&str>,
         context: Option<serde_json::Value>,
         parameters: Option<serde_json::Value>,
     ) -> serde_json::Value {
-        let aliases = self.get(resource_type);
-        let normalized = normalizer::normalize(arm_resource, aliases, api_version);
+        let normalized = normalizer::normalize(arm_resource, Some(self), api_version);
         normalizer::build_input_envelope(normalized, context, parameters)
     }
 }
@@ -194,6 +224,7 @@ fn resolve_resource_type(fq_type: &str, aliases: &[types::AliasEntry]) -> Resolv
                 short_name: short_name.to_string(),
                 default_path,
                 versioned_paths,
+                metadata: alias.default_metadata.clone(),
             },
         );
     }
@@ -568,16 +599,15 @@ mod tests {
         });
 
         let envelope = registry.normalize_and_wrap(
-            "Microsoft.Network/networkSecurityGroups",
             &arm_resource,
             None,
             Some(serde_json::json!({"resourceGroup": {"name": "rg1"}})),
             Some(serde_json::json!({"env": "prod"})),
         );
 
-        // Resource is normalized
+        // Resource is normalized (all keys lowercased)
         assert_eq!(envelope["resource"]["name"], "myNsg");
-        let rules = envelope["resource"]["securityRules"].as_array().unwrap();
+        let rules = envelope["resource"]["securityrules"].as_array().unwrap();
         assert_eq!(rules[0]["protocol"], "Tcp");
         assert!(rules[0].get("properties").is_none());
         // Context and parameters are passed through
@@ -596,8 +626,8 @@ mod tests {
             .load_from_json(&json)
             .expect("test_aliases.json should parse");
 
-        // Expect 11 resource types
-        assert_eq!(registry.len(), 11);
+        // Expect 24 resource types
+        assert_eq!(registry.len(), 23);
 
         // Storage
         let storage = registry

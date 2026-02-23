@@ -232,3 +232,92 @@ cases:
       tags:
         team: "security"
     want_effect: "audit"
+
+  # =========================================================================
+  # Bracket notation in field paths
+  # =========================================================================
+
+  - note: field_bracket_notation_string_key
+    policy_rule: |
+      {
+        "if": {
+          "field": "properties.networkAcls['default-action']",
+          "equals": "Allow"
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      properties:
+        networkAcls:
+          default-action: "Allow"
+    want_effect: "deny"
+
+  - note: field_bracket_notation_double_quote
+    policy_rule: |
+      {
+        "if": {
+          "field": "properties.settings['log-level']",
+          "equals": "debug"
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      properties:
+        settings:
+          log-level: "debug"
+    want_effect: "deny"
+
+  # =========================================================================
+  # Array index access in field paths
+  # =========================================================================
+
+  - note: field_array_index_zero
+    policy_rule: |
+      {
+        "if": {
+          "field": "properties.ipConfigurations[0].name",
+          "equals": "primary"
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      properties:
+        ipConfigurations:
+          - name: "primary"
+            properties:
+              subnet: "default"
+          - name: "secondary"
+            properties:
+              subnet: "dmz"
+    want_effect: "deny"
+
+  - note: field_array_index_one
+    policy_rule: |
+      {
+        "if": {
+          "field": "properties.ipConfigurations[1].name",
+          "equals": "secondary"
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      properties:
+        ipConfigurations:
+          - name: "primary"
+          - name: "secondary"
+    want_effect: "deny"
+
+  - note: field_array_index_out_of_bounds
+    policy_rule: |
+      {
+        "if": {
+          "field": "properties.ipConfigurations[5].name",
+          "exists": true
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      properties:
+        ipConfigurations:
+          - name: "primary"
+    want_undefined: true

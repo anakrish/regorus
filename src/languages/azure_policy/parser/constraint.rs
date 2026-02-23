@@ -25,7 +25,7 @@ impl<'source> Parser<'source> {
             loop {
                 let (key_span, key) = self.expect_string()?;
                 self.expect_symbol(":")?;
-                let key_lower = key.to_ascii_lowercase();
+                let key_lower = key.to_lowercase();
 
                 let value = match key_lower.as_str() {
                     "allof" | "anyof" => {

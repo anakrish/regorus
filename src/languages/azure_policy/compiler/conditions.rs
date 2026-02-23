@@ -8,6 +8,8 @@ use alloc::vec::Vec;
 
 use anyhow::{anyhow, Result};
 
+#[allow(unused_imports)]
+use crate::languages::azure_policy::ast::CountNode;
 use crate::languages::azure_policy::ast::{Condition, Constraint, FieldKind, Lhs, OperatorKind};
 use crate::rvm::instructions::{LoopMode, LoopStartParams};
 use crate::rvm::Instruction;
@@ -140,6 +142,14 @@ impl Compiler {
         // Implicit allOf: field with [*] outside count → every element must match.
         if let Some(field_path) = self.has_unbound_wildcard_field(&condition.lhs)? {
             return self.compile_condition_wildcard_allof(&field_path, condition);
+        }
+
+        // Count existence optimization: compile `count > 0`, `count == 0`,
+        // etc. as a `LoopMode::Any` loop that exits on the first match.
+        if let Lhs::Count(count_node) = &condition.lhs {
+            if let Some(result) = self.try_compile_count_as_any(count_node, condition)? {
+                return Ok(result);
+            }
         }
 
         let lhs = self.compile_lhs(&condition.lhs, &condition.span)?;

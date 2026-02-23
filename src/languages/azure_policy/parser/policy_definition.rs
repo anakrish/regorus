@@ -68,7 +68,7 @@ impl<'source> Parser<'source> {
 
         // Check if wrapped (has a "properties" key that is an object).
         let is_wrapped = top_entries.iter().any(|e| {
-            e.key.to_ascii_lowercase() == "properties" && matches!(e.value, JsonValue::Object(..))
+            e.key.to_lowercase() == "properties" && matches!(e.value, JsonValue::Object(..))
         });
 
         if is_wrapped {
@@ -90,7 +90,7 @@ impl<'source> Parser<'source> {
         let mut extra = Vec::new();
 
         for entry in entries {
-            if entry.key.to_ascii_lowercase() == "properties" {
+            if entry.key.to_lowercase() == "properties" {
                 if let JsonValue::Object(_, entries) = entry.value {
                     properties_entries = Some(entries);
                 }
@@ -122,7 +122,7 @@ impl<'source> Parser<'source> {
         let mut policy_rule_value: Option<JsonValue> = None;
 
         for entry in entries {
-            match entry.key.to_ascii_lowercase().as_str() {
+            match entry.key.to_lowercase().as_str() {
                 "displayname" => {
                     display_name = extract_string_value(&entry.value);
                     if display_name.is_none() {
@@ -238,7 +238,7 @@ fn parse_single_parameter(entry: ObjectEntry) -> Result<ParameterDefinition, Par
     let mut extra = Vec::new();
 
     for e in inner_entries {
-        match e.key.to_ascii_lowercase().as_str() {
+        match e.key.to_lowercase().as_str() {
             "type" => {
                 param_type = extract_string_value(&e.value);
                 if param_type.is_none() {
@@ -387,11 +387,37 @@ fn then_block_from_json_value(jv: JsonValue) -> Result<ThenBlock, ParseError> {
         key: "effect",
     })?;
 
+    let existence_condition = extract_existence_condition(&details)?;
+
     Ok(ThenBlock {
         span,
         effect,
         details,
+        existence_condition,
     })
+}
+
+fn extract_existence_condition(details: &Option<JsonValue>) -> Result<Option<Constraint>, ParseError> {
+    let details = match details {
+        Some(details) => details,
+        None => return Ok(None),
+    };
+
+    let entries = match details {
+        JsonValue::Object(_, entries) => entries,
+        _ => return Ok(None),
+    };
+
+    let existence_entry = entries
+        .iter()
+        .find(|entry| entry.key.eq_ignore_ascii_case("existenceCondition"));
+
+    let existence_value = match existence_entry {
+        Some(entry) => &entry.value,
+        None => return Ok(None),
+    };
+
+    constraint_from_json_value(existence_value.clone()).map(Some)
 }
 
 fn constraint_from_json_value(jv: JsonValue) -> Result<Constraint, ParseError> {

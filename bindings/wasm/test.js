@@ -231,7 +231,8 @@ vm.setInputJson(JSON.stringify({
 }));
 
 const result = JSON.parse(vm.execute());
-assert.equal(result, 'deny', 'matching resource should evaluate to deny');
+const effect = typeof result === 'string' ? result : result && result.effect;
+assert.equal(effect, 'deny', 'matching resource should evaluate to deny');
 }
 
 // Azure Policy definition compilation API example (parameter defaults)

@@ -67,12 +67,23 @@ struct Compiler {
     /// to short names like `"supportsHttpsTrafficOnly"` without knowing the
     /// resource type.
     alias_map: BTreeMap<String, String>,
+    /// Map from lowercase fully-qualified alias name → modifiable flag.
+    ///
+    /// Populated from [`AliasRegistry::alias_modifiable_map()`].  Used to
+    /// validate that Modify effect targets reference only aliases with
+    /// `defaultMetadata.attributes = "Modifiable"`.
+    alias_modifiable: BTreeMap<String, bool>,
     /// Default values for policy parameters, built from `PolicyDefinition.parameters`.
     ///
     /// Stored as a `Value::Object` mapping parameter names to their default values.
     /// When set, the compiler emits a builtin call for `parameters()` that falls
     /// back to these defaults when the caller does not supply a value.
     parameter_defaults: Option<Value>,
+
+    /// When set, field references resolve against this register instead of
+    /// `input.resource`. Used while compiling `existenceCondition` to resolve
+    /// fields against the related resource returned by `HostAwait`.
+    resource_override_reg: Option<u8>,
 
     // -- Metadata accumulators (populated during compilation) ---------------
     /// Built-in field kinds referenced (e.g. "type", "location", "tags").
@@ -246,8 +257,13 @@ impl Compiler {
         let path_components = path
             .iter()
             .map(|segment| {
-                self.add_literal_u16(Value::from((*segment).to_string()))
-                    .map(LiteralOrRegister::Literal)
+                // Numeric segments → Number literals (for array indexing).
+                let value = if let Ok(n) = segment.parse::<u64>() {
+                    Value::from(n)
+                } else {
+                    Value::from((*segment).to_string())
+                };
+                self.add_literal_u16(value).map(LiteralOrRegister::Literal)
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -322,7 +338,7 @@ impl Compiler {
     fn resolve_alias_path(&self, path: &str) -> Result<String> {
         if let Some(short) = self.alias_map.get(&path.to_lowercase()) {
             let resolved = short.clone();
-            return Ok(self.strip_fq_prefix(&resolved));
+            return Ok(self.strip_fq_prefix(&resolved).to_lowercase());
         }
 
         // When aliases are loaded, every field must be a known alias.
@@ -337,33 +353,18 @@ impl Compiler {
         Ok(path.to_string())
     }
 
-    /// Strip the `Provider/ResourceType/` prefix from a resolved alias short
+    /// Strip any resource-type prefix segments from a resolved alias short
     /// name, keeping only the trailing property path.
+    ///
+    /// Short names from `alias_to_short` may still contain child resource
+    /// type prefixes (e.g. `securityRules/destinationPortRanges[*]`).
+    /// Azure alias property paths use `.` as a separator, never `/`, so the
+    /// part after the last `/` is always the property name.
     fn strip_fq_prefix(&self, resolved: &str) -> String {
-        if !resolved.contains('/') {
-            return resolved.to_string();
-        }
-
-        let canonical = {
-            let mut segments = resolved.split('/');
-            let _provider = segments.next();
-            let _resource_type = segments.next();
-            let tail = segments.collect::<Vec<_>>().join("/");
-            if tail.is_empty() {
-                resolved.to_string()
-            } else {
-                tail
-            }
-        };
-
-        if resolved.contains("[*]") {
-            canonical
+        if let Some(idx) = resolved.rfind('/') {
+            resolved[idx + 1..].to_string()
         } else {
-            canonical
-                .rsplit('/')
-                .next()
-                .map(|segment| segment.to_string())
-                .unwrap_or(canonical)
+            resolved.to_string()
         }
     }
 
@@ -378,7 +379,43 @@ impl Compiler {
                 let effect_text = self
                     .resolve_effect_name_from_parameter_default(effect)
                     .unwrap_or_else(|| "AuditIfNotExists".to_string());
-                return self.compile_audit_if_not_exists_effect(rule, &effect_text);
+                return self.compile_cross_resource_effect(rule, &effect_text);
+            }
+            if resolved_effect_kind == EffectKind::DeployIfNotExists {
+                let effect_text = self
+                    .resolve_effect_name_from_parameter_default(effect)
+                    .unwrap_or_else(|| "DeployIfNotExists".to_string());
+                return self.compile_cross_resource_effect(rule, &effect_text);
+            }
+
+            // Parameterized effect with resolved kind that has details
+            let resolved_for_details = match &resolved_effect_kind {
+                EffectKind::Modify => Some(EffectKind::Modify),
+                EffectKind::Append => Some(EffectKind::Append),
+                _ => None,
+            };
+            if let Some(kind) = resolved_for_details {
+                // Compile the effect name expression, then build structured result
+                let effect_name_reg = if effect.raw.starts_with('[')
+                    && effect.raw.ends_with(']')
+                    && !effect.raw.starts_with("[[")
+                {
+                    let inner = &effect.raw[1..effect.raw.len().saturating_sub(1)];
+                    let expr =
+                        crate::languages::azure_policy::expr::ExprParser::parse_from_brackets(
+                            inner, span,
+                        )
+                        .map_err(|error| anyhow!("invalid effect expression: {}", error))?;
+                    self.compile_expr(&expr)?
+                } else {
+                    self.load_literal(Value::from(effect.raw.clone()), span)?
+                };
+                return self.compile_effect_with_details(
+                    &kind,
+                    effect_name_reg,
+                    rule.then_block.details.as_ref(),
+                    span,
+                );
             }
 
             if effect.raw.starts_with('[')
@@ -390,71 +427,630 @@ impl Compiler {
                     inner, span,
                 )
                 .map_err(|error| anyhow!("invalid effect expression: {}", error))?;
-                return self.compile_expr(&expr);
+                let name_reg = self.compile_expr(&expr)?;
+                return self.wrap_effect_result(name_reg, None, span);
             }
 
-            return self.load_literal(Value::from(effect.raw.clone()), span);
+            let name_reg = self.load_literal(Value::from(effect.raw.clone()), span)?;
+            return self.wrap_effect_result(name_reg, None, span);
         }
 
         match &effect.kind {
-            EffectKind::AuditIfNotExists => {
-                self.compile_audit_if_not_exists_effect(rule, &effect.raw)
+            EffectKind::AuditIfNotExists | EffectKind::DeployIfNotExists => {
+                self.compile_cross_resource_effect(rule, &effect.raw)
+            }
+            EffectKind::Modify | EffectKind::Append => {
+                let effect_name_reg = self.load_literal(Value::from(effect.raw.clone()), span)?;
+                self.compile_effect_with_details(
+                    &effect.kind,
+                    effect_name_reg,
+                    rule.then_block.details.as_ref(),
+                    span,
+                )
             }
             EffectKind::Deny
             | EffectKind::Audit
-            | EffectKind::Append
-            | EffectKind::DeployIfNotExists
             | EffectKind::Disabled
-            | EffectKind::Modify
             | EffectKind::DenyAction
-            | EffectKind::Manual => self.load_literal(Value::from(effect.raw.clone()), span),
-            // SAFETY: Other variants are filtered out by the bail!() above.
+            | EffectKind::Manual => {
+                let name_reg = self.load_literal(Value::from(effect.raw.clone()), span)?;
+                self.wrap_effect_result(name_reg, None, span)
+            }
+            // SAFETY: Other variants are filtered out above.
             EffectKind::Other(_) => {
                 bail!(span.error(&alloc::format!("unsupported effect kind: {}", effect.raw)))
             }
         }
     }
 
-    fn compile_audit_if_not_exists_effect(
+    /// Wrap an effect name register into `{ "effect": <name> }` or
+    /// `{ "effect": <name>, "details": <details> }`.
+    fn wrap_effect_result(
+        &mut self,
+        effect_name_reg: u8,
+        details_reg: Option<u8>,
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        use crate::rvm::instructions::ObjectCreateParams;
+
+        let mut keys = Vec::new();
+        let effect_key_idx = self.add_literal_u16(Value::from("effect"))?;
+        keys.push((effect_key_idx, effect_name_reg));
+
+        if let Some(det_reg) = details_reg {
+            let details_key_idx = self.add_literal_u16(Value::from("details"))?;
+            keys.push((details_key_idx, det_reg));
+        }
+
+        // Build template: object with all keys set to Undefined.
+        let mut template = alloc::collections::BTreeMap::new();
+        for &(key_idx, _) in &keys {
+            let key_val = self.program.literals[key_idx as usize].clone();
+            template.insert(key_val, Value::Undefined);
+        }
+        let template_idx = self.add_literal_u16(Value::Object(crate::Rc::new(template)))?;
+
+        // Sort keys by literal value (BTreeMap order).
+        keys.sort_by(|a, b| {
+            self.program.literals[a.0 as usize].cmp(&self.program.literals[b.0 as usize])
+        });
+
+        let dest = self.alloc_register()?;
+        let params = ObjectCreateParams {
+            dest,
+            template_literal_idx: template_idx,
+            literal_key_fields: keys,
+            fields: Vec::new(),
+        };
+        let params_index = self
+            .program
+            .instruction_data
+            .add_object_create_params(params);
+        self.emit(Instruction::ObjectCreate { params_index }, span);
+        Ok(dest)
+    }
+
+    /// Compile a Modify or Append effect with its details into a structured
+    /// result object.
+    fn compile_effect_with_details(
+        &mut self,
+        kind: &EffectKind,
+        effect_name_reg: u8,
+        details: Option<&JsonValue>,
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        match kind {
+            EffectKind::Modify => self.compile_modify_details(effect_name_reg, details, span),
+            EffectKind::Append => self.compile_append_details(effect_name_reg, details, span),
+            _ => self.wrap_effect_result(effect_name_reg, None, span),
+        }
+    }
+
+    /// Compile Modify effect details:
+    /// `{ "effect": "modify", "details": { "roleDefinitionIds": [...], "operations": [...] } }`
+    fn compile_modify_details(
+        &mut self,
+        effect_name_reg: u8,
+        details: Option<&JsonValue>,
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        use crate::languages::azure_policy::ast::ObjectEntry;
+        use crate::languages::azure_policy::compiler::utils::json_value_to_runtime;
+        use crate::rvm::instructions::{ArrayCreateParams, ObjectCreateParams};
+
+        let Some(JsonValue::Object(_, entries)) = details else {
+            // No details or not an object — return bare effect
+            return self.wrap_effect_result(effect_name_reg, None, span);
+        };
+
+        // Extract roleDefinitionIds and operations from details entries.
+        let mut role_ids_value: Option<&JsonValue> = None;
+        let mut operations: Option<&Vec<JsonValue>> = None;
+
+        for ObjectEntry { key, value, .. } in entries {
+            match key.to_lowercase().as_str() {
+                "roledefinitionids" => role_ids_value = Some(value),
+                "operations" => {
+                    if let JsonValue::Array(_, ops) = value {
+                        operations = Some(ops);
+                    }
+                }
+                _ => {} // existenceCondition, conflictEffect, etc. — skip
+            }
+        }
+
+        // Build details object fields
+        let mut detail_keys: Vec<(u16, u8)> = Vec::new();
+
+        // roleDefinitionIds — emit as a literal array
+        if let Some(role_json) = role_ids_value {
+            let role_val = json_value_to_runtime(role_json)?;
+            let role_reg = self.load_literal(role_val, span)?;
+            let key_idx = self.add_literal_u16(Value::from("roleDefinitionIds"))?;
+            detail_keys.push((key_idx, role_reg));
+        }
+
+        // operations — compile each operation into an object
+        if let Some(ops) = operations {
+            let mut op_regs = Vec::new();
+            for op_json in ops {
+                let op_reg = self.compile_modify_operation(op_json, span)?;
+                op_regs.push(op_reg);
+            }
+            // Create the operations array
+            let ops_dest = self.alloc_register()?;
+            let ops_params = ArrayCreateParams {
+                dest: ops_dest,
+                elements: op_regs,
+            };
+            let ops_params_index = self
+                .program
+                .instruction_data
+                .add_array_create_params(ops_params);
+            self.emit(
+                Instruction::ArrayCreate {
+                    params_index: ops_params_index,
+                },
+                span,
+            );
+
+            let key_idx = self.add_literal_u16(Value::from("operations"))?;
+            detail_keys.push((key_idx, ops_dest));
+        }
+
+        if detail_keys.is_empty() {
+            return self.wrap_effect_result(effect_name_reg, None, span);
+        }
+
+        // Build template for details object
+        let mut template = alloc::collections::BTreeMap::new();
+        for &(key_idx, _) in &detail_keys {
+            let key_val = self.program.literals[key_idx as usize].clone();
+            template.insert(key_val, Value::Undefined);
+        }
+        let template_idx = self.add_literal_u16(Value::Object(crate::Rc::new(template)))?;
+
+        detail_keys.sort_by(|a, b| {
+            self.program.literals[a.0 as usize].cmp(&self.program.literals[b.0 as usize])
+        });
+
+        let details_dest = self.alloc_register()?;
+        let details_params = ObjectCreateParams {
+            dest: details_dest,
+            template_literal_idx: template_idx,
+            literal_key_fields: detail_keys,
+            fields: Vec::new(),
+        };
+        let params_index = self
+            .program
+            .instruction_data
+            .add_object_create_params(details_params);
+        self.emit(Instruction::ObjectCreate { params_index }, span);
+
+        self.wrap_effect_result(effect_name_reg, Some(details_dest), span)
+    }
+
+    /// Compile a single Modify operation `{ "operation": "...", "field": "...", "value": ... }`
+    /// into an object register.
+    fn compile_modify_operation(
+        &mut self,
+        op_json: &JsonValue,
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        use crate::languages::azure_policy::ast::ObjectEntry;
+        use crate::languages::azure_policy::compiler::utils::json_value_to_runtime;
+        use crate::rvm::instructions::ObjectCreateParams;
+
+        let JsonValue::Object(_, entries) = op_json else {
+            bail!("modify operation must be an object");
+        };
+
+        let mut op_keys: Vec<(u16, u8)> = Vec::new();
+
+        for ObjectEntry { key, value, .. } in entries {
+            match key.to_lowercase().as_str() {
+                "operation" => {
+                    let val = json_value_to_runtime(value)?;
+                    let reg = self.load_literal(val, span)?;
+                    let key_idx = self.add_literal_u16(Value::from("operation"))?;
+                    op_keys.push((key_idx, reg));
+                }
+                "field" => {
+                    if let JsonValue::Str(_, field_path) = value {
+                        // Check modifiability when alias catalog is loaded
+                        self.check_modify_field_alias(field_path, span)?;
+
+                        let val = Value::from(field_path.clone());
+                        let reg = self.load_literal(val, span)?;
+                        let key_idx = self.add_literal_u16(Value::from("field"))?;
+                        op_keys.push((key_idx, reg));
+                    }
+                }
+                "value" => {
+                    // Value may contain template expressions
+                    let reg = self.compile_value_or_expr_from_json(value, span)?;
+                    let key_idx = self.add_literal_u16(Value::from("value"))?;
+                    op_keys.push((key_idx, reg));
+                }
+                "condition" => {
+                    // Condition for conditional operations — pass through
+                    let val = json_value_to_runtime(value)?;
+                    let reg = self.load_literal(val, span)?;
+                    let key_idx = self.add_literal_u16(Value::from("condition"))?;
+                    op_keys.push((key_idx, reg));
+                }
+                _ => {} // Unknown fields — skip
+            }
+        }
+
+        // Build template
+        let mut template = alloc::collections::BTreeMap::new();
+        for &(key_idx, _) in &op_keys {
+            let key_val = self.program.literals[key_idx as usize].clone();
+            template.insert(key_val, Value::Undefined);
+        }
+        let template_idx = self.add_literal_u16(Value::Object(crate::Rc::new(template)))?;
+
+        op_keys.sort_by(|a, b| {
+            self.program.literals[a.0 as usize].cmp(&self.program.literals[b.0 as usize])
+        });
+
+        let dest = self.alloc_register()?;
+        let params = ObjectCreateParams {
+            dest,
+            template_literal_idx: template_idx,
+            literal_key_fields: op_keys,
+            fields: Vec::new(),
+        };
+        let params_index = self
+            .program
+            .instruction_data
+            .add_object_create_params(params);
+        self.emit(Instruction::ObjectCreate { params_index }, span);
+        Ok(dest)
+    }
+
+    /// Check whether a field path used in a Modify operation targets a modifiable alias.
+    ///
+    /// When the alias catalog is loaded, non-modifiable aliases produce a
+    /// compile-time error.  Without an alias catalog, no check is performed.
+    fn check_modify_field_alias(&self, field_path: &str, span: &crate::lexer::Span) -> Result<()> {
+        if self.alias_modifiable.is_empty() {
+            return Ok(());
+        }
+
+        let lc = field_path.to_lowercase();
+
+        // Check the FQ alias directly
+        if let Some(&modifiable) = self.alias_modifiable.get(&lc) {
+            if !modifiable {
+                bail!(span.error(&alloc::format!(
+                    "alias '{}' is not modifiable (defaultMetadata.attributes != 'Modifiable')",
+                    field_path
+                )));
+            }
+            return Ok(());
+        }
+
+        // Tags and built-in fields are always modifiable for Modify operations
+        // (tags.*, type, location, etc.)
+        Ok(())
+    }
+
+    /// Compile an Append effect's details array:
+    /// `{ "effect": "append", "details": [ { "field": "...", "value": ... }, ... ] }`
+    fn compile_append_details(
+        &mut self,
+        effect_name_reg: u8,
+        details: Option<&JsonValue>,
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        use crate::rvm::instructions::ArrayCreateParams;
+
+        let Some(JsonValue::Array(_, items)) = details else {
+            return self.wrap_effect_result(effect_name_reg, None, span);
+        };
+
+        let mut item_regs = Vec::new();
+        for item in items {
+            let reg = self.compile_append_item(item, span)?;
+            item_regs.push(reg);
+        }
+
+        if item_regs.is_empty() {
+            return self.wrap_effect_result(effect_name_reg, None, span);
+        }
+
+        // Create details array
+        let details_dest = self.alloc_register()?;
+        let params = ArrayCreateParams {
+            dest: details_dest,
+            elements: item_regs,
+        };
+        let params_index = self
+            .program
+            .instruction_data
+            .add_array_create_params(params);
+        self.emit(Instruction::ArrayCreate { params_index }, span);
+
+        self.wrap_effect_result(effect_name_reg, Some(details_dest), span)
+    }
+
+    /// Compile a single Append item `{ "field": "...", "value": ... }` into an object register.
+    fn compile_append_item(
+        &mut self,
+        item_json: &JsonValue,
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        use crate::languages::azure_policy::ast::ObjectEntry;
+        use crate::rvm::instructions::ObjectCreateParams;
+
+        let JsonValue::Object(_, entries) = item_json else {
+            bail!("append details item must be an object");
+        };
+
+        let mut item_keys: Vec<(u16, u8)> = Vec::new();
+
+        for ObjectEntry { key, value, .. } in entries {
+            match key.to_lowercase().as_str() {
+                "field" => {
+                    if let JsonValue::Str(_, field_path) = value {
+                        let val = Value::from(field_path.clone());
+                        let reg = self.load_literal(val, span)?;
+                        let key_idx = self.add_literal_u16(Value::from("field"))?;
+                        item_keys.push((key_idx, reg));
+                    }
+                }
+                "value" => {
+                    let reg = self.compile_value_or_expr_from_json(value, span)?;
+                    let key_idx = self.add_literal_u16(Value::from("value"))?;
+                    item_keys.push((key_idx, reg));
+                }
+                _ => {}
+            }
+        }
+
+        let mut template = alloc::collections::BTreeMap::new();
+        for &(key_idx, _) in &item_keys {
+            let key_val = self.program.literals[key_idx as usize].clone();
+            template.insert(key_val, Value::Undefined);
+        }
+        let template_idx = self.add_literal_u16(Value::Object(crate::Rc::new(template)))?;
+
+        item_keys.sort_by(|a, b| {
+            self.program.literals[a.0 as usize].cmp(&self.program.literals[b.0 as usize])
+        });
+
+        let dest = self.alloc_register()?;
+        let params = ObjectCreateParams {
+            dest,
+            template_literal_idx: template_idx,
+            literal_key_fields: item_keys,
+            fields: Vec::new(),
+        };
+        let params_index = self
+            .program
+            .instruction_data
+            .add_object_create_params(params);
+        self.emit(Instruction::ObjectCreate { params_index }, span);
+        Ok(dest)
+    }
+
+    /// Compile a JSON value that may contain template expressions into a register.
+    ///
+    /// If the value is a string with `[...]` brackets, it's parsed as a
+    /// template expression and compiled. Otherwise it's loaded as a literal.
+    fn compile_value_or_expr_from_json(
+        &mut self,
+        value: &JsonValue,
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        use crate::languages::azure_policy::compiler::utils::json_value_to_runtime;
+
+        if let JsonValue::Str(_, s) = value {
+            if s.starts_with('[') && s.ends_with(']') && !s.starts_with("[[") {
+                let inner = &s[1..s.len().saturating_sub(1)];
+                let expr = crate::languages::azure_policy::expr::ExprParser::parse_from_brackets(
+                    inner, span,
+                )
+                .map_err(|error| anyhow!("invalid template expression in value: {}", error))?;
+                return self.compile_expr(&expr);
+            }
+        }
+        let val = json_value_to_runtime(value)?;
+        self.load_literal(val, span)
+    }
+
+    /// Compile cross-resource effects (auditIfNotExists / deployIfNotExists).
+    ///
+    /// These effects use a two-phase evaluation:
+    /// 1. `HostAwait` requests the related resource from the host
+    /// 2. The `existenceCondition` (if any) is evaluated against the returned
+    ///    resource inline. If no `existenceCondition`, existence is checked
+    ///    via `PolicyExists`.
+    ///
+    /// Host protocol:
+    ///   id  = `"azure.policy.existence_check"`
+    ///   arg = `{ operation: "lookup_related_resources", type, name, ... }`
+    ///   response = related resource object, or `null` if not found
+    fn compile_cross_resource_effect(
         &mut self,
         rule: &PolicyRule,
         effect_text: &str,
     ) -> Result<u8> {
         let span = &rule.then_block.effect.span;
 
-        // Defer related-resource existence evaluation to host via HostAwait.
+        let Some(details) = rule.then_block.details.as_ref() else {
+            return self.load_literal(Value::from(effect_text.to_string()), span);
+        };
+
+        // Phase 1: Request related resource from host via HostAwait.
         // Host contract:
-        //   id  = "azure.policy.audit_if_not_exists"
+        //   id  = "azure.policy.existence_check"
         //   arg = lookup request object (type/name/scope metadata)
-        //   response: truthy => non-compliant (return effect), falsy => compliant (return undefined)
-        if let Some(details) = rule.then_block.details.as_ref() {
-            let request_value = self.build_host_await_request(details)?;
-            let request_reg = self.load_literal(request_value, span)?;
-            let id_reg =
-                self.load_literal(Value::from("azure.policy.audit_if_not_exists"), span)?;
+        //   response: the related resource (object), or null if not found
+        let request_value = self.build_host_await_request(details)?;
+        let request_reg = self.load_literal(request_value, span)?;
+        let id_reg = self.load_literal(Value::from("azure.policy.existence_check"), span)?;
 
-            let host_result_reg = self.alloc_register()?;
+        let related_resource_reg = self.alloc_register()?;
+        self.emit(
+            Instruction::HostAwait {
+                dest: related_resource_reg,
+                arg: request_reg,
+                id: id_reg,
+            },
+            span,
+        );
+
+        // Phase 2: Evaluate existence.
+        let exists_reg = if let Some(ref existence_condition) = rule.then_block.existence_condition
+        {
+            // First check whether the related resource was found at all.
+            // When HostAwait returns null (resource not found), we must
+            // short-circuit to false — the existenceCondition only applies
+            // when the resource actually exists.  Without this guard,
+            // field lookups on a null response yield Undefined and operators
+            // like PolicyNotEquals(Undefined, _) return true, incorrectly
+            // marking a missing resource as compliant.
+            let true_reg = self.load_literal(Value::Bool(true), span)?;
+            let resource_found_reg = self.alloc_register()?;
             self.emit(
-                Instruction::HostAwait {
-                    dest: host_result_reg,
-                    arg: request_reg,
-                    id: id_reg,
+                Instruction::PolicyExists {
+                    dest: resource_found_reg,
+                    left: related_resource_reg,
+                    right: true_reg,
                 },
                 span,
             );
 
-            let effect_reg = self.load_literal(Value::from(effect_text.to_string()), span)?;
+            // Compile existenceCondition with field references resolving
+            // against the related resource instead of input.resource.
+            self.resource_override_reg = Some(related_resource_reg);
+            let cond_reg = self.compile_constraint(existence_condition)?;
+            self.resource_override_reg = None;
+
+            // Combine: resource must exist AND condition must pass.
+            // When resource is null: resource_found_reg=false,
+            // And(false, _) = false → non-compliant → effect fires.
+            let and_reg = self.alloc_register()?;
             self.emit(
-                Instruction::ReturnUndefinedIfNotTrue {
-                    condition: host_result_reg,
+                Instruction::And {
+                    dest: and_reg,
+                    left: resource_found_reg,
+                    right: cond_reg,
                 },
                 span,
             );
-
-            Ok(effect_reg)
+            and_reg
         } else {
-            self.load_literal(Value::from(effect_text.to_string()), span)
+            // No existenceCondition — just check if the resource was found
+            // (non-null/non-undefined). Uses PolicyExists which returns true
+            // when the value is defined and non-null (matching expected=true).
+            let true_reg = self.load_literal(Value::Bool(true), span)?;
+            let dest = self.alloc_register()?;
+            self.emit(
+                Instruction::PolicyExists {
+                    dest,
+                    left: related_resource_reg,
+                    right: true_reg,
+                },
+                span,
+            );
+            dest
+        };
+
+        // Phase 3: Produce result.
+        // If exists_reg is truthy → resource is compliant → return Undefined.
+        // If exists_reg is falsy → non-compliant → return the effect object.
+        let not_exists_reg = self.alloc_register()?;
+        self.emit(
+            Instruction::PolicyNot {
+                dest: not_exists_reg,
+                operand: exists_reg,
+            },
+            span,
+        );
+
+        let effect_name_reg = self.load_literal(Value::from(effect_text.to_string()), span)?;
+        self.emit(
+            Instruction::ReturnUndefinedIfNotTrue {
+                condition: not_exists_reg,
+            },
+            span,
+        );
+
+        // Build structured result with roleDefinitionIds if present.
+        self.compile_cross_resource_details(effect_name_reg, details, span)
+    }
+
+    /// Build cross-resource effect details (roleDefinitionIds, deployment, etc.).
+    fn compile_cross_resource_details(
+        &mut self,
+        effect_name_reg: u8,
+        details: &JsonValue,
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        use crate::languages::azure_policy::ast::ObjectEntry;
+        use crate::languages::azure_policy::compiler::utils::json_value_to_runtime;
+        use crate::rvm::instructions::ObjectCreateParams;
+
+        let JsonValue::Object(_, entries) = details else {
+            return self.wrap_effect_result(effect_name_reg, None, span);
+        };
+
+        let mut detail_keys: Vec<(u16, u8)> = Vec::new();
+
+        for ObjectEntry { key, value, .. } in entries {
+            match key.to_lowercase().as_str() {
+                "roledefinitionids" => {
+                    let val = json_value_to_runtime(value)?;
+                    let reg = self.load_literal(val, span)?;
+                    let key_idx = self.add_literal_u16(Value::from("roleDefinitionIds"))?;
+                    detail_keys.push((key_idx, reg));
+                }
+                "type" => {
+                    let val = json_value_to_runtime(value)?;
+                    let reg = self.load_literal(val, span)?;
+                    let key_idx = self.add_literal_u16(Value::from("type"))?;
+                    detail_keys.push((key_idx, reg));
+                }
+                // existenceCondition, deployment, name, resourceGroupName, etc.
+                // are not included in the structured result — they're used
+                // during compilation only.
+                _ => {}
+            }
         }
+
+        if detail_keys.is_empty() {
+            return self.wrap_effect_result(effect_name_reg, None, span);
+        }
+
+        let mut template = alloc::collections::BTreeMap::new();
+        for &(key_idx, _) in &detail_keys {
+            let key_val = self.program.literals[key_idx as usize].clone();
+            template.insert(key_val, Value::Undefined);
+        }
+        let template_idx = self.add_literal_u16(Value::Object(crate::Rc::new(template)))?;
+
+        detail_keys.sort_by(|a, b| {
+            self.program.literals[a.0 as usize].cmp(&self.program.literals[b.0 as usize])
+        });
+
+        let details_dest = self.alloc_register()?;
+        let params = ObjectCreateParams {
+            dest: details_dest,
+            template_literal_idx: template_idx,
+            literal_key_fields: detail_keys,
+            fields: Vec::new(),
+        };
+        let params_index = self
+            .program
+            .instruction_data
+            .add_object_create_params(params);
+        self.emit(Instruction::ObjectCreate { params_index }, span);
+
+        self.wrap_effect_result(effect_name_reg, Some(details_dest), span)
     }
 
     fn resolve_effect_kind(&self, effect: &EffectNode) -> EffectKind {
@@ -725,7 +1321,7 @@ impl Compiler {
         // Extract category and version from metadata JSON
         if let Some(JsonValue::Object(_, entries)) = defn.metadata.as_ref() {
             for entry in entries {
-                let key_lower = entry.key.to_ascii_lowercase();
+                let key_lower = entry.key.to_lowercase();
                 match key_lower.as_str() {
                     "category" => {
                         if let JsonValue::Str(_, ref s) = entry.value {
@@ -759,7 +1355,7 @@ impl Compiler {
 
         // Extra fields: policyType, id, name
         for entry in &defn.extra {
-            let key_lower = entry.key.to_ascii_lowercase();
+            let key_lower = entry.key.to_lowercase();
             match key_lower.as_str() {
                 "policytype" => {
                     if let JsonValue::Str(_, ref s) = entry.value {
@@ -782,7 +1378,7 @@ impl Compiler {
     }
 
     fn effect_kind_from_string(effect_name: &str) -> Option<EffectKind> {
-        let normalized = effect_name.to_ascii_lowercase();
+        let normalized = effect_name.to_lowercase();
         Some(match normalized.as_str() {
             "deny" => EffectKind::Deny,
             "audit" => EffectKind::Audit,
@@ -853,10 +1449,12 @@ pub fn compile_policy_rule(rule: &PolicyRule) -> Result<Rc<Program>> {
 pub fn compile_policy_rule_with_aliases(
     rule: &PolicyRule,
     alias_map: BTreeMap<String, String>,
+    alias_modifiable: BTreeMap<String, bool>,
 ) -> Result<Rc<Program>> {
     let mut compiler = Compiler::new();
     compiler.program.metadata.language = "azure_policy".to_string();
     compiler.alias_map = alias_map;
+    compiler.alias_modifiable = alias_modifiable;
     let effect = compiler.resolve_effect_annotation(rule);
     compiler
         .program
@@ -891,10 +1489,12 @@ pub fn compile_policy_definition(defn: &PolicyDefinition) -> Result<Rc<Program>>
 pub fn compile_policy_definition_with_aliases(
     defn: &PolicyDefinition,
     alias_map: BTreeMap<String, String>,
+    alias_modifiable: BTreeMap<String, bool>,
 ) -> Result<Rc<Program>> {
     let mut compiler = Compiler::new();
     compiler.program.metadata.language = "azure_policy".to_string();
     compiler.alias_map = alias_map;
+    compiler.alias_modifiable = alias_modifiable;
     compiler.parameter_defaults = Some(build_parameter_defaults(&defn.parameters)?);
     compiler.populate_definition_metadata(defn);
     let effect = compiler.resolve_effect_annotation(&defn.policy_rule);

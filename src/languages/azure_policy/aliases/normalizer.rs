@@ -15,6 +15,7 @@ use alloc::vec::Vec;
 use serde_json::{Map, Value};
 
 use super::types::{ResolvedAliases, ResolvedEntry};
+use super::AliasRegistry;
 
 /// Fields that exist at the ARM resource root (not under `properties`).
 const ROOT_FIELDS: &[&str] = &[
@@ -34,14 +35,44 @@ const ROOT_FIELDS: &[&str] = &[
     "fullName",
 ];
 
+/// Check whether an alias short name collides with a reserved ARM root field
+/// and needs a collision-safe key.
+///
+/// Returns `true` when `short_name` exactly matches (case-insensitive) one of
+/// the [`ROOT_FIELDS`] AND `default_path` starts with `"properties."`, meaning
+/// the alias points to a properties-level field that shadows the root field.
+///
+/// When `true`, both the normalizer and the compiler must use
+/// [`collision_safe_key`] to avoid overwriting the ARM envelope value.
+pub(crate) fn is_root_field_collision(short_name: &str, default_path: &str) -> bool {
+    ROOT_FIELDS
+        .iter()
+        .any(|f| f.eq_ignore_ascii_case(short_name))
+        && default_path.to_ascii_lowercase().starts_with("properties.")
+}
+
+/// Return a collision-safe key for an alias whose short name collides with a
+/// root ARM field.  The key is `_p_` + the lowercased short name (e.g.,
+/// `_p_type` for alias short name `type` when the default path is
+/// `properties.type`).
+pub(crate) fn collision_safe_key(short_name: &str) -> String {
+    alloc::format!("_p_{}", short_name.to_ascii_lowercase())
+}
+
 /// Normalize a raw ARM resource JSON value into the `input.resource` structure.
+///
+/// The resource type is extracted from the `type` field of `arm_resource` and
+/// used to look up alias entries in the registry.  This means callers don't
+/// need to know or pass the resource type separately — it's derived from the
+/// resource itself.
 ///
 /// # Arguments
 ///
 /// * `arm_resource` — The raw ARM JSON object for the resource.
-/// * `aliases` — Resolved alias data for the resource type. Used to determine
-///   which array fields contain sub-resources and to perform per-alias
-///   path resolution. If `None`, only root `properties` flattening is performed.
+/// * `registry` — Optional alias registry.  When provided, the resource's
+///   `type` field is used to look up alias entries for sub-resource array
+///   detection and per-alias path resolution.  If `None`, only root
+///   `properties` flattening is performed.
 /// * `api_version` — Optional API version string. When provided, versioned
 ///   alias paths are selected via [`ResolvedEntry::select_path`]. This enables
 ///   correct normalization for resources whose ARM JSON structure varies across
@@ -57,6 +88,25 @@ const ROOT_FIELDS: &[&str] = &[
 ///   handling versioned ARM paths when `api_version` is supplied.
 pub fn normalize(
     arm_resource: &Value,
+    registry: Option<&AliasRegistry>,
+    api_version: Option<&str>,
+) -> Value {
+    let aliases = registry.and_then(|r| {
+        arm_resource
+            .get("type")
+            .and_then(|t| t.as_str())
+            .and_then(|rt| r.get(rt))
+    });
+    normalize_with_aliases(arm_resource, aliases, api_version)
+}
+
+/// Internal normalization with pre-resolved alias data.
+///
+/// This is the core implementation used by [`normalize`] after looking up
+/// the alias entries from the registry.  Also used directly in unit tests
+/// that construct `ResolvedAliases` by hand.
+pub(crate) fn normalize_with_aliases(
+    arm_resource: &Value,
     aliases: Option<&ResolvedAliases>,
     api_version: Option<&str>,
 ) -> Value {
@@ -68,22 +118,23 @@ pub fn normalize(
     let sub_arrays = aliases.map(|a| &a.sub_resource_arrays);
     let mut result = Map::new();
 
-    // Rule 2: Copy root-level fields as-is.
+    // Rule 2: Copy root-level fields as-is (keys lowercased).
     for &field in ROOT_FIELDS {
         if let Some(val) = obj.get(field) {
-            result.insert(field.to_string(), val.clone());
+            result.insert(field.to_ascii_lowercase(), val.clone());
         }
     }
 
-    // Rule 1: Flatten root `properties` into the root.
+    // Rule 1: Flatten root `properties` into the root (keys lowercased).
     if let Some(Value::Object(props)) = obj.get("properties") {
         for (key, val) in props {
+            let lc_key = key.to_lowercase();
             // Root-level fields take precedence (shouldn't happen in practice).
-            if result.contains_key(key) {
+            if result.contains_key(&lc_key) {
                 continue;
             }
             let normalized = normalize_value(val, key, sub_arrays);
-            result.insert(key.clone(), normalized);
+            result.insert(lc_key, normalized);
         }
     }
 
@@ -118,16 +169,24 @@ fn normalize_value(value: &Value, field_path: &str, sub_arrays: Option<&Vec<Stri
                     .collect();
                 Value::Array(items)
             } else {
-                // Rule 4 & 6: Plain objects or primitives — pass through.
-                value.clone()
+                // Rule 4 & 6: Recurse into elements to lowercase any nested
+                // object keys (primitives pass through unchanged).
+                let items: Vec<Value> = arr
+                    .iter()
+                    .map(|elem| normalize_value(elem, field_path, sub_arrays))
+                    .collect();
+                Value::Array(items)
             }
         }
         Value::Object(obj) => {
-            // Recurse into nested objects to find sub-resource arrays.
+            // Recurse into nested objects to find sub-resource arrays (keys lowercased).
             let mut result = Map::new();
             for (k, v) in obj {
                 let child_path = alloc::format!("{}.{}", field_path, k);
-                result.insert(k.clone(), normalize_value(v, &child_path, sub_arrays));
+                result.insert(
+                    k.to_lowercase(),
+                    normalize_value(v, &child_path, sub_arrays),
+                );
             }
             Value::Object(result)
         }
@@ -145,23 +204,27 @@ fn flatten_element(element: &Value, array_path: &str, sub_arrays: Option<&Vec<St
 
     let mut result = Map::new();
 
-    // Copy non-`properties` fields from the element envelope.
+    // Copy non-`properties` fields from the element envelope (keys lowercased).
     for (key, val) in obj {
         if key == "properties" {
             continue;
         }
         let child_path = alloc::format!("{}.{}", array_path, key);
-        result.insert(key.clone(), normalize_value(val, &child_path, sub_arrays));
+        result.insert(
+            key.to_lowercase(),
+            normalize_value(val, &child_path, sub_arrays),
+        );
     }
 
-    // Merge `properties` into the element.
+    // Merge `properties` into the element (keys lowercased).
     if let Some(Value::Object(props)) = obj.get("properties") {
         for (key, val) in props {
-            if result.contains_key(key) {
+            let lc_key = key.to_lowercase();
+            if result.contains_key(&lc_key) {
                 continue;
             }
             let child_path = alloc::format!("{}.{}", array_path, key);
-            result.insert(key.clone(), normalize_value(val, &child_path, sub_arrays));
+            result.insert(lc_key, normalize_value(val, &child_path, sub_arrays));
         }
     }
 
@@ -220,9 +283,16 @@ fn apply_alias_entries(
 
         let arm_path = entry.select_path(api_version);
         if let Some(value) = navigate_arm_path(raw, arm_path) {
-            // Use the original-cased short name so the output key matches
-            // what the compiler emits (e.g., "accountType" not "accounttype").
-            set_nested_value(result, &entry.short_name, value);
+            // When the alias short name collides with a reserved ARM root
+            // field (e.g., alias short name "type" vs root "type"), store
+            // the alias value under a collision-safe key so it doesn't
+            // overwrite the ARM envelope field.
+            let target = if is_root_field_collision(&entry.short_name, &entry.default_path) {
+                collision_safe_key(&entry.short_name)
+            } else {
+                entry.short_name.clone()
+            };
+            set_nested_value(result, &target, value);
         }
     }
 
@@ -274,9 +344,12 @@ fn compute_element_remap(entry: &ResolvedEntry, api_version: Option<&str>) -> Op
     let array_name = &entry.short_name[..wildcard_pos];
 
     Some(ElementRemap {
-        array_path: array_name.split('.').map(|s| s.to_string()).collect(),
-        source_field: arm_leaf.to_string(),
-        target_field: short_leaf.to_string(),
+        array_path: array_name
+            .split('.')
+            .map(|s| s.to_ascii_lowercase())
+            .collect(),
+        source_field: arm_leaf.to_ascii_lowercase(),
+        target_field: short_leaf.to_ascii_lowercase(),
     })
 }
 
@@ -337,14 +410,15 @@ fn set_nested_value(result: &mut Map<String, Value>, path: &str, value: Value) {
         return;
     }
     if segments.len() == 1 {
-        result.insert(segments[0].to_string(), value);
+        result.insert(segments[0].to_ascii_lowercase(), value);
         return;
     }
-    // Navigate/create intermediate objects.
+    // Navigate/create intermediate objects (keys lowercased).
     let mut current = result;
     for &segment in &segments[..segments.len() - 1] {
+        let lc = segment.to_ascii_lowercase();
         let entry = current
-            .entry(segment.to_string())
+            .entry(lc)
             .or_insert_with(|| Value::Object(Map::new()));
         current = match entry.as_object_mut() {
             Some(map) => map,
@@ -352,7 +426,7 @@ fn set_nested_value(result: &mut Map<String, Value>, path: &str, value: Value) {
         };
     }
     if let Some(last_segment) = segments.last() {
-        current.insert((*last_segment).to_string(), value);
+        current.insert(last_segment.to_ascii_lowercase(), value);
     }
 }
 
@@ -403,8 +477,8 @@ mod tests {
         assert_eq!(result["name"], "myStorage");
         assert_eq!(result["type"], "Microsoft.Storage/storageAccounts");
         assert_eq!(result["location"], "westus2");
-        assert_eq!(result["supportsHttpsTrafficOnly"], true);
-        assert_eq!(result["isHnsEnabled"], false);
+        assert_eq!(result["supportshttpstrafficonly"], true);
+        assert_eq!(result["ishnsenabled"], false);
         // `properties` wrapper itself should not be in the result
         assert!(result.get("properties").is_none());
     }
@@ -453,8 +527,8 @@ mod tests {
             }
         });
 
-        let result = normalize(&arm, Some(&aliases), None);
-        let rules = result["securityRules"].as_array().unwrap();
+        let result = normalize_with_aliases(&arm, Some(&aliases), None);
+        let rules = result["securityrules"].as_array().unwrap();
         assert_eq!(rules.len(), 2);
         assert_eq!(rules[0]["name"], "rule1");
         assert_eq!(rules[0]["protocol"], "Tcp");
@@ -479,7 +553,7 @@ mod tests {
         });
 
         let result = normalize(&arm, None, None);
-        let rules = result["networkAcls"]["ipRules"].as_array().unwrap();
+        let rules = result["networkacls"]["iprules"].as_array().unwrap();
         assert_eq!(rules.len(), 2);
         assert_eq!(rules[0]["value"], "10.0.0.1");
     }
@@ -496,7 +570,7 @@ mod tests {
 
         let result = normalize(&arm, None, None);
         assert_eq!(result["sku"]["name"], "Standard_LRS");
-        assert_eq!(result["supportsHttpsTrafficOnly"], true);
+        assert_eq!(result["supportshttpstrafficonly"], true);
     }
 
     #[test]
@@ -578,11 +652,11 @@ mod tests {
         assert_eq!(result["sku"]["name"], "Basic");
         assert_eq!(result["plan"]["name"], "p1");
         assert_eq!(result["zones"][0], "1");
-        assert_eq!(result["managedBy"], "/sub/other");
+        assert_eq!(result["managedby"], "/sub/other");
         assert_eq!(result["etag"], "W/\"abc\"");
-        assert_eq!(result["apiVersion"], "2023-01-01");
-        assert_eq!(result["fullName"], "parent/child");
-        assert_eq!(result["someProp"], true);
+        assert_eq!(result["apiversion"], "2023-01-01");
+        assert_eq!(result["fullname"], "parent/child");
+        assert_eq!(result["someprop"], true);
     }
 
     #[test]
@@ -621,17 +695,17 @@ mod tests {
             }
         });
 
-        let result = normalize(&arm, Some(&aliases), None);
+        let result = normalize_with_aliases(&arm, Some(&aliases), None);
         let subnets = result["subnets"].as_array().unwrap();
         assert_eq!(subnets.len(), 1);
         // First level flatten: subnet element has name + addressPrefix merged
         assert_eq!(subnets[0]["name"], "subnet1");
-        assert_eq!(subnets[0]["addressPrefix"], "10.0.0.0/24");
+        assert_eq!(subnets[0]["addressprefix"], "10.0.0.0/24");
         assert!(subnets[0].get("properties").is_none());
         // Second level flatten: ipConfig element has name + privateIPAddress
-        let ip_configs = subnets[0]["ipConfigurations"].as_array().unwrap();
+        let ip_configs = subnets[0]["ipconfigurations"].as_array().unwrap();
         assert_eq!(ip_configs[0]["name"], "ipconfig1");
-        assert_eq!(ip_configs[0]["privateIPAddress"], "10.0.0.4");
+        assert_eq!(ip_configs[0]["privateipaddress"], "10.0.0.4");
         assert!(ip_configs[0].get("properties").is_none());
     }
 
@@ -653,7 +727,7 @@ mod tests {
             }
         });
 
-        let result = normalize(&arm, Some(&aliases), None);
+        let result = normalize_with_aliases(&arm, Some(&aliases), None);
         let items = result["items"].as_array().unwrap();
         assert_eq!(items[0]["name"], "plain-object");
         assert_eq!(items[0]["enabled"], true);
@@ -669,7 +743,7 @@ mod tests {
         });
 
         let result = normalize(&arm, None, None);
-        let ips = result["allowedIPs"].as_array().unwrap();
+        let ips = result["allowedips"].as_array().unwrap();
         assert_eq!(ips.len(), 3);
         assert_eq!(ips[0], "10.0.0.1");
     }
@@ -690,8 +764,8 @@ mod tests {
         });
 
         let result = normalize(&arm, None, None);
-        assert_eq!(result["networkAcls"]["defaultAction"], "Deny");
-        let rules = result["networkAcls"]["virtualNetworkRules"]
+        assert_eq!(result["networkacls"]["defaultaction"], "Deny");
+        let rules = result["networkacls"]["virtualnetworkrules"]
             .as_array()
             .unwrap();
         assert_eq!(rules[0]["id"], "/vnet/subnet1");
@@ -719,8 +793,8 @@ mod tests {
 
         // The sub_resource_arrays entry is "SecurityRules" but the ARM JSON
         // field is "securityRules" — should still match case-insensitively.
-        let result = normalize(&arm, Some(&aliases), None);
-        let rules = result["securityRules"].as_array().unwrap();
+        let result = normalize_with_aliases(&arm, Some(&aliases), None);
+        let rules = result["securityrules"].as_array().unwrap();
         assert_eq!(rules[0]["protocol"], "Tcp");
         assert!(rules[0].get("properties").is_none());
     }

@@ -290,7 +290,7 @@ cases:
       - key:
           operation: "lookup_related_resources"
           type: "Microsoft.Insights/diagnosticSettings"
-        response: true
+        response: null
     want_effect: "auditIfNotExists"
 
   # =========================================================================
@@ -351,6 +351,8 @@ cases:
         storageProfile:
           imageReference:
             publisher: "Canonical"
+    host_await:
+      - response: null
     want_effect: "deployIfNotExists"
 
   # =========================================================================

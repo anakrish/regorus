@@ -496,3 +496,46 @@ cases:
     resource:
       type: "any"
     want_effect: "deny"
+
+  # =========================================================================
+  # Unary minus for negative number literals
+  # =========================================================================
+
+  - note: expr_unary_minus_literal
+    policy_rule: |
+      {
+        "if": {
+          "value": "[add(-1, 5)]",
+          "equals": 4
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      type: "any"
+    want_effect: "deny"
+
+  - note: expr_unary_minus_float
+    policy_rule: |
+      {
+        "if": {
+          "value": "[add(-2.5, 3.5)]",
+          "equals": 1
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      type: "any"
+    want_effect: "deny"
+
+  - note: expr_unary_minus_sub_expression
+    policy_rule: |
+      {
+        "if": {
+          "value": "[sub(10, -3)]",
+          "equals": 13
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      type: "any"
+    want_effect: "deny"

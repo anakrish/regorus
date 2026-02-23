@@ -4,6 +4,7 @@
 //! Top-level policy rule parsing: `parse_policy_rule`, `parse_then_block`, and count parsing.
 
 use alloc::boxed::Box;
+use alloc::string::ToString as _;
 
 use crate::lexer::Span;
 
@@ -31,7 +32,7 @@ impl<'source> Parser<'source> {
                 let (key_span, key) = self.expect_string()?;
                 self.expect_symbol(":")?;
 
-                match key.to_ascii_lowercase().as_str() {
+                match key.to_lowercase().as_str() {
                     "if" => {
                         condition_span = Some(key_span);
                         condition = Some(self.parse_constraint()?);
@@ -90,10 +91,10 @@ impl<'source> Parser<'source> {
                 let (_key_span, key) = self.expect_string()?;
                 self.expect_symbol(":")?;
 
-                match key.to_ascii_lowercase().as_str() {
+                match key.to_lowercase().as_str() {
                     "effect" => {
                         let (val_span, val_text) = self.expect_string()?;
-                        let kind = match val_text.to_ascii_lowercase().as_str() {
+                        let kind = match val_text.to_lowercase().as_str() {
                             "deny" => EffectKind::Deny,
                             "audit" => EffectKind::Audit,
                             "append" => EffectKind::Append,
@@ -141,11 +142,66 @@ impl<'source> Parser<'source> {
             key: "effect",
         })?;
 
+        // Extract and parse `existenceCondition` from the `details` block.
+        let existence_condition = Self::extract_existence_condition(&details)?;
+
         Ok(ThenBlock {
             span,
             effect,
             details,
+            existence_condition,
         })
+    }
+
+    /// Extract `existenceCondition` from a `details` `JsonValue` and parse it
+    /// as a `Constraint`.
+    ///
+    /// The `existenceCondition` uses the same grammar as `policyRule.if`, so
+    /// we extract the source text via the span and re-parse it.
+    fn extract_existence_condition(
+        details: &Option<JsonValue>,
+    ) -> Result<Option<Constraint>, ParseError> {
+        let details = match details {
+            Some(d) => d,
+            None => return Ok(None),
+        };
+
+        let entries = match details {
+            JsonValue::Object(_, entries) => entries,
+            _ => return Ok(None),
+        };
+
+        let existence_entry = entries
+            .iter()
+            .find(|e| e.key.eq_ignore_ascii_case("existenceCondition"));
+
+        let existence_value = match existence_entry {
+            Some(e) => &e.value,
+            None => return Ok(None),
+        };
+
+        // Get the source text of the existenceCondition value via its span.
+        let ec_span = existence_value.span();
+        let source_text = ec_span.source.get_contents();
+        let start = ec_span.start as usize;
+        let end = ec_span.end as usize;
+        let ec_text = &source_text[start..end];
+
+        let ec_source = crate::lexer::Source::from_contents(
+            "existenceCondition".to_string(),
+            ec_text.to_string(),
+        )
+        .map_err(|e| ParseError::Custom {
+            span: ec_span.clone(),
+            message: alloc::format!("failed to create source for existenceCondition: {}", e),
+        })?;
+
+        let constraint = super::parse_constraint(&ec_source).map_err(|e| ParseError::Custom {
+            span: ec_span.clone(),
+            message: alloc::format!("failed to parse existenceCondition: {}", e),
+        })?;
+
+        Ok(Some(constraint))
     }
 
     /// Parse the inner object of a `"count": { ... }` block.
@@ -161,7 +217,7 @@ impl<'source> Parser<'source> {
             loop {
                 let (key_span, key) = self.expect_string()?;
                 self.expect_symbol(":")?;
-                let key_lower = key.to_ascii_lowercase();
+                let key_lower = key.to_lowercase();
 
                 match key_lower.as_str() {
                     "field" => {

@@ -83,6 +83,19 @@ pub(super) fn logic_all(
     Ok(Value::Bool(args.iter().all(is_true)))
 }
 
+/// `azure.policy.logic_any(a, b, ...)`
+///
+/// Used by the ARM template `or()` function.  Returns true iff any
+/// argument is `Bool(true)`.
+pub(super) fn logic_any(
+    _span: &Span,
+    _params: &[Ref<Expr>],
+    args: &[Value],
+    _strict: bool,
+) -> Result<Value> {
+    Ok(Value::Bool(args.iter().any(is_true)))
+}
+
 /// `azure.policy.if(cond, when_true, when_false)`
 pub(super) fn if_fn(
     _span: &Span,

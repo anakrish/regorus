@@ -155,7 +155,7 @@ cases:
     resource:
       properties:
         enabled: "true"
-    want_undefined: true
+    want_effect: "audit"
 
   - note: bool_equals_direct
     policy_rule: |
@@ -236,3 +236,123 @@ cases:
       properties:
         threshold: 0.75
     want_effect: "audit"
+
+  # =========================================================================
+  # String ↔ Bool coercion
+  # =========================================================================
+
+  - note: coercion_string_true_equals_bool_true
+    policy_rule: |
+      {
+        "if": {
+          "field": "properties.enabled",
+          "equals": true
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      properties:
+        enabled: "true"
+    want_effect: "deny"
+
+  - note: coercion_string_false_equals_bool_false
+    policy_rule: |
+      {
+        "if": {
+          "field": "properties.enabled",
+          "equals": false
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      properties:
+        enabled: "false"
+    want_effect: "deny"
+
+  - note: coercion_bool_true_equals_string_true
+    policy_rule: |
+      {
+        "if": {
+          "field": "properties.enabled",
+          "equals": "True"
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      properties:
+        enabled: true
+    want_effect: "deny"
+
+  - note: coercion_bool_false_notEquals_string_true
+    policy_rule: |
+      {
+        "if": {
+          "field": "properties.enabled",
+          "notEquals": "true"
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      properties:
+        enabled: false
+    want_effect: "deny"
+
+  - note: coercion_string_TRUE_case_insensitive
+    policy_rule: |
+      {
+        "if": {
+          "field": "properties.flag",
+          "equals": true
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      properties:
+        flag: "TRUE"
+    want_effect: "deny"
+
+  - note: coercion_string_random_not_bool
+    policy_rule: |
+      {
+        "if": {
+          "field": "properties.flag",
+          "equals": true
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      properties:
+        flag: "yes"
+    want_undefined: true
+
+  # =========================================================================
+  # Unicode case-insensitivity
+  # =========================================================================
+
+  - note: unicode_case_equals
+    policy_rule: |
+      {
+        "if": {
+          "field": "properties.city",
+          "equals": "MÜNCHEN"
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      properties:
+        city: "münchen"
+    want_effect: "deny"
+
+  - note: unicode_case_contains
+    policy_rule: |
+      {
+        "if": {
+          "field": "properties.name",
+          "contains": "CAFÉ"
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      properties:
+        name: "my-café-app"
+    want_effect: "deny"

@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 
 use anyhow::{anyhow, bail, Result};
 
-use crate::languages::azure_policy::ast::{Expr, ExprLiteral, ValueOrExpr};
+use crate::languages::azure_policy::ast::{Expr, ExprLiteral, JsonValue, ValueOrExpr};
 use crate::rvm::Instruction;
 use crate::Value;
 
@@ -31,8 +31,66 @@ impl Compiler {
         value: &crate::languages::azure_policy::ast::JsonValue,
         span: &crate::lexer::Span,
     ) -> Result<u8> {
+        // Arrays may contain ARM template expression strings that need
+        // runtime evaluation (e.g., `["[subscription().id]", "/"]`).
+        // Detect this and build the array dynamically.
+        if let JsonValue::Array(_, items) = value {
+            if items.iter().any(|item| {
+                matches!(item, JsonValue::Str(_, s) if crate::languages::azure_policy::parser::is_template_expr(s))
+            }) {
+                return self.compile_dynamic_array(items, span);
+            }
+        }
         let runtime_value = json_value_to_runtime(value)?;
         self.load_literal(runtime_value, span)
+    }
+
+    /// Compile a JSON array where some elements are ARM template expressions.
+    ///
+    /// Each element is compiled individually: plain values become literals,
+    /// template expressions are parsed and compiled to compute values at
+    /// runtime (e.g., `subscription().id`).
+    fn compile_dynamic_array(
+        &mut self,
+        items: &[JsonValue],
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        use crate::languages::azure_policy::expr::ExprParser;
+
+        let mut element_regs = Vec::with_capacity(items.len());
+        for item in items {
+            let reg = if let JsonValue::Str(ref item_span, ref s) = *item {
+                if crate::languages::azure_policy::parser::is_template_expr(s) {
+                    let end = s.len().saturating_sub(1);
+                    let inner = &s[1..end];
+                    let expr = ExprParser::parse_from_brackets(inner, item_span)
+                        .map_err(|e| anyhow!("{}", e))?;
+                    self.compile_expr(&expr)?
+                } else {
+                    let runtime_value = json_value_to_runtime(item)?;
+                    self.load_literal(runtime_value, span)?
+                }
+            } else {
+                let runtime_value = json_value_to_runtime(item)?;
+                self.load_literal(runtime_value, span)?
+            };
+            element_regs.push(reg);
+        }
+
+        let arr_dest = self.alloc_register()?;
+        let params = self.program.instruction_data.add_array_create_params(
+            crate::rvm::instructions::ArrayCreateParams {
+                dest: arr_dest,
+                elements: element_regs,
+            },
+        );
+        self.emit(
+            Instruction::ArrayCreate {
+                params_index: params,
+            },
+            span,
+        );
+        Ok(arr_dest)
     }
 
     pub(super) fn compile_expr(&mut self, expr: &Expr) -> Result<u8> {
@@ -139,7 +197,35 @@ impl Compiler {
                     bail!(span.error("field() requires one argument"));
                 };
                 let field_path = extract_string_literal(first_arg)?;
-                let reg = self.compile_field_path_expression(&field_path, span)?;
+                // Resolve alias names to their short property paths.
+                // Built-in field names (type, name, id, …) pass through directly
+                // to compile_field_path_expression where they become
+                // input.resource.<name>.
+                let resolved = match field_path.to_lowercase().as_str() {
+                    "type" | "id" | "kind" | "name" | "location" | "fullname" | "tags"
+                    | "identity.type" | "apiversion" => field_path.clone(),
+                    s if s.starts_with("tags.") || s.starts_with("tags['") => field_path.clone(),
+                    _ => self.resolve_alias_path(&field_path)?,
+                };
+                let reg = self.compile_field_path_expression(&resolved, span)?;
+
+                // Azure Policy: field('alias[*]') inside a count/where clause
+                // returns a single-element array containing the current
+                // iteration value.  Template expressions use the standard
+                // `first(field('alias[*]'))` pattern to extract the scalar.
+                let reg = if resolved.contains("[*]") {
+                    if self.resolve_count_binding(&resolved)?.is_some() {
+                        let arr = self.alloc_register()?;
+                        self.emit(Instruction::ArrayNew { dest: arr }, span);
+                        self.emit(Instruction::ArrayPush { arr, value: reg }, span);
+                        arr
+                    } else {
+                        reg
+                    }
+                } else {
+                    reg
+                };
+
                 // Azure Policy: missing field → null.  Without this, the RVM's
                 // undefined-propagation would short-circuit any subsequent
                 // builtin calls (e.g. `empty(field('missing'))` → Undefined

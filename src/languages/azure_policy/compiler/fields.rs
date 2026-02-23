@@ -145,7 +145,7 @@ impl Compiler {
     ///
     /// When the underlying array is missing (undefined), the `ForEach` loop
     /// iterates zero times and an empty array is returned.
-    fn compile_field_wildcard_collect(
+    pub(super) fn compile_field_wildcard_collect(
         &mut self,
         field_path: &str,
         span: &crate::lexer::Span,

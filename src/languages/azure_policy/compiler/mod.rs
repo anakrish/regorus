@@ -337,7 +337,7 @@ impl Compiler {
     fn resolve_alias_path(&self, path: &str) -> Result<String> {
         if let Some(short) = self.alias_map.get(&path.to_lowercase()) {
             let resolved = short.clone();
-            return Ok(self.strip_fq_prefix(&resolved));
+            return Ok(self.strip_fq_prefix(&resolved).to_lowercase());
         }
 
         // When aliases are loaded, every field must be a known alias.
@@ -352,33 +352,18 @@ impl Compiler {
         Ok(path.to_string())
     }
 
-    /// Strip the `Provider/ResourceType/` prefix from a resolved alias short
+    /// Strip any resource-type prefix segments from a resolved alias short
     /// name, keeping only the trailing property path.
+    ///
+    /// Short names from `alias_to_short` may still contain child resource
+    /// type prefixes (e.g. `securityRules/destinationPortRanges[*]`).
+    /// Azure alias property paths use `.` as a separator, never `/`, so the
+    /// part after the last `/` is always the property name.
     fn strip_fq_prefix(&self, resolved: &str) -> String {
-        if !resolved.contains('/') {
-            return resolved.to_string();
-        }
-
-        let canonical = {
-            let mut segments = resolved.split('/');
-            let _provider = segments.next();
-            let _resource_type = segments.next();
-            let tail = segments.collect::<Vec<_>>().join("/");
-            if tail.is_empty() {
-                resolved.to_string()
-            } else {
-                tail
-            }
-        };
-
-        if resolved.contains("[*]") {
-            canonical
+        if let Some(idx) = resolved.rfind('/') {
+            resolved[idx + 1..].to_string()
         } else {
-            canonical
-                .rsplit('/')
-                .next()
-                .map(|segment| segment.to_string())
-                .unwrap_or(canonical)
+            resolved.to_string()
         }
     }
 
@@ -920,12 +905,43 @@ impl Compiler {
         // Phase 2: Evaluate existence.
         let exists_reg = if let Some(ref existence_condition) = rule.then_block.existence_condition
         {
+            // First check whether the related resource was found at all.
+            // When HostAwait returns null (resource not found), we must
+            // short-circuit to false — the existenceCondition only applies
+            // when the resource actually exists.  Without this guard,
+            // field lookups on a null response yield Undefined and operators
+            // like PolicyNotEquals(Undefined, _) return true, incorrectly
+            // marking a missing resource as compliant.
+            let true_reg = self.load_literal(Value::Bool(true), span)?;
+            let resource_found_reg = self.alloc_register()?;
+            self.emit(
+                Instruction::PolicyExists {
+                    dest: resource_found_reg,
+                    left: related_resource_reg,
+                    right: true_reg,
+                },
+                span,
+            );
+
             // Compile existenceCondition with field references resolving
             // against the related resource instead of input.resource.
             self.resource_override_reg = Some(related_resource_reg);
             let cond_reg = self.compile_constraint(existence_condition)?;
             self.resource_override_reg = None;
-            cond_reg
+
+            // Combine: resource must exist AND condition must pass.
+            // When resource is null: resource_found_reg=false,
+            // And(false, _) = false → non-compliant → effect fires.
+            let and_reg = self.alloc_register()?;
+            self.emit(
+                Instruction::And {
+                    dest: and_reg,
+                    left: resource_found_reg,
+                    right: cond_reg,
+                },
+                span,
+            );
+            and_reg
         } else {
             // No existenceCondition — just check if the resource was found
             // (non-null/non-undefined). Uses PolicyExists which returns true

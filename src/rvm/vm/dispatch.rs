@@ -762,6 +762,7 @@ impl RegoVM {
                         available: loop_params_len,
                     })?;
                 let mode = loop_params.mode;
+
                 let params = LoopParams {
                     collection: loop_params.collection,
                     key_reg: loop_params.key_reg,

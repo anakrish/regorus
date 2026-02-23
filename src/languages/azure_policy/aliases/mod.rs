@@ -29,6 +29,8 @@ use anyhow::Result;
 
 use types::{ProviderAliases, ResolvedAliases, ResolvedEntry};
 
+use normalizer::{collision_safe_key, is_root_field_collision};
+
 /// Registry of resolved alias data, keyed by fully-qualified resource type
 /// (case-insensitive, stored lowercase).
 #[derive(Debug, Clone, Default)]
@@ -81,7 +83,17 @@ impl AliasRegistry {
                 if alias.name.len() > prefix.len()
                     && alias.name[..prefix.len()].eq_ignore_ascii_case(&prefix)
                 {
-                    let short = alias.name[prefix.len()..].to_string();
+                    let raw_short = alias.name[prefix.len()..].to_string();
+                    let default_path = alias.default_path.as_deref().unwrap_or("");
+                    // When an alias short name collides with a reserved ARM
+                    // root field (name, type, id, etc.), use a collision-safe
+                    // key so the compiler and normalizer agree on where the
+                    // alias value lives in the normalized resource.
+                    let short = if is_root_field_collision(&raw_short, default_path) {
+                        collision_safe_key(&raw_short)
+                    } else {
+                        raw_short
+                    };
                     let lc_name = alias.name.to_lowercase();
                     self.alias_to_short.insert(lc_name.clone(), short);
                     let is_modifiable = alias
@@ -596,9 +608,9 @@ mod tests {
             Some(serde_json::json!({"env": "prod"})),
         );
 
-        // Resource is normalized
+        // Resource is normalized (all keys lowercased)
         assert_eq!(envelope["resource"]["name"], "myNsg");
-        let rules = envelope["resource"]["securityRules"].as_array().unwrap();
+        let rules = envelope["resource"]["securityrules"].as_array().unwrap();
         assert_eq!(rules[0]["protocol"], "Tcp");
         assert!(rules[0].get("properties").is_none());
         // Context and parameters are passed through
@@ -617,8 +629,8 @@ mod tests {
             .load_from_json(&json)
             .expect("test_aliases.json should parse");
 
-        // Expect 11 resource types
-        assert_eq!(registry.len(), 11);
+        // Expect 24 resource types
+        assert_eq!(registry.len(), 23);
 
         // Storage
         let storage = registry

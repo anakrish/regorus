@@ -57,7 +57,7 @@ impl Compiler {
         span: &crate::lexer::Span,
     ) -> Result<(u8, String)> {
         let field_path = self.extract_field_count_path(field)?;
-        let (collection_prefix, _suffix) = split_count_wildcard_path(&field_path)?;
+        let (collection_prefix, suffix) = split_count_wildcard_path(&field_path)?;
 
         // Check if this field path is relative to an outer count binding.
         if let Some(binding) = self.resolve_count_binding(&field_path)? {
@@ -74,6 +74,22 @@ impl Compiler {
                     return Ok((collection_reg, inner_prefix));
                 }
             }
+        }
+
+        // Multi-level wildcard (e.g., `lenses[*].parts[*]`): flatten all
+        // nested elements into a single array so a single count loop can
+        // iterate every inner element across all outer containers.
+        // The binding prefix covers everything up to the last `[*]` so
+        // that field references like `lenses[*].parts[*].metadata.type`
+        // resolve to `current_element.metadata.type`.
+        if suffix.as_ref().is_some_and(|s| s.contains("[*]")) {
+            let flat_reg = self.compile_field_wildcard_collect(&field_path, span)?;
+            // Binding prefix = path up to the last `[*]`.
+            let last_wc = field_path
+                .rfind("[*]")
+                .ok_or_else(|| anyhow!("expected [*] in multi-wildcard path: {}", field_path))?;
+            let binding_prefix = field_path[..last_wc].to_string();
+            return Ok((flat_reg, binding_prefix));
         }
 
         let collection_reg = self.compile_resource_path_value(&collection_prefix, span)?;

@@ -224,7 +224,10 @@
           {
             "name": "Microsoft.Storage/storageAccounts/networkAcls.defaultAction",
             "defaultPath": "properties.networkAcls.defaultAction",
-            "paths": []
+            "paths": [],
+            "defaultMetadata": {
+              "attributes": "Modifiable"
+            }
           },
           {
             "name": "Microsoft.Storage/storageAccounts/networkAcls.ipRules[*]",
@@ -256,6 +259,37 @@
             "paths": [],
             "defaultMetadata": {
               "attributes": "None"
+            }
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/networkAcls.resourceAccessRules[*]",
+            "defaultPath": "properties.networkAcls.resourceAccessRules[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/networkAcls.virtualNetworkRules[*]",
+            "defaultPath": "properties.networkAcls.virtualNetworkRules[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/networkAcls.virtualNetworkRules[*].id",
+            "defaultPath": "properties.networkAcls.virtualNetworkRules[*].id",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/networkAcls.bypass",
+            "defaultPath": "properties.networkAcls.bypass",
+            "paths": [],
+            "defaultMetadata": {
+              "attributes": "Modifiable"
+            }
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/allowBlobPublicAccess",
+            "defaultPath": "properties.allowBlobPublicAccess",
+            "paths": [],
+            "defaultMetadata": {
+              "attributes": "Modifiable"
             }
           }
         ]
@@ -854,6 +888,27 @@
             ]
           }
         ]
+      },
+      {
+        "resourceType": "servers/auditingSettings",
+        "capabilities": "None",
+        "aliases": [
+          {
+            "name": "Microsoft.Sql/servers/auditingSettings/auditActionsAndGroups[*]",
+            "defaultPath": "properties.auditActionsAndGroups[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Sql/servers/auditingSettings/auditActionsAndGroups",
+            "defaultPath": "properties.auditActionsAndGroups",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Sql/servers/auditingSettings/state",
+            "defaultPath": "properties.state",
+            "paths": []
+          }
+        ]
       }
     ]
   },
@@ -1045,6 +1100,77 @@
                 }
               }
             ]
+          },
+          {
+            "name": "Microsoft.Compute/imageId",
+            "defaultPath": "properties.storageProfile.imageReference.id",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/imagePublisher",
+            "defaultPath": "properties.storageProfile.imageReference.publisher",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/imageOffer",
+            "defaultPath": "properties.storageProfile.imageReference.offer",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/imageSku",
+            "defaultPath": "properties.storageProfile.imageReference.sku",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/securityProfile.uefiSettings",
+            "defaultPath": "properties.securityProfile.uefiSettings",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/storageProfile.osDisk.managedDisk.id",
+            "defaultPath": "properties.storageProfile.osDisk.managedDisk.id",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/proximityPlacementGroup.id",
+            "defaultPath": "properties.proximityPlacementGroup.id",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/zones",
+            "defaultPath": "zones",
+            "paths": []
+          }
+        ]
+      },
+      {
+        "resourceType": "VirtualMachineScaleSets",
+        "capabilities": "SupportsTags, SupportsLocation",
+        "aliases": [
+          {
+            "name": "Microsoft.Compute/imageId",
+            "defaultPath": "properties.virtualMachineProfile.storageProfile.imageReference.id",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/imagePublisher",
+            "defaultPath": "properties.virtualMachineProfile.storageProfile.imageReference.publisher",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/imageOffer",
+            "defaultPath": "properties.virtualMachineProfile.storageProfile.imageReference.offer",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/imageSku",
+            "defaultPath": "properties.virtualMachineProfile.storageProfile.imageReference.sku",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/VirtualMachineScaleSets/securityProfile.uefiSettings",
+            "defaultPath": "properties.virtualMachineProfile.securityProfile.uefiSettings",
+            "paths": []
           }
         ]
       }
@@ -1498,6 +1624,405 @@
           {
             "name": "Microsoft.Compute/VirtualMachineScaleSets/osdisk.imageUrl",
             "defaultPath": "properties.virtualMachineProfile.storageProfile.osDisk.image.uri",
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.Synapse",
+    "resourceTypes": [
+      {
+        "resourceType": "workspaces",
+        "capabilities": "SupportsTags, SupportsLocation",
+        "aliases": [
+          {
+            "name": "Microsoft.Synapse/workspaces/extraProperties",
+            "defaultPath": "properties.extraProperties",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Synapse/workspaces/azureADOnlyAuthentication",
+            "defaultPath": "properties.azureADOnlyAuthentication",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Synapse/workspaces/settings",
+            "defaultPath": "properties.settings",
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.Security",
+    "resourceTypes": [
+      {
+        "resourceType": "pricings",
+        "capabilities": "None",
+        "aliases": [
+          {
+            "name": "Microsoft.Security/pricings/pricingTier",
+            "defaultPath": "properties.pricingTier",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Security/pricings/subPlan",
+            "defaultPath": "properties.subPlan",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Security/pricings/extensions[*]",
+            "defaultPath": "properties.extensions[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Security/pricings/extensions[*].name",
+            "defaultPath": "properties.extensions[*].name",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Security/pricings/extensions[*].isEnabled",
+            "defaultPath": "properties.extensions[*].isEnabled",
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.StreamAnalytics",
+    "resourceTypes": [
+      {
+        "resourceType": "streamingjobs",
+        "capabilities": "SupportsTags, SupportsLocation",
+        "aliases": [
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/jobStorageAccount",
+            "defaultPath": "properties.jobStorageAccount",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/jobStorageAccount.accountName",
+            "defaultPath": "properties.jobStorageAccount.accountName",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/outputs/datasource.type",
+            "defaultPath": "properties.datasource.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/outputs/datasource.Microsoft-ServiceBus-EventHub.serviceBusNamespace",
+            "defaultPath": "properties.datasource.serviceBusNamespace",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/outputs/datasource.Microsoft-Sql-Server-Database.server",
+            "defaultPath": "properties.datasource.server",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/outputs/datasource.Microsoft-Storage-Table.accountName",
+            "defaultPath": "properties.datasource.accountName",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/outputs/datasource.Microsoft-Storage-DocumentDB.accountId",
+            "defaultPath": "properties.datasource.accountId",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/outputs/datasource.Microsoft-AzureFunction.functionAppName",
+            "defaultPath": "properties.datasource.functionAppName",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/outputs/datasource.Microsoft-Storage-Blob.storageAccounts[*]",
+            "defaultPath": "properties.datasource.storageAccounts[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/outputs/datasource.Microsoft-Storage-Blob.storageAccounts[*].accountName",
+            "defaultPath": "properties.datasource.storageAccounts[*].accountName",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/inputs/Stream.datasource.type",
+            "defaultPath": "properties.datasource.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/inputs/Stream.datasource.Microsoft-ServiceBus-EventHub.serviceBusNamespace",
+            "defaultPath": "properties.datasource.serviceBusNamespace",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/inputs/Stream.datasource.Microsoft-Devices-IotHubs.iotHubNamespace",
+            "defaultPath": "properties.datasource.iotHubNamespace",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/inputs/Reference.datasource.Microsoft-Sql-Server-Database.server",
+            "defaultPath": "properties.datasource.server",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/inputs/Stream.datasource.Microsoft-Storage-Blob.storageAccounts[*]",
+            "defaultPath": "properties.datasource.storageAccounts[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/inputs/Stream.datasource.Microsoft-Storage-Blob.storageAccounts[*].accountName",
+            "defaultPath": "properties.datasource.storageAccounts[*].accountName",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/inputs/Reference.datasource.type",
+            "defaultPath": "properties.datasource.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/inputs/Reference.datasource.Microsoft-Storage-Blob.storageAccounts[*]",
+            "defaultPath": "properties.datasource.storageAccounts[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/inputs/Reference.datasource.Microsoft-Storage-Blob.storageAccounts[*].accountName",
+            "defaultPath": "properties.datasource.storageAccounts[*].accountName",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/functions[*].type",
+            "defaultPath": "properties.functions[*].type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.StreamAnalytics/streamingjobs/functions[*].binding.Microsoft-MachineLearning-WebService.endpoint",
+            "defaultPath": "properties.functions[*].binding.endpoint",
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.DocumentDB",
+    "resourceTypes": [
+      {
+        "resourceType": "databaseAccounts",
+        "capabilities": "SupportsTags, SupportsLocation",
+        "aliases": [
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/Locations[*]",
+            "defaultPath": "properties.Locations[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/Locations[*].locationName",
+            "defaultPath": "properties.Locations[*].locationName",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/publicNetworkAccess",
+            "defaultPath": "properties.publicNetworkAccess",
+            "paths": [],
+            "defaultMetadata": {
+              "attributes": "Modifiable"
+            }
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/isVirtualNetworkFilterEnabled",
+            "defaultPath": "properties.isVirtualNetworkFilterEnabled",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/ipRules[*]",
+            "defaultPath": "properties.ipRules[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/ipRules[*].ipAddressOrRange",
+            "defaultPath": "properties.ipRules[*].ipAddressOrRange",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/ipRules",
+            "defaultPath": "properties.ipRules",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/ipRangeFilter",
+            "defaultPath": "properties.ipRangeFilter",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/privateEndpointConnections[*]",
+            "defaultPath": "properties.privateEndpointConnections[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/privateEndpointConnections[*].privateLinkServiceConnectionState.status",
+            "defaultPath": "properties.privateEndpointConnections[*].properties.privateLinkServiceConnectionState.status",
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.ContainerInstance",
+    "resourceTypes": [
+      {
+        "resourceType": "containerGroups",
+        "capabilities": "SupportsTags, SupportsLocation",
+        "aliases": [
+          {
+            "name": "Microsoft.ContainerInstance/containerGroups/diagnostics.logAnalytics.workspaceId",
+            "defaultPath": "properties.diagnostics.logAnalytics.workspaceId",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.ContainerInstance/containerGroups/diagnostics.logAnalytics.workspaceKey",
+            "defaultPath": "properties.diagnostics.logAnalytics.workspaceKey",
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.Portal",
+    "resourceTypes": [
+      {
+        "resourceType": "dashboards",
+        "capabilities": "SupportsTags, SupportsLocation",
+        "aliases": [
+          {
+            "name": "Microsoft.Portal/dashboards/lenses[*].parts[*]",
+            "defaultPath": "properties.lenses[*].parts[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Portal/dashboards/lenses[*].parts[*].metadata.type",
+            "defaultPath": "properties.lenses[*].parts[*].metadata.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Portal/dashboards/lenses[*].parts[*].metadata.Extension-HubsExtension-PartType-MarkdownPart.settings.content.settings.markdownUri",
+            "defaultPath": "properties.lenses[*].parts[*].metadata.Extension-HubsExtension-PartType-MarkdownPart.settings.content.settings.markdownUri",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Portal/dashboards/lenses[*].parts[*].metadata.Extension-HubsExtension-PartType-MarkdownPart.settings.content.settings.markdownSource",
+            "defaultPath": "properties.lenses[*].parts[*].metadata.Extension-HubsExtension-PartType-MarkdownPart.settings.content.settings.markdownSource",
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.Authorization",
+    "resourceTypes": [
+      {
+        "resourceType": "roleDefinitions",
+        "capabilities": "",
+        "aliases": [
+          {
+            "name": "Microsoft.Authorization/roleDefinitions/type",
+            "defaultPath": "properties.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Authorization/roleDefinitions/permissions[*].actions[*]",
+            "defaultPath": "properties.permissions[*].actions[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Authorization/roleDefinitions/permissions.actions[*]",
+            "defaultPath": "properties.permissions.actions[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Authorization/roleDefinitions/assignableScopes[*]",
+            "defaultPath": "properties.assignableScopes[*]",
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.Network",
+    "resourceTypes": [
+      {
+        "resourceType": "virtualNetworks",
+        "capabilities": "SupportsTags, SupportsLocation",
+        "aliases": [
+          {
+            "name": "Microsoft.Network/virtualNetworks/enableDdosProtection",
+            "defaultPath": "properties.enableDdosProtection",
+            "paths": [],
+            "defaultMetadata": {
+              "attributes": "Modifiable"
+            }
+          },
+          {
+            "name": "Microsoft.Network/virtualNetworks/ddosProtectionPlan",
+            "defaultPath": "properties.ddosProtectionPlan",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Network/virtualNetworks/ddosProtectionPlan.id",
+            "defaultPath": "properties.ddosProtectionPlan.id",
+            "paths": [],
+            "defaultMetadata": {
+              "attributes": "Modifiable"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.DBforPostgreSQL",
+    "resourceTypes": [
+      {
+        "resourceType": "flexibleServers",
+        "capabilities": "SupportsTags, SupportsLocation",
+        "aliases": []
+      },
+      {
+        "resourceType": "flexibleServers/configurations",
+        "capabilities": "",
+        "aliases": [
+          {
+            "name": "Microsoft.DBforPostgreSQL/flexibleServers/configurations/value",
+            "defaultPath": "properties.value",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DBforPostgreSQL/flexibleServers/configurations/source",
+            "defaultPath": "properties.source",
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.Resources",
+    "resourceTypes": [
+      {
+        "resourceType": "links",
+        "capabilities": "None",
+        "aliases": [
+          {
+            "name": "Microsoft.Resources/links/targetId",
+            "defaultPath": "properties.targetId",
             "paths": []
           }
         ]

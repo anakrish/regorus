@@ -80,29 +80,39 @@ impl AliasRegistry {
             // Build the global FQ alias → short name lookup and modifiable map.
             let prefix = alloc::format!("{}/", fq_type);
             for alias in &rt.aliases {
-                if alias.name.len() > prefix.len()
+                // Derive the short name by stripping the resource type prefix.
+                // For cross-type aliases (e.g., Microsoft.Compute/imagePublisher
+                // under the virtualMachines resource type), the name does not
+                // start with the resource type prefix.  In that case, take the
+                // part after the last '/'.
+                let raw_short = if alias.name.len() > prefix.len()
                     && alias.name[..prefix.len()].eq_ignore_ascii_case(&prefix)
                 {
-                    let raw_short = alias.name[prefix.len()..].to_string();
-                    let default_path = alias.default_path.as_deref().unwrap_or("");
-                    // When an alias short name collides with a reserved ARM
-                    // root field (name, type, id, etc.), use a collision-safe
-                    // key so the compiler and normalizer agree on where the
-                    // alias value lives in the normalized resource.
-                    let short = if is_root_field_collision(&raw_short, default_path) {
-                        collision_safe_key(&raw_short)
-                    } else {
-                        raw_short
-                    };
-                    let lc_name = alias.name.to_lowercase();
-                    self.alias_to_short.insert(lc_name.clone(), short);
-                    let is_modifiable = alias
-                        .default_metadata
-                        .as_ref()
-                        .and_then(|m| m.attributes.as_deref())
-                        .is_some_and(|a| a.eq_ignore_ascii_case("Modifiable"));
-                    self.alias_modifiable.insert(lc_name, is_modifiable);
-                }
+                    alias.name[prefix.len()..].to_string()
+                } else if let Some(idx) = alias.name.rfind('/') {
+                    alias.name[idx + 1..].to_string()
+                } else {
+                    continue;
+                };
+
+                let default_path = alias.default_path.as_deref().unwrap_or("");
+                // When an alias short name collides with a reserved ARM
+                // root field (name, type, id, etc.), use a collision-safe
+                // key so the compiler and normalizer agree on where the
+                // alias value lives in the normalized resource.
+                let short = if is_root_field_collision(&raw_short, default_path) {
+                    collision_safe_key(&raw_short)
+                } else {
+                    raw_short
+                };
+                let lc_name = alias.name.to_lowercase();
+                self.alias_to_short.insert(lc_name.clone(), short);
+                let is_modifiable = alias
+                    .default_metadata
+                    .as_ref()
+                    .and_then(|m| m.attributes.as_deref())
+                    .is_some_and(|a| a.eq_ignore_ascii_case("Modifiable"));
+                self.alias_modifiable.insert(lc_name, is_modifiable);
             }
             let resolved = resolve_resource_type(&fq_type, &rt.aliases);
             self.types.insert(fq_type.to_lowercase(), resolved);
@@ -190,10 +200,16 @@ fn resolve_resource_type(fq_type: &str, aliases: &[types::AliasEntry]) -> Resolv
 
     for alias in aliases {
         // Derive short name by stripping the resource type prefix.
+        // For cross-type aliases (e.g., Microsoft.Compute/imagePublisher
+        // under the virtualMachines resource type), the name does not
+        // start with the resource type prefix.  In that case, take the
+        // part after the last '/'.
         let short_name = if alias.name.len() > prefix.len()
             && alias.name[..prefix.len()].eq_ignore_ascii_case(&prefix)
         {
             &alias.name[prefix.len()..]
+        } else if let Some(idx) = alias.name.rfind('/') {
+            &alias.name[idx + 1..]
         } else {
             &alias.name
         };
@@ -626,8 +642,8 @@ mod tests {
             .load_from_json(&json)
             .expect("test_aliases.json should parse");
 
-        // Expect 24 resource types
-        assert_eq!(registry.len(), 23);
+        // Expect 32 resource types (23 original + 9 added for lockdown tests)
+        assert_eq!(registry.len(), 32);
 
         // Storage
         let storage = registry

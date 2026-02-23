@@ -1140,6 +1140,88 @@
             "name": "Microsoft.Compute/virtualMachines/zones",
             "defaultPath": "zones",
             "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/storageProfile.osDisk.osType",
+            "defaultPath": "properties.storageProfile.osDisk.osType",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/storageProfile.osDisk.createOption",
+            "defaultPath": "properties.storageProfile.osDisk.createOption",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/storageProfile.imageReference.id",
+            "defaultPath": "properties.storageProfile.imageReference.id",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/storageProfile.imageReference.sku",
+            "defaultPath": "properties.storageProfile.imageReference.sku",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/osProfile.computerName",
+            "defaultPath": "properties.osProfile.computerName",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/osProfile.windowsConfiguration",
+            "defaultPath": "properties.osProfile.windowsConfiguration",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/osProfile.linuxConfiguration",
+            "defaultPath": "properties.osProfile.linuxConfiguration",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/osProfile.windowsConfiguration.patchSettings.assessmentMode",
+            "defaultPath": "properties.osProfile.windowsConfiguration.patchSettings.assessmentMode",
+            "defaultMetadata": { "attributes": "Modifiable" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/osProfile.linuxConfiguration.patchSettings.assessmentMode",
+            "defaultPath": "properties.osProfile.linuxConfiguration.patchSettings.assessmentMode",
+            "defaultMetadata": { "attributes": "Modifiable" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/osProfile.windowsConfiguration.patchSettings.patchMode",
+            "defaultPath": "properties.osProfile.windowsConfiguration.patchSettings.patchMode",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/osProfile.linuxConfiguration.patchSettings.patchMode",
+            "defaultPath": "properties.osProfile.linuxConfiguration.patchSettings.patchMode",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/osProfile.windowsConfiguration.patchSettings.automaticByPlatformSettings",
+            "defaultPath": "properties.osProfile.windowsConfiguration.patchSettings.automaticByPlatformSettings",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/osProfile.windowsConfiguration.patchSettings.automaticByPlatformSettings.bypassPlatformSafetyChecksOnUserSchedule",
+            "defaultPath": "properties.osProfile.windowsConfiguration.patchSettings.automaticByPlatformSettings.bypassPlatformSafetyChecksOnUserSchedule",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/osProfile.linuxConfiguration.patchSettings.automaticByPlatformSettings",
+            "defaultPath": "properties.osProfile.linuxConfiguration.patchSettings.automaticByPlatformSettings",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/osProfile.linuxConfiguration.patchSettings.automaticByPlatformSettings.bypassPlatformSafetyChecksOnUserSchedule",
+            "defaultPath": "properties.osProfile.linuxConfiguration.patchSettings.automaticByPlatformSettings.bypassPlatformSafetyChecksOnUserSchedule",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/imageSKU",
+            "defaultPath": "properties.storageProfile.imageReference.sku",
+            "paths": []
           }
         ]
       },
@@ -1170,6 +1252,16 @@
           {
             "name": "Microsoft.Compute/VirtualMachineScaleSets/securityProfile.uefiSettings",
             "defaultPath": "properties.virtualMachineProfile.securityProfile.uefiSettings",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachineScaleSets/virtualMachineProfile.storageProfile.osDisk.osType",
+            "defaultPath": "properties.virtualMachineProfile.storageProfile.osDisk.osType",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/imageSKU",
+            "defaultPath": "properties.virtualMachineProfile.storageProfile.imageReference.sku",
             "paths": []
           }
         ]
@@ -1625,6 +1717,41 @@
             "name": "Microsoft.Compute/VirtualMachineScaleSets/osdisk.imageUrl",
             "defaultPath": "properties.virtualMachineProfile.storageProfile.osDisk.image.uri",
             "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/imageId",
+            "defaultPath": "properties.virtualMachineProfile.storageProfile.imageReference.id",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/imagePublisher",
+            "defaultPath": "properties.virtualMachineProfile.storageProfile.imageReference.publisher",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/imageOffer",
+            "defaultPath": "properties.virtualMachineProfile.storageProfile.imageReference.offer",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/imageSku",
+            "defaultPath": "properties.virtualMachineProfile.storageProfile.imageReference.sku",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/imageSKU",
+            "defaultPath": "properties.virtualMachineProfile.storageProfile.imageReference.sku",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/VirtualMachineScaleSets/securityProfile.uefiSettings",
+            "defaultPath": "properties.virtualMachineProfile.securityProfile.uefiSettings",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachineScaleSets/virtualMachineProfile.storageProfile.osDisk.osType",
+            "defaultPath": "properties.virtualMachineProfile.storageProfile.osDisk.osType",
+            "paths": []
           }
         ]
       }
@@ -1982,6 +2109,36 @@
             "defaultMetadata": {
               "attributes": "Modifiable"
             }
+          },
+          {
+            "name": "Microsoft.Network/virtualNetworks/subnets[*]",
+            "defaultPath": "properties.subnets[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Network/virtualNetworks/subnets[*].name",
+            "defaultPath": "properties.subnets[*].name",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Network/virtualNetworks/subnets[*].ipConfigurations[*]",
+            "defaultPath": "properties.subnets[*].properties.ipConfigurations[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Network/virtualNetworks/subnets[*].ipConfigurations[*].id",
+            "defaultPath": "properties.subnets[*].properties.ipConfigurations[*].id",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Network/virtualNetworks/subnets[*].routeTable",
+            "defaultPath": "properties.subnets[*].properties.routeTable",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Network/virtualNetworks/subnets[*].routeTable.id",
+            "defaultPath": "properties.subnets[*].properties.routeTable.id",
+            "paths": []
           }
         ]
       }
@@ -2023,6 +2180,199 @@
           {
             "name": "Microsoft.Resources/links/targetId",
             "defaultPath": "properties.targetId",
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.Network",
+    "resourceTypes": [
+      {
+        "resourceType": "azureFirewalls",
+        "capabilities": "SupportsTags, SupportsLocation",
+        "aliases": [
+          {
+            "name": "Microsoft.Network/azureFirewalls/ipConfigurations[*]",
+            "defaultPath": "properties.ipConfigurations[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Network/azureFirewalls/ipConfigurations[*].subnet.id",
+            "defaultPath": "properties.ipConfigurations[*].properties.subnet.id",
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.SignalRService",
+    "resourceTypes": [
+      {
+        "resourceType": "SignalR",
+        "capabilities": "SupportsTags, SupportsLocation",
+        "aliases": [
+          {
+            "name": "Microsoft.SignalRService/SignalR/networkACLs.defaultAction",
+            "defaultPath": "properties.networkACLs.defaultAction",
+            "defaultMetadata": { "attributes": "Modifiable" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.SignalRService/SignalR/networkACLs.publicNetwork.allow",
+            "defaultPath": "properties.networkACLs.publicNetwork.allow",
+            "defaultMetadata": { "attributes": "Modifiable" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.SignalRService/SignalR/networkACLs.publicNetwork.allow[*]",
+            "defaultPath": "properties.networkACLs.publicNetwork.allow[*]",
+            "defaultMetadata": { "attributes": "Modifiable" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.SignalRService/SignalR/publicNetworkAccess",
+            "defaultPath": "properties.publicNetworkAccess",
+            "defaultMetadata": { "attributes": "Modifiable" },
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.ManagedIdentity",
+    "resourceTypes": [
+      {
+        "resourceType": "userAssignedIdentities/federatedIdentityCredentials",
+        "capabilities": "",
+        "aliases": [
+          {
+            "name": "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/issuer",
+            "defaultPath": "properties.issuer",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/subject",
+            "defaultPath": "properties.subject",
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.HybridCompute",
+    "resourceTypes": [
+      {
+        "resourceType": "machines",
+        "capabilities": "SupportsTags, SupportsLocation",
+        "aliases": [
+          {
+            "name": "Microsoft.HybridCompute/machines/osName",
+            "defaultPath": "properties.osName",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.HybridCompute/machines/osSku",
+            "defaultPath": "properties.osSku",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.HybridCompute/imageOffer",
+            "defaultPath": "properties.imageOffer",
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.Maintenance",
+    "resourceTypes": [
+      {
+        "resourceType": "configurationAssignments",
+        "capabilities": "",
+        "aliases": [
+          {
+            "name": "Microsoft.Maintenance/configurationAssignments/maintenanceConfigurationId",
+            "defaultPath": "properties.maintenanceConfigurationId",
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.Automanage",
+    "resourceTypes": [
+      {
+        "resourceType": "configurationProfileAssignments",
+        "capabilities": "",
+        "aliases": [
+          {
+            "name": "Microsoft.Automanage/configurationProfileAssignments/configurationProfile",
+            "defaultPath": "properties.configurationProfile",
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.Insights",
+    "resourceTypes": [
+      {
+        "resourceType": "dataCollectionRuleAssociations",
+        "capabilities": "",
+        "aliases": [
+          {
+            "name": "Microsoft.Insights/dataCollectionRuleAssociations/dataCollectionRuleId",
+            "defaultPath": "properties.dataCollectionRuleId",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Insights/dataCollectionRuleAssociations/dataCollectionEndpointId",
+            "defaultPath": "properties.dataCollectionEndpointId",
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.GuestConfiguration",
+    "resourceTypes": [
+      {
+        "resourceType": "guestConfigurationAssignments",
+        "capabilities": "",
+        "aliases": [
+          {
+            "name": "Microsoft.GuestConfiguration/guestConfigurationAssignments/parameterHash",
+            "defaultPath": "properties.parameterHash",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.GuestConfiguration/guestConfigurationAssignments/complianceStatus",
+            "defaultPath": "properties.complianceStatus",
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.ConnectedVMwarevSphere",
+    "resourceTypes": [
+      {
+        "resourceType": "virtualMachines",
+        "capabilities": "SupportsTags, SupportsLocation",
+        "aliases": [
+          {
+            "name": "Microsoft.ConnectedVMwarevSphere/virtualMachines/osProfile.osType",
+            "defaultPath": "properties.osProfile.osType",
             "paths": []
           }
         ]

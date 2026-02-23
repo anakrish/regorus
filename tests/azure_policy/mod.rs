@@ -78,6 +78,19 @@ struct TestCase {
     #[serde(default)]
     pub api_version: Option<String>,
 
+    /// Optional request context object for the evaluation.
+    /// When set, injected as `context.requestContext`.  Used by policies
+    /// that reference `[requestContext().apiVersion]` or other request
+    /// infrastructure fields.
+    ///
+    /// This is distinct from `api_version`, which specifies the resource's
+    /// own API version for alias versioned path selection and
+    /// `resource.apiVersion`.  When `request_context` is absent but
+    /// `api_version` is present, `api_version` is used as a fallback
+    /// for `context.requestContext.apiVersion` (backward compatibility).
+    #[serde(default)]
+    pub request_context: Option<serde_yaml::Value>,
+
     /// Optional custom context object. Overrides the default test context
     /// (resourceGroup, subscription). Useful for testing `resourceGroup()`,
     /// `subscription()`, and other context-dependent expressions.
@@ -495,10 +508,20 @@ fn make_context(case: &TestCase) -> Result<Value> {
         )?
     };
 
-    // Inject requestContext.apiVersion so that `[requestContext().apiVersion]`
-    // expressions resolve correctly.  In production, the host provides this;
-    // the test harness mirrors the same contract.
-    if let Some(ref api_ver) = case.api_version {
+    // Inject requestContext so that `[requestContext().apiVersion]` and other
+    // request infrastructure expressions resolve correctly.
+    //
+    // Priority:
+    //   1. Explicit `request_context` YAML field → injected as-is.
+    //   2. Fallback: `api_version` → synthesizes `{ apiVersion: "<ver>" }`.
+    //
+    // In production the host provides the full requestContext; the test
+    // harness mirrors the same contract.
+    if let Some(ref rc) = case.request_context {
+        let rc_val = yaml_to_regorus_value(Some(rc))?.unwrap_or_else(Value::new_object);
+        let map = ctx.as_object_mut()?;
+        map.insert(Value::from("requestContext"), rc_val);
+    } else if let Some(ref api_ver) = case.api_version {
         let map = ctx.as_object_mut()?;
         let mut req_ctx = Value::new_object();
         let rc_map = req_ctx.as_object_mut()?;

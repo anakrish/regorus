@@ -296,6 +296,9 @@ fn reparse_policy_rule(jv: JsonValue, fallback_span: &Span) -> Result<PolicyRule
 }
 
 /// Serialize a `JsonValue` back to a JSON string.
+///
+/// Emits newlines after commas and braces to keep lines short enough for the
+/// lexer's `MAX_COL` limit when re-parsing large policy rules.
 fn json_value_to_string(jv: &JsonValue) -> String {
     let mut out = String::new();
     write_json_value(&mut out, jv);
@@ -330,19 +333,24 @@ fn write_json_value(out: &mut String, jv: &JsonValue) {
         }
         JsonValue::Array(_, items) => {
             out.push('[');
+            out.push('\n');
             for (i, item) in items.iter().enumerate() {
                 if i > 0 {
                     out.push(',');
+                    out.push('\n');
                 }
                 write_json_value(out, item);
             }
+            out.push('\n');
             out.push(']');
         }
         JsonValue::Object(_, entries) => {
             out.push('{');
+            out.push('\n');
             for (i, entry) in entries.iter().enumerate() {
                 if i > 0 {
                     out.push(',');
+                    out.push('\n');
                 }
                 out.push('"');
                 for ch in entry.key.chars() {
@@ -356,6 +364,7 @@ fn write_json_value(out: &mut String, jv: &JsonValue) {
                 out.push(':');
                 write_json_value(out, &entry.value);
             }
+            out.push('\n');
             out.push('}');
         }
     }

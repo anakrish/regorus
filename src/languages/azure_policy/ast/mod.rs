@@ -195,6 +195,9 @@ pub enum FieldKind {
     Tags,
     /// `"identity.type"`
     IdentityType,
+    /// `"identity.<subpath>"` — any identity sub-field other than `type`
+    /// (e.g., `"identity.userAssignedIdentities"`, `"identity.principalId"`).
+    IdentityField(String),
     /// `"apiVersion"`
     ApiVersion,
     /// `"tags.tagName"` or `"tags['tagName']"`

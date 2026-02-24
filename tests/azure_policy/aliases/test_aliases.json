@@ -1222,6 +1222,16 @@
             "name": "Microsoft.Compute/imageSKU",
             "defaultPath": "properties.storageProfile.imageReference.sku",
             "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/storageProfile.osDisk.managedDisk.diskEncryptionSet.id",
+            "defaultPath": "properties.storageProfile.osDisk.managedDisk.diskEncryptionSet.id",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachines/storageProfile.dataDisks[*].managedDisk.diskEncryptionSet.id",
+            "defaultPath": "properties.storageProfile.dataDisks[*].managedDisk.diskEncryptionSet.id",
+            "paths": []
           }
         ]
       },
@@ -1262,6 +1272,21 @@
           {
             "name": "Microsoft.Compute/imageSKU",
             "defaultPath": "properties.virtualMachineProfile.storageProfile.imageReference.sku",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachineScaleSets/virtualMachineProfile.storageProfile.osDisk.managedDisk.diskEncryptionSet.id",
+            "defaultPath": "properties.virtualMachineProfile.storageProfile.osDisk.managedDisk.diskEncryptionSet.id",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachineScaleSets/virtualMachineProfile.storageProfile.dataDisks[*]",
+            "defaultPath": "properties.virtualMachineProfile.storageProfile.dataDisks[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/virtualMachineScaleSets/virtualMachineProfile.storageProfile.dataDisks[*].managedDisk.diskEncryptionSet.id",
+            "defaultPath": "properties.virtualMachineProfile.storageProfile.dataDisks[*].managedDisk.diskEncryptionSet.id",
             "paths": []
           }
         ]
@@ -1644,6 +1669,16 @@
             "name": "Microsoft.Compute/disks/diskSizeGB",
             "defaultPath": "properties.diskSizeGB",
             "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/disks/encryption.diskEncryptionSetId",
+            "defaultPath": "properties.encryption.diskEncryptionSetId",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/disks/managedBy",
+            "defaultPath": "properties.managedBy",
+            "paths": []
           }
         ]
       }
@@ -1993,6 +2028,231 @@
           {
             "name": "Microsoft.DocumentDB/databaseAccounts/privateEndpointConnections[*].privateLinkServiceConnectionState.status",
             "defaultPath": "properties.privateEndpointConnections[*].properties.privateLinkServiceConnectionState.status",
+            "paths": []
+          }
+        ]
+      },
+      {
+        "resourceType": "databaseAccounts/sqlDatabases",
+        "aliases": [
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/options",
+            "defaultPath": "properties.options",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/options.throughput",
+            "defaultPath": "properties.options.throughput",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/throughputSettings/default.resource.throughput",
+            "defaultPath": "properties.resource.throughput",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/throughputSettings/default.resource.provisionedThroughputSettings",
+            "defaultPath": "properties.resource.provisionedThroughputSettings",
+            "paths": []
+          }
+        ]
+      },
+      {
+        "resourceType": "databaseAccounts/sqlDatabases/containers",
+        "aliases": [
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/options",
+            "defaultPath": "properties.options",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/options.throughput",
+            "defaultPath": "properties.options.throughput",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/throughputSettings/default.resource.throughput",
+            "defaultPath": "properties.resource.throughput",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/throughputSettings/default.resource.provisionedThroughputSettings",
+            "defaultPath": "properties.resource.provisionedThroughputSettings",
+            "paths": []
+          }
+        ]
+      },
+      {
+        "resourceType": "databaseAccounts/mongodbDatabases",
+        "aliases": [
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/mongodbDatabases/options",
+            "defaultPath": "properties.options",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/mongodbDatabases/options.throughput",
+            "defaultPath": "properties.options.throughput",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/mongodbDatabases/throughputSettings/default.resource.throughput",
+            "defaultPath": "properties.resource.throughput",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/mongodbDatabases/throughputSettings/default.resource.provisionedThroughputSettings",
+            "defaultPath": "properties.resource.provisionedThroughputSettings",
+            "paths": []
+          }
+        ]
+      },
+      {
+        "resourceType": "databaseAccounts/mongodbDatabases/collections",
+        "aliases": [
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/mongodbDatabases/collections/options",
+            "defaultPath": "properties.options",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/mongodbDatabases/collections/options.throughput",
+            "defaultPath": "properties.options.throughput",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/mongodbDatabases/collections/throughputSettings/default.resource.throughput",
+            "defaultPath": "properties.resource.throughput",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/mongodbDatabases/collections/throughputSettings/default.resource.provisionedThroughputSettings",
+            "defaultPath": "properties.resource.provisionedThroughputSettings",
+            "paths": []
+          }
+        ]
+      },
+      {
+        "resourceType": "databaseAccounts/gremlinDatabases",
+        "aliases": [
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/options",
+            "defaultPath": "properties.options",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/options.throughput",
+            "defaultPath": "properties.options.throughput",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/throughputSettings/default.resource.throughput",
+            "defaultPath": "properties.resource.throughput",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/throughputSettings/default.resource.provisionedThroughputSettings",
+            "defaultPath": "properties.resource.provisionedThroughputSettings",
+            "paths": []
+          }
+        ]
+      },
+      {
+        "resourceType": "databaseAccounts/gremlinDatabases/graphs",
+        "aliases": [
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/graphs/options",
+            "defaultPath": "properties.options",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/graphs/options.throughput",
+            "defaultPath": "properties.options.throughput",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/graphs/throughputSettings/default.resource.throughput",
+            "defaultPath": "properties.resource.throughput",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/graphs/throughputSettings/default.resource.provisionedThroughputSettings",
+            "defaultPath": "properties.resource.provisionedThroughputSettings",
+            "paths": []
+          }
+        ]
+      },
+      {
+        "resourceType": "databaseAccounts/cassandraKeyspaces",
+        "aliases": [
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces/options",
+            "defaultPath": "properties.options",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces/options.throughput",
+            "defaultPath": "properties.options.throughput",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces/throughputSettings/default.resource.throughput",
+            "defaultPath": "properties.resource.throughput",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces/throughputSettings/default.resource.provisionedThroughputSettings",
+            "defaultPath": "properties.resource.provisionedThroughputSettings",
+            "paths": []
+          }
+        ]
+      },
+      {
+        "resourceType": "databaseAccounts/cassandraKeyspaces/tables",
+        "aliases": [
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces/tables/options",
+            "defaultPath": "properties.options",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces/tables/options.throughput",
+            "defaultPath": "properties.options.throughput",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces/tables/throughputSettings/default.resource.throughput",
+            "defaultPath": "properties.resource.throughput",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces/tables/throughputSettings/default.resource.provisionedThroughputSettings",
+            "defaultPath": "properties.resource.provisionedThroughputSettings",
+            "paths": []
+          }
+        ]
+      },
+      {
+        "resourceType": "databaseAccounts/tables",
+        "aliases": [
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/tables/options",
+            "defaultPath": "properties.options",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/tables/options.throughput",
+            "defaultPath": "properties.options.throughput",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/tables/throughputSettings/default.resource.throughput",
+            "defaultPath": "properties.resource.throughput",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DocumentDB/databaseAccounts/tables/throughputSettings/default.resource.provisionedThroughputSettings",
+            "defaultPath": "properties.resource.provisionedThroughputSettings",
             "paths": []
           }
         ]
@@ -2373,6 +2633,264 @@
           {
             "name": "Microsoft.ConnectedVMwarevSphere/virtualMachines/osProfile.osType",
             "defaultPath": "properties.osProfile.osType",
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.Compute",
+    "resourceTypes": [
+      {
+        "resourceType": "images",
+        "capabilities": "SupportsTags, SupportsLocation",
+        "aliases": [
+          {
+            "name": "Microsoft.Compute/images/storageProfile.osDisk.diskEncryptionSet.id",
+            "defaultPath": "properties.storageProfile.osDisk.diskEncryptionSet.id",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/images/storageProfile.osDisk.diskEncryptionSet",
+            "defaultPath": "properties.storageProfile.osDisk.diskEncryptionSet",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/images/storageProfile.dataDisks[*]",
+            "defaultPath": "properties.storageProfile.dataDisks[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/images/storageProfile.dataDisks[*].diskEncryptionSet.id",
+            "defaultPath": "properties.storageProfile.dataDisks[*].diskEncryptionSet.id",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/images/storageProfile.dataDisks[*].diskEncryptionSet",
+            "defaultPath": "properties.storageProfile.dataDisks[*].diskEncryptionSet",
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.Compute",
+    "resourceTypes": [
+      {
+        "resourceType": "galleries/images/versions",
+        "capabilities": "SupportsTags, SupportsLocation",
+        "aliases": [
+          {
+            "name": "Microsoft.Compute/galleries/images/versions/publishingProfile.targetRegions[*]",
+            "defaultPath": "properties.publishingProfile.targetRegions[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/galleries/images/versions/publishingProfile.targetRegions[*].name",
+            "defaultPath": "properties.publishingProfile.targetRegions[*].name",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/galleries/images/versions/publishingProfile.targetRegions[*].encryption",
+            "defaultPath": "properties.publishingProfile.targetRegions[*].encryption",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/galleries/images/versions/publishingProfile.targetRegions[*].encryption.osDiskImage",
+            "defaultPath": "properties.publishingProfile.targetRegions[*].encryption.osDiskImage",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/galleries/images/versions/publishingProfile.targetRegions[*].encryption.osDiskImage.diskEncryptionSetId",
+            "defaultPath": "properties.publishingProfile.targetRegions[*].encryption.osDiskImage.diskEncryptionSetId",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/galleries/images/versions/publishingProfile.targetRegions[*].encryption.dataDiskImages[*]",
+            "defaultPath": "properties.publishingProfile.targetRegions[*].encryption.dataDiskImages[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/galleries/images/versions/publishingProfile.targetRegions[*].encryption.dataDiskImages[*].diskEncryptionSetId",
+            "defaultPath": "properties.publishingProfile.targetRegions[*].encryption.dataDiskImages[*].diskEncryptionSetId",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/galleries/images/versions/publishingProfile.targetRegions[*].encryption.dataDiskImages",
+            "defaultPath": "properties.publishingProfile.targetRegions[*].encryption.dataDiskImages",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/galleries/images/versions/storageProfile.dataDiskImages[*]",
+            "defaultPath": "properties.storageProfile.dataDiskImages[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Compute/galleries/images/versions/storageProfile.dataDiskImages",
+            "defaultPath": "properties.storageProfile.dataDiskImages",
+            "paths": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "Microsoft.DataFactory",
+    "resourceTypes": [
+      {
+        "resourceType": "factories/linkedservices",
+        "capabilities": "None",
+        "aliases": [
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/type",
+            "defaultPath": "properties.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/typeProperties.connectionString",
+            "defaultPath": "properties.typeProperties.connectionString",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/typeProperties.connectionString.type",
+            "defaultPath": "properties.typeProperties.connectionString.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/typeProperties.encryptedCredential",
+            "defaultPath": "properties.typeProperties.encryptedCredential",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/SqlServer.typeProperties.password",
+            "defaultPath": "properties.typeProperties.password",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/SqlServer.typeProperties.password.type",
+            "defaultPath": "properties.typeProperties.password.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/AzureSqlDW.typeProperties.servicePrincipalKey.type",
+            "defaultPath": "properties.typeProperties.servicePrincipalKey.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/AzureSearch.typeProperties.key.type",
+            "defaultPath": "properties.typeProperties.key.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/AzureStorage.typeProperties.sasUri",
+            "defaultPath": "properties.typeProperties.sasUri",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/AzureStorage.typeProperties.sasUri.type",
+            "defaultPath": "properties.typeProperties.sasUri.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/AzureBlobStorage.typeProperties.servicePrincipalKey",
+            "defaultPath": "properties.typeProperties.servicePrincipalKey",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/AzureBlobStorage.typeProperties.servicePrincipalKey.type",
+            "defaultPath": "properties.typeProperties.servicePrincipalKey.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/AzureStorage.typeProperties.accountKey",
+            "defaultPath": "properties.typeProperties.accountKey",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/CosmosDb.typeProperties.accountKey.type",
+            "defaultPath": "properties.typeProperties.accountKey.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/AmazonMWS.typeProperties.mwsAuthToken.type",
+            "defaultPath": "properties.typeProperties.mwsAuthToken.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/AmazonMWS.typeProperties.secretKey.type",
+            "defaultPath": "properties.typeProperties.secretKey.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/AmazonS3.typeProperties.secretAccessKey.type",
+            "defaultPath": "properties.typeProperties.secretAccessKey.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/Dynamics.typeProperties.servicePrincipalCredential",
+            "defaultPath": "properties.typeProperties.servicePrincipalCredential",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/Dynamics.typeProperties.servicePrincipalCredential.type",
+            "defaultPath": "properties.typeProperties.servicePrincipalCredential.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/Hubspot.typeProperties.accessToken",
+            "defaultPath": "properties.typeProperties.accessToken",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/Hubspot.typeProperties.accessToken.type",
+            "defaultPath": "properties.typeProperties.accessToken.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/Odbc.typeProperties.credential.type",
+            "defaultPath": "properties.typeProperties.credential.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/GoogleAdWords.typeProperties.developerToken.type",
+            "defaultPath": "properties.typeProperties.developerToken.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/GoogleBigQuery.typeProperties.clientSecret.type",
+            "defaultPath": "properties.typeProperties.clientSecret.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/GoogleBigQuery.typeProperties.refreshToken.type",
+            "defaultPath": "properties.typeProperties.refreshToken.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/OData.typeProperties.servicePrincipalEmbeddedCert.type",
+            "defaultPath": "properties.typeProperties.servicePrincipalEmbeddedCert.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/OData.typeProperties.servicePrincipalEmbeddedCertPassword.type",
+            "defaultPath": "properties.typeProperties.servicePrincipalEmbeddedCertPassword.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/Salesforce.typeProperties.securityToken.type",
+            "defaultPath": "properties.typeProperties.securityToken.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/Sftp.typeProperties.passPhrase.type",
+            "defaultPath": "properties.typeProperties.passPhrase.type",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.DataFactory/factories/linkedservices/Sftp.typeProperties.privateKeyContent.type",
+            "defaultPath": "properties.typeProperties.privateKeyContent.type",
             "paths": []
           }
         ]

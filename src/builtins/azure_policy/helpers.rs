@@ -3,6 +3,7 @@
 
 //! Shared helpers: type coercion, comparison, pattern matching, and path resolution.
 
+use crate::languages::azure_policy::strings;
 use crate::value::Value;
 
 use alloc::string::{String, ToString as _};
@@ -26,13 +27,13 @@ pub fn as_string(value: &Value) -> Option<String> {
 }
 
 pub fn as_string_ci(value: &Value) -> Option<String> {
-    as_string(value).map(|s| s.to_lowercase())
+    as_string(value).map(|s| strings::case_fold::fold(&s).into_owned())
 }
 
 pub fn as_boolish(value: &Value) -> Option<bool> {
     match value {
         Value::Bool(b) => Some(*b),
-        Value::String(s) => match s.to_lowercase().as_str() {
+        Value::String(s) => match s.to_ascii_lowercase().as_str() {
             "true" => Some(true),
             "false" => Some(false),
             _ => None,
@@ -49,17 +50,11 @@ pub fn compare_values(args: &[Value]) -> Option<i8> {
     }
 
     match (&args[0], &args[1]) {
-        (Value::String(a), Value::String(b)) => {
-            let a_ci = a.to_lowercase();
-            let b_ci = b.to_lowercase();
-            Some(if a_ci < b_ci {
-                -1
-            } else if a_ci > b_ci {
-                1
-            } else {
-                0
-            })
-        }
+        (Value::String(a), Value::String(b)) => Some(match strings::case_fold::cmp(a, b) {
+            core::cmp::Ordering::Less => -1,
+            core::cmp::Ordering::Equal => 0,
+            core::cmp::Ordering::Greater => 1,
+        }),
         (Value::Number(a), Value::Number(b)) => Some(if a < b {
             -1
         } else if a > b {
@@ -103,7 +98,7 @@ pub fn case_insensitive_equals(left: &Value, right: &Value) -> bool {
     }
 
     match (left, right) {
-        (Value::String(a), Value::String(b)) => a.to_lowercase() == b.to_lowercase(),
+        (Value::String(a), Value::String(b)) => strings::case_fold::eq(a, b),
         // String ↔ Number coercion
         (Value::String(s), Value::Number(_)) | (Value::Number(_), Value::String(s)) => {
             if let Some(n) = try_coerce_to_number(s) {
@@ -158,8 +153,8 @@ pub fn match_pattern(args: &[Value], insensitive: bool) -> bool {
     };
 
     if insensitive {
-        input = input.to_lowercase();
-        pattern = pattern.to_lowercase();
+        input = strings::case_fold::fold(&input).into_owned();
+        pattern = strings::case_fold::fold(&pattern).into_owned();
     }
 
     match_question_hash_pattern(&input, &pattern)
@@ -237,7 +232,7 @@ pub fn resolve_path(root: &Value, path: &str) -> Value {
                 let mut next = None;
                 for (key, value) in map.iter() {
                     if let Value::String(key_str) = key {
-                        if key_str.to_lowercase() == segment.to_lowercase() {
+                        if strings::keys::eq(key_str, &segment) {
                             next = Some(value.clone());
                             break;
                         }

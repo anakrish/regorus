@@ -208,6 +208,7 @@ impl Compiler {
                 let resolved = match field_path.to_lowercase().as_str() {
                     "type" | "id" | "kind" | "name" | "location" | "fullname" | "tags"
                     | "identity.type" | "apiversion" => field_path.clone(),
+                    s if s.starts_with("identity.") => field_path.clone(),
                     s if s.starts_with("tags.") || s.starts_with("tags['") => field_path.clone(),
                     _ => self.resolve_alias_path(&field_path)?,
                 };

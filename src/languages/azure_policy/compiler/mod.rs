@@ -377,9 +377,24 @@ impl Compiler {
     }
 
     fn resolve_alias_path(&self, path: &str) -> Result<String> {
-        if let Some(short) = self.alias_map.get(&path.to_lowercase()) {
+        let lc = path.to_lowercase();
+        if let Some(short) = self.alias_map.get(&lc) {
             let resolved = short.clone();
             return Ok(self.strip_fq_prefix(&resolved).to_lowercase());
+        }
+
+        // Fallback: if the alias isn't found, try deriving the array path
+        // from a corresponding `[*]` alias.  Policies often reference
+        // `field('Type/prop.array')` (without `[*]`) inside `length()` to
+        // get the array length, even when only `prop.array[*]` is registered.
+        if !lc.contains("[*]") {
+            let wildcard_key = alloc::format!("{}[*]", lc);
+            if let Some(short) = self.alias_map.get(&wildcard_key) {
+                let resolved = self.strip_fq_prefix(short).to_lowercase();
+                if let Some(base) = resolved.strip_suffix("[*]") {
+                    return Ok(base.to_string());
+                }
+            }
         }
 
         // When aliases are loaded, every field must be a known alias.

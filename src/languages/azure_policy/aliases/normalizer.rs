@@ -61,12 +61,15 @@ pub(crate) fn collision_safe_key(short_name: &str) -> String {
 
 /// Lowercase all keys of a JSON object (shallow — values are untouched).
 /// Non-object values are returned as-is.
+///
+/// Uses ASCII lowercasing because ARM property keys (including tag names)
+/// are restricted to ASCII characters.
 fn lowercase_object_keys(value: &Value) -> Value {
     match value {
         Value::Object(obj) => {
             let mut result = Map::new();
             for (k, v) in obj {
-                result.insert(k.to_lowercase(), v.clone());
+                result.insert(k.to_ascii_lowercase(), v.clone());
             }
             Value::Object(result)
         }
@@ -139,13 +142,17 @@ pub(crate) fn normalize_with_aliases(
     // management/tag-resources#tag-usage-and-recommendations), so we
     // lowercase the keys inside the `tags` object to match the
     // compiler's lowercased lookup paths.
+    // Similarly, `identity` sub-fields (e.g. `userAssignedIdentities`,
+    // `principalId`) use camelCase in ARM but the compiler resolves them
+    // via lowercased paths, so we shallow-lowercase those keys too.
     for &field in ROOT_FIELDS {
         if let Some(val) = obj.get(field) {
-            let val = if field.eq_ignore_ascii_case("tags") {
-                lowercase_object_keys(val)
-            } else {
-                val.clone()
-            };
+            let val =
+                if field.eq_ignore_ascii_case("tags") || field.eq_ignore_ascii_case("identity") {
+                    lowercase_object_keys(val)
+                } else {
+                    val.clone()
+                };
             result.insert(field.to_ascii_lowercase(), val);
         }
     }
@@ -153,7 +160,7 @@ pub(crate) fn normalize_with_aliases(
     // Rule 1: Flatten root `properties` into the root (keys lowercased).
     if let Some(Value::Object(props)) = obj.get("properties") {
         for (key, val) in props {
-            let lc_key = key.to_lowercase();
+            let lc_key = key.to_ascii_lowercase();
             // Root-level fields take precedence (shouldn't happen in practice).
             if result.contains_key(&lc_key) {
                 continue;
@@ -209,7 +216,7 @@ fn normalize_value(value: &Value, field_path: &str, sub_arrays: Option<&Vec<Stri
             for (k, v) in obj {
                 let child_path = alloc::format!("{}.{}", field_path, k);
                 result.insert(
-                    k.to_lowercase(),
+                    k.to_ascii_lowercase(),
                     normalize_value(v, &child_path, sub_arrays),
                 );
             }
@@ -236,7 +243,7 @@ fn flatten_element(element: &Value, array_path: &str, sub_arrays: Option<&Vec<St
         }
         let child_path = alloc::format!("{}.{}", array_path, key);
         result.insert(
-            key.to_lowercase(),
+            key.to_ascii_lowercase(),
             normalize_value(val, &child_path, sub_arrays),
         );
     }
@@ -244,7 +251,7 @@ fn flatten_element(element: &Value, array_path: &str, sub_arrays: Option<&Vec<St
     // Merge `properties` into the element (keys lowercased).
     if let Some(Value::Object(props)) = obj.get("properties") {
         for (key, val) in props {
-            let lc_key = key.to_lowercase();
+            let lc_key = key.to_ascii_lowercase();
             if result.contains_key(&lc_key) {
                 continue;
             }

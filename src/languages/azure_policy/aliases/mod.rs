@@ -642,8 +642,8 @@ mod tests {
             .load_from_json(&json)
             .expect("test_aliases.json should parse");
 
-        // Expect 32 resource types (23 original + 9 added for lockdown tests)
-        assert_eq!(registry.len(), 32);
+        // Expect 44 resource types
+        assert_eq!(registry.len(), 44);
 
         // Storage
         let storage = registry

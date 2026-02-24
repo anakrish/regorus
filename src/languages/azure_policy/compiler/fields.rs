@@ -55,6 +55,11 @@ impl Compiler {
                 self.record_field_kind("identity.type");
                 self.compile_resource_path_value("identity.type", span)?
             }
+            FieldKind::IdentityField(ref subpath) => {
+                let path = format!("identity.{}", subpath.to_ascii_lowercase());
+                self.record_field_kind(&path);
+                self.compile_resource_path_value(&path, span)?
+            }
             FieldKind::ApiVersion => {
                 self.record_field_kind("apiVersion");
                 self.compile_resource_path_value("apiVersion", span)?
@@ -62,7 +67,12 @@ impl Compiler {
             FieldKind::Tag(tag) => {
                 self.record_field_kind("tags");
                 self.record_tag_name(tag);
-                self.compile_resource_path_value(&format!("tags.{}", tag), span)?
+                // Lowercase tag name to match normalizer's lowercased keys.
+                // ARM tag names are case-insensitive and ASCII-only.
+                self.compile_resource_path_value(
+                    &format!("tags.{}", tag.to_ascii_lowercase()),
+                    span,
+                )?
             }
             FieldKind::Alias(path) => {
                 self.record_alias(path);

@@ -30,3 +30,4 @@ pub mod ast;
 pub mod compiler;
 pub mod expr;
 pub mod parser;
+pub mod strings;

@@ -130,6 +130,9 @@ pub(super) fn classify_field(
         "fullname" => Ok(FieldKind::FullName),
         "tags" => Ok(FieldKind::Tags),
         "identity.type" => Ok(FieldKind::IdentityType),
+        _ if text.to_lowercase().starts_with("identity.") => {
+            Ok(FieldKind::IdentityField(text["identity.".len()..].into()))
+        }
         "apiversion" => Ok(FieldKind::ApiVersion),
         _ if text.to_lowercase().starts_with("tags.") => Ok(FieldKind::Tag(text[5..].into())),
         _ if text.to_lowercase().starts_with("tags['") && text.ends_with("']") => {

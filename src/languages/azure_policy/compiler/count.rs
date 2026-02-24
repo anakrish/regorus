@@ -108,6 +108,9 @@ impl Compiler {
             FieldKind::Location => Ok("location".to_string()),
             FieldKind::FullName => Ok("fullName".to_string()),
             FieldKind::IdentityType => Ok("identity.type".to_string()),
+            FieldKind::IdentityField(subpath) => {
+                Ok(format!("identity.{}", subpath.to_ascii_lowercase()))
+            }
             FieldKind::ApiVersion => Ok("apiVersion".to_string()),
             FieldKind::Tags => Ok("tags".to_string()),
             FieldKind::Tag(tag) => Ok(format!("tags.{}", tag)),

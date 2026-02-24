@@ -808,6 +808,7 @@ impl RegoVM {
             as_boolish, as_string_ci, case_insensitive_equals, compare_values, is_true,
             is_undefined, match_like_pattern_ci, match_pattern,
         };
+        use crate::languages::azure_policy::strings;
         use Instruction::*;
         match instruction {
             PolicyEquals { dest, left, right } => {
@@ -917,7 +918,7 @@ impl RegoVM {
                     let result = match *l {
                         Value::String(ref haystack) => {
                             if let Value::String(ref needle) = *r {
-                                haystack.to_lowercase().contains(&needle.to_lowercase())
+                                strings::case_fold::contains(haystack, needle)
                             } else {
                                 false
                             }
@@ -946,7 +947,7 @@ impl RegoVM {
                         let contains_result = match *l {
                             Value::String(ref haystack) => {
                                 if let Value::String(ref needle) = *r {
-                                    haystack.to_lowercase().contains(&needle.to_lowercase())
+                                    strings::case_fold::contains(haystack, needle)
                                 } else {
                                     false
                                 }

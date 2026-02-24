@@ -1488,3 +1488,118 @@ cases:
     request_context:
       apiVersion: "2024-01-01"
     want_undefined: true
+
+  # =========================================================================
+  # Pass — operatingSystemTypes set to ["Windows"] but VM is Linux
+  #        → OS type filter does not match → if condition fails
+  # =========================================================================
+
+  - note: pass_wrong_os_param
+    resource:
+      type: "Microsoft.Compute/virtualMachines"
+      name: "vm-linux-wrong-os"
+      id: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/virtualMachines/vm-linux-wrong-os"
+      location: "eastus"
+      properties:
+        storageProfile:
+          imageReference:
+            publisher: "Canonical"
+            offer: "UbuntuServer"
+            sku: "18.04-LTS"
+          osDisk:
+            osType: "Linux"
+        osProfile:
+          computerName: "vm-linux-wrong-os"
+          linuxConfiguration:
+            patchSettings:
+              patchMode: "ImageDefault"
+    parameters:
+      operatingSystemTypes:
+        - "Windows"
+      locations: []
+      tagValues: []
+      tagOperator: "Any"
+      resourceGroups: []
+    request_context:
+      apiVersion: "2024-01-01"
+    want_undefined: true
+
+  # =========================================================================
+  # Pass — Old API version (< 2023-07-01)
+  #        → requestContext().apiVersion guard fails
+  # =========================================================================
+
+  - note: pass_old_api_version
+    resource:
+      id: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/virtualMachines/vm-old-api"
+      location: "eastus"
+      properties:
+        storageProfile:
+          imageReference:
+            publisher: "Canonical"
+            offer: "UbuntuServer"
+            sku: "18.04-LTS"
+          osDisk:
+            osType: "Linux"
+        osProfile:
+          computerName: "vm-old-api"
+          linuxConfiguration:
+            patchSettings:
+              patchMode: "ImageDefault"
+    request_context:
+      apiVersion: "2020-06-01"
+    want_undefined: true
+
+  # =========================================================================
+  # Pass — Arc machine (Microsoft.HybridCompute/machines)
+  #        → policy only applies to Microsoft.Compute/virtualMachines
+  # =========================================================================
+
+  - note: pass_arc_not_supported
+    resource:
+      type: "Microsoft.HybridCompute/machines"
+      name: "arc-server"
+      id: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.HybridCompute/machines/arc-server"
+      location: "eastus"
+      properties:
+        osName: "Linux"
+    request_context:
+      apiVersion: "2024-01-01"
+    want_undefined: true
+
+  # =========================================================================
+  # Pass — VM in a location not included in the locations parameter
+  #        → location filter does not match → if condition fails
+  # =========================================================================
+
+  - note: pass_non_matching_location
+    resource:
+      type: "Microsoft.Compute/virtualMachines"
+      name: "vm-wrong-loc"
+      id: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/virtualMachines/vm-wrong-loc"
+      location: "westeurope"
+      properties:
+        storageProfile:
+          imageReference:
+            publisher: "Canonical"
+            offer: "UbuntuServer"
+            sku: "18.04-LTS"
+          osDisk:
+            osType: "Linux"
+        osProfile:
+          computerName: "vm-wrong-loc"
+          linuxConfiguration:
+            patchSettings:
+              patchMode: "ImageDefault"
+    parameters:
+      operatingSystemTypes:
+        - "Linux"
+      locations:
+        - "eastus"
+        - "westus2"
+      tagValues: []
+      tagOperator: "Any"
+      resourceGroups: []
+    request_context:
+      apiVersion: "2024-01-01"
+    want_undefined: true

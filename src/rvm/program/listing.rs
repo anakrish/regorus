@@ -564,6 +564,11 @@ fn format_instruction_readable(
             let comment = format!("Append r{} to array r{}", value, arr);
             align_comment(&base, &comment, config.comment_column)
         }
+        Instruction::ArrayPushDefined { arr, value } => {
+            let base = format!("{}ArrayPushDef r{}.push(r{})", indent, arr, value);
+            let comment = format!("Append r{} to array r{} (skip if undefined)", value, arr);
+            align_comment(&base, &comment, config.comment_column)
+        }
         Instruction::ArrayCreate { params_index } => {
             if let Some(params) = instruction_data.get_array_create_params(params_index) {
                 let elements = params
@@ -971,6 +976,7 @@ const fn get_instruction_name(instruction: &Instruction) -> &'static str {
         Instruction::IndexLiteral { .. } => "INDEX_LIT",
         Instruction::ArrayNew { .. } => "ARRAY_NEW",
         Instruction::ArrayPush { .. } => "ARRAY_PUSH",
+        Instruction::ArrayPushDefined { .. } => "ARRAY_PUSH_DEF",
         Instruction::ArrayCreate { .. } => "ARRAY_CREATE",
         Instruction::SetNew { .. } => "SET_NEW",
         Instruction::SetAdd { .. } => "SET_ADD",

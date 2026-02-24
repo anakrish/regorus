@@ -367,3 +367,79 @@ cases:
         options:
           throughput: ""
     want_undefined: true
+
+  # =========================================================================
+  # Cassandra Keyspace: options.throughput exceeds max → Deny
+  # =========================================================================
+
+  - note: deny_cassandra_keyspace_throughput
+    parameters:
+      throughputMax: 400
+    resource:
+      type: "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces"
+      name: "test-cassandra-ks"
+      properties:
+        options:
+          throughput: "600"
+    want_effect: "Deny"
+
+  # =========================================================================
+  # Cassandra Table: options.throughput exceeds max → Deny
+  # =========================================================================
+
+  - note: deny_cassandra_table_throughput
+    parameters:
+      throughputMax: 400
+    resource:
+      type: "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces/tables"
+      name: "test-cassandra-table"
+      properties:
+        options:
+          throughput: "600"
+    want_effect: "Deny"
+
+  # =========================================================================
+  # Gremlin Database: options.throughput exceeds max → Deny
+  # =========================================================================
+
+  - note: deny_gremlin_database_throughput
+    parameters:
+      throughputMax: 400
+    resource:
+      type: "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases"
+      name: "test-gremlin-db"
+      properties:
+        options:
+          throughput: "600"
+    want_effect: "Deny"
+
+  # =========================================================================
+  # Gremlin Graph: autoscale (ProvisionedThroughputSettings key) → Deny
+  # =========================================================================
+
+  - note: deny_gremlin_graph_autoscale
+    parameters:
+      throughputMax: 400
+    resource:
+      type: "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/graphs"
+      name: "test-gremlin-graph"
+      properties:
+        options:
+          ProvisionedThroughputSettings:
+            maxThroughput: 4000
+    want_effect: "Deny"
+
+  # =========================================================================
+  # MongoDB Collection: options.throughput exceeds max → Deny
+  # =========================================================================
+
+  - note: deny_mongo_collection_throughput
+    parameters:
+      throughputMax: 400
+    resource:
+      type: "Microsoft.DocumentDB/databaseAccounts/mongodbDatabases/collections"
+      name: "test-mongo-collection"
+      properties:
+        options:
+          throughput: "600"
+    want_effect: "Deny"

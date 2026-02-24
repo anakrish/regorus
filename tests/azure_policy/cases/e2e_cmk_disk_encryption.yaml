@@ -477,6 +477,90 @@ cases:
     want_undefined: true
 
   # =========================================================================
+  # Gallery Image Version: OS disk encryption (branch 6)
+  # =========================================================================
+
+  - note: audit_gallery_version_osdisk_no_cmk
+    resource:
+      type: "Microsoft.Compute/galleries/images/versions"
+      name: "gallery-version-osdisk-no-cmk"
+      properties:
+        publishingProfile:
+          targetRegions:
+            - name: "eastus"
+            - name: "westus"
+    want_effect: "Audit"
+
+  - note: pass_gallery_version_osdisk_with_cmk
+    resource:
+      type: "Microsoft.Compute/galleries/images/versions"
+      name: "gallery-version-osdisk-cmk"
+      properties:
+        publishingProfile:
+          targetRegions:
+            - name: "eastus"
+              encryption:
+                osDiskImage:
+                  diskEncryptionSetId: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/diskEncryptionSets/myDES"
+            - name: "westus"
+              encryption:
+                osDiskImage:
+                  diskEncryptionSetId: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/diskEncryptionSets/myDES"
+    want_undefined: true
+
+  # =========================================================================
+  # Gallery Image Version: data disk encryption (branch 7)
+  # =========================================================================
+
+  - note: audit_gallery_version_datadisks_no_cmk
+    resource:
+      type: "Microsoft.Compute/galleries/images/versions"
+      name: "gallery-version-datadisks-no-cmk"
+      properties:
+        storageProfile:
+          dataDiskImages:
+            - lun: 0
+            - lun: 1
+        publishingProfile:
+          targetRegions:
+            - name: "eastus"
+              encryption:
+                osDiskImage:
+                  diskEncryptionSetId: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/diskEncryptionSets/myDES"
+            - name: "westus"
+              encryption:
+                osDiskImage:
+                  diskEncryptionSetId: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/diskEncryptionSets/myDES"
+    want_effect: "Audit"
+
+  - note: pass_gallery_version_datadisks_with_cmk
+    resource:
+      type: "Microsoft.Compute/galleries/images/versions"
+      name: "gallery-version-datadisks-cmk"
+      properties:
+        storageProfile:
+          dataDiskImages:
+            - lun: 0
+            - lun: 1
+        publishingProfile:
+          targetRegions:
+            - name: "eastus"
+              encryption:
+                osDiskImage:
+                  diskEncryptionSetId: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/diskEncryptionSets/myDES"
+                dataDiskImages:
+                  - diskEncryptionSetId: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/diskEncryptionSets/myDES"
+                  - diskEncryptionSetId: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/diskEncryptionSets/myDES"
+            - name: "westus"
+              encryption:
+                osDiskImage:
+                  diskEncryptionSetId: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/diskEncryptionSets/myDES"
+                dataDiskImages:
+                  - diskEncryptionSetId: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/diskEncryptionSets/myDES"
+                  - diskEncryptionSetId: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/diskEncryptionSets/myDES"
+    want_undefined: true
+
+  # =========================================================================
   # 9. Wrong resource type → pass
   # =========================================================================
 

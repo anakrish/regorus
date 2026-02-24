@@ -1174,3 +1174,70 @@ cases:
       tagValues: {}
       tagOperator: "Any"
     want_undefined: true
+
+  # =========================================================================
+  # Pass — VM with excluded publisher "microsoft-ads" and gallery imageId
+  #        → publisher exclusion gate (notEquals "microsoft-ads") fails
+  # =========================================================================
+
+  - note: pass_excluded_publisher
+    resource:
+      type: "Microsoft.Compute/virtualMachines"
+      name: "vm-ads-win"
+      location: "eastus"
+      properties:
+        storageProfile:
+          imageReference:
+            publisher: "microsoft-ads"
+            offer: "windows-data-science-vm"
+            sku: "windows2016"
+            id: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/galleries/myGallery/images/myImage"
+          osDisk:
+            osType: "Windows"
+        osProfile:
+          computerName: "vm-ads-win"
+          windowsConfiguration:
+            patchSettings:
+              assessmentMode: "ImageDefault"
+    parameters:
+      assessmentMode: "AutomaticByPlatform"
+      osType: "Windows"
+      locations: []
+      tagValues: {}
+      tagOperator: "Any"
+    request_context:
+      apiVersion: "2024-01-01"
+    want_undefined: true
+
+  # =========================================================================
+  # Pass — VM with unknown publisher, no gallery imageId
+  #        → no publisher/image gate matches → if condition fails
+  # =========================================================================
+
+  - note: pass_unknown_publisher
+    resource:
+      type: "Microsoft.Compute/virtualMachines"
+      name: "vm-unknown"
+      location: "eastus"
+      properties:
+        storageProfile:
+          imageReference:
+            publisher: "unknown-publisher"
+            offer: "unknown-offer"
+            sku: "unknown-sku"
+          osDisk:
+            osType: "Linux"
+        osProfile:
+          computerName: "vm-unknown"
+          linuxConfiguration:
+            patchSettings:
+              assessmentMode: "ImageDefault"
+    parameters:
+      assessmentMode: "AutomaticByPlatform"
+      osType: "Linux"
+      locations: []
+      tagValues: {}
+      tagOperator: "Any"
+    request_context:
+      apiVersion: "2024-01-01"
+    want_undefined: true

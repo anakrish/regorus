@@ -761,3 +761,25 @@ cases:
       location: "eastus"
       properties: {}
     want_undefined: true
+
+  # =========================================================================
+  # Pass — VM with unsupported publisher (not in any publisher allowlist)
+  # =========================================================================
+
+  - note: pass_unsupported_publisher
+    resource:
+      type: "Microsoft.Compute/virtualMachines"
+      name: "vm-unknown-pub"
+      id: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/virtualMachines/vm-unknown-pub"
+      location: "eastus"
+      properties:
+        storageProfile:
+          imageReference:
+            publisher: "unknown-vendor"
+            offer: "some-offer"
+            sku: "some-sku"
+          osDisk:
+            osType: "Linux"
+        osProfile:
+          linuxConfiguration: {}
+    want_undefined: true

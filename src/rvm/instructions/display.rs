@@ -228,6 +228,9 @@ impl core::fmt::Display for Instruction {
             }
             Instruction::ArrayNew { dest } => format!("ARRAY_NEW R({})", dest),
             Instruction::ArrayPush { arr, value } => format!("ARRAY_PUSH R({}) R({})", arr, value),
+            Instruction::ArrayPushDefined { arr, value } => {
+                format!("ARRAY_PUSH_DEFINED R({}) R({})", arr, value)
+            }
             Instruction::ArrayCreate { params_index } => {
                 format!("ARRAY_CREATE P({})", params_index)
             }

@@ -320,8 +320,10 @@ impl Compiler {
                 let parts = split_path_without_wildcards(s)?;
                 let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
                 let val_reg = self.emit_chained_index_literal_path(current_reg, &refs, span)?;
+                // Use ArrayPushDefined to skip absent nested properties,
+                // matching Azure Policy's field() collection semantics.
                 self.emit(
-                    Instruction::ArrayPush {
+                    Instruction::ArrayPushDefined {
                         arr: result_reg,
                         value: val_reg,
                     },
@@ -331,7 +333,7 @@ impl Compiler {
             None => {
                 // No suffix: push the element itself.
                 self.emit(
-                    Instruction::ArrayPush {
+                    Instruction::ArrayPushDefined {
                         arr: result_reg,
                         value: current_reg,
                     },

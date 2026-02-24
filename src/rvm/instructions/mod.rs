@@ -217,6 +217,16 @@ pub enum Instruction {
         value: u8,
     },
 
+    /// Push element to array, but skip if the value is undefined.
+    ///
+    /// Used by Azure Policy's `field('alias[*].property')` wildcard collection
+    /// so that absent nested properties are excluded from the collected array
+    /// rather than producing undefined entries.
+    ArrayPushDefined {
+        arr: u8,
+        value: u8,
+    },
+
     /// Create array from registers - returns undefined if any element is undefined
     ArrayCreate {
         /// Index into program's instruction_data.array_create_params table

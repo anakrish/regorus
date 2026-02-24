@@ -613,6 +613,33 @@ impl RegoVM {
                 }
                 Ok(InstructionOutcome::Continue)
             }
+            ArrayPushDefined { arr, value } => {
+                let value_to_push = self.get_register(value)?.clone();
+
+                // Skip undefined values — matches Azure Policy's
+                // `field('alias[*].property')` collection semantics where
+                // absent nested properties are excluded from the collected
+                // array.
+                if value_to_push == Value::Undefined {
+                    return Ok(InstructionOutcome::Continue);
+                }
+
+                let mut arr_value = self.get_register(arr)?.clone();
+
+                if let Ok(arr_mut) = arr_value.as_array_mut() {
+                    arr_mut.push(value_to_push);
+                    self.set_register(arr, arr_value)?;
+                } else {
+                    let offending = arr_value.clone();
+                    self.set_register(arr, arr_value)?;
+                    return Err(VmError::RegisterNotArray {
+                        register: arr,
+                        value: offending,
+                        pc: self.pc,
+                    });
+                }
+                Ok(InstructionOutcome::Continue)
+            }
             ArrayCreate { params_index } => {
                 if let Some(params) = program
                     .instruction_data

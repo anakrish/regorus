@@ -289,6 +289,78 @@ cases:
     want_undefined: true
 
   # =========================================================================
+  # OUTPUT: SQL output to disallowed server → Audit
+  # =========================================================================
+
+  - note: audit_output_sql_disallowed
+    resource:
+      type: "Microsoft.StreamAnalytics/streamingjobs/outputs"
+      name: "output-sql-bad"
+      properties:
+        datasource:
+          type: "Microsoft.Sql/Server/Database"
+          Microsoft-Sql-Server-Database:
+            server: "rogue-sql-server"
+    parameters:
+      allowedSQLServers:
+        - "trusted-sql-server"
+    want_effect: "Audit"
+
+  # =========================================================================
+  # OUTPUT: Table output to disallowed account → Audit
+  # =========================================================================
+
+  - note: audit_output_table_disallowed
+    resource:
+      type: "Microsoft.StreamAnalytics/streamingjobs/outputs"
+      name: "output-table"
+      properties:
+        datasource:
+          type: "Microsoft.Storage/Table"
+          Microsoft-Storage-Table:
+            accountName: "rogue-storage"
+    parameters:
+      allowedStorageAccounts:
+        - "trusted-storage"
+    want_effect: "Audit"
+
+  # =========================================================================
+  # OUTPUT: CosmosDB output to disallowed account → Audit
+  # =========================================================================
+
+  - note: audit_output_cosmosdb_disallowed
+    resource:
+      type: "Microsoft.StreamAnalytics/streamingjobs/outputs"
+      name: "output-cosmosdb"
+      properties:
+        datasource:
+          type: "Microsoft.Storage/DocumentDB"
+          Microsoft-Storage-DocumentDB:
+            accountId: "rogue-cosmos-account"
+    parameters:
+      allowedCosmosAccounts:
+        - "trusted-cosmos-account"
+    want_effect: "Audit"
+
+  # =========================================================================
+  # OUTPUT: AzureFunction output to disallowed function app → Audit
+  # =========================================================================
+
+  - note: audit_output_function_disallowed
+    resource:
+      type: "Microsoft.StreamAnalytics/streamingjobs/outputs"
+      name: "output-function"
+      properties:
+        datasource:
+          type: "Microsoft.AzureFunction"
+          Microsoft-AzureFunction:
+            functionAppName: "rogue-function-app"
+    parameters:
+      allowedAzureFunctionAccounts:
+        - "trusted-function-app"
+    want_effect: "Audit"
+
+  # =========================================================================
   # OUTPUT: Unknown datasource type → Audit (not in known list)
   # =========================================================================
 

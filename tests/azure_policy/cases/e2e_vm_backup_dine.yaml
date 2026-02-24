@@ -797,3 +797,65 @@ cases:
           type: "Microsoft.RecoveryServices/backupprotecteditems"
         response: null
     want_effect: "DeployIfNotExists"
+
+  # =========================================================================
+  # VM in a different location than vaultLocation → location check fails → pass
+  # =========================================================================
+
+  - note: pass_vm_wrong_location
+    resource:
+      type: "Microsoft.Compute/virtualMachines"
+      name: "vm-wrong-loc"
+      location: "westeurope"
+      properties:
+        storageProfile:
+          imageReference:
+            publisher: "MicrosoftWindowsServer"
+            offer: "WindowsServer"
+            sku: "2019-Datacenter"
+    parameters:
+      vaultLocation: "eastus"
+      backupPolicyId: "/subscriptions/sub1/resourceGroups/backup-rg/providers/Microsoft.RecoveryServices/vaults/vault1/backupPolicies/DefaultPolicy"
+    want_undefined: true
+
+  # =========================================================================
+  # VM in a Databricks resource group → notContains "/resourceGroups/databricks-rg-"
+  # fails → allOf fails → pass
+  # =========================================================================
+
+  - note: pass_vm_databricks_rg
+    resource:
+      type: "Microsoft.Compute/virtualMachines"
+      name: "vm-dbr"
+      id: "/subscriptions/sub1/resourceGroups/databricks-rg-myworkspace/providers/Microsoft.Compute/virtualMachines/vm-dbr"
+      location: "eastus"
+      properties:
+        storageProfile:
+          imageReference:
+            publisher: "MicrosoftWindowsServer"
+            offer: "WindowsServer"
+            sku: "2019-Datacenter"
+    parameters:
+      vaultLocation: "eastus"
+      backupPolicyId: "/subscriptions/sub1/resourceGroups/backup-rg/providers/Microsoft.RecoveryServices/vaults/vault1/backupPolicies/DefaultPolicy"
+    want_undefined: true
+
+  # =========================================================================
+  # VM with publisher "azureopenshift" → notEquals fails → allOf fails → pass
+  # =========================================================================
+
+  - note: pass_vm_excluded_publisher_azureopenshift
+    resource:
+      type: "Microsoft.Compute/virtualMachines"
+      name: "vm-openshift"
+      location: "eastus"
+      properties:
+        storageProfile:
+          imageReference:
+            publisher: "azureopenshift"
+            offer: "aro4"
+            sku: "aro_worker"
+    parameters:
+      vaultLocation: "eastus"
+      backupPolicyId: "/subscriptions/sub1/resourceGroups/backup-rg/providers/Microsoft.RecoveryServices/vaults/vault1/backupPolicies/DefaultPolicy"
+    want_undefined: true

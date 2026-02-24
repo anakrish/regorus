@@ -1493,3 +1493,117 @@ cases:
           type: "Microsoft.Maintenance/configurationAssignments"
         response: null
     want_effect: "DeployIfNotExists"
+
+  # =========================================================================
+  # Pass — VM with excluded publisher "microsoft-ads" and a gallery imageId
+  #        → publisher exclusion gate (notEquals "microsoft-ads") fails
+  # =========================================================================
+
+  - note: pass_excluded_publisher
+    resource:
+      type: "Microsoft.Compute/virtualMachines"
+      name: "vm-ads"
+      id: "/subscriptions/sub1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-ads"
+      location: "eastus"
+      properties:
+        storageProfile:
+          imageReference:
+            publisher: "microsoft-ads"
+            offer: "windows-data-science-vm"
+            sku: "windows2016"
+            id: "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/galleries/myGallery/images/myImage"
+          osDisk:
+            osType: "Windows"
+            createOption: "FromImage"
+        osProfile:
+          computerName: "vm-ads"
+          windowsConfiguration: {}
+    parameters:
+      maintenanceConfigurationResourceId: "/subscriptions/sub1/resourceGroups/rg-maint/providers/Microsoft.Maintenance/maintenanceConfigurations/config1"
+      operatingSystemTypes:
+        - "Windows"
+        - "Linux"
+      tagValues: []
+      tagOperator: "Any"
+      resourceGroups: []
+      locations: []
+    request_context:
+      apiVersion: "2024-01-01"
+    want_undefined: true
+
+  # =========================================================================
+  # Pass — Linux VM with maintenance config already assigned
+  #        → existenceCondition satisfied → compliant
+  # =========================================================================
+
+  - note: pass_maintenance_config_exists
+    resource:
+      type: "Microsoft.Compute/virtualMachines"
+      name: "vm-ubuntu-compliant"
+      id: "/subscriptions/sub1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-ubuntu-compliant"
+      location: "eastus"
+      properties:
+        storageProfile:
+          imageReference:
+            publisher: "Canonical"
+            offer: "UbuntuServer"
+            sku: "18.04-LTS"
+          osDisk:
+            osType: "Linux"
+        osProfile:
+          computerName: "vm-ubuntu-compliant"
+          linuxConfiguration:
+            patchSettings:
+              patchMode: "ImageDefault"
+    parameters:
+      maintenanceConfigurationResourceId: "/subscriptions/sub1/resourceGroups/rg-maint/providers/Microsoft.Maintenance/maintenanceConfigurations/config1"
+      operatingSystemTypes:
+        - "Linux"
+      tagValues: []
+      tagOperator: "Any"
+      resourceGroups: []
+      locations: []
+    request_context:
+      apiVersion: "2024-01-01"
+    host_await:
+      - key:
+          operation: "lookup_related_resources"
+          type: "Microsoft.Maintenance/configurationAssignments"
+        response:
+          properties:
+            maintenanceConfigurationId: "/subscriptions/sub1/resourceGroups/rg-maint/providers/Microsoft.Maintenance/maintenanceConfigurations/config1"
+    want_undefined: true
+
+  # =========================================================================
+  # Pass — VM with unknown publisher, no gallery imageId
+  #        → no publisher/image gate matches → if condition fails
+  # =========================================================================
+
+  - note: pass_unknown_publisher
+    resource:
+      type: "Microsoft.Compute/virtualMachines"
+      name: "vm-unknown"
+      id: "/subscriptions/sub1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-unknown"
+      location: "eastus"
+      properties:
+        storageProfile:
+          imageReference:
+            publisher: "unknown-publisher"
+            offer: "unknown-offer"
+            sku: "unknown-sku"
+          osDisk:
+            osType: "Linux"
+        osProfile:
+          computerName: "vm-unknown"
+          linuxConfiguration: {}
+    parameters:
+      maintenanceConfigurationResourceId: "/subscriptions/sub1/resourceGroups/rg-maint/providers/Microsoft.Maintenance/maintenanceConfigurations/config1"
+      operatingSystemTypes:
+        - "Linux"
+      tagValues: []
+      tagOperator: "Any"
+      resourceGroups: []
+      locations: []
+    request_context:
+      apiVersion: "2024-01-01"
+    want_undefined: true

@@ -111,10 +111,14 @@ policy_definition: |
   }
 
 cases:
-  - note: audit_when_destination_port_is_3389
+  # =========================================================================
+  # Exact port 3389 match
+  # =========================================================================
+
+  - note: audit_exact_port_3389_from_internet
     resource:
       type: "Microsoft.Network/networkSecurityGroups/securityRules"
-      name: "allow-rdp-range"
+      name: "allow-rdp"
       properties:
         access: "Allow"
         direction: "Inbound"
@@ -122,24 +126,238 @@ cases:
         sourceAddressPrefix: "Internet"
     want_effect: "Audit"
 
-  - note: pass_when_port_range_excludes_3389
-    resource:
-      type: "Microsoft.Network/networkSecurityGroups/securityRules"
-      name: "allow-ssh"
-      properties:
-        access: "Allow"
-        direction: "Inbound"
-        destinationPortRange: "22-22"
-        sourceAddressPrefix: "Internet"
-    want_undefined: true
-
-  - note: audit_when_destination_port_range_is_wildcard
+  - note: audit_exact_port_3389_from_wildcard
     resource:
       type: "Microsoft.Network/networkSecurityGroups/securityRules"
       name: "allow-rdp-any"
       properties:
         access: "Allow"
         direction: "Inbound"
-        destinationPortRange: "*"
+        destinationPortRange: "3389"
         sourceAddressPrefix: "*"
     want_effect: "Audit"
+
+  # =========================================================================
+  # Wildcard port (*)
+  # =========================================================================
+
+  - note: audit_wildcard_port_from_internet
+    resource:
+      type: "Microsoft.Network/networkSecurityGroups/securityRules"
+      name: "allow-all"
+      properties:
+        access: "Allow"
+        direction: "Inbound"
+        destinationPortRange: "*"
+        sourceAddressPrefix: "Internet"
+    want_effect: "Audit"
+
+  # =========================================================================
+  # Port range containing 3389
+  # =========================================================================
+
+  - note: audit_port_range_includes_3389
+    resource:
+      type: "Microsoft.Network/networkSecurityGroups/securityRules"
+      name: "allow-rdp-range"
+      properties:
+        access: "Allow"
+        direction: "Inbound"
+        destinationPortRange: "3380-3390"
+        sourceAddressPrefix: "*"
+    want_effect: "Audit"
+
+  - note: audit_port_range_exact_3389_to_3389
+    resource:
+      type: "Microsoft.Network/networkSecurityGroups/securityRules"
+      name: "exactly-3389"
+      properties:
+        access: "Allow"
+        direction: "Inbound"
+        destinationPortRange: "3389-3389"
+        sourceAddressPrefix: "Internet"
+    want_effect: "Audit"
+
+  - note: audit_port_range_1_to_4000
+    resource:
+      type: "Microsoft.Network/networkSecurityGroups/securityRules"
+      name: "low-ports"
+      properties:
+        access: "Allow"
+        direction: "Inbound"
+        destinationPortRange: "1-4000"
+        sourceAddressPrefix: "*"
+    want_effect: "Audit"
+
+  # =========================================================================
+  # Port range NOT containing 3389
+  # =========================================================================
+
+  - note: pass_port_range_excludes_3389
+    resource:
+      type: "Microsoft.Network/networkSecurityGroups/securityRules"
+      name: "http-only"
+      properties:
+        access: "Allow"
+        direction: "Inbound"
+        destinationPortRange: "80-443"
+        sourceAddressPrefix: "Internet"
+    want_undefined: true
+
+  - note: pass_port_3390_only
+    resource:
+      type: "Microsoft.Network/networkSecurityGroups/securityRules"
+      name: "port-3390"
+      properties:
+        access: "Allow"
+        direction: "Inbound"
+        destinationPortRange: "3390"
+        sourceAddressPrefix: "*"
+    want_undefined: true
+
+  # =========================================================================
+  # destinationPortRanges[*] array — double negation pattern
+  # =========================================================================
+
+  - note: audit_port_ranges_array_contains_3389
+    resource:
+      type: "Microsoft.Network/networkSecurityGroups/securityRules"
+      name: "multi-port-rdp"
+      properties:
+        access: "Allow"
+        direction: "Inbound"
+        destinationPortRanges:
+          - "80"
+          - "3389"
+          - "443"
+        sourceAddressPrefix: "Internet"
+    want_effect: "Audit"
+
+  - note: audit_port_ranges_array_contains_wildcard
+    resource:
+      type: "Microsoft.Network/networkSecurityGroups/securityRules"
+      name: "multi-port-wildcard"
+      properties:
+        access: "Allow"
+        direction: "Inbound"
+        destinationPortRanges:
+          - "*"
+        sourceAddressPrefix: "*"
+    want_effect: "Audit"
+
+  - note: audit_port_ranges_array_with_range_containing_3389
+    resource:
+      type: "Microsoft.Network/networkSecurityGroups/securityRules"
+      name: "multi-port-range"
+      properties:
+        access: "Allow"
+        direction: "Inbound"
+        destinationPortRanges:
+          - "80-443"
+          - "3380-3390"
+        sourceAddressPrefix: "Internet"
+    want_effect: "Audit"
+
+  - note: pass_port_ranges_array_no_3389
+    resource:
+      type: "Microsoft.Network/networkSecurityGroups/securityRules"
+      name: "non-rdp-ports"
+      properties:
+        access: "Allow"
+        direction: "Inbound"
+        destinationPortRanges:
+          - "80"
+          - "443"
+          - "8080"
+        sourceAddressPrefix: "Internet"
+    want_undefined: true
+
+  # =========================================================================
+  # Source address variations
+  # =========================================================================
+
+  - note: audit_source_prefixes_array_wildcard
+    resource:
+      type: "Microsoft.Network/networkSecurityGroups/securityRules"
+      name: "src-wild-array"
+      properties:
+        access: "Allow"
+        direction: "Inbound"
+        destinationPortRange: "3389"
+        sourceAddressPrefixes:
+          - "*"
+    want_effect: "Audit"
+
+  - note: audit_source_prefixes_array_internet
+    resource:
+      type: "Microsoft.Network/networkSecurityGroups/securityRules"
+      name: "src-inet-array"
+      properties:
+        access: "Allow"
+        direction: "Inbound"
+        destinationPortRange: "3389"
+        sourceAddressPrefixes:
+          - "Internet"
+    want_effect: "Audit"
+
+  - note: pass_source_is_private_subnet
+    resource:
+      type: "Microsoft.Network/networkSecurityGroups/securityRules"
+      name: "private-rdp"
+      properties:
+        access: "Allow"
+        direction: "Inbound"
+        destinationPortRange: "3389"
+        sourceAddressPrefix: "10.0.0.0/8"
+    want_undefined: true
+
+  - note: pass_source_prefixes_all_private
+    resource:
+      type: "Microsoft.Network/networkSecurityGroups/securityRules"
+      name: "private-array"
+      properties:
+        access: "Allow"
+        direction: "Inbound"
+        destinationPortRange: "3389"
+        sourceAddressPrefixes:
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+    want_undefined: true
+
+  # =========================================================================
+  # Non-matching access / direction
+  # =========================================================================
+
+  - note: pass_deny_rule
+    resource:
+      type: "Microsoft.Network/networkSecurityGroups/securityRules"
+      name: "deny-rdp"
+      properties:
+        access: "Deny"
+        direction: "Inbound"
+        destinationPortRange: "3389"
+        sourceAddressPrefix: "*"
+    want_undefined: true
+
+  - note: pass_outbound_rule
+    resource:
+      type: "Microsoft.Network/networkSecurityGroups/securityRules"
+      name: "outbound-rdp"
+      properties:
+        access: "Allow"
+        direction: "Outbound"
+        destinationPortRange: "3389"
+        sourceAddressPrefix: "*"
+    want_undefined: true
+
+  # =========================================================================
+  # Wrong resource type
+  # =========================================================================
+
+  - note: pass_wrong_type
+    resource:
+      type: "Microsoft.Storage/storageAccounts"
+      name: "not-nsg"
+      properties:
+        access: "Allow"
+    want_undefined: true

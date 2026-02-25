@@ -1,0 +1,19 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '15px'}}}%%
+%% Title: Why Denied? — Pinpoint the Exact Failing Condition
+flowchart LR
+    REQ["🚫 Request Denied\n'Why was I blocked?'"] --> WHY["🧠 Root Cause\nAnalysis\n(MAX-SAT)"]
+
+    WHY --> C1["Condition 1 ✅\nUser is authenticated"]
+    WHY --> C2["Condition 2 ✅\nValid subscription"]
+    WHY --> C3["Condition 3 ❌\nGroup membership\nnot enforced"]
+    WHY --> C4["Condition 4 ✅\nRegion allowed"]
+
+    C3 --> ACTION["💡 Actionable Insight:\n'managedState' must be\n'enforced' — contact\ngroup owner"]
+
+    style REQ fill:#FFCDD2,stroke:#E53935,stroke-width:2px,color:#1a1a2e
+    style WHY fill:#FFF3E0,stroke:#FF9800,stroke-width:2px,color:#1a1a2e
+    style C1 fill:#C8E6C9,stroke:#66BB6A,color:#1a1a2e
+    style C2 fill:#C8E6C9,stroke:#66BB6A,color:#1a1a2e
+    style C3 fill:#FFCDD2,stroke:#E53935,stroke-width:3px,color:#1a1a2e
+    style C4 fill:#C8E6C9,stroke:#66BB6A,color:#1a1a2e
+    style ACTION fill:#E3F2FD,stroke:#1976D2,stroke-width:2px,color:#1a1a2e

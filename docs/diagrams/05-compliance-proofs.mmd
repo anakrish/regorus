@@ -1,0 +1,24 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '15px'}}}%%
+%% Title: Compliance Proofs — Mathematical Guarantees, Not Just Testing
+flowchart LR
+    subgraph QUESTION["❓ Compliance Questions"]
+        direction TB
+        Q1["Can any request\nbypass this rule?"]
+        Q2["Is the new policy at\nleast as restrictive?"]
+        Q3["Are there unreachable\n(dead) rules?"]
+    end
+
+    QUESTION --> PROVE["🧠 Policy\nIntelligence\nEngine"]
+
+    PROVE --> |"No bypass\nexists"| A1["✅ Mathematically\nImpossible to Bypass\n(UNSAT proof)"]
+    PROVE --> |"New ⊇ Old"| A2["✅ New Policy is\nStrictly Tighter\n(Subsumption proof)"]
+    PROVE --> |"Dead code\nfound"| A3["🧹 3 Rules Are\nUnreachable —\nSafe to Remove"]
+
+    style QUESTION fill:#E8EAF6,stroke:#3F51B5,stroke-width:2px,color:#1a1a2e
+    style Q1 fill:#C5CAE9,stroke:#3F51B5,color:#1a1a2e
+    style Q2 fill:#C5CAE9,stroke:#3F51B5,color:#1a1a2e
+    style Q3 fill:#C5CAE9,stroke:#3F51B5,color:#1a1a2e
+    style PROVE fill:#FFF3E0,stroke:#FF9800,stroke-width:2px,color:#1a1a2e
+    style A1 fill:#C8E6C9,stroke:#388E3C,stroke-width:2px,color:#1a1a2e
+    style A2 fill:#C8E6C9,stroke:#388E3C,stroke-width:2px,color:#1a1a2e
+    style A3 fill:#FFF9C4,stroke:#F9A825,stroke-width:2px,color:#1a1a2e

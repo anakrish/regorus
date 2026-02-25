@@ -1,0 +1,18 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '15px'}}}%%
+%% Title: Safe Policy Migration — Prove Equivalence Before You Deploy
+flowchart LR
+    V1["Policy v1\n(Current)"] --> DIFF["🔍 Policy Diff\nAnalysis"]
+    V2["Policy v2\n(Proposed)"] --> DIFF
+
+    DIFF --> |"Identical behavior"| SAFE["✅ Safe to Deploy\nMathematically\nEquivalent"]
+    DIFF --> |"Behavior differs"| EXAMPLE["⚠️ Found Difference!\nHere's the exact\ninput that diverges"]
+
+    EXAMPLE --> FIX["Fix & Re-verify"]
+    FIX --> DIFF
+
+    style V1 fill:#BBDEFB,stroke:#1976D2,color:#1a1a2e
+    style V2 fill:#BBDEFB,stroke:#1976D2,color:#1a1a2e
+    style DIFF fill:#FFF3E0,stroke:#FF9800,stroke-width:2px,color:#1a1a2e
+    style SAFE fill:#C8E6C9,stroke:#388E3C,stroke-width:2px,color:#1a1a2e
+    style EXAMPLE fill:#FFF9C4,stroke:#F9A825,stroke-width:2px,color:#1a1a2e
+    style FIX fill:#E1BEE7,stroke:#8E24AA,color:#1a1a2e

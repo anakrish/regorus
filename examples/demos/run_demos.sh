@@ -736,6 +736,68 @@ run $BIN subsumes \
   --azure-aliases examples/demos/azure_policy_aliases.json \
   -s examples/demos/azure_keyvault_schema.json
 
+# ==============================================================
+title "DEMO 34 — AGS Group Governance: Input Synthesis" \
+      "Azure Graph Service ELM group membership governance." \
+      "5 decision paths: allowed-app, enforced, reportOnly," \
+      "expected-error (403/404), unexpected-error (fail-closed)."
+# ==============================================================
+
+echo "▸ 34a) Synthesise an input that triggers denial (deny_result = true):"
+run $BIN analyze \
+  -d examples/demos/ags_group_governance.rego \
+  -e data.graph.elm_governance_group_membership.deny_result \
+  -o true \
+  -i examples/demos/ags_group_governance_input.json \
+  -s examples/demos/ags_group_governance_schema.json
+
+echo "▸ 34b) Synthesise an input that avoids denial (deny_result = false):"
+run $BIN analyze \
+  -d examples/demos/ags_group_governance.rego \
+  -e data.graph.elm_governance_group_membership.deny_result \
+  -o false \
+  -i examples/demos/ags_group_governance_input.json \
+  -s examples/demos/ags_group_governance_schema.json
+
+# ==============================================================
+title "DEMO 35 — AGS Group Governance: Test Suite Generation" \
+      "Generate tests covering all reachable lines."
+# ==============================================================
+
+echo "▸ 35) Generate test suite with line coverage:"
+run $BIN gen-tests \
+  -d examples/demos/ags_group_governance.rego \
+  -e data.graph.elm_governance_group_membership.deny_result \
+  -i examples/demos/ags_group_governance_input.json \
+  -s examples/demos/ags_group_governance_schema.json \
+  --max-tests 10
+
+# ==============================================================
+title "DEMO 36 — Condition Coverage & Annotated Output" \
+      "--condition-coverage: ensure every boolean condition" \
+      "evaluates to both true and false across the test suite." \
+      "--format annotated: full source listing with markers."
+# ==============================================================
+
+echo "▸ 36a) Condition coverage for AGS governance (JSON output):"
+run $BIN gen-tests \
+  -d examples/demos/ags_group_governance.rego \
+  -e data.graph.elm_governance_group_membership.deny_result \
+  -i examples/demos/ags_group_governance_input.json \
+  -s examples/demos/ags_group_governance_schema.json \
+  --condition-coverage \
+  --max-tests 30
+
+echo "▸ 36b) Condition coverage for allowed_server (annotated output):"
+run $BIN gen-tests \
+  -d examples/server/allowed_server.rego \
+  -e data.example.allow \
+  -i examples/server/input.json \
+  -s examples/server/input_schema.json \
+  --max-loops 3 \
+  --condition-coverage \
+  --format annotated
+
 sep
 echo "  All demos completed successfully."
 sep

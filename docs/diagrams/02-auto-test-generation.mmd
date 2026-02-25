@@ -1,0 +1,36 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '15px'}}}%%
+%% Title: Automated Test Generation — Zero Manual Effort, Full Coverage
+flowchart LR
+    subgraph TODAY["❌ Today: Manual Testing"]
+        direction TB
+        M1["Engineer writes\ntest inputs by hand"]
+        M2["Misses edge cases\n& corner scenarios"]
+        M3["Incomplete coverage\n= security gaps"]
+        M1 --> M2 --> M3
+    end
+
+    subgraph MAGIC["  "]
+        direction TB
+        VS["  vs  "]
+    end
+
+    subgraph FUTURE["✅ With Policy Intelligence"]
+        direction TB
+        F1["Engine reads policy\n& schema"]
+        F2["Mathematically finds\nall decision paths"]
+        F3["Generates minimal\ntest suite with\nfull coverage"]
+        F1 --> F2 --> F3
+    end
+
+    TODAY ~~~ MAGIC ~~~ FUTURE
+
+    style TODAY fill:#FFEBEE,stroke:#E53935,stroke-width:2px,color:#1a1a2e
+    style FUTURE fill:#E8F5E9,stroke:#43A047,stroke-width:2px,color:#1a1a2e
+    style MAGIC fill:none,stroke:none,color:#5C6BC0
+    style M1 fill:#FFCDD2,stroke:#E53935,color:#1a1a2e
+    style M2 fill:#FFCDD2,stroke:#E53935,color:#1a1a2e
+    style M3 fill:#FFCDD2,stroke:#E53935,color:#1a1a2e
+    style F1 fill:#C8E6C9,stroke:#43A047,color:#1a1a2e
+    style F2 fill:#C8E6C9,stroke:#43A047,color:#1a1a2e
+    style F3 fill:#C8E6C9,stroke:#43A047,color:#1a1a2e
+    style VS fill:none,stroke:none,color:#5C6BC0

@@ -236,6 +236,11 @@ cargo build --example regorus --features z3-analysis,cedar,azure_policy
 | `regorus subsumes` | Prove (or disprove) that one policy is at least as restrictive as another |
 | `regorus gen-tests` | Generate a minimal test suite covering all reachable source lines |
 
+`gen-tests` also supports **condition coverage** (`--condition-coverage`) which
+ensures every boolean condition evaluates to both `true` and `false` across the
+test suite, and an **annotated output** format (`--format annotated`) that shows
+a full source listing per test with `true`/`false` markers on each condition line.
+
 The analyzer supports Rego, Cedar, and Azure Policy definitions.  Azure Policy
 demos use `--azure-aliases` to supply the alias catalog.
 

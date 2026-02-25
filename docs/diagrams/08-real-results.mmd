@@ -1,0 +1,41 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '14px'}}}%%
+%% Title: Real Results — 23 Tests, 100% Coverage, Zero Manual Effort
+flowchart LR
+    subgraph POLICY_IN["Policy + Schema"]
+        direction TB
+        POL["group_governance.rego\n(139 lines, 5 decision paths)"]
+        SCH["JSON Schema\n(type constraints,\nrequired fields, enums)"]
+    end
+
+    POLICY_IN --> GEN["⚡ gen-tests\n--condition-coverage"]
+
+    subgraph RESULTS["Automatic Results"]
+        direction TB
+        subgraph STATS["Coverage Stats"]
+            S1["34/34 lines covered\n100% line coverage"]
+            S2["46/46 condition goals\n100% MC/DC coverage"]
+            S3["23 test cases generated"]
+        end
+        subgraph SAMPLE["Sample Generated Inputs"]
+            direction TB
+            I1["Test 2: Deny — enforced\n{\n  fetchResponse.code: 200\n  managedState: 'enforced'\n  appid: 'aaaaaaaa-...'\n}"]
+            I2["Test 3: Allow — reportOnly\n{\n  fetchResponse.code: 200\n  managedState: 'reportOnly'\n  appid: 'aaaaaaaa-...'\n}"]
+            I3["Test 5: Allow — 403\n{\n  fetchResponse.code: 403\n  appid: 'aaaaaaaa-...'\n}"]
+        end
+    end
+
+    GEN --> RESULTS
+
+    style POLICY_IN fill:#E8EAF6,stroke:#3F51B5,stroke-width:2px,color:#1a1a2e
+    style POL fill:#C5CAE9,stroke:#3F51B5,color:#1a1a2e
+    style SCH fill:#C5CAE9,stroke:#3F51B5,color:#1a1a2e
+    style GEN fill:#FFF3E0,stroke:#FF9800,stroke-width:2px,color:#1a1a2e
+    style RESULTS fill:#E8F5E9,stroke:#4CAF50,stroke-width:2px,color:#1a1a2e
+    style STATS fill:#C8E6C9,stroke:#388E3C,color:#1a1a2e
+    style S1 fill:#A5D6A7,stroke:#388E3C,color:#1a1a2e
+    style S2 fill:#A5D6A7,stroke:#388E3C,color:#1a1a2e
+    style S3 fill:#A5D6A7,stroke:#388E3C,color:#1a1a2e
+    style SAMPLE fill:#E3F2FD,stroke:#1976D2,color:#1a1a2e
+    style I1 fill:#FFCDD2,stroke:#E53935,color:#1a1a2e
+    style I2 fill:#C8E6C9,stroke:#388E3C,color:#1a1a2e
+    style I3 fill:#C8E6C9,stroke:#388E3C,color:#1a1a2e

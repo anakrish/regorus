@@ -802,6 +802,89 @@ is also denied by the original.  The original is strictly more restrictive.
 
 ---
 
+## Demo 34 — AGS Group Governance: Input Synthesis
+
+**Policy** ([ags_group_governance.rego](ags_group_governance.rego)):
+Azure Graph Service evaluates this policy when a caller attempts to modify
+an Entra group's membership.  Only authorised governance applications may
+modify groups under Entra Identity Governance (ELM) management.
+
+Five decision paths:
+
+| # | Path | Outcome |
+|---|------|---------|
+| 1 | Caller appId is in the allowed list | not applicable (allow) |
+| 2 | Fetch 200 + `enforced` | applicable → **denied** |
+| 3 | Fetch 200 + `reportOnly` | applicable → allowed (audit only) |
+| 4 | Fetch 403 or 404 (expected error) | not applicable (allow) |
+| 5 | Fetch null or unexpected code | applicable → **denied** (fail-closed) |
+
+```bash
+# 34a) Synthesise a denial input
+regorus analyze \
+  -d examples/demos/ags_group_governance.rego \
+  -e data.graph.elm_governance_group_membership.deny_result \
+  -o true \
+  -i examples/demos/ags_group_governance_input.json \
+  -s examples/demos/ags_group_governance_schema.json
+
+# 34b) Synthesise a non-denial input
+regorus analyze \
+  -d examples/demos/ags_group_governance.rego \
+  -e data.graph.elm_governance_group_membership.deny_result \
+  -o false \
+  -i examples/demos/ags_group_governance_input.json \
+  -s examples/demos/ags_group_governance_schema.json
+```
+
+---
+
+## Demo 35 — AGS Group Governance: Test Suite Generation
+
+```bash
+regorus gen-tests \
+  -d examples/demos/ags_group_governance.rego \
+  -e data.graph.elm_governance_group_membership.deny_result \
+  -i examples/demos/ags_group_governance_input.json \
+  -s examples/demos/ags_group_governance_schema.json \
+  --max-tests 10
+```
+
+4 tests achieve 100% line coverage across all 34 reachable lines.
+
+---
+
+## Demo 36 — Condition Coverage & Annotated Output
+
+`--condition-coverage` adds a Phase 2 solver pass that ensures every
+boolean condition in the policy evaluates to both `true` and `false`
+across the test suite.  `--format annotated` shows a full source listing
+per test with `true`/`false`/blank markers on each condition line.
+
+```bash
+# 36a) Condition coverage for AGS governance (JSON output)
+regorus gen-tests \
+  -d examples/demos/ags_group_governance.rego \
+  -e data.graph.elm_governance_group_membership.deny_result \
+  -i examples/demos/ags_group_governance_input.json \
+  -s examples/demos/ags_group_governance_schema.json \
+  --condition-coverage --max-tests 30
+
+# 36b) Condition coverage for allowed_server (annotated output)
+regorus gen-tests \
+  -d examples/server/allowed_server.rego \
+  -e data.example.allow \
+  -i examples/server/input.json \
+  -s examples/server/input_schema.json \
+  --max-loops 3 --condition-coverage --format annotated
+```
+
+36a produces ~23 tests covering all 46 condition goals (100% condition
+coverage).  36b produces ~10 tests covering all 12 condition goals with
+an annotated source listing showing `true`/`false` markers.
+
+---
+
 ## Key capabilities demonstrated
 
 | Capability | How it's shown |
@@ -826,3 +909,6 @@ is also denied by the original.  The original is strictly more restrictive.
 | **Bug detection in refactoring** | Z3 catches a subtle `allOf`↔`anyOf` mistake and produces a precise counterexample |
 | **Gap analysis** | Subsumption analysis detects a missing access-control requirement and identifies the exact security gap |
 | **Material implication** | Premium SKU → RBAC requirement expressed as `allOf(sku=premium, rbac=false)` and its dual `anyOf(sku≠premium, rbac=true)` |
+| **Condition coverage** | `--condition-coverage` ensures every boolean condition takes both `true` and `false` outcomes across the test suite |
+| **Annotated output** | `--format annotated` shows a full source listing per test with `true`/`false` markers on each condition line |
+| **AGS governance** | 5 decision paths (allowed-app, enforced, reportOnly, expected-error, fail-closed) fully covered by Z3 |

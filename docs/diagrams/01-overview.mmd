@@ -1,0 +1,39 @@
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#4A90D9', 'primaryTextColor': '#fff', 'primaryBorderColor': '#2E6AB0', 'lineColor': '#5C6BC0', 'secondaryColor': '#E8F0FE', 'tertiaryColor': '#F3E5F5', 'fontSize': '16px'}}}%%
+%% Title: Policy Intelligence — From Policies to Proven Guarantees
+flowchart LR
+    subgraph INPUT["📋 What You Have"]
+        direction TB
+        P["Access Control\nPolicies"]
+        S["JSON Schema\n(optional)"]
+        D["Reference Data"]
+    end
+
+    subgraph ENGINE["🧠 Policy Intelligence Engine"]
+        direction TB
+        C["Compile &\nAnalyze"]
+        Z["Mathematical\nReasoning (Z3)"]
+        C --> Z
+    end
+
+    subgraph OUTPUT["✅ What You Get"]
+        direction TB
+        T["Auto-Generated\nTest Suites"]
+        V["Change Impact\nAnalysis"]
+        R["Root Cause\nExplanations"]
+        PR["Compliance\nProofs"]
+    end
+
+    INPUT --> ENGINE --> OUTPUT
+
+    style INPUT fill:#E8F0FE,stroke:#4A90D9,stroke-width:2px,color:#1a1a2e
+    style ENGINE fill:#FFF3E0,stroke:#FF9800,stroke-width:2px,color:#1a1a2e
+    style OUTPUT fill:#E8F5E9,stroke:#4CAF50,stroke-width:2px,color:#1a1a2e
+    style P fill:#BBDEFB,stroke:#1976D2,color:#1a1a2e
+    style S fill:#BBDEFB,stroke:#1976D2,color:#1a1a2e
+    style D fill:#BBDEFB,stroke:#1976D2,color:#1a1a2e
+    style C fill:#FFE0B2,stroke:#F57C00,color:#1a1a2e
+    style Z fill:#FFE0B2,stroke:#F57C00,color:#1a1a2e
+    style T fill:#C8E6C9,stroke:#388E3C,color:#1a1a2e
+    style V fill:#C8E6C9,stroke:#388E3C,color:#1a1a2e
+    style R fill:#C8E6C9,stroke:#388E3C,color:#1a1a2e
+    style PR fill:#C8E6C9,stroke:#388E3C,color:#1a1a2e

@@ -29,6 +29,8 @@ request** — principal, action, resource, and context fields — that satisfies
 - [Policy Diff](#policy-diff)
 - [Policy Subsumption](#policy-subsumption)
 - [Test Suite Generation](#test-suite-generation)
+  - [Condition Coverage](#condition-coverage)
+  - [Annotated Output](#annotated-output)
 - [JSON Schema Support](#json-schema-support)
 - [Example Walkthroughs](#example-walkthroughs)
   - [Server Infrastructure](#example-1--server-infrastructure)
@@ -651,6 +653,8 @@ regorus gen-tests [OPTIONS] --entrypoint <RULE>
 | `--max-tests <N>` | Maximum test cases to generate (default: 100). |
 | `--timeout <MS>` | Z3 timeout (default: 30000). |
 | `--max-loops <N>` | Loop unrolling depth (default: 5). |
+| `--condition-coverage` | Enable condition coverage: ensure every boolean condition evaluates to both `true` and `false` across the test suite. |
+| `--format <FORMAT>` | Output format: `json` (default) or `annotated` (full source listing with `true`/`false` markers per condition line). |
 | `--dump-smt <FILE>` | Write base SMT-LIB2 assertions. |
 
 ### Test Gen Output
@@ -702,6 +706,94 @@ regorus gen-tests \
   -s examples/server/input_schema.json \
   --max-loops 3
 ```
+
+### Condition Coverage
+
+Line coverage ensures every reachable line is executed by at least one test.
+**Condition coverage** goes further: it ensures every boolean condition in the
+policy evaluates to both `true` and `false` across the test suite.
+
+Enable it with `--condition-coverage`:
+
+```bash
+regorus gen-tests \
+  -d examples/server/allowed_server.rego \
+  -e data.example.allow \
+  -i examples/server/input.json \
+  -s examples/server/input_schema.json \
+  --max-loops 3 \
+  --condition-coverage
+```
+
+The algorithm adds a Phase 2 after line coverage:
+1. Collects all boolean conditions from the symbolic translation.
+2. For each condition, checks which tests already exercise `true` and `false`.
+3. For each uncovered condition goal, asks Z3 for an input that forces it.
+4. Repeats until all condition goals are covered or proved tautological.
+
+The JSON output includes condition coverage information per test case:
+
+```json
+{
+  "test_cases": [
+    {
+      "input": { ... },
+      "covered_lines": [
+        { "location": "policy.rego:14", "text": "    \"http\" in server.protocols" }
+      ],
+      "condition_coverage": [
+        { "location": "policy.rego:14", "value": true, "text": "    \"http\" in server.protocols" },
+        { "location": "policy.rego:16", "value": false, "text": "    port.id in server.ports" }
+      ]
+    }
+  ],
+  "coverage_summary": {
+    "coverable_lines": 16,
+    "covered_lines": 16,
+    "coverage_pct": "100.0%",
+    "condition_goals": 12,
+    "condition_goals_covered": 12,
+    "condition_coverage_pct": "100.0%"
+  }
+}
+```
+
+### Annotated Output
+
+Use `--format annotated` to see a full source listing per test, with
+`true`/`false` markers on each condition line:
+
+```bash
+regorus gen-tests \
+  -d examples/server/allowed_server.rego \
+  -e data.example.allow \
+  -i examples/server/input.json \
+  -s examples/server/input_schema.json \
+  --max-loops 3 \
+  --condition-coverage \
+  --format annotated
+```
+
+Each test case is displayed as the full policy source with a 5-character
+prefix before each line number:
+
+```
+== Test 5 ==
+  Result: true
+  Source: examples/server/allowed_server.rego
+         1 | package example
+  ...
+  false   11 |     "http" in server.protocols
+         12 |     port := input.ports[_]
+  ...
+  true    16 |     "telnet" in server.protocols
+```
+
+- `true ` — the condition evaluated to true in this test
+- `false` — the condition evaluated to false in this test
+- (blank) — the line is not a condition, or was not reached
+
+This makes it easy to visually verify which conditions each test exercises.
 
 ---
 

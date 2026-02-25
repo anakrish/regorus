@@ -1,0 +1,44 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '14px'}}}%%
+%% Title: MC/DC Condition Coverage — Every Condition Tested Both Ways
+flowchart LR
+    subgraph POLICY["Policy Rule: applicable"]
+        direction TB
+        R["applicable if {\n  appId NOT in allowlist\n  AND isFetchSuccess\n  AND isManagedStateEnforced\n}"]
+    end
+
+    POLICY --> MCDC["🧠 MC/DC\nAnalysis"]
+
+    subgraph TESTS["Generated Test Pairs — Each Condition Flipped Independently"]
+        direction TB
+        subgraph T1["Condition A: appId in allowlist"]
+            direction LR
+            T1T["✅ TRUE\nappId = 'ff177ae3...'\n→ allowed app"]
+            T1F["❌ FALSE\nappId = 'aaaaaaaa...'\n→ unknown app"]
+        end
+        subgraph T2["Condition B: isFetchSuccess"]
+            direction LR
+            T2T["✅ TRUE\ncode = 200"]
+            T2F["❌ FALSE\ncode = 500"]
+        end
+        subgraph T3["Condition C: managedState enforced"]
+            direction LR
+            T3T["✅ TRUE\n= 'enforced'"]
+            T3F["❌ FALSE\n= 'reportOnly'"]
+        end
+    end
+
+    MCDC --> TESTS
+
+    style POLICY fill:#E8EAF6,stroke:#3F51B5,stroke-width:2px,color:#1a1a2e
+    style R fill:#C5CAE9,stroke:#3F51B5,color:#1a1a2e
+    style MCDC fill:#FFF3E0,stroke:#FF9800,stroke-width:2px,color:#1a1a2e
+    style TESTS fill:#F3E5F5,stroke:#9C27B0,stroke-width:2px,color:#1a1a2e
+    style T1 fill:#E3F2FD,stroke:#1976D2,color:#1a1a2e
+    style T2 fill:#E3F2FD,stroke:#1976D2,color:#1a1a2e
+    style T3 fill:#E3F2FD,stroke:#1976D2,color:#1a1a2e
+    style T1T fill:#C8E6C9,stroke:#388E3C,color:#1a1a2e
+    style T1F fill:#FFCDD2,stroke:#E53935,color:#1a1a2e
+    style T2T fill:#C8E6C9,stroke:#388E3C,color:#1a1a2e
+    style T2F fill:#FFCDD2,stroke:#E53935,color:#1a1a2e
+    style T3T fill:#C8E6C9,stroke:#388E3C,color:#1a1a2e
+    style T3F fill:#FFCDD2,stroke:#E53935,color:#1a1a2e

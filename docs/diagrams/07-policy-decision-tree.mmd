@@ -1,0 +1,25 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '14px'}}}%%
+%% Title: Real Policy — 5 Decision Paths, Fully Explored
+flowchart LR
+    REQ["Incoming Request\nappId + fetchResponse"] --> CHECK{"appId in\nallowlist?"}
+
+    CHECK -->|"Yes"| ALLOW1["✅ Not Applicable\n(Allowed App)\nAlways passes"]
+
+    CHECK -->|"No"| FETCH{"fetchResponse\nHTTP code?"}
+
+    FETCH -->|"200"| STATE{"managedState?"}
+    FETCH -->|"403 / 404"| ALLOW2["✅ Not Applicable\n(Expected Error)\nAlways passes"]
+    FETCH -->|"null or other"| DENY2["🚫 DENIED\nFail-closed\n(unexpected error)"]
+
+    STATE -->|"enforced"| DENY1["🚫 DENIED\nGovernance\nenforced"]
+    STATE -->|"reportOnly"| AUDIT["📋 Applicable\nbut Allowed\n(audit only)"]
+
+    style REQ fill:#E8EAF6,stroke:#3F51B5,stroke-width:2px,color:#1a1a2e
+    style CHECK fill:#FFF3E0,stroke:#FF9800,stroke-width:2px,color:#1a1a2e
+    style FETCH fill:#FFF3E0,stroke:#FF9800,stroke-width:2px,color:#1a1a2e
+    style STATE fill:#FFF3E0,stroke:#FF9800,stroke-width:2px,color:#1a1a2e
+    style ALLOW1 fill:#C8E6C9,stroke:#388E3C,stroke-width:2px,color:#1a1a2e
+    style ALLOW2 fill:#C8E6C9,stroke:#388E3C,stroke-width:2px,color:#1a1a2e
+    style AUDIT fill:#FFF9C4,stroke:#F9A825,stroke-width:2px,color:#1a1a2e
+    style DENY1 fill:#FFCDD2,stroke:#E53935,stroke-width:2px,color:#1a1a2e
+    style DENY2 fill:#FFCDD2,stroke:#E53935,stroke-width:2px,color:#1a1a2e

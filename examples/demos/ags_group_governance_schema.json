@@ -1,0 +1,48 @@
+{
+  "type": "object",
+  "required": ["request", "fetchResponse"],
+  "properties": {
+    "request": {
+      "type": "object",
+      "required": ["authContext"],
+      "properties": {
+        "authContext": {
+          "type": "object",
+          "required": ["appid"],
+          "properties": {
+            "appid": {
+              "type": "string",
+              "enum": [
+                "ff177ae3-6045-4264-8733-f1364466bf47",
+                "5c8e7a0b-1d9b-4cbd-8cbd-1c3fbbd9e5c0",
+                "de8bc8b5-d9f9-48b1-a8ad-b748da725064",
+                "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                "11111111-2222-3333-4444-555555555555"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "fetchResponse": {
+      "type": "object",
+      "required": ["code", "data"],
+      "properties": {
+        "code": {
+          "type": "integer",
+          "enum": [200, 403, 404, 500]
+        },
+        "data": {
+          "type": "object",
+          "required": ["managedState"],
+          "properties": {
+            "managedState": {
+              "type": "string",
+              "enum": ["enforced", "reportOnly", "none"]
+            }
+          }
+        }
+      }
+    }
+  }
+}

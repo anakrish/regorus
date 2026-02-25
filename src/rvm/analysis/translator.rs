@@ -13,7 +13,7 @@ use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use z3::ast::{
     Ast, Bool as Z3Bool, Int as Z3Int, Real as Z3Real, Regexp as Z3Regexp, String as Z3String,
@@ -48,6 +48,30 @@ pub struct BlockResult<'ctx> {
     pub succeeded: bool,
 }
 
+/// Record of a single assertion condition encountered during translation.
+///
+/// Captures enough information for condition-coverage analysis:
+/// - `pre_path_condition`: the path condition *before* the assertion
+///   (i.e., the context required to reach this assertion point).
+/// - `condition`: the individual boolean condition being asserted.
+/// - `pc`: the program counter of the AssertCondition instruction.
+///
+/// For future MC/DC support, `body_id` identifies which rule body
+/// (decision) this condition belongs to, so conditions within the
+/// same decision can be grouped and independently toggled.
+#[derive(Clone, Debug)]
+pub struct ConditionRecord<'ctx> {
+    /// Program counter of the AssertCondition instruction.
+    pub pc: usize,
+    /// Path condition immediately before this assertion (full call-chain context).
+    pub pre_path_condition: Z3Bool<'ctx>,
+    /// The individual condition being asserted (what gets ANDed into path_condition).
+    pub condition: Z3Bool<'ctx>,
+    /// Identifier for the rule body (decision) containing this condition.
+    /// Format: "rule_index:def_index:body_pc" — for future MC/DC grouping.
+    pub body_id: Option<String>,
+}
+
 /// The symbolic translator engine.
 #[allow(missing_debug_implementations)]
 pub struct Translator<'ctx, 'a> {
@@ -72,6 +96,14 @@ pub struct Translator<'ctx, 'a> {
     /// Path condition at each PC (for coverage targeting).
     pc_path_conditions: HashMap<usize, Z3Bool<'ctx>>,
 
+    /// Per-assertion condition records (for condition coverage).
+    /// Each entry captures the individual condition at an AssertCondition PC,
+    /// along with the path condition *before* the assert (pre-condition context).
+    /// This enables condition coverage: for each condition, generate inputs
+    /// where the condition is true (normal line coverage) and false (reaching
+    /// the assertion point but the condition fails).
+    pc_conditions: Vec<ConditionRecord<'ctx>>,
+
     /// Accumulated caller path conditions (AND of outer path conditions
     /// at each `translate_call_rule` boundary). Used to contextualise
     /// the inner `pc_path_conditions` so that line-coverage constraints
@@ -84,8 +116,8 @@ pub struct Translator<'ctx, 'a> {
     /// Rule call cache: rule_index → (result_value, result_defined, path_condition).
     rule_cache: HashMap<u16, (SymValue<'ctx>, Definedness<'ctx>)>,
 
-    /// Current rule inlining depth (for recursion detection).
-    rule_depth: usize,
+    /// Rules currently on the call stack (for true recursion detection).
+    rule_call_stack: HashSet<u16>,
 
     /// Counter for generating fresh variable names.
     #[allow(dead_code)]
@@ -140,10 +172,11 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             constraints: Vec::new(),
             pc: 0,
             pc_path_conditions: HashMap::new(),
+            pc_conditions: Vec::new(),
             caller_path_condition: Z3Bool::from_bool(ctx, true),
             warnings: Vec::new(),
             rule_cache: HashMap::new(),
-            rule_depth: 0,
+            rule_call_stack: HashSet::new(),
             fresh_counter: 0,
             is_in_partial_set_body: false,
             partial_set_main_value_reg: None,
@@ -175,6 +208,11 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
     /// Take the accumulated PC → path-condition map (consumes it).
     pub fn take_pc_path_conditions(&mut self) -> HashMap<usize, Z3Bool<'ctx>> {
         core::mem::take(&mut self.pc_path_conditions)
+    }
+
+    /// Take the accumulated per-assertion condition records (consumes it).
+    pub fn take_pc_conditions(&mut self) -> Vec<ConditionRecord<'ctx>> {
+        core::mem::take(&mut self.pc_conditions)
     }
 
     /// Translate starting from an entry point PC.
@@ -994,6 +1032,19 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             let bool_val = reg.value.to_z3_bool(self.ctx)?;
             let def = reg.defined.to_z3_bool(self.ctx);
             let cond_z3 = Z3Bool::and(self.ctx, &[&def, &bool_val]);
+
+            // Record condition for condition-coverage analysis.
+            let pre_path = Z3Bool::and(
+                self.ctx,
+                &[&self.caller_path_condition, &self.path_condition],
+            );
+            self.pc_conditions.push(ConditionRecord {
+                pc: self.pc,
+                pre_path_condition: pre_path,
+                condition: cond_z3.clone(),
+                body_id: None, // TODO: populate for MC/DC
+            });
+
             self.path_condition = Z3Bool::and(self.ctx, &[&self.path_condition, &cond_z3]);
             return Ok(InstructionAction::Continue);
         }
@@ -1031,11 +1082,39 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     Definedness::Symbolic(def) => Z3Bool::and(self.ctx, &[def, b]),
                 }
             }
+            SymValue::ConditionalConcrete { .. } => {
+                // Convert the conditional to a Z3 Bool (ITE chain) and
+                // gate by definedness.  Without this, rules like `applicable`
+                // that return ConditionalConcrete would be treated as
+                // unconditionally truthy.
+                match reg.value.to_z3_bool(self.ctx) {
+                    Ok(b) => {
+                        let def = reg.defined.to_z3_bool(self.ctx);
+                        Z3Bool::and(self.ctx, &[&def, &b])
+                    }
+                    Err(_) => {
+                        // Non-bool ConditionalConcrete — treat as truthy if defined.
+                        reg.defined.to_z3_bool(self.ctx)
+                    }
+                }
+            }
             _ => {
                 // Non-bool symbolic values: treat as truthy if defined.
                 reg.defined.to_z3_bool(self.ctx)
             }
         };
+
+        // Record condition for condition-coverage analysis.
+        let pre_path = Z3Bool::and(
+            self.ctx,
+            &[&self.caller_path_condition, &self.path_condition],
+        );
+        self.pc_conditions.push(ConditionRecord {
+            pc: self.pc,
+            pre_path_condition: pre_path,
+            condition: cond_z3.clone(),
+            body_id: None, // TODO: populate for MC/DC
+        });
 
         // Conjoin to path condition.
         self.path_condition = Z3Bool::and(self.ctx, &[&self.path_condition, &cond_z3]);
@@ -1518,6 +1597,43 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             return Ok(InstructionAction::Continue);
         }
 
+        // ConditionalConcrete container + concrete key → distribute indexing.
+        if let (SymValue::ConditionalConcrete { branches, fallback }, SymValue::Concrete(key_val)) =
+            (&container_reg.value, &key_reg.value)
+        {
+            let new_branches: Vec<(Z3Bool<'ctx>, Value)> = branches
+                .iter()
+                .map(|(cond, val)| (cond.clone(), val[key_val].clone()))
+                .collect();
+            let new_fallback = fallback[key_val].clone();
+
+            let all_bool = new_branches
+                .iter()
+                .all(|(_, v)| matches!(v, Value::Bool(_)))
+                && matches!(&new_fallback, Value::Bool(_));
+
+            if all_bool {
+                let fb = matches!(&new_fallback, Value::Bool(true));
+                let mut result = Z3Bool::from_bool(self.ctx, fb);
+                for (cond, val) in new_branches.iter().rev() {
+                    let b = matches!(val, Value::Bool(true));
+                    result = cond.ite(&Z3Bool::from_bool(self.ctx, b), &result);
+                }
+                self.set_register_sym(dest, SymValue::Bool(result), Definedness::Defined, None);
+            } else {
+                self.set_register_sym(
+                    dest,
+                    SymValue::ConditionalConcrete {
+                        branches: new_branches,
+                        fallback: new_fallback,
+                    },
+                    container_reg.defined.clone(),
+                    None,
+                );
+            }
+            return Ok(InstructionAction::Continue);
+        }
+
         // Dynamic index into symbolic container — limited precision.
         self.warnings.push(format!(
             "PC {}: Dynamic index into symbolic container — limited precision",
@@ -1549,6 +1665,43 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         if let SymValue::Concrete(container_val) = &container_reg.value {
             let result = container_val[&key_val].clone();
             self.set_register_concrete(dest, result);
+            return Ok(InstructionAction::Continue);
+        }
+
+        // ConditionalConcrete container → distribute the index across branches.
+        if let SymValue::ConditionalConcrete { branches, fallback } = &container_reg.value {
+            let new_branches: Vec<(Z3Bool<'ctx>, Value)> = branches
+                .iter()
+                .map(|(cond, val)| (cond.clone(), val[&key_val].clone()))
+                .collect();
+            let new_fallback = fallback[&key_val].clone();
+
+            // Try to simplify: if all branch values + fallback are Bool,
+            // promote directly to a Z3 Bool ITE chain.
+            let all_bool = new_branches
+                .iter()
+                .all(|(_, v)| matches!(v, Value::Bool(_)))
+                && matches!(&new_fallback, Value::Bool(_));
+
+            if all_bool {
+                let fb = matches!(&new_fallback, Value::Bool(true));
+                let mut result = Z3Bool::from_bool(self.ctx, fb);
+                for (cond, val) in new_branches.iter().rev() {
+                    let b = matches!(val, Value::Bool(true));
+                    result = cond.ite(&Z3Bool::from_bool(self.ctx, b), &result);
+                }
+                self.set_register_sym(dest, SymValue::Bool(result), Definedness::Defined, None);
+            } else {
+                self.set_register_sym(
+                    dest,
+                    SymValue::ConditionalConcrete {
+                        branches: new_branches,
+                        fallback: new_fallback,
+                    },
+                    container_reg.defined.clone(),
+                    None,
+                );
+            }
             return Ok(InstructionAction::Continue);
         }
 
@@ -1683,11 +1836,12 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             return Ok(InstructionAction::Continue);
         }
 
-        // Recursion depth check.
-        if self.rule_depth >= self.config.max_rule_depth {
+        // True recursion detection: if this rule is already on the call
+        // stack, we have a cycle.  Return Undefined to break it.
+        if self.rule_call_stack.contains(&rule_index) {
             self.warnings.push(format!(
-                "PC {}: Max rule depth ({}) reached for rule {}; returning Undefined",
-                self.pc, self.config.max_rule_depth, rule_index
+                "PC {}: Recursive call to rule {} detected; returning Undefined",
+                self.pc, rule_index
             ));
             self.set_register_sym(
                 dest,
@@ -1724,7 +1878,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             &[&self.caller_path_condition, &self.path_condition],
         );
 
-        self.rule_depth += 1;
+        self.rule_call_stack.insert(rule_index);
 
         // Set up register window for the rule.
         let num_regs = rule_info.num_registers as usize;
@@ -1766,6 +1920,11 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         }
 
         for (def_idx, bodies) in rule_info.definitions.iter().enumerate() {
+            // Track accumulated failure of previous bodies within this
+            // definition — used for else-chain semantics where body[i+1]
+            // only fires if body[0..=i] all failed.
+            let mut prev_bodies_failed = Z3Bool::from_bool(self.ctx, true);
+
             for body_pc in bodies.iter() {
                 // Reset path condition for this body.
                 self.path_condition = Z3Bool::from_bool(self.ctx, true);
@@ -1810,26 +1969,32 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 // contributes an element to the set. The result_reg stays
                 // Undefined because SetAdd is a no-op in symbolic mode.
                 //
-                // For complete rules, we also need the result to be defined.
-                let body_succeeded = if is_partial_set {
-                    body_path_cond.clone()
+                // For complete rules, we also need the result to be defined,
+                // AND all previous bodies in this definition must have failed
+                // (else-chain semantics).
+                if is_partial_set {
+                    body_results.push((body_path_cond, result_value.value.clone()));
+                    // Partial sets: all bodies run, no else-chain gating.
                 } else {
                     let result_defined = result_value.defined.to_z3_bool(self.ctx);
-                    Z3Bool::and(self.ctx, &[&body_path_cond, &result_defined])
-                };
-
-                body_results.push((body_succeeded, result_value.value.clone()));
-
-                // For partial set rules, ALL bodies in ALL definitions execute
-                // (they accumulate into the set). For complete rules, the first
-                // successful body in a definition wins.
-                if !is_partial_set {
-                    break;
+                    let body_succeeded =
+                        Z3Bool::and(self.ctx, &[&body_path_cond, &result_defined]);
+                    // Gate by failure of all previous bodies in this definition.
+                    let effective_cond = Z3Bool::and(
+                        self.ctx,
+                        &[&prev_bodies_failed, &body_succeeded],
+                    );
+                    // Update accumulated failure for next else-body.
+                    prev_bodies_failed = Z3Bool::and(
+                        self.ctx,
+                        &[&prev_bodies_failed, &body_succeeded.not()],
+                    );
+                    body_results.push((effective_cond, result_value.value.clone()));
                 }
             }
         }
 
-        self.rule_depth -= 1;
+        self.rule_call_stack.remove(&rule_index);
 
         // Collect partial set elements before restoring state.
         let collected_partial_set_elements = if is_partial_set {
@@ -1998,17 +2163,60 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             let (cond, val) = body_results.into_iter().next().unwrap();
             (val, Definedness::Symbolic(cond))
         } else {
-            // Multiple bodies: use ITE chain.
-            // Last body is the fallback.
-            let mut iter = body_results.into_iter().rev();
-            let (last_cond, last_val) = iter.next().unwrap();
+            // Multiple bodies (else-chain or multiple definitions).
+            // Check if ALL values are concrete — if so, build a
+            // ConditionalConcrete instead of losing information.
+            let all_concrete = body_results
+                .iter()
+                .all(|(_, v)| matches!(v, SymValue::Concrete(_)));
 
-            // For now, if multiple bodies produce different sorts,
-            // fall back to the first body's result gated by its condition.
-            // A more complete implementation would use a Z3 ITE chain.
-            let any_succeeded = last_cond.clone();
-            // TODO: Build proper ITE chain for multiple definitions.
-            (last_val, Definedness::Symbolic(any_succeeded))
+            if all_concrete {
+                let branches: Vec<(Z3Bool<'ctx>, Value)> = body_results
+                    .into_iter()
+                    .map(|(cond, val)| {
+                        let concrete = match val {
+                            SymValue::Concrete(v) => v,
+                            _ => unreachable!(),
+                        };
+                        (cond, concrete)
+                    })
+                    .collect();
+                let cond_refs: Vec<&Z3Bool<'ctx>> =
+                    branches.iter().map(|(c, _)| c).collect();
+                let any_succeeded = Z3Bool::or(self.ctx, &cond_refs);
+                (
+                    SymValue::ConditionalConcrete {
+                        branches,
+                        fallback: Value::Undefined,
+                    },
+                    Definedness::Symbolic(any_succeeded),
+                )
+            } else {
+                // Mixed symbolic/concrete — build ITE if possible.
+                // For now, combine same-sort symbolic values into an ITE chain.
+                let first_sort = body_results[0].1.sort();
+                let all_same_sort = body_results.iter().all(|(_, v)| v.sort() == first_sort);
+
+                if all_same_sort && first_sort == ValueSort::Bool {
+                    // All bodies produce Bool — build Z3 Bool ITE.
+                    let mut iter = body_results.into_iter().rev();
+                    let (last_cond, last_val) = iter.next().unwrap();
+                    let mut result = last_val.to_z3_bool(self.ctx)?;
+                    let mut any_cond = last_cond.clone();
+                    for (cond, val) in iter {
+                        let branch_bool = val.to_z3_bool(self.ctx)?;
+                        result = cond.ite(&branch_bool, &result);
+                        any_cond = Z3Bool::or(self.ctx, &[&any_cond, &cond]);
+                    }
+                    (SymValue::Bool(result), Definedness::Symbolic(any_cond))
+                } else {
+                    // Fallback: take the last body's result (lossy).
+                    let mut iter = body_results.into_iter().rev();
+                    let (last_cond, last_val) = iter.next().unwrap();
+                    let any_succeeded = last_cond.clone();
+                    (last_val, Definedness::Symbolic(any_succeeded))
+                }
+            }
         };
 
         // Apply default value if the rule has one.
@@ -2021,8 +2229,6 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 Definedness::Defined => (final_value, final_defined),
                 Definedness::Symbolic(def_bool) => {
                     // If defined → use rule result; else → use default.
-                    // We need both values to have the same Z3 sort for ITE.
-                    // For the common case (bool rule with bool default), this works directly.
                     match (&final_value, &default_val) {
                         (SymValue::Bool(rule_bool), Value::Bool(def_b)) => {
                             let def_z3 = Z3Bool::from_bool(self.ctx, *def_b);
@@ -2034,6 +2240,19 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                             let def_z3 = Z3Bool::from_bool(self.ctx, *def_b);
                             let result = def_bool.ite(&rule_z3, &def_z3);
                             (SymValue::Bool(result), Definedness::Defined)
+                        }
+                        (
+                            SymValue::ConditionalConcrete { branches, .. },
+                            _,
+                        ) => {
+                            // Replace the Undefined fallback with the default value.
+                            (
+                                SymValue::ConditionalConcrete {
+                                    branches: branches.clone(),
+                                    fallback: default_val,
+                                },
+                                Definedness::Defined,
+                            )
                         }
                         _ => {
                             // Different sorts or complex types — just use default if all bodies failed.
@@ -2381,12 +2600,14 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         // to a value that happens to match collection elements.
         let result_defined = Definedness::and(self.ctx, &coll.defined, &val.defined);
 
-        // Concrete case — but skip if the collection is a path placeholder
-        // (Undefined with source_path), since that is a symbolic collection.
+        // Concrete case — but skip if either operand is a path placeholder
+        // (Undefined with source_path), since those are symbolic values.
         let coll_is_path_placeholder = matches!(&coll.value, SymValue::Concrete(Value::Undefined))
             && coll.source_path.is_some();
+        let val_is_path_placeholder = matches!(&val.value, SymValue::Concrete(Value::Undefined))
+            && val.source_path.is_some();
 
-        if !coll_is_path_placeholder {
+        if !coll_is_path_placeholder && !val_is_path_placeholder {
             if let (SymValue::Concrete(cv), SymValue::Concrete(vv)) = (&coll.value, &val.value) {
                 let result = match cv {
                     Value::Set(s) => s.contains(vv),
@@ -2396,6 +2617,60 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 };
                 self.set_register_concrete(dest, Value::Bool(result));
                 return Ok(InstructionAction::Continue);
+            }
+        }
+
+        // Concrete collection + symbolic value: build OR(value == elem) for each
+        // element in the concrete collection.  This handles the common pattern of
+        // `x in ["a", "b", "c"]` where x is a symbolic input path.
+        if !coll_is_path_placeholder {
+            if let SymValue::Concrete(cv) = &coll.value {
+                let elements: Vec<&Value> = match cv {
+                    Value::Array(a) => a.iter().collect(),
+                    Value::Set(s) => s.iter().collect(),
+                    _ => Vec::new(),
+                };
+                if !elements.is_empty() {
+                    let mut disjuncts = Vec::new();
+                    for elem in &elements {
+                        match elem {
+                            Value::String(s) => {
+                                let val_z3 = self.get_z3_for_contains_operand(&val, ValueSort::String)?;
+                                if let ContainsZ3Value::Str(val_str) = &val_z3 {
+                                    let elem_z3 = Z3String::from_str(self.ctx, s).unwrap();
+                                    disjuncts.push(val_str._eq(&elem_z3));
+                                }
+                            }
+                            Value::Number(n) => {
+                                if let Some(i) = n.as_i64() {
+                                    let val_z3 = self.get_z3_for_contains_operand(&val, ValueSort::Int)?;
+                                    if let ContainsZ3Value::Int(val_int) = &val_z3 {
+                                        let elem_z3 = Z3Int::from_i64(self.ctx, i);
+                                        disjuncts.push(val_int._eq(&elem_z3));
+                                    }
+                                }
+                            }
+                            Value::Bool(b) => {
+                                let val_z3 = self.get_z3_for_contains_operand(&val, ValueSort::Bool)?;
+                                if let ContainsZ3Value::Bool(val_bool) = &val_z3 {
+                                    let elem_z3 = Z3Bool::from_bool(self.ctx, *b);
+                                    disjuncts.push(val_bool._eq(&elem_z3));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    let result = if disjuncts.is_empty() {
+                        Z3Bool::from_bool(self.ctx, false)
+                    } else {
+                        let refs: Vec<&Z3Bool> = disjuncts.iter().collect();
+                        Z3Bool::or(self.ctx, &refs)
+                    };
+
+                    self.set_register_sym(dest, SymValue::Bool(result), result_defined.clone(), None);
+                    return Ok(InstructionAction::Continue);
+                }
             }
         }
 

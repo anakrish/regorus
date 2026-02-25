@@ -537,6 +537,16 @@ enum RegorusCommand {
         /// Required when input files include Azure Policy definition JSON.
         #[arg(long, value_name = "aliases.json")]
         azure_aliases: Option<String>,
+
+        /// Enable condition coverage: generate tests where each individual
+        /// condition evaluates to both true and false.
+        #[arg(long)]
+        condition_coverage: bool,
+
+        /// Output format: "json" (default) or "annotated" (source listing
+        /// with per-test condition annotations).
+        #[arg(long, default_value = "json")]
+        format: String,
     },
 
     /// Parse a Rego policy and dump AST.
@@ -764,9 +774,11 @@ fn main() -> Result<()> {
             input,
             schema,
             azure_aliases,
+            condition_coverage,
+            format,
         } => analyze::rego_gen_tests(
             &bundles, &data, entrypoint, output, dump_smt, timeout, max_loops, max_tests, input,
-            schema, azure_aliases,
+            schema, azure_aliases, condition_coverage, &format,
         ),
         #[cfg(feature = "cedar")]
         RegorusCommand::Cedar { command } => cedar_cli::run(command),

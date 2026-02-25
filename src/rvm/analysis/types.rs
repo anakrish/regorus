@@ -72,6 +72,16 @@ pub enum SymValue<'ctx> {
         cardinality: Z3Int<'ctx>,
         elements: Vec<SymSetElement<'ctx>>,
     },
+    /// A conditional choice among concrete values, produced when a rule
+    /// has multiple else-chain bodies that return different concrete objects.
+    ///
+    /// Semantics: if branches[0].0 then branches[0].1
+    ///            else if branches[1].0 then branches[1].1
+    ///            ... else fallback
+    ConditionalConcrete {
+        branches: Vec<(Z3Bool<'ctx>, Value)>,
+        fallback: Value,
+    },
 }
 
 /// Tracks whether a symbolic register holds a defined (non-Undefined) value.
@@ -156,6 +166,7 @@ impl<'ctx> SymValue<'ctx> {
             SymValue::Str(_) => ValueSort::String,
             SymValue::SetCardinality(_) => ValueSort::Int,
             SymValue::SymbolicSet { .. } => ValueSort::Int,
+            SymValue::ConditionalConcrete { .. } => ValueSort::Unknown,
         }
     }
 
@@ -166,7 +177,25 @@ impl<'ctx> SymValue<'ctx> {
         match self {
             SymValue::Bool(b) => Ok(b.clone()),
             SymValue::Concrete(Value::Bool(b)) => Ok(Z3Bool::from_bool(ctx, *b)),
-            other => anyhow::bail!("Cannot promote {:?} to Z3 Bool", other.sort()),
+            SymValue::ConditionalConcrete { branches, fallback } => {
+                // Build ITE chain: rightmost branch first, then fold left.
+                let fb = match fallback {
+                    Value::Bool(b) => *b,
+                    _ => anyhow::bail!("ConditionalConcrete fallback is not Bool"),
+                };
+                let mut result = Z3Bool::from_bool(ctx, fb);
+                for (cond, val) in branches.iter().rev() {
+                    let b = match val {
+                        Value::Bool(b) => *b,
+                        _ => anyhow::bail!("ConditionalConcrete branch is not Bool"),
+                    };
+                    result = cond.ite(&Z3Bool::from_bool(ctx, b), &result);
+                }
+                Ok(result)
+            }
+            other => {
+                anyhow::bail!("Cannot promote {:?} to Z3 Bool", other.sort())
+            }
         }
     }
 
@@ -233,6 +262,21 @@ impl<'ctx> SymValue<'ctx> {
         ctx: &'ctx z3::Context,
         desired: &Value,
     ) -> anyhow::Result<Z3Bool<'ctx>> {
+        // Fast path: concrete values can be compared directly regardless of type.
+        if let SymValue::Concrete(v) = self {
+            return Ok(Z3Bool::from_bool(ctx, v == desired));
+        }
+
+        // ConditionalConcrete: ITE chain comparing each branch to desired.
+        if let SymValue::ConditionalConcrete { branches, fallback } = self {
+            let mut result = Z3Bool::from_bool(ctx, fallback == desired);
+            for (cond, val) in branches.iter().rev() {
+                let branch_eq = Z3Bool::from_bool(ctx, val == desired);
+                result = cond.ite(&branch_eq, &result);
+            }
+            return Ok(result);
+        }
+
         match desired {
             Value::Bool(b) => {
                 let z3_self = self.to_z3_bool(ctx)?;
@@ -269,6 +313,17 @@ impl<'ctx> SymValue<'ctx> {
         match self {
             SymValue::Concrete(Value::Undefined) => Z3Bool::from_bool(ctx, false),
             SymValue::Concrete(_) => Z3Bool::from_bool(ctx, true),
+            SymValue::ConditionalConcrete { branches, fallback } => {
+                // Defined if any branch is active OR the fallback is not Undefined.
+                if *fallback != Value::Undefined {
+                    return Z3Bool::from_bool(ctx, true);
+                }
+                if branches.is_empty() {
+                    return Z3Bool::from_bool(ctx, false);
+                }
+                let conds: Vec<&Z3Bool<'ctx>> = branches.iter().map(|(c, _)| c).collect();
+                Z3Bool::or(ctx, &conds)
+            }
             // Symbolic values (including SetCardinality) are defined by
             // construction; their definedness is tracked separately.
             _ => Z3Bool::from_bool(ctx, true),

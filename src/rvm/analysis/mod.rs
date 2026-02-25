@@ -930,6 +930,10 @@ pub struct TestCase {
     pub input: Value,
     /// Lines covered by this test (as `("file.rego", line_number)` pairs).
     pub covered_lines: Vec<(String, usize)>,
+    /// Condition-coverage goals satisfied by this test case.
+    /// Each entry is `("file.rego:line", true/false)` indicating whether
+    /// the condition on that line was tested as true or false.
+    pub condition_coverage: Vec<(String, bool)>,
 }
 
 /// Result of test-suite generation.
@@ -941,6 +945,10 @@ pub struct TestSuiteResult {
     pub coverable_lines: usize,
     /// How many source lines were covered across all test cases.
     pub covered_lines: usize,
+    /// Total condition-coverage goals (each assert × {true, false}).
+    pub condition_goals: usize,
+    /// How many condition-coverage goals were covered.
+    pub condition_goals_covered: usize,
     pub warnings: Vec<String>,
     pub solver_smt: Option<String>,
 }
@@ -954,6 +962,8 @@ pub struct TestSuiteResult {
 ///    to be covered and solve.
 /// 4. When SAT, record the test case and all lines it covers.
 /// 5. Repeat until all lines are covered or proved uncoverable.
+/// 6. If `condition_coverage` is true, also generate inputs where each
+///    assertion condition is false (reaching the assert point but failing it).
 pub fn generate_test_suite(
     program: &Program,
     data: &Value,
@@ -961,6 +971,7 @@ pub fn generate_test_suite(
     desired_output: Option<&Value>,
     config: &AnalysisConfig,
     max_tests: usize,
+    condition_coverage: bool,
 ) -> anyhow::Result<TestSuiteResult> {
     let z3_cfg = z3::Config::new();
     let ctx = z3::Context::new(&z3_cfg);
@@ -984,7 +995,7 @@ pub fn generate_test_suite(
         vec![]
     };
 
-    let (result, constraints, path_condition, pc_path_conditions, warnings) = {
+    let (result, constraints, path_condition, pc_path_conditions, pc_conditions, warnings) = {
         let mut translator = Translator::new(&ctx, program, data, &mut registry, config);
         let entry_pc = program
             .get_entry_point(entry_point)
@@ -993,8 +1004,9 @@ pub fn generate_test_suite(
         let constraints = core::mem::take(&mut translator.constraints);
         let path_condition = translator.path_condition.clone();
         let pc_conds = translator.take_pc_path_conditions();
+        let cond_records = translator.take_pc_conditions();
         let warnings = core::mem::take(&mut translator.warnings);
-        (result, constraints, path_condition, pc_conds, warnings)
+        (result, constraints, path_condition, pc_conds, cond_records, warnings)
     };
 
     // Assert base constraints and path condition.
@@ -1090,6 +1102,7 @@ pub fn generate_test_suite(
                 test_cases.push(TestCase {
                     input,
                     covered_lines: covered,
+                    condition_coverage: Vec::new(),
                 });
             }
             z3::SatResult::Unsat => {
@@ -1113,10 +1126,145 @@ pub fn generate_test_suite(
 
     let covered_count = globally_covered.len();
 
+    // ── Phase 2: Condition coverage ──────────────────────────────────────────
+    // For each recorded assertion condition, we already have a "condition=true"
+    // test case from line coverage. Now generate a "condition=false" test case
+    // where the pre-path is reachable but the condition evaluates to false.
+    let mut condition_goals: usize = 0;
+    let mut condition_goals_covered: usize = 0;
+
+    if condition_coverage && !pc_conditions.is_empty() {
+        // Build a second solver that only has base constraints + schema
+        // (no output constraint, no full path_condition) so we can ask
+        // "reach this point but fail the condition".
+        let solver_cond = z3::Solver::new(&ctx);
+        if config.timeout_ms > 0 {
+            let mut params = z3::Params::new(&ctx);
+            params.set_u32("timeout", config.timeout_ms);
+            solver_cond.set_params(&params);
+        }
+        for c in &constraints {
+            solver_cond.assert(c);
+        }
+        for c in &schema_constraints {
+            solver_cond.assert(c);
+        }
+
+        // Deduplicate conditions by source line.
+        // Map: (source_file, line) → Vec<&ConditionRecord>
+        let mut cond_by_line: std::collections::BTreeMap<
+            (String, usize),
+            Vec<&translator::ConditionRecord<'_>>,
+        > = std::collections::BTreeMap::new();
+
+        for rec in &pc_conditions {
+            if let Some(span) = program.instruction_spans.get(rec.pc).and_then(|s| s.as_ref()) {
+                if span.source_index < program.sources.len() {
+                    let source_name = program.sources[span.source_index].name.clone();
+                    cond_by_line
+                        .entry((source_name, span.line))
+                        .or_default()
+                        .push(rec);
+                }
+            }
+        }
+
+        // Each line with a condition generates 2 goals: true and false.
+        // The "true" goal is considered covered if the line was covered
+        // by line-coverage phase. The "false" goal requires a new solve.
+        condition_goals = cond_by_line.len() * 2;
+
+        // Count "true" goals already covered by line coverage.
+        for line_key in cond_by_line.keys() {
+            if globally_covered.contains(line_key) {
+                condition_goals_covered += 1;
+            }
+        }
+
+        // Now solve "false" goals.
+        for (line_key, recs) in &cond_by_line {
+            if test_cases.len() >= max_tests {
+                break;
+            }
+
+            // Use the last record for this line (consistent with line-coverage).
+            let rec = recs.last().unwrap();
+
+            solver_cond.push();
+            solver_cond.assert(&rec.pre_path_condition);
+            solver_cond.assert(&rec.condition.not());
+
+            match solver_cond.check() {
+                z3::SatResult::Sat => {
+                    let model = solver_cond.get_model().unwrap();
+                    let input = extract_input(&model, &registry);
+
+                    // Determine which lines this model covers.
+                    let mut covered_lines_for_tc = Vec::new();
+                    for (lk, line_cond) in &line_conditions {
+                        if let Some(val) = model.eval(line_cond, true) {
+                            if format!("{}", val) == "true" {
+                                covered_lines_for_tc.push(lk.clone());
+                            }
+                        }
+                    }
+                    for l in &covered_lines_for_tc {
+                        globally_covered.insert(l.clone());
+                    }
+
+                    // Record which condition-coverage goals this test satisfies.
+                    let mut cond_cov = Vec::new();
+                    cond_cov.push((
+                        format!("{}:{}", line_key.0, line_key.1),
+                        false, // this was the "false" goal
+                    ));
+
+                    // Also check if any "true" condition goals are satisfied.
+                    for (other_key, other_recs) in &cond_by_line {
+                        let other_rec = other_recs.last().unwrap();
+                        if let Some(val) = model.eval(&other_rec.condition, true) {
+                            if format!("{}", val) == "true" {
+                                cond_cov.push((
+                                    format!("{}:{}", other_key.0, other_key.1),
+                                    true,
+                                ));
+                            }
+                        }
+                    }
+
+                    condition_goals_covered += 1; // the false goal
+                    test_cases.push(TestCase {
+                        input,
+                        covered_lines: covered_lines_for_tc,
+                        condition_coverage: cond_cov,
+                    });
+                }
+                z3::SatResult::Unsat => {
+                    // Condition can never be false at this point – tautological.
+                    condition_goals_covered += 1; // vacuously covered
+                    all_warnings.push(format!(
+                        "Condition at {}:{} can never be false (tautological, UNSAT)",
+                        line_key.0, line_key.1
+                    ));
+                }
+                z3::SatResult::Unknown => {
+                    all_warnings.push(format!(
+                        "Z3 returned Unknown for condition-false at {}:{}",
+                        line_key.0, line_key.1
+                    ));
+                }
+            }
+
+            solver_cond.pop(1);
+        }
+    }
+
     Ok(TestSuiteResult {
         test_cases,
         coverable_lines,
         covered_lines: covered_count,
+        condition_goals,
+        condition_goals_covered,
         warnings: all_warnings,
         solver_smt,
     })

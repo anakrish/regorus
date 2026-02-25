@@ -24,7 +24,7 @@ export LIBRARY_PATH="${LIBRARY_PATH:-/opt/homebrew/lib}"
 # Helpers
 sep()   { printf '\n%s\n' "$(printf '═%.0s' {1..70})"; }
 title() { sep; printf '  %s\n' "$@"; sep; }
-run()   { printf '\033[36m$ %s\033[0m\n' "$*"; eval "$@"; echo; }
+run()   { printf '\033[36m$ %s\033[0m\n' "$*"; "$@"; echo; }
 
 # ==============================================================
 title "DEMO 1 — Container Admission Controller" \

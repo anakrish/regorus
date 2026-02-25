@@ -1,0 +1,13 @@
+{
+  "request": {
+    "authContext": {
+      "appid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    }
+  },
+  "fetchResponse": {
+    "code": 200,
+    "data": {
+      "managedState": "enforced"
+    }
+  }
+}

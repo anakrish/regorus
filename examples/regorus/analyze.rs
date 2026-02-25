@@ -474,6 +474,8 @@ pub fn rego_gen_tests(
     input_file: Option<String>,
     schema_file: Option<String>,
     azure_aliases_file: Option<String>,
+    condition_coverage: bool,
+    format: &str,
 ) -> Result<()> {
     let (program, data, cedar_entities) =
         compile_policy_set(bundles, files, &entrypoint, azure_aliases_file.as_ref())?;
@@ -505,6 +507,7 @@ pub fn rego_gen_tests(
         desired_value.as_ref(),
         &config,
         max_tests,
+        condition_coverage,
     )?;
 
     if let (Some(ref path), Some(ref smt)) = (&dump_smt, &result.solver_smt) {
@@ -513,19 +516,104 @@ pub fn rego_gen_tests(
         eprintln!("SMT assertions written to {path}");
     }
 
+    // Build a cache of source-file lines for annotated output and text fields.
+    // Key: filename, Value: Vec of lines (0-indexed).
+    let source_cache = build_source_cache(&result);
+
+    // Helper: look up source text for a "file:line" location string.
+    // Note: span.line is 1-based (line 0 is a special "default" sentinel).
+    let source_text = |loc: &str| -> String {
+        if let Some(idx) = loc.rfind(':') {
+            let file = &loc[..idx];
+            if let Ok(line_no) = loc[idx + 1..].parse::<usize>() {
+                if let Some(lines) = source_cache.get(file) {
+                    if line_no > 0 && line_no <= lines.len() {
+                        return lines[line_no - 1].trim().to_string();
+                    }
+                }
+            }
+        }
+        String::new()
+    };
+
+    match format {
+        "annotated" => print_annotated_output(&result, &source_cache)?,
+        _ => print_json_output(&result, &source_text)?,
+    }
+
+    Ok(())
+}
+
+/// Build a cache mapping filenames to their source lines.
+fn build_source_cache(
+    result: &regorus::rvm::analysis::TestSuiteResult,
+) -> std::collections::HashMap<String, Vec<String>> {
+    let mut files_needed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for tc in &result.test_cases {
+        for (f, _) in &tc.covered_lines {
+            files_needed.insert(f.clone());
+        }
+        for (loc, _) in &tc.condition_coverage {
+            if let Some(idx) = loc.rfind(':') {
+                files_needed.insert(loc[..idx].to_string());
+            }
+        }
+    }
+    let mut cache = std::collections::HashMap::new();
+    for file in &files_needed {
+        if let Ok(contents) = std::fs::read_to_string(file) {
+            let lines: Vec<String> = contents.lines().map(|l| l.to_string()).collect();
+            cache.insert(file.clone(), lines);
+        }
+    }
+    cache
+}
+
+/// Print JSON format output (default).
+fn print_json_output(
+    result: &regorus::rvm::analysis::TestSuiteResult,
+    source_text: &dyn Fn(&str) -> String,
+) -> Result<()> {
     let test_cases_json: Vec<serde_json::Value> = result
         .test_cases
         .iter()
         .map(|tc| {
-            let lines: Vec<String> = tc
+            let lines: Vec<serde_json::Value> = tc
                 .covered_lines
                 .iter()
-                .map(|(f, l)| format!("{}:{}", f, l))
+                .map(|(f, l)| {
+                    let loc = format!("{}:{}", f, l);
+                    let text = source_text(&loc);
+                    let mut entry = serde_json::json!({ "location": loc });
+                    if !text.is_empty() {
+                        entry["text"] = serde_json::json!(text);
+                    }
+                    entry
+                })
                 .collect();
-            serde_json::json!({
+            let cond_cov: Vec<serde_json::Value> = tc
+                .condition_coverage
+                .iter()
+                .map(|(loc, val)| {
+                    let text = source_text(loc);
+                    let mut entry = serde_json::json!({
+                        "location": loc,
+                        "value": val,
+                    });
+                    if !text.is_empty() {
+                        entry["text"] = serde_json::json!(text);
+                    }
+                    entry
+                })
+                .collect();
+            let mut obj = serde_json::json!({
                 "input": regorus_value_to_json(&tc.input),
                 "covered_lines": lines,
-            })
+            });
+            if !cond_cov.is_empty() {
+                obj["condition_coverage"] = serde_json::json!(cond_cov);
+            }
+            obj
         })
         .collect();
 
@@ -535,16 +623,156 @@ pub fn rego_gen_tests(
         0.0
     };
 
+    let mut coverage_summary = serde_json::json!({
+        "coverable_lines": result.coverable_lines,
+        "covered_lines": result.covered_lines,
+        "coverage_pct": format!("{:.1}%", coverage_pct),
+    });
+    if result.condition_goals > 0 {
+        coverage_summary["condition_goals"] = serde_json::json!(result.condition_goals);
+        coverage_summary["condition_goals_covered"] =
+            serde_json::json!(result.condition_goals_covered);
+        let cond_pct = (result.condition_goals_covered as f64
+            / result.condition_goals as f64)
+            * 100.0;
+        coverage_summary["condition_coverage_pct"] =
+            serde_json::json!(format!("{:.1}%", cond_pct));
+    }
+
     let output_obj = serde_json::json!({
         "test_cases": test_cases_json,
-        "coverage_summary": {
-            "coverable_lines": result.coverable_lines,
-            "covered_lines": result.covered_lines,
-            "coverage_pct": format!("{:.1}%", coverage_pct),
-        },
+        "coverage_summary": coverage_summary,
         "warnings": result.warnings,
     });
     println!("{}", serde_json::to_string_pretty(&output_obj)?);
+
+    Ok(())
+}
+
+/// Print annotated source listing with per-test condition coverage markers.
+///
+/// For each test case, prints the full policy source with annotations:
+///   - Lines covered by that test get a `+` marker
+///   - Lines with a condition-coverage goal show `[T]` or `[F]`
+///   - Uncovered lines are shown without a marker
+fn print_annotated_output(
+    result: &regorus::rvm::analysis::TestSuiteResult,
+    source_cache: &std::collections::HashMap<String, Vec<String>>,
+) -> Result<()> {
+    // Collect all source files referenced, in deterministic order.
+    let mut all_files: Vec<&String> = source_cache.keys().collect();
+    all_files.sort();
+
+    // Build set of all known condition lines across all tests.
+    // A line is a "condition line" if it appears in any test's condition_coverage.
+    let mut all_condition_lines: std::collections::HashSet<(String, usize)> =
+        std::collections::HashSet::new();
+    for tc in &result.test_cases {
+        for (loc, _) in &tc.condition_coverage {
+            if let Some(idx) = loc.rfind(':') {
+                let file = loc[..idx].to_string();
+                if let Ok(line_no) = loc[idx + 1..].parse::<usize>() {
+                    all_condition_lines.insert((file, line_no));
+                }
+            }
+        }
+    }
+
+    // Print summary header.
+    let coverage_pct = if result.coverable_lines > 0 {
+        (result.covered_lines as f64 / result.coverable_lines as f64) * 100.0
+    } else {
+        0.0
+    };
+    println!(
+        "# Coverage: {}/{} lines ({:.1}%)",
+        result.covered_lines, result.coverable_lines, coverage_pct
+    );
+    if result.condition_goals > 0 {
+        let cond_pct = (result.condition_goals_covered as f64
+            / result.condition_goals as f64)
+            * 100.0;
+        println!(
+            "# Conditions: {}/{} goals ({:.1}%)",
+            result.condition_goals_covered, result.condition_goals, cond_pct
+        );
+    }
+    println!("# Tests: {}", result.test_cases.len());
+    println!();
+
+    for (ti, tc) in result.test_cases.iter().enumerate() {
+        // Build sets for quick lookup.
+        let covered: std::collections::HashSet<(String, usize)> =
+            tc.covered_lines.iter().cloned().collect();
+        let cond_map: std::collections::HashMap<(String, usize), bool> = tc
+            .condition_coverage
+            .iter()
+            .filter_map(|(loc, val)| {
+                if let Some(idx) = loc.rfind(':') {
+                    let file = loc[..idx].to_string();
+                    if let Ok(line_no) = loc[idx + 1..].parse::<usize>() {
+                        return Some(((file, line_no), *val));
+                    }
+                }
+                None
+            })
+            .collect();
+
+        // Determine what makes this test special.
+        let false_conds: Vec<_> = tc
+            .condition_coverage
+            .iter()
+            .filter(|(_, v)| !v)
+            .collect();
+        let test_label = if false_conds.is_empty() {
+            "line coverage".to_string()
+        } else {
+            false_conds
+                .iter()
+                .map(|(loc, _)| format!("{} = false", loc))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
+        println!("== Test {} ({}) ==", ti + 1, test_label);
+        println!("Input: {}", regorus_value_to_json(&tc.input));
+        println!();
+
+        for file in &all_files {
+            if let Some(lines) = source_cache.get(*file) {
+                for (i, line) in lines.iter().enumerate() {
+                    let line_no = i + 1; // 1-based, matching span.line
+                    let key = (file.to_string(), line_no);
+
+                    let marker = if let Some(val) = cond_map.get(&key) {
+                        // Explicit condition coverage entry for this test.
+                        if *val { "true " } else { "false" }
+                    } else if all_condition_lines.contains(&key) && covered.contains(&key) {
+                        // This is a condition line and was covered (assertion
+                        // passed), so the condition was true.
+                        "true "
+                    } else {
+                        "     "
+                    };
+
+                    println!(
+                        "{} {:>4} | {}",
+                        marker,
+                        line_no,
+                        line,
+                    );
+                }
+            }
+        }
+        println!();
+    }
+
+    if !result.warnings.is_empty() {
+        println!("# Warnings:");
+        for w in &result.warnings {
+            println!("#   {}", w);
+        }
+    }
 
     Ok(())
 }

@@ -44,6 +44,10 @@ pub fn extract_input<'ctx>(model: &z3::Model<'ctx>, registry: &PathRegistry<'ctx
         }
     }
 
+    // Post-process: clean up arrays by removing trailing null/empty elements
+    // that appear when Z3 creates witnesses beyond schema maxItems bounds.
+    clean_up_value(&mut result);
+
     result
 }
 
@@ -166,5 +170,53 @@ fn set_nested(obj: &mut Value, segments: &[&str], value: Value) {
                 }
             }
         }
+    }
+}
+
+/// Recursively clean up a Value tree:
+/// - Remove `null` and junk elements from arrays (Z3 padding beyond schema bounds)
+/// - Remove objects that are empty or have only `null`/undefined fields
+/// - Recurse into arrays and objects
+fn clean_up_value(val: &mut Value) {
+    match val {
+        Value::Array(arr) => {
+            let arr_mut = crate::Rc::make_mut(arr);
+            // Recurse into each element first.
+            for elem in arr_mut.iter_mut() {
+                clean_up_value(elem);
+            }
+            // Remove all null/junk elements (interior and trailing).
+            // Z3 may place unconstrained values at arbitrary indices.
+            arr_mut.retain(|v| !is_junk(v));
+        }
+        Value::Object(map) => {
+            let map_mut = crate::Rc::make_mut(map);
+            // Recurse into each value.
+            for (_, v) in map_mut.iter_mut() {
+                clean_up_value(v);
+            }
+            // Remove fields whose value is junk (null, empty object, empty array).
+            let junk_keys: Vec<Value> = map_mut
+                .iter()
+                .filter(|(_, v)| is_junk(v))
+                .map(|(k, _)| k.clone())
+                .collect();
+            for key in junk_keys {
+                map_mut.remove(&key);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Returns true if a value is "junk" — produced by Z3 for unconstrained paths.
+fn is_junk(val: &Value) -> bool {
+    match val {
+        Value::Null => true,
+        Value::Undefined => true,
+        Value::String(s) if s.is_empty() => true,
+        Value::Object(map) => map.is_empty() || map.values().all(|v| is_junk(v)),
+        Value::Array(arr) => arr.is_empty() || arr.iter().all(|v| is_junk(v)),
+        _ => false,
     }
 }

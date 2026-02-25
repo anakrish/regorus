@@ -28,6 +28,11 @@ use alloc::vec::Vec;
 impl<'a> Compiler<'a> {
     pub(super) fn compute_rule_type(&self, rule_path: &str) -> Result<RuleType> {
         let Some(definitions) = self.policy.inner.rules.get(rule_path) else {
+            // No non-default definitions found.  Check whether a default-only
+            // rule exists — default rules are always Complete.
+            if self.policy.inner.default_rules.contains_key(rule_path) {
+                return Ok(RuleType::Complete);
+            }
             return Err(CompilerError::General {
                 message: format!("no definitions found for rule path '{}'", rule_path),
             }
@@ -280,6 +285,51 @@ impl<'a> Compiler<'a> {
         self.current_module_index = module_index;
 
         let saved_register_counter = self.register_counter;
+        // Default-only rules have no non-default definitions in `rules`.
+        // Emit minimal structure so the rule exists in the program and
+        // can receive its default literal later.
+        if rules.get(rule_path).is_none() {
+            if let Some(rule_index) = self.rule_index_map.get(rule_path).copied() {
+                while self.rule_definitions.len() <= rule_index as usize {
+                    self.rule_definitions.push(Vec::new());
+                }
+                // No body entry points — body_groups will be empty.
+                // translate_call_rule_inner handles empty body_groups
+                // correctly: it produces Undefined, then applies the
+                // default literal.
+                while self.rule_num_registers.len() <= rule_index as usize {
+                    self.rule_num_registers.push(0);
+                }
+                while self.rule_result_registers.len() <= rule_index as usize {
+                    self.rule_result_registers.push(0);
+                }
+                while self.rule_definition_function_params.len() <= rule_index as usize {
+                    self.rule_definition_function_params.push(Vec::new());
+                }
+                while self.rule_definition_destructuring_patterns.len() <= rule_index as usize {
+                    self.rule_definition_destructuring_patterns.push(Vec::new());
+                }
+                while self.rule_function_param_count.len() <= rule_index as usize {
+                    self.rule_function_param_count.push(None);
+                }
+
+                // Register in the rule tree so the rule is discoverable.
+                let rule_path_parts: Vec<&str> = rule_path.split('.').collect();
+                if let Some((rule_name, package_parts)) = rule_path_parts.split_last() {
+                    let package_path: Vec<String> =
+                        package_parts.iter().map(|s| s.to_string()).collect();
+                    let _ = self.program.add_rule_to_tree(
+                        &package_path,
+                        rule_name,
+                        rule_index as usize,
+                    );
+                }
+            }
+            self.register_counter = saved_register_counter;
+            self.current_package = saved_package;
+            self.current_module_index = saved_module_index;
+            return Ok(());
+        }
         if let Some(rule_definitions) = rules.get(rule_path) {
             let Some(rule_index) = self.rule_index_map.get(rule_path).copied() else {
                 return Err(CompilerError::General {

@@ -181,6 +181,25 @@ fn walk_schema<'ctx>(
         {
             apply_unique_items(ctx, registry, path, n, constraints);
         }
+
+        // ---- closed-world: elements beyond maxItems are undefined ----
+        // Loop witnesses may create paths at indices n..max_elements.
+        // Without this constraint, those paths have unconstrained Z3
+        // variables that the solver can exploit to satisfy constraints
+        // that would be unsatisfiable with valid inputs.
+        if n < max_elements {
+            for idx in n..max_elements {
+                let child_path = format!("{}[{}]", path, idx);
+                assert_element_undefined(
+                    ctx,
+                    registry,
+                    items_schema,
+                    &child_path,
+                    max_elements,
+                    constraints,
+                );
+            }
+        }
     }
 
     // ---- minLength (string) ----
@@ -268,6 +287,82 @@ fn apply_min_items_defined<'ctx>(
             registry.get_or_create(element_path, ValueSort::Unknown, true, 0);
             let entry = registry.get(element_path).unwrap();
             constraints.push(entry.defined.clone());
+        }
+    }
+}
+
+/// Assert that an array element and all its sub-paths are undefined.
+///
+/// This implements "closed-world" semantics for arrays: elements beyond
+/// `maxItems` must not exist in the input. We walk the item schema
+/// recursively and assert `NOT defined` for every path that `walk_schema`
+/// would create — leaf variables, object properties, and nested arrays.
+fn assert_element_undefined<'ctx>(
+    ctx: &'ctx z3::Context,
+    registry: &mut PathRegistry<'ctx>,
+    items_schema: &serde_json::Value,
+    element_path: &str,
+    max_elements: usize,
+    constraints: &mut Vec<Z3Bool<'ctx>>,
+) {
+    let obj = match items_schema.as_object() {
+        Some(o) => o,
+        None => return,
+    };
+
+    let schema_type = obj.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+    match schema_type {
+        "object" => {
+            // Recurse into each property and assert all sub-paths are undefined.
+            if let Some(props) = obj.get("properties").and_then(|p| p.as_object()) {
+                for (key, sub_schema) in props {
+                    let child_path = format!("{}.{}", element_path, key);
+                    assert_element_undefined(
+                        ctx,
+                        registry,
+                        sub_schema,
+                        &child_path,
+                        max_elements,
+                        constraints,
+                    );
+                }
+            }
+        }
+        "array" => {
+            // Nested array — assert all nested elements are undefined.
+            if let Some(nested_items) = obj.get("items") {
+                let nested_max = obj
+                    .get("maxItems")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize)
+                    .unwrap_or(max_elements)
+                    .min(max_elements);
+                for idx in 0..nested_max {
+                    let child_path = format!("{}[{}]", element_path, idx);
+                    assert_element_undefined(
+                        ctx,
+                        registry,
+                        nested_items,
+                        &child_path,
+                        max_elements,
+                        constraints,
+                    );
+                }
+            }
+        }
+        _ => {
+            // Leaf type (string, boolean, integer, number) — assert NOT defined.
+            let sort = match schema_type {
+                "boolean" => ValueSort::Bool,
+                "integer" => ValueSort::Int,
+                "number" => ValueSort::Real,
+                "string" => ValueSort::String,
+                _ => ValueSort::Unknown,
+            };
+            registry.get_or_create(element_path, sort, true, 0);
+            let entry = registry.get(element_path).unwrap();
+            constraints.push(entry.defined.clone().not());
         }
     }
 }

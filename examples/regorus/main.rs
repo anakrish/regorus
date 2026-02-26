@@ -368,9 +368,12 @@ enum RegorusCommand {
         /// Required when input files include Azure Policy definition JSON.
         #[arg(long, value_name = "aliases.json")]
         azure_aliases: Option<String>,
-    },
 
-    /// Find inputs where two policy versions disagree (policy diff).
+        /// Model fetch() calls as returning input at this path.
+        /// E.g. --model-fetch fetchResponse maps fetch() → input.fetchResponse.
+        #[arg(long, value_name = "INPUT_PATH")]
+        model_fetch: Option<String>,
+    },
     ///
     /// Translates both policies into SMT constraints over the same symbolic
     /// input space and asks Z3 for an input where
@@ -537,6 +540,11 @@ enum RegorusCommand {
         /// Required when input files include Azure Policy definition JSON.
         #[arg(long, value_name = "aliases.json")]
         azure_aliases: Option<String>,
+
+        /// Model fetch() calls as returning input at this path.
+        /// E.g. --model-fetch fetchResponse maps fetch() → input.fetchResponse.
+        #[arg(long, value_name = "INPUT_PATH")]
+        model_fetch: Option<String>,
 
         /// Enable condition coverage: generate tests where each individual
         /// condition evaluates to both true and false.
@@ -712,9 +720,10 @@ fn main() -> Result<()> {
             input,
             schema,
             azure_aliases,
+            model_fetch,
         } => analyze::rego_analyze(
             &bundles, &data, entrypoint, output, cover_line, avoid_line, dump_smt, dump_model,
-            timeout, max_loops, input, schema, azure_aliases,
+            timeout, max_loops, input, schema, azure_aliases, model_fetch,
         ),
         #[cfg(feature = "z3-analysis")]
         RegorusCommand::Diff {
@@ -774,11 +783,12 @@ fn main() -> Result<()> {
             input,
             schema,
             azure_aliases,
+            model_fetch,
             condition_coverage,
             format,
         } => analyze::rego_gen_tests(
             &bundles, &data, entrypoint, output, dump_smt, timeout, max_loops, max_tests, input,
-            schema, azure_aliases, condition_coverage, &format,
+            schema, azure_aliases, model_fetch, condition_coverage, &format,
         ),
         #[cfg(feature = "cedar")]
         RegorusCommand::Cedar { command } => cedar_cli::run(command),

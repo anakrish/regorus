@@ -1,0 +1,17 @@
+{
+  "request": {
+    "authContext": {
+      "appid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    },
+    "resourceKeys": {
+      "id": "12345678-abcd-efgh-ijkl-000000000001",
+      "uniqueName": "test-group"
+    }
+  },
+  "fetchResponse": {
+    "code": 200,
+    "data": {
+      "managedState": "enforced"
+    }
+  }
+}

@@ -45,6 +45,21 @@ pub struct SymSetElement<'ctx> {
     pub element_sort: ValueSort,
 }
 
+/// An element of a symbolically-modeled array.
+///
+/// Unlike `SymSetElement`, this preserves per-element symbolic values and
+/// ordering—critical for positional access (`arr[i]`) and for builtins
+/// like `sprintf` that consume array elements by index.
+#[derive(Debug, Clone)]
+pub struct SymArrayElement<'ctx> {
+    /// The symbolic value of this element.
+    pub value: SymValue<'ctx>,
+    /// The definedness of this element.
+    pub defined: Definedness<'ctx>,
+    /// Optional source path (e.g., `"input.user.name"`).
+    pub source_path: Option<std::string::String>,
+}
+
 #[derive(Debug, Clone)]
 pub enum SymValue<'ctx> {
     /// A fully-known concrete value.
@@ -71,6 +86,17 @@ pub enum SymValue<'ctx> {
     SymbolicSet {
         cardinality: Z3Int<'ctx>,
         elements: Vec<SymSetElement<'ctx>>,
+    },
+    /// A symbolic array with ordered elements preserving per-element
+    /// symbolic values and source paths.
+    ///
+    /// Produced by `ArrayCreate` and array comprehensions when at least
+    /// one element is symbolic (a path placeholder or Z3 expression).
+    /// The length is always known concretely (it is `elements.len()`).
+    /// Supports: positional access, `count()`, `Contains`, iteration,
+    /// and extraction by builtins like `sprintf`.
+    SymbolicArray {
+        elements: Vec<SymArrayElement<'ctx>>,
     },
     /// A conditional choice among concrete values, produced when a rule
     /// has multiple else-chain bodies that return different concrete objects.
@@ -166,6 +192,7 @@ impl<'ctx> SymValue<'ctx> {
             SymValue::Str(_) => ValueSort::String,
             SymValue::SetCardinality(_) => ValueSort::Int,
             SymValue::SymbolicSet { .. } => ValueSort::Int,
+            SymValue::SymbolicArray { .. } => ValueSort::Unknown,
             SymValue::ConditionalConcrete { .. } => ValueSort::Unknown,
         }
     }
@@ -343,6 +370,14 @@ impl<'ctx> SymValue<'ctx> {
     pub fn as_symbolic_set_elements(&self) -> Option<&Vec<SymSetElement<'ctx>>> {
         match self {
             SymValue::SymbolicSet { elements, .. } => Some(elements),
+            _ => None,
+        }
+    }
+
+    /// If this is a `SymbolicArray`, extract the ordered elements.
+    pub fn as_symbolic_array_elements(&self) -> Option<&Vec<SymArrayElement<'ctx>>> {
+        match self {
+            SymValue::SymbolicArray { elements } => Some(elements),
             _ => None,
         }
     }

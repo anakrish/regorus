@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Z3 Construct Lockdown Input Schema",
+  "type": "object",
+  "properties": {
+    "user": {
+      "type": "object",
+      "properties": {
+        "name":        { "type": "string" },
+        "role":        { "type": "string" },
+        "level":       { "type": "integer" },
+        "active":      { "type": "boolean" },
+        "permissions": { "type": "integer" }
+      },
+      "required": ["name", "role", "level", "active", "permissions"]
+    },
+    "resource": {
+      "type": "object",
+      "properties": {
+        "name":     { "type": "string" },
+        "type":     { "type": "string" },
+        "region":   { "type": "string" },
+        "tags":     { "type": "array", "items": { "type": "string" } },
+        "priority": { "type": "integer" },
+        "port":     { "type": "string" }
+      },
+      "required": ["name", "type", "region", "tags", "priority", "port"]
+    },
+    "budget": {
+      "type": "object",
+      "properties": {
+        "limit": { "type": "integer" },
+        "spent": { "type": "integer" }
+      },
+      "required": ["limit", "spent"]
+    },
+    "labels": {
+      "type": "object",
+      "properties": {
+        "env":         { "type": "string" },
+        "team":        { "type": "string" },
+        "cost-center": { "type": "string" }
+      }
+    },
+    "emergency": { "type": "boolean" },
+    "resources": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "required_permissions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "granted_permissions": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["user", "resource", "budget", "labels", "emergency", "resources", "required_permissions", "granted_permissions"]
+}

@@ -798,6 +798,70 @@ run $BIN gen-tests \
   --condition-coverage \
   --format annotated
 
+# ==============================================================
+title "DEMO 37 — Z3 Construct Lockdown (sprintf, SymbolicArray)" \
+      "Comprehensive policy exercising ALL Z3-modeled constructs:" \
+      "default rules, partial sets/objects, functions, every," \
+      "comprehensions, string builtins (sprintf, concat, replace," \
+      "substring, trim_prefix, trim_suffix, indexof), arithmetic," \
+      "abs, to_number, type checks, bitwise, negation, and more."
+# ==============================================================
+
+echo "▸ 37a) Analyse lockdown policy — synthesise allow input:"
+run $BIN analyze \
+  -d examples/demos/z3_construct_lockdown.rego \
+  -e data.lockdown.decision \
+  -o '"allow"' \
+  --schema examples/demos/z3_construct_lockdown_schema.json
+
+echo "▸ 37b) Analyse lockdown policy — synthesise deny input:"
+run $BIN analyze \
+  -d examples/demos/z3_construct_lockdown.rego \
+  -e data.lockdown.decision \
+  -o '"deny"' \
+  --schema examples/demos/z3_construct_lockdown_schema.json
+
+echo "▸ 37c) Analyse lockdown policy — synthesise review input:"
+run $BIN analyze \
+  -d examples/demos/z3_construct_lockdown.rego \
+  -e data.lockdown.decision \
+  -o '"review"' \
+  --schema examples/demos/z3_construct_lockdown_schema.json
+
+echo "▸ 37d) Generate test suite with condition coverage:"
+run $BIN gen-tests \
+  -d examples/demos/z3_construct_lockdown.rego \
+  -e data.lockdown.decision \
+  --schema examples/demos/z3_construct_lockdown_schema.json \
+  --condition-coverage \
+  --max-tests 20
+
+# ==============================================================
+title "DEMO 38 — Original AGS Policy with fetch() (--model-fetch)" \
+      "The verbatim AGS group governance policy using fetch()." \
+      "--model-fetch fetchResponse maps the fetch() external I/O" \
+      "call to input.fetchResponse so Z3 can reason symbolically" \
+      "about all possible fetch outcomes."
+# ==============================================================
+
+echo "▸ 38a) Analyse original AGS policy — synthesise deny input:"
+run $BIN analyze \
+  -d examples/demos/ags_group_governance_original.rego \
+  -e data.graph.elm_governance_group_membership_9.deny \
+  -i examples/demos/ags_group_governance_original_input.json \
+  -s examples/demos/ags_group_governance_original_schema.json \
+  --model-fetch fetchResponse
+
+echo "▸ 38b) Generate test suite with condition coverage:"
+run $BIN gen-tests \
+  -d examples/demos/ags_group_governance_original.rego \
+  -e data.graph.elm_governance_group_membership_9.deny \
+  -i examples/demos/ags_group_governance_original_input.json \
+  -s examples/demos/ags_group_governance_original_schema.json \
+  --model-fetch fetchResponse \
+  --condition-coverage \
+  --max-tests 15
+
 sep
 echo "  All demos completed successfully."
 sep

@@ -22,6 +22,7 @@ pub fn rego_analyze(
     input_file: Option<String>,
     schema_file: Option<String>,
     azure_aliases_file: Option<String>,
+    model_fetch: Option<String>,
 ) -> Result<()> {
     let (program, data, cedar_entities) =
         compile_policy_set(bundles, files, &entrypoint, azure_aliases_file.as_ref())?;
@@ -120,6 +121,7 @@ pub fn rego_analyze(
         example_input,
         input_schema,
         concrete_input,
+        fetch_input_path: model_fetch,
     };
 
     let result = generate_input_for_goal(&program, &data, &entrypoint, &goal, &config)?;
@@ -349,6 +351,7 @@ pub fn rego_diff(
         example_input,
         input_schema,
         concrete_input,
+        fetch_input_path: None,
     };
 
     let result = policy_diff(
@@ -425,6 +428,7 @@ pub fn rego_subsumes(
         example_input,
         input_schema,
         concrete_input,
+        fetch_input_path: None,
     };
 
     let result = policy_subsumes(
@@ -474,6 +478,7 @@ pub fn rego_gen_tests(
     input_file: Option<String>,
     schema_file: Option<String>,
     azure_aliases_file: Option<String>,
+    model_fetch: Option<String>,
     condition_coverage: bool,
     format: &str,
 ) -> Result<()> {
@@ -498,6 +503,7 @@ pub fn rego_gen_tests(
         example_input,
         input_schema,
         concrete_input,
+        fetch_input_path: model_fetch,
     };
 
     let result = generate_test_suite(

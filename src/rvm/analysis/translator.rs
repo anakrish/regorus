@@ -32,8 +32,8 @@ use crate::builtins::azure_policy::helpers::{
 
 use super::path_registry::PathRegistry;
 use super::types::{
-    ComprehensionAccumulator, ComprehensionYieldEntry, Definedness, SymRegister, SymSetElement,
-    SymValue, ValueSort,
+    ComprehensionAccumulator, ComprehensionYieldEntry, Definedness, SymArrayElement, SymRegister,
+    SymSetElement, SymValue, ValueSort,
 };
 use super::AnalysisConfig;
 
@@ -458,10 +458,40 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                             return Ok(InstructionAction::Continue);
                         }
                     }
-                    // Symbolic value — push Undefined placeholder to preserve length.
-                    let mut new_arr = (**a).clone();
-                    new_arr.push(Value::Undefined);
-                    self.set_register_concrete(arr, Value::Array(crate::Rc::new(new_arr)));
+                    // Symbolic value — convert to SymbolicArray so the
+                    // element is properly tracked.
+                    let mut elements: Vec<SymArrayElement<'ctx>> = (**a)
+                        .iter()
+                        .map(|v| SymArrayElement {
+                            value: SymValue::Concrete(v.clone()),
+                            defined: Definedness::Defined,
+                            source_path: None,
+                        })
+                        .collect();
+                    elements.push(SymArrayElement {
+                        value: val_reg.value.clone(),
+                        defined: val_reg.defined.clone(),
+                        source_path: val_reg.source_path.clone(),
+                    });
+                    self.set_register_sym(
+                        arr,
+                        SymValue::SymbolicArray { elements },
+                        Definedness::Defined,
+                        None,
+                    );
+                } else if let SymValue::SymbolicArray { ref elements } = arr_reg.value {
+                    let mut new_elements = elements.clone();
+                    new_elements.push(SymArrayElement {
+                        value: val_reg.value.clone(),
+                        defined: val_reg.defined.clone(),
+                        source_path: val_reg.source_path.clone(),
+                    });
+                    self.set_register_sym(
+                        arr,
+                        SymValue::SymbolicArray { elements: new_elements },
+                        Definedness::Defined,
+                        None,
+                    );
                 } else {
                     self.warnings.push(format!(
                         "PC {}: ArrayPush on non-concrete array — limited precision",
@@ -2452,44 +2482,21 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 }
                 self.set_register_concrete(params.dest, Value::from_array(elements));
             } else {
-                // Build a SymbolicSet so Contains and Count work on arrays
-                // with symbolic elements.
+                // Build a SymbolicArray that preserves per-element symbolic
+                // values and ordering.
                 let mut sym_elements = Vec::new();
-                for (i, &reg) in params.element_registers().iter().enumerate() {
-                    let r = self.get_register(reg);
-                    let elem_path = r
-                        .source_path
-                        .clone()
-                        .unwrap_or_else(|| self.pname(&format!("arr_create_{}_{}", self.pc, i)));
-                    let elem_sort = if r.source_path.is_some() {
-                        self.registry
-                            .get(elem_path.as_str())
-                            .map(|e| e.sort)
-                            .unwrap_or(r.value.sort())
-                    } else {
-                        r.value.sort()
-                    };
-                    let cond = r.defined.to_z3_bool(self.ctx);
-                    sym_elements.push(SymSetElement {
-                        condition: cond,
-                        element_path: elem_path.clone(),
-                        key_path: elem_path,
-                        element_sort: elem_sort,
+                for &reg in params.element_registers() {
+                    let r = self.get_register(reg).clone();
+                    sym_elements.push(SymArrayElement {
+                        value: r.value,
+                        defined: r.defined,
+                        source_path: r.source_path,
                     });
-                }
-
-                let zero = Z3Int::from_i64(self.ctx, 0);
-                let one = Z3Int::from_i64(self.ctx, 1);
-                let mut sum = Z3Int::from_i64(self.ctx, 0);
-                for elem in &sym_elements {
-                    let contrib = elem.condition.ite(&one, &zero);
-                    sum = Z3Int::add(self.ctx, &[&sum, &contrib]);
                 }
 
                 self.set_register_sym(
                     params.dest,
-                    SymValue::SymbolicSet {
-                        cardinality: sum,
+                    SymValue::SymbolicArray {
                         elements: sym_elements,
                     },
                     Definedness::Defined,
@@ -2759,6 +2766,66 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 for elem in &elements_clone {
                     let eq = self.build_path_equality(&elem.key_path, cmp_sort, &val_z3)?;
                     disjuncts.push(Z3Bool::and(self.ctx, &[&elem.condition, &eq]));
+                }
+
+                let result = if disjuncts.is_empty() {
+                    Z3Bool::from_bool(self.ctx, false)
+                } else {
+                    let refs: Vec<&Z3Bool> = disjuncts.iter().collect();
+                    Z3Bool::or(self.ctx, &refs)
+                };
+
+                self.set_register_sym(dest, SymValue::Bool(result), result_defined.clone(), None);
+                return Ok(InstructionAction::Continue);
+            }
+        }
+
+        // Symbolic array: check if any element matches.
+        if let SymValue::SymbolicArray { elements } = &coll.value {
+            if !elements.is_empty() {
+                let val_sort = val.value.sort();
+                // Infer element sort from the first element with a known sort.
+                let elem_sort = elements
+                    .iter()
+                    .map(|e| e.value.sort())
+                    .find(|s| *s != ValueSort::Unknown)
+                    .unwrap_or(ValueSort::String);
+                let cmp_sort = if val_sort != ValueSort::Unknown {
+                    val_sort
+                } else {
+                    elem_sort
+                };
+
+                let val_z3 = self.get_z3_for_contains_operand(&val, cmp_sort)?;
+                let elements_clone: Vec<_> = elements.clone();
+
+                let mut disjuncts = Vec::new();
+                for elem in &elements_clone {
+                    if let Some(ref path) = elem.source_path {
+                        let eq = self.build_path_equality(path, cmp_sort, &val_z3)?;
+                        let def = elem.defined.to_z3_bool(self.ctx);
+                        disjuncts.push(Z3Bool::and(self.ctx, &[&def, &eq]));
+                    } else if let SymValue::Concrete(ref v) = elem.value {
+                        // Concrete element: direct comparison.
+                        let eq = match (&val_z3, v) {
+                            (ContainsZ3Value::Str(z), Value::String(s)) => {
+                                let lit = Z3String::from_str(self.ctx, s).unwrap();
+                                z._eq(&lit)
+                            }
+                            (ContainsZ3Value::Int(z), Value::Number(n)) => {
+                                if let Some(i) = n.as_i64() {
+                                    z._eq(&Z3Int::from_i64(self.ctx, i))
+                                } else {
+                                    continue;
+                                }
+                            }
+                            (ContainsZ3Value::Bool(z), Value::Bool(b)) => {
+                                z._eq(&Z3Bool::from_bool(self.ctx, *b))
+                            }
+                            _ => continue,
+                        };
+                        disjuncts.push(eq);
+                    }
                 }
 
                 let result = if disjuncts.is_empty() {
@@ -3131,6 +3198,91 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             return Ok(InstructionAction::Jump(loop_end));
         }
 
+        // -------------------------------------------------------------------
+        // SymbolicArray collection → iterate over ordered elements.
+        //
+        // Similar to SymbolicSet iteration but preserves array ordering.
+        // Each element has a value (possibly symbolic), definedness, and
+        // an optional source_path for registry-backed elements.
+        // -------------------------------------------------------------------
+        if let Some(elements) = collection.value.as_symbolic_array_elements() {
+            let elements = elements.clone();
+            let body_start = params.body_start as usize;
+            let loop_end = params.loop_end as usize;
+            let saved_path_cond = self.path_condition.clone();
+
+            if self.is_in_partial_set_body && self.partial_set_main_value_reg.is_none() {
+                self.partial_set_main_value_reg = Some(params.value_reg);
+            }
+
+            let mut success_conditions: Vec<Z3Bool<'ctx>> = Vec::new();
+
+            for (idx, element) in elements.iter().enumerate() {
+                if let Some(ref path) = element.source_path {
+                    // Element backed by a registry path.
+                    let elem_sort = self
+                        .registry
+                        .get(path.as_str())
+                        .map(|e| e.sort)
+                        .unwrap_or(element.value.sort());
+                    self.create_path_register(params.key_reg, path, elem_sort)?;
+                    self.create_path_register(params.value_reg, path, elem_sort)?;
+                } else {
+                    // Concrete or Z3 element — set the key to the index and value to the element.
+                    self.set_register_concrete(params.key_reg, Value::from(idx as i64));
+                    self.set_register_sym(
+                        params.value_reg,
+                        element.value.clone(),
+                        element.defined.clone(),
+                        None,
+                    );
+                }
+
+                // AND the element's definedness into the path condition.
+                let elem_def = element.defined.to_z3_bool(self.ctx);
+                self.path_condition = Z3Bool::and(self.ctx, &[&saved_path_cond, &elem_def]);
+
+                let saved_pc = self.pc;
+                let _result = self.translate_block(body_start);
+                self.pc = saved_pc;
+
+                success_conditions.push(self.path_condition.clone());
+            }
+
+            use crate::rvm::instructions::LoopMode;
+            let loop_result = if success_conditions.is_empty() {
+                match params.mode {
+                    LoopMode::Every => Z3Bool::from_bool(self.ctx, true),
+                    _ => Z3Bool::from_bool(self.ctx, false),
+                }
+            } else {
+                match params.mode {
+                    LoopMode::Any | LoopMode::ForEach => {
+                        let refs: Vec<&Z3Bool> = success_conditions.iter().collect();
+                        Z3Bool::or(self.ctx, &refs)
+                    }
+                    LoopMode::Every => {
+                        let refs: Vec<&Z3Bool> = success_conditions.iter().collect();
+                        Z3Bool::and(self.ctx, &refs)
+                    }
+                }
+            };
+
+            self.warnings.push(format!(
+                "PC {}: Loop over SymbolicArray with {} element(s)",
+                self.pc,
+                elements.len()
+            ));
+
+            self.path_condition = Z3Bool::and(self.ctx, &[&saved_path_cond, &loop_result]);
+            self.set_register_sym(
+                params.result_reg,
+                SymValue::Bool(loop_result),
+                Definedness::Defined,
+                None,
+            );
+            return Ok(InstructionAction::Jump(loop_end));
+        }
         // Symbolic collection → bounded witness instantiation.
         // When the collection is a path register (e.g., input.servers),
         // we create bounded symbolic "witness" elements and translate the
@@ -3410,43 +3562,20 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             return Ok(());
         }
 
-        // For symbolic arrays, model as a SymbolicSet (supports Contains
-        // and count). Array ordering is not tracked symbolically.
+        // For symbolic arrays, build a SymbolicArray that preserves
+        // per-element symbolic values and ordering.
         let mut elements = Vec::new();
-        for (i, entry) in acc.yields.iter().enumerate() {
-            let elem_path = entry
-                .value
-                .source_path
-                .clone()
-                .unwrap_or_else(|| self.pname(&format!("compr_arr_{}_{}", self.pc, i)));
-            let elem_sort = if entry.value.source_path.is_some() {
-                self.registry
-                    .get(elem_path.as_str())
-                    .map(|e| e.sort)
-                    .unwrap_or(entry.value.value.sort())
-            } else {
-                entry.value.value.sort()
-            };
-            elements.push(SymSetElement {
-                condition: entry.condition.clone(),
-                element_path: elem_path.clone(),
-                key_path: elem_path,
-                element_sort: elem_sort,
+        for entry in acc.yields.iter() {
+            elements.push(SymArrayElement {
+                value: entry.value.value.clone(),
+                defined: entry.value.defined.clone(),
+                source_path: entry.value.source_path.clone(),
             });
-        }
-
-        let zero = Z3Int::from_i64(self.ctx, 0);
-        let one = Z3Int::from_i64(self.ctx, 1);
-        let mut sum = Z3Int::from_i64(self.ctx, 0);
-        for elem in &elements {
-            let contrib = elem.condition.ite(&one, &zero);
-            sum = Z3Int::add(self.ctx, &[&sum, &contrib]);
         }
 
         self.set_register_sym(
             result_reg,
-            SymValue::SymbolicSet {
-                cardinality: sum,
+            SymValue::SymbolicArray {
                 elements,
             },
             Definedness::Defined,
@@ -3702,6 +3831,16 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             "trim_suffix" => {
                 self.translate_builtin_trim_suffix(&params)?;
             }
+            "sprintf" => {
+                self.translate_builtin_sprintf(&params)?;
+            }
+
+            // ---------------------------------------------------------------
+            // fetch — external I/O, modeled as input path when configured
+            // ---------------------------------------------------------------
+            "fetch" => {
+                self.translate_builtin_fetch(&params)?;
+            }
 
             // ---------------------------------------------------------------
             // abs — ite(x >= 0, x, -x)
@@ -3855,6 +3994,8 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         if params.arg_count() >= 2 {
             let delim_reg = self.get_register(params.args[0]).clone();
             let list_reg = self.get_register(params.args[1]).clone();
+
+            // Fully concrete case.
             if let (SymValue::Concrete(Value::String(delim)), SymValue::Concrete(Value::Array(items))) =
                 (&delim_reg.value, &list_reg.value)
             {
@@ -3870,8 +4011,56 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 self.set_register_concrete(params.dest, Value::from(parts.join(delim.as_ref())));
                 return Ok(());
             }
+
+            // SymbolicArray + concrete delimiter → Z3 str.++ with delimiter.
+            if let SymValue::Concrete(Value::String(ref delim)) = delim_reg.value {
+                if let SymValue::SymbolicArray { ref elements } = list_reg.value {
+                    let delim_str = delim.as_ref();
+                    let mut z3_parts: Vec<Z3String<'ctx>> = Vec::new();
+                    for (i, elem) in elements.iter().enumerate() {
+                        if i > 0 && !delim_str.is_empty() {
+                            z3_parts.push(Z3String::from_str(self.ctx, delim_str).unwrap());
+                        }
+                        // Resolve element to Z3 string.
+                        if let Some(ref path) = elem.source_path {
+                            z3_parts.push(self.registry.get_string(path));
+                        } else if let Ok(z) = elem.value.to_z3_string(self.ctx) {
+                            z3_parts.push(z);
+                        } else {
+                            // Can't resolve → fallback.
+                            return self.concat_fallback(params);
+                        }
+                    }
+                    if z3_parts.is_empty() {
+                        self.set_register_concrete(params.dest, Value::from(""));
+                    } else if z3_parts.len() == 1 {
+                        self.set_register_sym(
+                            params.dest,
+                            SymValue::Str(z3_parts.into_iter().next().unwrap()),
+                            Definedness::Defined,
+                            None,
+                        );
+                    } else {
+                        let result = self.z3_string_concat(&z3_parts);
+                        self.set_register_sym(
+                            params.dest,
+                            SymValue::Str(result),
+                            Definedness::Defined,
+                            None,
+                        );
+                    }
+                    return Ok(());
+                }
+            }
         }
 
+        self.concat_fallback(params)
+    }
+
+    fn concat_fallback(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
         self.warnings.push(format!(
             "PC {}: Builtin 'concat' modeled as unconstrained String",
             self.pc
@@ -4472,6 +4661,12 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 return Ok(());
             }
 
+            // SymbolicArray → concrete length (always known at compile time).
+            if let Some(elems) = arg.value.as_symbolic_array_elements() {
+                self.set_register_concrete(params.dest, Value::from(elems.len()));
+                return Ok(());
+            }
+
             // Concrete collection → concrete count.
             if let SymValue::Concrete(cv) = &arg.value {
                 let count = match cv {
@@ -4861,6 +5056,322 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         let var = Z3String::new_const(self.ctx, name.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(())
+    }
+
+    /// `fetch(request)` → symbolic value from `input.<fetch_input_path>`.
+    ///
+    /// When `config.fetch_input_path` is set (e.g. `Some("fetchResponse")`),
+    /// the `fetch` builtin result is modeled as the symbolic value at
+    /// `input/<path>` in the registry.  Downstream field accesses like
+    /// `.code`, `.data.managedState` resolve naturally through the registry.
+    /// When not configured, falls back to an unconstrained symbolic string.
+    fn translate_builtin_fetch(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if let Some(ref input_path) = self.config.fetch_input_path.clone() {
+            let path = format!("input/{}", input_path);
+            // Create the path entry in the registry so downstream field accesses
+            // (e.g., fetchResponse.code, fetchResponse.data.managedState) resolve.
+            let _entry =
+                self.registry
+                    .get_or_create(&path, ValueSort::Unknown, true, self.pc);
+            let defined = self.registry.get(&path).unwrap().defined.clone();
+            self.set_register_sym(
+                params.dest,
+                SymValue::Concrete(Value::Undefined), // placeholder; sort resolved on use
+                Definedness::Symbolic(defined),
+                Some(path),
+            );
+        } else {
+            self.warnings.push(format!(
+                "PC {}: fetch() modeled as unconstrained String (use --model-fetch to map to input)",
+                self.pc
+            ));
+            let name = self.pname(&format!("fetch_{}", self.pc));
+            let var = Z3String::new_const(self.ctx, name.as_str());
+            self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
+        }
+        Ok(())
+    }
+
+    /// `sprintf(fmt, args_array)` → Z3 `str.++` of literal segments and formatted args.
+    ///
+    /// The format string (arg 0) must be a concrete constant. The args array
+    /// (arg 1) may contain concrete values or symbolic Z3 strings / ints.
+    /// Supported format verbs: `%s` (string), `%d` (integer), `%v` (auto),
+    /// `%%` (literal percent). Width/precision specifiers are consumed but
+    /// ignored for Z3 modeling (the output shape is still correct).
+    /// Falls back to unconstrained String for non-concrete format strings or
+    /// unsupported verbs like `%f`/`%e`/`%g`.
+    fn translate_builtin_sprintf(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        if params.arg_count() >= 2 {
+            let fmt_reg = self.get_register(params.args[0]).clone();
+            let args_reg = self.get_register(params.args[1]).clone();
+
+            // Format string must be concrete.
+            if let SymValue::Concrete(Value::String(fmt_str)) = &fmt_reg.value {
+                // Collect the argument values from the array register.
+                // Handles concrete arrays, SymbolicArrays (from ArrayCreate
+                // with symbolic elements), and path-backed elements.
+                let arg_values: Option<Vec<SymValue<'ctx>>> = match &args_reg.value {
+                    SymValue::Concrete(Value::Array(items)) => {
+                        // Each element is concrete — wrap as SymValue::Concrete.
+                        Some(items.iter().map(|v| SymValue::Concrete(v.clone())).collect())
+                    }
+                    SymValue::SymbolicArray { elements } => {
+                        // Ordered symbolic elements — resolve each to its Z3
+                        // value, optionally via registry for path-backed elems.
+                        let mut resolved = Vec::with_capacity(elements.len());
+                        for elem in elements {
+                            if let Some(ref path) = elem.source_path {
+                                // Look up sort from registry and produce
+                                // the appropriate Z3 variable.
+                                let sort = self
+                                    .registry
+                                    .get(path.as_str())
+                                    .map(|e| e.sort)
+                                    .unwrap_or(ValueSort::String);
+                                match sort {
+                                    ValueSort::String | ValueSort::Unknown => {
+                                        let z = self.registry.get_string(path);
+                                        resolved.push(SymValue::Str(z));
+                                    }
+                                    ValueSort::Int => {
+                                        let z = self.registry.get_int(path);
+                                        resolved.push(SymValue::Int(z));
+                                    }
+                                    ValueSort::Bool => {
+                                        // Bools don't participate in sprintf meaningfully,
+                                        // but try string representation.
+                                        let z = self.registry.get_string(path);
+                                        resolved.push(SymValue::Str(z));
+                                    }
+                                    ValueSort::Real => {
+                                        // Real → fall back to unconstrained.
+                                        return self.sprintf_fallback(params);
+                                    }
+                                }
+                            } else {
+                                resolved.push(elem.value.clone());
+                            }
+                        }
+                        Some(resolved)
+                    }
+                    _ => None,
+                };
+
+                if let Some(args) = arg_values {
+                    if let Some(result) = self.sprintf_build_z3(fmt_str.as_ref(), &args) {
+                        self.set_register_sym(
+                            params.dest,
+                            SymValue::Str(result),
+                            Definedness::Defined,
+                            None,
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        self.sprintf_fallback(params)
+    }
+
+    /// Fallback for sprintf: unconstrained String.
+    fn sprintf_fallback(
+        &mut self,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+    ) -> anyhow::Result<()> {
+        self.warnings.push(format!(
+            "PC {}: Builtin 'sprintf' — cannot fully model, unconstrained String",
+            self.pc
+        ));
+        let name = self.pname(&format!("builtin_sprintf_{}", self.pc));
+        let var = Z3String::new_const(self.ctx, name.as_str());
+        self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
+        Ok(())
+    }
+
+    /// Parse the format string and build a Z3 `str.++` expression.
+    /// Returns `None` if the format contains unsupported verbs.
+    fn sprintf_build_z3(
+        &self,
+        fmt: &str,
+        args: &[SymValue<'ctx>],
+    ) -> Option<Z3String<'ctx>> {
+        let mut segments: Vec<Z3String<'ctx>> = Vec::new();
+        let mut literal = String::new();
+        let mut chars = fmt.chars().peekable();
+        let mut arg_idx = 0usize;
+
+        while let Some(c) = chars.next() {
+            if c != '%' {
+                literal.push(c);
+                continue;
+            }
+            // Saw '%'.
+            match chars.peek() {
+                Some('%') => {
+                    // Literal '%'.
+                    chars.next();
+                    literal.push('%');
+                }
+                _ => {
+                    // Flush the accumulated literal segment.
+                    if !literal.is_empty() {
+                        segments.push(Z3String::from_str(self.ctx, &literal).unwrap());
+                        literal.clear();
+                    }
+
+                    // Skip optional flags: -, +, 0, space, #
+                    while let Some(&ch) = chars.peek() {
+                        if ch == '-' || ch == '+' || ch == '0' || ch == ' ' || ch == '#' {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    // Skip optional width: digits
+                    while let Some(&ch) = chars.peek() {
+                        if ch.is_ascii_digit() {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    // Skip optional precision: .digits
+                    if chars.peek() == Some(&'.') {
+                        chars.next();
+                        while let Some(&ch) = chars.peek() {
+                            if ch.is_ascii_digit() {
+                                chars.next();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+
+                    // The verb character.
+                    let verb = chars.next()?;
+
+                    if arg_idx >= args.len() {
+                        // More format verbs than args — bail.
+                        return None;
+                    }
+                    let arg = &args[arg_idx];
+                    arg_idx += 1;
+
+                    match verb {
+                        's' => {
+                            // Expect string argument.
+                            match arg {
+                                SymValue::Concrete(Value::String(s)) => {
+                                    segments
+                                        .push(Z3String::from_str(self.ctx, s.as_ref()).unwrap());
+                                }
+                                SymValue::Str(z) => {
+                                    segments.push(z.clone());
+                                }
+                                _ => {
+                                    // Try to resolve as z3 string.
+                                    if let Ok(z) = arg.to_z3_string(self.ctx) {
+                                        segments.push(z);
+                                    } else {
+                                        return None;
+                                    }
+                                }
+                            }
+                        }
+                        'd' => {
+                            // Expect integer argument → str.from_int.
+                            match arg {
+                                SymValue::Concrete(Value::Number(n)) => {
+                                    if let Some(i) = n.as_i64() {
+                                        segments.push(
+                                            Z3String::from_str(self.ctx, &i.to_string()).unwrap(),
+                                        );
+                                    } else {
+                                        return None;
+                                    }
+                                }
+                                SymValue::Int(z) => {
+                                    segments.push(self.z3_int_to_string(z));
+                                }
+                                _ => {
+                                    if let Ok(z) = arg.to_z3_int(self.ctx) {
+                                        segments.push(self.z3_int_to_string(&z));
+                                    } else {
+                                        return None;
+                                    }
+                                }
+                            }
+                        }
+                        'v' => {
+                            // Generic: try string first, then int→str.
+                            match arg {
+                                SymValue::Concrete(Value::String(s)) => {
+                                    segments
+                                        .push(Z3String::from_str(self.ctx, s.as_ref()).unwrap());
+                                }
+                                SymValue::Concrete(Value::Number(n)) => {
+                                    if let Some(i) = n.as_i64() {
+                                        segments.push(
+                                            Z3String::from_str(self.ctx, &i.to_string()).unwrap(),
+                                        );
+                                    } else if let Some(f) = n.as_f64() {
+                                        segments.push(
+                                            Z3String::from_str(self.ctx, &f.to_string()).unwrap(),
+                                        );
+                                    } else {
+                                        return None;
+                                    }
+                                }
+                                SymValue::Concrete(Value::Bool(b)) => {
+                                    segments.push(
+                                        Z3String::from_str(self.ctx, &b.to_string()).unwrap(),
+                                    );
+                                }
+                                SymValue::Str(z) => {
+                                    segments.push(z.clone());
+                                }
+                                SymValue::Int(z) => {
+                                    segments.push(self.z3_int_to_string(z));
+                                }
+                                _ => {
+                                    if let Ok(z) = arg.to_z3_string(self.ctx) {
+                                        segments.push(z);
+                                    } else if let Ok(z) = arg.to_z3_int(self.ctx) {
+                                        segments.push(self.z3_int_to_string(&z));
+                                    } else {
+                                        return None;
+                                    }
+                                }
+                            }
+                        }
+                        // Unsupported verbs: bail to unconstrained.
+                        _ => return None,
+                    }
+                }
+            }
+        }
+
+        // Flush trailing literal.
+        if !literal.is_empty() {
+            segments.push(Z3String::from_str(self.ctx, &literal).unwrap());
+        }
+
+        // Build result.
+        if segments.is_empty() {
+            Some(Z3String::from_str(self.ctx, "").unwrap())
+        } else if segments.len() == 1 {
+            Some(segments.into_iter().next().unwrap())
+        } else {
+            Some(self.z3_string_concat(&segments))
+        }
     }
 
     /// `abs(x)` → ite(x >= 0, x, -x)
@@ -5771,6 +6282,29 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 offset.get_z3_ast(),
                 length.get_z3_ast(),
             );
+            Z3String::wrap(self.ctx, ast)
+        }
+    }
+
+    /// Z3 `str.++` — concatenate multiple strings.
+    fn z3_string_concat(&self, parts: &[Z3String<'ctx>]) -> Z3String<'ctx> {
+        #[allow(unsafe_code)]
+        unsafe {
+            let ctx_ptr: *const z3::Context = self.ctx;
+            let raw_ctx: z3_sys::Z3_context = *(ctx_ptr as *const z3_sys::Z3_context);
+            let asts: Vec<z3_sys::Z3_ast> = parts.iter().map(|p| p.get_z3_ast()).collect();
+            let ast = z3_sys::Z3_mk_seq_concat(raw_ctx, asts.len() as u32, asts.as_ptr());
+            Z3String::wrap(self.ctx, ast)
+        }
+    }
+
+    /// Z3 `str.from_int` — convert an integer to its decimal string representation.
+    fn z3_int_to_string(&self, i: &Z3Int<'ctx>) -> Z3String<'ctx> {
+        #[allow(unsafe_code)]
+        unsafe {
+            let ctx_ptr: *const z3::Context = self.ctx;
+            let raw_ctx: z3_sys::Z3_context = *(ctx_ptr as *const z3_sys::Z3_context);
+            let ast = z3_sys::Z3_mk_int_to_str(raw_ctx, i.get_z3_ast());
             Z3String::wrap(self.ctx, ast)
         }
     }

@@ -130,6 +130,10 @@ lazy_static! {
 	#[cfg(feature = "opa-testutil")]
 	test::register(&mut m);
 
+	// fetch — external I/O builtin. At runtime, the host provides
+	// the response; for Z3 analysis it is modeled as input.
+	m.insert("fetch", (fetch_stub, 1));
+
 	m
     };
 }
@@ -144,6 +148,15 @@ lazy_static! {
 
 	m
     };
+}
+
+/// Stub implementation for `fetch` builtin.
+/// At runtime the host provides the response via HostAwait or a
+/// custom runtime function.  This stub exists solely so the
+/// compiler recognizes `fetch` as a known builtin.  For Z3
+/// analysis the result is modeled as an input path.
+fn fetch_stub(_span: &Span, _params: &[Ref<Expr>], _args: &[Value], _strict: bool) -> Result<Value> {
+    Ok(Value::Undefined)
 }
 
 pub fn must_cache(path: &str) -> Option<&'static str> {

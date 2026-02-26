@@ -80,6 +80,11 @@ pub struct AnalysisConfig {
     /// Used by Cedar analysis to inject the entity hierarchy as concrete
     /// data while keeping principal/action/resource/context symbolic.
     pub concrete_input: std::collections::HashMap<String, Value>,
+    /// When set, `fetch()` calls are modeled as returning the value at
+    /// `input.<fetch_input_path>`.  For example, `Some("fetchResponse")`
+    /// maps `fetch(...)` → `input/fetchResponse` in the registry, so
+    /// Z3 reasons symbolically about all possible fetch outcomes.
+    pub fetch_input_path: Option<String>,
 }
 
 impl Default for AnalysisConfig {
@@ -93,6 +98,7 @@ impl Default for AnalysisConfig {
             example_input: None,
             input_schema: None,
             concrete_input: std::collections::HashMap::new(),
+            fetch_input_path: None,
         }
     }
 }

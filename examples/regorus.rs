@@ -338,6 +338,25 @@ enum AzurePolicyCommand {
         /// Policy definition JSON file.
         file: String,
     },
+
+    /// Run an external Azure Policy test suite (YAML format).
+    #[command(name = "test-suite")]
+    TestSuite {
+        /// Root folder containing `*.Test.yaml` files (searched recursively).
+        folder: String,
+
+        /// Alias catalog JSON file.
+        #[arg(long, short)]
+        aliases: Option<String>,
+
+        /// Only run test files whose path contains this substring.
+        #[arg(long, short)]
+        filter: Option<String>,
+
+        /// Print verbose per-case output.
+        #[arg(long, short)]
+        verbose: bool,
+    },
 }
 
 #[derive(clap::Parser)]
@@ -548,6 +567,600 @@ fn az_policy_parse(file: String) -> Result<()> {
     Ok(())
 }
 
+// ── External test-suite runner ────────────────────────────────────────────
+
+/// YAML schema for the external Azure Policy test suite (`*.Test.yaml`).
+#[cfg(feature = "azure_policy")]
+mod ext_test {
+    use serde::Deserialize;
+
+    #[derive(Deserialize, Debug)]
+    #[allow(dead_code)]
+    pub struct TestFile {
+        #[serde(default)]
+        pub title: Option<String>,
+
+        /// Path to a policy definition JSON file (relative to the YAML file, may use `\`).
+        #[serde(default)]
+        pub policy: Option<String>,
+
+        #[serde(default)]
+        pub tests: Vec<TestCase>,
+    }
+
+    #[derive(Deserialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct TestCase {
+        pub name: String,
+
+        #[serde(default)]
+        pub parameters: Option<serde_json::Value>,
+
+        /// Inline policy rule (used in `csharp-converted` tests).
+        #[serde(default)]
+        pub policy_rule: Option<serde_json::Value>,
+
+        pub expected: Expected,
+
+        #[serde(default)]
+        pub resources: Vec<String>,
+
+        #[serde(default)]
+        pub environment: Option<Environment>,
+
+        /// DenyAction-style tests use `requests` instead of `resources`.
+        #[serde(default)]
+        pub requests: Vec<serde_json::Value>,
+    }
+
+    #[derive(Deserialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    #[allow(dead_code)]
+    pub struct Expected {
+        #[serde(default)]
+        pub compliance_state: Option<String>,
+
+        /// Legacy alias for `complianceState`.
+        #[serde(default)]
+        pub outcome: Option<String>,
+
+        #[serde(default)]
+        pub effect: Option<String>,
+
+        #[serde(default)]
+        pub fields: Vec<FieldExpectation>,
+
+        #[serde(default)]
+        pub deployment: Vec<serde_json::Value>,
+    }
+
+    #[derive(Deserialize, Debug)]
+    #[allow(dead_code)]
+    pub struct FieldExpectation {
+        pub path: String,
+        pub value: serde_json::Value,
+    }
+
+    #[derive(Deserialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct Environment {
+        #[serde(default)]
+        pub related_resource: Option<String>,
+
+        #[serde(default)]
+        pub resource_group: Option<String>,
+    }
+
+    impl Expected {
+        /// Normalised compliance state string.
+        pub fn state(&self) -> Option<&str> {
+            self.compliance_state.as_deref().or(self.outcome.as_deref())
+        }
+    }
+}
+
+#[cfg(feature = "azure_policy")]
+fn az_policy_test_suite(
+    folder: String,
+    aliases: Option<String>,
+    filter: Option<String>,
+    verbose: bool,
+) -> Result<()> {
+    use regorus::languages::azure_policy::aliases::normalizer;
+    use regorus::languages::azure_policy::{compiler, parser};
+    use regorus::rvm::RegoVM;
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    // Optionally load a shared alias catalog.
+    let alias_registry = az_load_aliases(aliases.as_deref())?;
+
+    // Recursively find all *.Test.yaml files.
+    let mut test_files = Vec::new();
+    fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.ends_with(".Test.yaml") {
+                    out.push(path);
+                }
+            }
+        }
+    }
+    walk(Path::new(&folder), &mut test_files);
+    test_files.sort();
+
+    if test_files.is_empty() {
+        bail!("No *.Test.yaml files found under {folder}");
+    }
+
+    println!("Found {} test file(s) under {}", test_files.len(), folder);
+
+    let mut total_files = 0usize;
+    let mut total_cases = 0usize;
+    let mut total_pass = 0usize;
+    let mut total_fail = 0usize;
+    let mut total_skip = 0usize;
+    let mut failures: Vec<String> = Vec::new();
+
+    for test_path in &test_files {
+        let rel = test_path
+            .strip_prefix(&folder)
+            .unwrap_or(test_path)
+            .display()
+            .to_string();
+
+        if let Some(ref f) = filter {
+            if !rel.contains(f.as_str()) {
+                continue;
+            }
+        }
+        total_files += 1;
+
+        let yaml_str = match std::fs::read_to_string(test_path) {
+            Ok(s) => s,
+            Err(e) => {
+                let msg = format!("{rel}: cannot read file: {e}");
+                eprintln!("SKIP {msg}");
+                failures.push(msg);
+                total_fail += 1;
+                continue;
+            }
+        };
+
+        let test_file: ext_test::TestFile = match serde_yaml::from_str(&yaml_str) {
+            Ok(t) => t,
+            Err(e) => {
+                let msg = format!("{rel}: YAML parse error: {e}");
+                eprintln!("SKIP {msg}");
+                failures.push(msg);
+                total_fail += 1;
+                continue;
+            }
+        };
+
+        if verbose {
+            println!("\n── {} ({} tests) ──", rel, test_file.tests.len());
+        }
+
+        // Load the file-level policy definition (if any).
+        let file_policy_json: Option<serde_json::Value> =
+            if let Some(ref pol_path) = test_file.policy {
+                // Resolve path relative to the YAML file.  Windows backslashes → forward.
+                let resolved = pol_path.replace('\\', "/");
+                let base = test_path.parent().unwrap_or_else(|| Path::new("."));
+                let policy_path = base.join(&resolved);
+                match std::fs::read_to_string(&policy_path) {
+                    Ok(text) => match serde_json::from_str(&text) {
+                        Ok(v) => Some(v),
+                        Err(e) => {
+                            // Try stripping trailing commas (common in test JSON).
+                            match serde_json_lenient(&text) {
+                                Ok(v) => Some(v),
+                                Err(_) => {
+                                    let msg = format!(
+                                        "{rel}: policy JSON parse error ({}): {e}",
+                                        policy_path.display()
+                                    );
+                                    eprintln!("SKIP {msg}");
+                                    failures.push(msg);
+                                    total_fail += 1;
+                                    continue;
+                                }
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        let msg = format!(
+                            "{rel}: cannot read policy file {}: {e}",
+                            policy_path.display()
+                        );
+                        eprintln!("SKIP {msg}");
+                        failures.push(msg);
+                        total_fail += 1;
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
+
+        for case in &test_file.tests {
+            total_cases += 1;
+            let label = format!("{rel} / {}", case.name);
+
+            // Skip DenyAction tests (different evaluation model).
+            if !case.requests.is_empty() {
+                if verbose {
+                    println!("  SKIP (DenyAction) {}", case.name);
+                }
+                total_skip += 1;
+                continue;
+            }
+
+            // Determine the policy definition JSON for this case.
+            let policy_json = if let Some(ref inline_rule) = case.policy_rule {
+                // Inline policyRule in the test case → wrap in a minimal definition.
+                serde_json::json!({
+                    "properties": {
+                        "policyRule": inline_rule,
+                        "mode": "All"
+                    }
+                })
+            } else if let Some(ref file_json) = file_policy_json {
+                file_json.clone()
+            } else {
+                if verbose {
+                    println!("  SKIP (no policy) {}", case.name);
+                }
+                total_skip += 1;
+                continue;
+            };
+
+            // Parse the policy definition.
+            let policy_text = serde_json::to_string(&policy_json).unwrap();
+            let source = match regorus::Source::from_contents(label.clone(), policy_text) {
+                Ok(s) => s,
+                Err(e) => {
+                    let msg = format!("{label}: source error: {e}");
+                    if verbose {
+                        eprintln!("  FAIL {msg}");
+                    }
+                    failures.push(msg);
+                    total_fail += 1;
+                    continue;
+                }
+            };
+
+            let defn = match parser::parse_policy_definition(&source) {
+                Ok(d) => d,
+                Err(e) => {
+                    let msg = format!("{label}: parse error: {e}");
+                    if verbose {
+                        eprintln!("  FAIL {msg}");
+                    }
+                    failures.push(msg);
+                    total_fail += 1;
+                    continue;
+                }
+            };
+
+            // Compile.
+            let program = if let Some(ref reg) = alias_registry {
+                match compiler::compile_policy_definition_with_aliases(
+                    &defn,
+                    reg.alias_map(),
+                    reg.alias_modifiable_map(),
+                ) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let msg = format!("{label}: compile error: {e}");
+                        if verbose {
+                            eprintln!("  FAIL {msg}");
+                        }
+                        failures.push(msg);
+                        total_fail += 1;
+                        continue;
+                    }
+                }
+            } else {
+                match compiler::compile_policy_definition(&defn) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let msg = format!("{label}: compile error: {e}");
+                        if verbose {
+                            eprintln!("  FAIL {msg}");
+                        }
+                        failures.push(msg);
+                        total_fail += 1;
+                        continue;
+                    }
+                }
+            };
+
+            // Extract details.type for AINE/DINE host-await normalization.
+            let details_type = policy_json
+                .pointer("/properties/policyRule/then/details/type")
+                .or_else(|| policy_json.pointer("/then/details/type"))
+                .and_then(|v| v.as_str())
+                .map(String::from);
+
+            // If no resources provided, evaluate once with empty resource.
+            let resources: Vec<serde_json::Value> = if case.resources.is_empty() {
+                vec![serde_json::json!({})]
+            } else {
+                case.resources
+                    .iter()
+                    .filter_map(|s| {
+                        serde_json_lenient(s.trim())
+                            .or_else(|_| serde_json::from_str(s.trim()))
+                            .ok()
+                    })
+                    .collect()
+            };
+
+            if resources.is_empty() && !case.resources.is_empty() {
+                let msg = format!("{label}: all resource JSON blocks failed to parse");
+                if verbose {
+                    eprintln!("  FAIL {msg}");
+                }
+                failures.push(msg);
+                total_fail += 1;
+                continue;
+            }
+
+            // Evaluate each resource and check the result.
+            let mut case_passed = true;
+            for (ri, raw_resource) in resources.iter().enumerate() {
+                // Normalize the resource.
+                let resource_json = if let Some(ref reg) = alias_registry {
+                    let api_ver = raw_resource
+                        .get("apiVersion")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    normalizer::normalize(raw_resource, Some(reg), api_ver.as_deref())
+                } else {
+                    normalizer::normalize(raw_resource, None, None)
+                };
+
+                // Build parameters.
+                let params = case
+                    .parameters
+                    .as_ref()
+                    .map(|p| serde_json::to_string(p).unwrap())
+                    .unwrap_or_else(|| "{}".to_string());
+                let params_value = regorus::Value::from_json_str(&params)?;
+
+                // Build resource value.
+                let resource_value =
+                    regorus::Value::from_json_str(&serde_json::to_string(&resource_json)?)?;
+
+                // Input envelope.
+                let mut input = regorus::Value::new_object();
+                let map = input.as_object_mut()?;
+                map.insert(regorus::Value::from("resource"), resource_value);
+                map.insert(regorus::Value::from("parameters"), params_value);
+
+                // Context (resourceGroup, subscription, requestContext).
+                let mut ctx: serde_json::Value = serde_json::json!({
+                    "resourceGroup": { "name": "testRG", "location": "eastus" },
+                    "subscription": { "subscriptionId": "00000000-0000-0000-0000-000000000000" }
+                });
+                if let Some(ref env) = case.environment {
+                    if let Some(ref rg_str) = env.resource_group {
+                        if let Ok(rg) = serde_json_lenient(rg_str.trim()) {
+                            ctx["resourceGroup"] = rg;
+                        }
+                    }
+                }
+                // Inject requestContext from resource apiVersion.
+                if let Some(api_ver) = raw_resource.get("apiVersion").and_then(|v| v.as_str()) {
+                    ctx["requestContext"] = serde_json::json!({ "apiVersion": api_ver });
+                }
+                let ctx_value = regorus::Value::from_json_str(&serde_json::to_string(&ctx)?)?;
+
+                let mut vm = RegoVM::new();
+                vm.load_program(Arc::clone(&program));
+                vm.set_input(input);
+                vm.set_context(ctx_value);
+
+                // Host-await for AINE/DINE: related resource.
+                if let Some(ref env) = case.environment {
+                    if let Some(ref rr_str) = env.related_resource {
+                        if let Ok(rr_json) = serde_json_lenient(rr_str.trim()) {
+                            // Normalize related resource.
+                            let rr_norm = if let Some(ref reg) = alias_registry {
+                                let rr_with_type = if let Some(ref dt) = details_type {
+                                    let mut rr = rr_json.clone();
+                                    if rr.is_object() {
+                                        rr.as_object_mut().unwrap().entry("type").or_insert_with(
+                                            || serde_json::Value::String(dt.clone()),
+                                        );
+                                    }
+                                    rr
+                                } else {
+                                    rr_json
+                                };
+                                normalizer::normalize(&rr_with_type, Some(reg), None)
+                            } else {
+                                normalizer::normalize(&rr_json, None, None)
+                            };
+
+                            let rr_value =
+                                regorus::Value::from_json_str(&serde_json::to_string(&rr_norm)?)?;
+                            let mut responses: BTreeMap<regorus::Value, Vec<regorus::Value>> =
+                                BTreeMap::new();
+                            responses
+                                .entry(regorus::Value::from("azure.policy.existence_check"))
+                                .or_default()
+                                .push(rr_value);
+                            vm.set_host_await_responses(responses);
+                        }
+                    }
+                }
+
+                let result = match vm.execute_entry_point_by_name("main") {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let msg = format!("{label} [resource {ri}]: execution error: {e}");
+                        if verbose {
+                            eprintln!("  FAIL {msg}");
+                        }
+                        failures.push(msg);
+                        case_passed = false;
+                        break;
+                    }
+                };
+
+                // Check expected compliance state.
+                let expected_state = case.expected.state();
+                if let Some(state) = expected_state {
+                    let is_compliant = state.eq_ignore_ascii_case("Compliant");
+                    let is_noncompliant = state.eq_ignore_ascii_case("NonCompliant")
+                        || state.eq_ignore_ascii_case("Protected");
+
+                    if is_compliant {
+                        // Compliant → the condition should NOT match (undefined).
+                        if result != regorus::Value::Undefined {
+                            // Some policies return the effect even when compliant
+                            // via existenceCondition match.  Check if the result
+                            // has effect matching the expected.
+                            let effect_val = extract_effect(&result);
+                            if !effect_val.is_empty() {
+                                // AINE/DINE compliant: the if-condition matched
+                                // but the existenceCondition was satisfied.
+                                // Our compiler returns Undefined in that case,
+                                // but if it doesn't, still treat as pass if
+                                // the state says Compliant.
+                            }
+                            let msg = format!(
+                                "{label} [resource {ri}]: expected Compliant (undefined) but got {}",
+                                result
+                            );
+                            if verbose {
+                                eprintln!("  FAIL {msg}");
+                            }
+                            failures.push(msg);
+                            case_passed = false;
+                            break;
+                        }
+                    } else if is_noncompliant {
+                        // NonCompliant → the condition should match, producing an effect.
+                        if result == regorus::Value::Undefined {
+                            let msg = format!(
+                                "{label} [resource {ri}]: expected NonCompliant but got undefined"
+                            );
+                            if verbose {
+                                eprintln!("  FAIL {msg}");
+                            }
+                            failures.push(msg);
+                            case_passed = false;
+                            break;
+                        }
+
+                        // Optionally check the effect name.
+                        if let Some(ref expected_effect) = case.expected.effect {
+                            let actual = extract_effect(&result);
+                            if !actual.eq_ignore_ascii_case(expected_effect) {
+                                let msg = format!(
+                                    "{label} [resource {ri}]: expected effect '{}' but got '{}'",
+                                    expected_effect, actual
+                                );
+                                if verbose {
+                                    eprintln!("  FAIL {msg}");
+                                }
+                                failures.push(msg);
+                                case_passed = false;
+                                break;
+                            }
+                        }
+                    }
+                    // Other states (e.g., "Protected" for DenyAction) — we only
+                    // check if we got a result or not for now.
+                }
+            }
+
+            if case_passed {
+                total_pass += 1;
+                if verbose {
+                    println!("  PASS {}", case.name);
+                }
+            } else {
+                total_fail += 1;
+            }
+        }
+    }
+
+    // Summary.
+    println!("\n══════════════════════════════════════════════════════════");
+    println!(
+        "Files: {total_files}  Cases: {total_cases}  Pass: {total_pass}  Fail: {total_fail}  Skip: {total_skip}"
+    );
+    if !failures.is_empty() {
+        println!("\nFailures ({}):", failures.len());
+        for (i, f) in failures.iter().enumerate() {
+            println!("  {}. {f}", i + 1);
+        }
+    }
+    println!("══════════════════════════════════════════════════════════");
+
+    if total_fail > 0 {
+        bail!("{total_fail} test(s) failed");
+    }
+
+    Ok(())
+}
+
+/// Extract the effect name string from a VM result value.
+#[cfg(feature = "azure_policy")]
+fn extract_effect(value: &regorus::Value) -> String {
+    if let Ok(obj) = value.as_object() {
+        if let Some(e) = obj.get(&regorus::Value::from("effect")) {
+            if let Ok(s) = e.as_string() {
+                return s.to_string();
+            }
+        }
+    }
+    // Fallback: try to use the value as a plain string.
+    if let Ok(s) = value.as_string() {
+        return s.to_string();
+    }
+    String::new()
+}
+
+/// Lenient JSON parser that strips trailing commas before values/arrays close.
+/// Many test policy JSON files have trailing commas which strict serde_json rejects.
+#[cfg(feature = "azure_policy")]
+fn serde_json_lenient(s: &str) -> Result<serde_json::Value> {
+    // Simple approach: strip trailing commas before } and ].
+    let mut cleaned = String::with_capacity(s.len());
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+    while i < len {
+        if chars[i] == ',' {
+            // Look ahead past whitespace for } or ].
+            let mut j = i + 1;
+            while j < len && chars[j].is_whitespace() {
+                j += 1;
+            }
+            if j < len && (chars[j] == '}' || chars[j] == ']') {
+                // Skip the trailing comma.
+                i += 1;
+                continue;
+            }
+        }
+        cleaned.push(chars[i]);
+        i += 1;
+    }
+    Ok(serde_json::from_str(&cleaned)?)
+}
+
 fn main() -> Result<()> {
     use clap::Parser;
 
@@ -594,6 +1207,12 @@ fn main() -> Result<()> {
                 resource_type,
             } => az_policy_eval(file, input, aliases, resource_type),
             AzurePolicyCommand::Parse { file } => az_policy_parse(file),
+            AzurePolicyCommand::TestSuite {
+                folder,
+                aliases,
+                filter,
+                verbose,
+            } => az_policy_test_suite(folder, aliases, filter, verbose),
         },
     }
 }

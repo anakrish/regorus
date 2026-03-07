@@ -61,10 +61,11 @@ cases:
     want_effect: "deny"
 
   # =========================================================================
-  # Missing array → true (vacuous truth)
+  # Missing array → false (not iterable → condition not met)
+  # Azure Policy: field[*] on null/missing/non-array → false
   # =========================================================================
 
-  - note: allof_missing_array_is_true
+  - note: allof_missing_array_is_false
     policy_rule: |
       {
         "if": {
@@ -75,7 +76,7 @@ cases:
       }
     resource:
       type: "some.type"
-    want_effect: "deny"
+    want_undefined: true
 
   # =========================================================================
   # No suffix — elements compared directly
@@ -285,6 +286,102 @@ cases:
         - { "other": "b" }
     want_no_effect: true
 
+  # -- exists false with [*] ------------------------------------------------
+
+  - note: allof_exists_false_all_present
+    # All elements have the field → "exists false" is false for each → compliant
+    policy_rule: |
+      {
+        "if": {
+          "field": "items[*].name",
+          "exists": "false"
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      items:
+        - { "name": "a" }
+        - { "name": "b" }
+    want_no_effect: true
+
+  - note: allof_exists_false_all_missing
+    # No element has the field → "exists false" is true for each → non-compliant
+    policy_rule: |
+      {
+        "if": {
+          "field": "items[*].name",
+          "exists": "false"
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      items:
+        - { "other": "x" }
+        - { "other": "y" }
+    want_effect: "deny"
+
+  - note: allof_exists_false_mixed
+    # Mixed — one has field, one doesn't → not all satisfy → compliant
+    policy_rule: |
+      {
+        "if": {
+          "field": "items[*].name",
+          "exists": "false"
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      items:
+        - { "name": "a" }
+        - { "other": "b" }
+    want_no_effect: true
+
+  - note: allof_exists_true_null_values
+    # Null values → "exists true" is false (null = not defined) → compliant
+    policy_rule: |
+      {
+        "if": {
+          "field": "items[*].name",
+          "exists": "true"
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      items:
+        - { "name": null }
+        - { "name": null }
+    want_no_effect: true
+
+  - note: allof_exists_false_null_values
+    # Null values → "exists false" is true (null = not defined) → non-compliant
+    policy_rule: |
+      {
+        "if": {
+          "field": "items[*].name",
+          "exists": "false"
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      items:
+        - { "name": null }
+        - { "name": null }
+    want_effect: "deny"
+
+  - note: allof_exists_false_empty_array
+    # Empty array → vacuous truth → non-compliant
+    policy_rule: |
+      {
+        "if": {
+          "field": "items[*].name",
+          "exists": "false"
+        },
+        "then": { "effect": "deny" }
+      }
+    resource:
+      items: []
+    want_effect: "deny"
+
   # =========================================================================
   # Real-world pattern: not + [*] + notEquals
   # "at least one element equals X" via double negation
@@ -409,6 +506,7 @@ cases:
     want_effect: "deny"
 
   - note: allof_doubly_nested_inner_missing
+    # Inner [*] on missing field → false (not iterable), outer Every fails
     policy_rule: |
       {
         "if": {
@@ -421,7 +519,7 @@ cases:
       groups:
         - other: "no tags"
         - other: "also no tags"
-    want_effect: "deny"
+    want_undefined: true
 
   # =========================================================================
   # Single element — trivially allOf

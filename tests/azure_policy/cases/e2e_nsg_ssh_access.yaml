@@ -210,7 +210,9 @@ cases:
         access: "Allow"
         direction: "Inbound"
         destinationPortRange: "80-443"
+        destinationPortRanges: []
         sourceAddressPrefix: "Internet"
+        sourceAddressPrefixes: []
     want_undefined: true
 
   - note: pass_port_23_only
@@ -221,7 +223,9 @@ cases:
         access: "Allow"
         direction: "Inbound"
         destinationPortRange: "23"
+        destinationPortRanges: []
         sourceAddressPrefix: "*"
+        sourceAddressPrefixes: []
     want_undefined: true
 
   # =========================================================================
@@ -317,7 +321,9 @@ cases:
         access: "Allow"
         direction: "Inbound"
         destinationPortRange: "22"
+        destinationPortRanges: []
         sourceAddressPrefix: "10.0.0.0/8"
+        sourceAddressPrefixes: []
     want_undefined: true
 
   - note: pass_source_prefixes_all_private
@@ -328,6 +334,7 @@ cases:
         access: "Allow"
         direction: "Inbound"
         destinationPortRange: "22"
+        destinationPortRanges: []
         sourceAddressPrefixes:
           - "10.0.0.0/8"
           - "172.16.0.0/12"

@@ -3,12 +3,17 @@
 
 //! Azure Policy builtins: operators, logic functions, and ARM template functions.
 
-#![allow(
-    clippy::as_conversions,
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::expect_used,
     clippy::indexing_slicing,
+    clippy::panic,
+    clippy::shadow_unrelated,
+    clippy::unwrap_used,
     clippy::missing_const_for_fn,
-    clippy::pattern_type_mismatch,
-    clippy::unused_trait_names
+    clippy::option_if_let_else,
+    clippy::semicolon_if_nothing_returned,
+    clippy::useless_let_if_seq
 )]
 
 pub mod helpers;

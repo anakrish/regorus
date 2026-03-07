@@ -18,6 +18,16 @@ use ipnet::IpNet;
 
 use super::helpers::{as_string, try_coerce_to_number};
 
+/// Truncate `f64` to `i64` (saturating semantics since Rust 1.45).
+///
+/// The standard library provides no `TryFrom<f64>` for `i64`, so a raw `as`
+/// cast is the only option.  Wrapping it in a named function keeps the rest
+/// of the module free of `clippy::as_conversions` warnings.
+#[expect(clippy::as_conversions, reason = "no TryFrom<f64> for i64 in std")]
+const fn truncate_f64_to_i64(f: f64) -> i64 {
+    f as i64
+}
+
 pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     m.insert("azure.policy.fn.split", (fn_split, 2));
     m.insert("azure.policy.fn.empty", (fn_empty, 1));
@@ -37,19 +47,56 @@ pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::Bui
 
 /// `split(inputString, delimiter)` → array of strings.
 fn fn_split(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
-    if args.len() != 2 {
-        return Ok(Value::Undefined);
-    }
-
-    let (Some(input), Some(delimiter)) = (as_string(&args[0]), as_string(&args[1])) else {
+    #[allow(clippy::pattern_type_mismatch)]
+    let [input_val, delim_val] = args
+    else {
         return Ok(Value::Undefined);
     };
 
-    let parts: alloc::vec::Vec<Value> = input
-        .split(&delimiter)
-        .map(|s| Value::from(s.to_string()))
-        .collect();
-    Ok(Value::from(parts))
+    let Some(input) = as_string(input_val) else {
+        return Ok(Value::Undefined);
+    };
+
+    // The delimiter argument can be a single string or an array of strings.
+    // When an array is provided, the input is split on ANY of the delimiters.
+    match *delim_val {
+        Value::String(ref delimiter) => {
+            let parts: alloc::vec::Vec<Value> = input
+                .split(delimiter.as_ref())
+                .map(|s| Value::from(s.to_string()))
+                .collect();
+            Ok(Value::from(parts))
+        }
+        Value::Array(ref delimiters) => {
+            // Collect all string delimiters from the array.
+            let delims: alloc::vec::Vec<&str> = delimiters
+                .iter()
+                .filter_map(|v| match *v {
+                    Value::String(ref s) => Some(s.as_ref()),
+                    _ => None,
+                })
+                .collect();
+            if delims.is_empty() {
+                // No valid delimiters — return input as single-element array.
+                return Ok(Value::from(alloc::vec![Value::from(input)]));
+            }
+            // Split by replacing all delimiters with the first one, then
+            // splitting on that.
+            let Some(first) = delims.first() else {
+                return Ok(Value::from(alloc::vec![Value::from(input)]));
+            };
+            let mut replaced = input;
+            for &d in delims.get(1..).unwrap_or_default() {
+                replaced = replaced.replace(d, first);
+            }
+            let parts: alloc::vec::Vec<Value> = replaced
+                .split(first)
+                .map(|s| Value::from(s.to_string()))
+                .collect();
+            Ok(Value::from(parts))
+        }
+        _ => Ok(Value::Undefined),
+    }
 }
 
 /// `empty(item)` → true if string/array/object is empty or value is null/undefined.
@@ -57,10 +104,10 @@ fn fn_empty(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) 
     let Some(arg) = args.first() else {
         return Ok(Value::Bool(true));
     };
-    let result = match arg {
-        Value::String(s) => s.is_empty(),
-        Value::Array(a) => a.is_empty(),
-        Value::Object(o) => o.is_empty(),
+    let result = match *arg {
+        Value::String(ref s) => s.is_empty(),
+        Value::Array(ref a) => a.is_empty(),
+        Value::Object(ref o) => o.is_empty(),
         Value::Null | Value::Undefined => true,
         _ => false,
     };
@@ -72,15 +119,12 @@ fn fn_first(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) 
     let Some(arg) = args.first() else {
         return Ok(Value::Undefined);
     };
-    match arg {
-        Value::Array(a) => Ok(a.first().cloned().unwrap_or(Value::Undefined)),
-        Value::String(s) => {
-            if let Some(ch) = s.chars().next() {
-                Ok(Value::from(ch.to_string()))
-            } else {
-                Ok(Value::Undefined)
-            }
-        }
+    match *arg {
+        Value::Array(ref a) => Ok(a.first().cloned().unwrap_or(Value::Undefined)),
+        Value::String(ref s) => Ok(s
+            .chars()
+            .next()
+            .map_or(Value::Undefined, |ch| Value::from(ch.to_string()))),
         _ => Ok(Value::Undefined),
     }
 }
@@ -90,15 +134,12 @@ fn fn_last(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -
     let Some(arg) = args.first() else {
         return Ok(Value::Undefined);
     };
-    match arg {
-        Value::Array(a) => Ok(a.last().cloned().unwrap_or(Value::Undefined)),
-        Value::String(s) => {
-            if let Some(ch) = s.chars().last() {
-                Ok(Value::from(ch.to_string()))
-            } else {
-                Ok(Value::Undefined)
-            }
-        }
+    match *arg {
+        Value::Array(ref a) => Ok(a.last().cloned().unwrap_or(Value::Undefined)),
+        Value::String(ref s) => Ok(s
+            .chars()
+            .last()
+            .map_or(Value::Undefined, |ch| Value::from(ch.to_string()))),
         _ => Ok(Value::Undefined),
     }
 }
@@ -110,10 +151,12 @@ fn fn_starts_with(
     args: &[Value],
     _strict: bool,
 ) -> Result<Value> {
-    if args.len() != 2 {
+    #[allow(clippy::pattern_type_mismatch)]
+    let [hay_val, needle_val] = args
+    else {
         return Ok(Value::Bool(false));
-    }
-    let (Some(haystack), Some(needle)) = (as_string(&args[0]), as_string(&args[1])) else {
+    };
+    let (Some(haystack), Some(needle)) = (as_string(hay_val), as_string(needle_val)) else {
         return Ok(Value::Bool(false));
     };
     Ok(Value::Bool(
@@ -128,10 +171,12 @@ fn fn_ends_with(
     args: &[Value],
     _strict: bool,
 ) -> Result<Value> {
-    if args.len() != 2 {
+    #[allow(clippy::pattern_type_mismatch)]
+    let [hay_val, needle_val] = args
+    else {
         return Ok(Value::Bool(false));
-    }
-    let (Some(haystack), Some(needle)) = (as_string(&args[0]), as_string(&args[1])) else {
+    };
+    let (Some(haystack), Some(needle)) = (as_string(hay_val), as_string(needle_val)) else {
         return Ok(Value::Bool(false));
     };
     Ok(Value::Bool(
@@ -144,30 +189,20 @@ fn fn_int(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) ->
     let Some(arg) = args.first() else {
         return Ok(Value::Undefined);
     };
-    match arg {
-        Value::Number(n) => {
+    match *arg {
+        Value::Number(ref n) => {
             // Truncate to integer.
-            if let Some(i) = n.as_i64() {
-                Ok(Value::from(i))
-            } else if let Some(f) = n.as_f64() {
-                Ok(Value::from(f as i64))
-            } else {
-                Ok(Value::Undefined)
-            }
+            n.as_i64()
+                .map(Value::from)
+                .or_else(|| n.as_f64().map(|f| Value::from(truncate_f64_to_i64(f))))
+                .map_or(Ok(Value::Undefined), Ok)
         }
-        Value::String(s) => {
-            if let Some(n) = try_coerce_to_number(s) {
-                if let Some(i) = n.as_i64() {
-                    Ok(Value::from(i))
-                } else if let Some(f) = n.as_f64() {
-                    Ok(Value::from(f as i64))
-                } else {
-                    Ok(Value::Undefined)
-                }
-            } else {
-                Ok(Value::Undefined)
-            }
-        }
+        Value::String(ref s) => try_coerce_to_number(s).map_or(Ok(Value::Undefined), |n| {
+            n.as_i64()
+                .map(Value::from)
+                .or_else(|| n.as_f64().map(|f| Value::from(truncate_f64_to_i64(f))))
+                .map_or(Ok(Value::Undefined), Ok)
+        }),
         _ => Ok(Value::Undefined),
     }
 }
@@ -177,10 +212,10 @@ fn fn_string(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool)
     let Some(arg) = args.first() else {
         return Ok(Value::Undefined);
     };
-    match arg {
+    match *arg {
         Value::String(_) => Ok(arg.clone()),
         Value::Bool(b) => Ok(Value::from(b.to_string())),
-        Value::Number(n) => Ok(Value::from(n.format_decimal())),
+        Value::Number(ref n) => Ok(Value::from(n.format_decimal())),
         Value::Null => Ok(Value::from("null")),
         Value::Undefined => Ok(Value::Undefined),
         // For arrays and objects, produce JSON-style representation.
@@ -193,22 +228,18 @@ fn fn_bool(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -
     let Some(arg) = args.first() else {
         return Ok(Value::Undefined);
     };
-    match arg {
+    match *arg {
         Value::Bool(_) => Ok(arg.clone()),
-        Value::String(s) => match s.to_lowercase().as_str() {
+        Value::String(ref s) => match s.to_lowercase().as_str() {
             "true" | "1" => Ok(Value::Bool(true)),
             "false" | "0" => Ok(Value::Bool(false)),
             _ => Ok(Value::Undefined),
         },
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Ok(Value::Bool(i != 0))
-            } else if let Some(f) = n.as_f64() {
-                Ok(Value::Bool(f != 0.0))
-            } else {
-                Ok(Value::Undefined)
-            }
-        }
+        Value::Number(ref n) => n
+            .as_i64()
+            .map(|i| Value::Bool(i != 0))
+            .or_else(|| n.as_f64().map(|f| Value::Bool(f != 0.0)))
+            .map_or(Ok(Value::Undefined), Ok),
         _ => Ok(Value::Undefined),
     }
 }
@@ -224,34 +255,38 @@ fn fn_pad_left(
         return Ok(Value::Undefined);
     }
 
-    let Some(value) = as_string(&args[0]) else {
+    let Some(value) = args.first().and_then(as_string) else {
         return Ok(Value::Undefined);
     };
 
-    let width = match &args[1] {
-        Value::Number(n) => n
+    let width = args.get(1).and_then(|width_val| match *width_val {
+        Value::Number(ref n) => n
             .as_i64()
             .and_then(|x| usize::try_from(x).ok())
-            .or_else(|| n.as_f64().and_then(|x| usize::try_from(x as i64).ok())),
-        Value::String(s) => try_coerce_to_number(s).and_then(|n| {
+            .or_else(|| {
+                n.as_f64()
+                    .and_then(|x| usize::try_from(truncate_f64_to_i64(x)).ok())
+            }),
+        Value::String(ref s) => try_coerce_to_number(s).and_then(|n| {
             n.as_i64()
                 .and_then(|x| usize::try_from(x).ok())
-                .or_else(|| n.as_f64().and_then(|x| usize::try_from(x as i64).ok()))
+                .or_else(|| {
+                    n.as_f64()
+                        .and_then(|x| usize::try_from(truncate_f64_to_i64(x)).ok())
+                })
         }),
         _ => None,
-    };
+    });
 
     let Some(total_width) = width else {
         return Ok(Value::Undefined);
     };
 
-    let pad_char = if args.len() == 3 {
-        as_string(&args[2])
-            .and_then(|s| s.chars().next())
-            .unwrap_or(' ')
-    } else {
-        ' '
-    };
+    let pad_char = args
+        .get(2)
+        .and_then(as_string)
+        .and_then(|s| s.chars().next())
+        .unwrap_or(' ');
 
     let value_len = value.chars().count();
     if value_len >= total_width {
@@ -275,11 +310,12 @@ fn fn_ip_range_contains(
     args: &[Value],
     _strict: bool,
 ) -> Result<Value> {
-    if args.len() != 2 {
+    #[allow(clippy::pattern_type_mismatch)]
+    let [range_val, target_val] = args
+    else {
         return Ok(Value::Bool(false));
-    }
-
-    let (Some(range), Some(target)) = (as_string(&args[0]), as_string(&args[1])) else {
+    };
+    let (Some(range), Some(target)) = (as_string(range_val), as_string(target_val)) else {
         return Ok(Value::Bool(false));
     };
 

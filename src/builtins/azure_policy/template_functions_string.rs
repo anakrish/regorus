@@ -30,16 +30,17 @@ fn fn_index_of(
     args: &[Value],
     _strict: bool,
 ) -> Result<Value> {
-    if args.len() != 2 {
-        return Ok(Value::Undefined);
-    }
-    let (Some(haystack), Some(needle)) = (as_string(&args[0]), as_string(&args[1])) else {
+    #[allow(clippy::pattern_type_mismatch)]
+    let [hay_val, needle_val] = args
+    else {
         return Ok(Value::Undefined);
     };
-    match haystack.find(&needle) {
-        Some(pos) => Ok(Value::from(pos as i64)),
-        None => Ok(Value::from(-1_i64)),
-    }
+    let (Some(haystack), Some(needle)) = (as_string(hay_val), as_string(needle_val)) else {
+        return Ok(Value::Undefined);
+    };
+    Ok(haystack.find(&needle).map_or(Value::from(-1_i64), |pos| {
+        Value::from(i64::try_from(pos).unwrap_or(-1))
+    }))
 }
 
 /// `lastIndexOf(stringToSearch, stringToFind)` → zero-based index, or -1.
@@ -49,16 +50,17 @@ fn fn_last_index_of(
     args: &[Value],
     _strict: bool,
 ) -> Result<Value> {
-    if args.len() != 2 {
-        return Ok(Value::Undefined);
-    }
-    let (Some(haystack), Some(needle)) = (as_string(&args[0]), as_string(&args[1])) else {
+    #[allow(clippy::pattern_type_mismatch)]
+    let [hay_val, needle_val] = args
+    else {
         return Ok(Value::Undefined);
     };
-    match haystack.rfind(&needle) {
-        Some(pos) => Ok(Value::from(pos as i64)),
-        None => Ok(Value::from(-1_i64)),
-    }
+    let (Some(haystack), Some(needle)) = (as_string(hay_val), as_string(needle_val)) else {
+        return Ok(Value::Undefined);
+    };
+    Ok(haystack.rfind(&needle).map_or(Value::from(-1_i64), |pos| {
+        Value::from(i64::try_from(pos).unwrap_or(-1))
+    }))
 }
 
 /// `trim(stringToTrim)` → string with leading/trailing whitespace removed.
@@ -79,15 +81,20 @@ fn fn_format(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool)
     if args.is_empty() {
         return Ok(Value::Undefined);
     }
-    let Some(template) = as_string(&args[0]) else {
+    let Some(first) = args.first() else {
+        return Ok(Value::Undefined);
+    };
+    let Some(template) = as_string(first) else {
         return Ok(Value::Undefined);
     };
 
-    let format_args: Vec<String> = args[1..]
+    let format_args: Vec<String> = args
+        .get(1..)
+        .unwrap_or_default()
         .iter()
-        .map(|v| match v {
-            Value::String(s) => s.to_string(),
-            Value::Number(n) => n.format_decimal(),
+        .map(|v| match *v {
+            Value::String(ref s) => s.to_string(),
+            Value::Number(ref n) => n.format_decimal(),
             Value::Bool(b) => b.to_string(),
             Value::Null => "null".to_string(),
             _ => v.to_string(),

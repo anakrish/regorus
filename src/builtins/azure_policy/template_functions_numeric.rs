@@ -32,10 +32,10 @@ pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::Bui
 /// - A single array argument: `min([1, 2, 3])` → `1`
 fn fn_min(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let values = if args.len() == 1 {
-        match &args[0] {
-            Value::Array(arr) => arr.as_ref().as_slice(),
+        args.first().map_or(args, |first| match *first {
+            Value::Array(ref arr) => arr.as_ref().as_slice(),
             _ => args,
-        }
+        })
     } else {
         args
     };
@@ -46,15 +46,12 @@ fn fn_min(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) ->
 
     let mut result: Option<&Value> = None;
     for v in values {
-        match v {
+        match *v {
             Value::Number(_) => {
-                if let Some(current) = result {
-                    if v < current {
-                        result = Some(v);
-                    }
-                } else {
-                    result = Some(v);
-                }
+                result = Some(match result {
+                    Some(current) if v >= current => current,
+                    _ => v,
+                });
             }
             _ => return Ok(Value::Undefined),
         }
@@ -68,10 +65,10 @@ fn fn_min(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) ->
 /// Same overloading as `min`.
 fn fn_max(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let values = if args.len() == 1 {
-        match &args[0] {
-            Value::Array(arr) => arr.as_ref().as_slice(),
+        args.first().map_or(args, |first| match *first {
+            Value::Array(ref arr) => arr.as_ref().as_slice(),
             _ => args,
-        }
+        })
     } else {
         args
     };
@@ -82,15 +79,12 @@ fn fn_max(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) ->
 
     let mut result: Option<&Value> = None;
     for v in values {
-        match v {
+        match *v {
             Value::Number(_) => {
-                if let Some(current) = result {
-                    if v > current {
-                        result = Some(v);
-                    }
-                } else {
-                    result = Some(v);
-                }
+                result = Some(match result {
+                    Some(current) if v <= current => current,
+                    _ => v,
+                });
             }
             _ => return Ok(Value::Undefined),
         }
@@ -104,25 +98,13 @@ fn fn_float(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) 
     let Some(arg) = args.first() else {
         return Ok(Value::Undefined);
     };
-    match arg {
-        Value::Number(n) => {
-            if let Some(f) = n.as_f64() {
-                Ok(Value::from(f))
-            } else {
-                Ok(arg.clone())
-            }
-        }
-        Value::String(s) => {
-            if let Some(n) = try_coerce_to_number(s) {
-                if let Some(f) = n.as_f64() {
-                    Ok(Value::from(f))
-                } else {
-                    Ok(Value::Undefined)
-                }
-            } else {
-                Ok(Value::Undefined)
-            }
-        }
+    match *arg {
+        Value::Number(ref n) => n
+            .as_f64()
+            .map_or_else(|| Ok(arg.clone()), |f| Ok(Value::from(f))),
+        Value::String(ref s) => Ok(try_coerce_to_number(s)
+            .and_then(|n| n.as_f64())
+            .map_or(Value::Undefined, Value::from)),
         _ => Ok(Value::Undefined),
     }
 }
@@ -132,33 +114,44 @@ fn fn_float(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) 
 /// ARM template `div()` performs integer division, unlike the RVM `Div`
 /// instruction which may produce floats for non-evenly-divisible operands.
 fn fn_int_div(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
-    if args.len() != 2 {
+    #[allow(clippy::pattern_type_mismatch)]
+    let [a, b] = args
+    else {
         return Ok(Value::Undefined);
-    }
-    let (a, b) = (extract_i64(&args[0]), extract_i64(&args[1]));
+    };
+    let (a, b) = (extract_i64(a), extract_i64(b));
     match (a, b) {
-        (Some(_), Some(0)) => Ok(Value::Undefined),
-        (Some(a), Some(b)) => Ok(Value::from(a / b)),
+        (Some(a), Some(b)) => a
+            .checked_div(b)
+            .map_or(Ok(Value::Undefined), |r| Ok(Value::from(r))),
         _ => Ok(Value::Undefined),
     }
 }
 
 /// `mod(operand1, operand2)` → integer modulo.
 fn fn_int_mod(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
-    if args.len() != 2 {
+    #[allow(clippy::pattern_type_mismatch)]
+    let [a, b] = args
+    else {
         return Ok(Value::Undefined);
-    }
-    let (a, b) = (extract_i64(&args[0]), extract_i64(&args[1]));
+    };
+    let (a, b) = (extract_i64(a), extract_i64(b));
     match (a, b) {
-        (Some(_), Some(0)) => Ok(Value::Undefined),
-        (Some(a), Some(b)) => Ok(Value::from(a % b)),
+        (Some(a), Some(b)) => a
+            .checked_rem(b)
+            .map_or(Ok(Value::Undefined), |r| Ok(Value::from(r))),
         _ => Ok(Value::Undefined),
     }
 }
 
 fn extract_i64(v: &Value) -> Option<i64> {
-    match v {
-        Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|x| x as i64)),
+    match *v {
+        Value::Number(ref n) => n.as_i64().or_else(|| n.as_f64().map(f64_to_i64)),
         _ => None,
     }
+}
+
+#[expect(clippy::as_conversions)]
+const fn f64_to_i64(x: f64) -> i64 {
+    x as i64
 }

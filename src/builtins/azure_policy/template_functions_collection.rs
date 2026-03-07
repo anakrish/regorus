@@ -39,27 +39,28 @@ fn fn_intersection(
     args: &[Value],
     _strict: bool,
 ) -> Result<Value> {
-    if args.is_empty() {
+    let Some(first) = args.first() else {
         return Ok(Value::Undefined);
-    }
+    };
+    let rest = args.get(1..).unwrap_or_default();
 
-    match &args[0] {
-        Value::Array(first) => {
+    match *first {
+        Value::Array(ref first) => {
             // Intersection of arrays: keep elements from first that appear in all others.
             let mut result: Vec<Value> = first.as_ref().clone();
-            for arg in &args[1..] {
-                let Value::Array(other) = arg else {
+            for arg in rest {
+                let Value::Array(ref other) = *arg else {
                     return Ok(Value::Undefined);
                 };
                 result.retain(|item| other.contains(item));
             }
             Ok(Value::from(result))
         }
-        Value::Object(first) => {
+        Value::Object(ref first) => {
             // Intersection of objects: keys that exist in all objects.
             let mut result: BTreeMap<Value, Value> = first.as_ref().clone();
-            for arg in &args[1..] {
-                let Value::Object(other) = arg else {
+            for arg in rest {
+                let Value::Object(ref other) = *arg else {
                     return Ok(Value::Undefined);
                 };
                 result.retain(|k, _| other.contains_key(k));
@@ -75,17 +76,17 @@ fn fn_intersection(
 /// For arrays: returns distinct elements across all arrays.
 /// For objects: merges all objects (later values overwrite earlier for same key).
 fn fn_union(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
-    if args.is_empty() {
+    let Some(first) = args.first() else {
         return Ok(Value::Undefined);
-    }
+    };
 
-    match &args[0] {
+    match *first {
         Value::Array(_) => {
             // Union of arrays: collect unique elements preserving first-seen order.
             let mut seen = alloc::collections::BTreeSet::<Value>::new();
             let mut result = Vec::new();
             for arg in args {
-                let Value::Array(arr) = arg else {
+                let Value::Array(ref arr) = *arg else {
                     return Ok(Value::Undefined);
                 };
                 for item in arr.iter() {
@@ -100,7 +101,7 @@ fn fn_union(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) 
             // Union of objects: merge, last writer wins.
             let mut result = BTreeMap::<Value, Value>::new();
             for arg in args {
-                let Value::Object(obj) = arg else {
+                let Value::Object(ref obj) = *arg else {
                     return Ok(Value::Undefined);
                 };
                 for (k, v) in obj.iter() {
@@ -115,18 +116,20 @@ fn fn_union(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) 
 
 /// `take(originalValue, numberToTake)` → first N elements of array or chars of string.
 fn fn_take(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
-    if args.len() != 2 {
+    #[allow(clippy::pattern_type_mismatch)]
+    let [original, count_val] = args
+    else {
         return Ok(Value::Undefined);
-    }
+    };
 
-    let count = extract_usize(&args[1]).unwrap_or(0);
+    let count = extract_usize(count_val).unwrap_or(0);
 
-    match &args[0] {
-        Value::Array(arr) => {
+    match *original {
+        Value::Array(ref arr) => {
             let n = count.min(arr.len());
-            Ok(Value::from(arr[..n].to_vec()))
+            Ok(Value::from(arr.get(..n).unwrap_or_default().to_vec()))
         }
-        Value::String(s) => {
+        Value::String(ref s) => {
             let taken: alloc::string::String = s.chars().take(count).collect();
             Ok(Value::from(taken))
         }
@@ -136,18 +139,20 @@ fn fn_take(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -
 
 /// `skip(originalValue, numberToSkip)` → array/string after skipping N elements.
 fn fn_skip(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
-    if args.len() != 2 {
+    #[allow(clippy::pattern_type_mismatch)]
+    let [original, count_val] = args
+    else {
         return Ok(Value::Undefined);
-    }
+    };
 
-    let count = extract_usize(&args[1]).unwrap_or(0);
+    let count = extract_usize(count_val).unwrap_or(0);
 
-    match &args[0] {
-        Value::Array(arr) => {
+    match *original {
+        Value::Array(ref arr) => {
             let n = count.min(arr.len());
-            Ok(Value::from(arr[n..].to_vec()))
+            Ok(Value::from(arr.get(n..).unwrap_or_default().to_vec()))
         }
-        Value::String(s) => {
+        Value::String(ref s) => {
             let skipped: alloc::string::String = s.chars().skip(count).collect();
             Ok(Value::from(skipped))
         }
@@ -157,14 +162,13 @@ fn fn_skip(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -
 
 /// `range(startIndex, count)` → array of integers starting at startIndex.
 fn fn_range(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
-    if args.len() != 2 {
+    #[allow(clippy::pattern_type_mismatch)]
+    let [start_val, count_val] = args
+    else {
         return Ok(Value::Undefined);
-    }
+    };
 
-    let start = extract_i64(&args[0]);
-    let count = extract_i64(&args[1]);
-
-    let (Some(start), Some(count)) = (start, count) else {
+    let (Some(start), Some(count)) = (extract_i64(start_val), extract_i64(count_val)) else {
         return Ok(Value::Undefined);
     };
 
@@ -172,7 +176,13 @@ fn fn_range(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) 
         return Ok(Value::Undefined);
     }
 
-    let result: Vec<Value> = (0..count).map(|i| Value::from(start + i)).collect();
+    let mut result = Vec::new();
+    for i in 0..count {
+        let val = start
+            .checked_add(i)
+            .ok_or_else(|| anyhow::anyhow!("range overflow"))?;
+        result.push(Value::from(val));
+    }
     Ok(Value::from(result))
 }
 
@@ -183,7 +193,7 @@ fn fn_array(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) 
     let Some(arg) = args.first() else {
         return Ok(Value::from(Vec::<Value>::new()));
     };
-    match arg {
+    match *arg {
         Value::Array(_) => Ok(arg.clone()),
         _ => Ok(Value::from(alloc::vec![arg.clone()])),
     }
@@ -213,10 +223,11 @@ fn fn_create_object(
 ) -> Result<Value> {
     let mut map = BTreeMap::<Value, Value>::new();
 
-    let mut i = 0;
-    while i + 1 < args.len() {
-        map.insert(args[i].clone(), args[i + 1].clone());
-        i += 2;
+    for pair in args.chunks(2) {
+        #[allow(clippy::pattern_type_mismatch)]
+        if let [key, value] = pair {
+            map.insert(key.clone(), value.clone());
+        }
     }
 
     Ok(Value::Object(Rc::new(map)))
@@ -225,18 +236,24 @@ fn fn_create_object(
 // ── Helpers ───────────────────────────────────────────────────────────
 
 fn extract_usize(v: &Value) -> Option<usize> {
-    match v {
-        Value::Number(n) => n
+    match *v {
+        Value::Number(ref n) => n
             .as_i64()
             .and_then(|x| usize::try_from(x).ok())
-            .or_else(|| n.as_f64().and_then(|x| usize::try_from(x as i64).ok())),
+            .or_else(|| n.as_f64().and_then(|x| usize::try_from(f64_as_i64(x)).ok())),
         _ => None,
     }
 }
 
 fn extract_i64(v: &Value) -> Option<i64> {
-    match v {
-        Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|x| x as i64)),
+    match *v {
+        Value::Number(ref n) => n.as_i64().or_else(|| n.as_f64().map(f64_as_i64)),
         _ => None,
     }
+}
+
+/// Deliberate truncating conversion from `f64` → `i64`.
+#[expect(clippy::as_conversions)]
+const fn f64_as_i64(x: f64) -> i64 {
+    x as i64
 }

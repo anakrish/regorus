@@ -1,6 +1,5 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-#![allow(clippy::option_if_let_else)]
 
 use alloc::format;
 use alloc::string::{String, ToString as _};
@@ -273,14 +272,14 @@ fn format_instruction_readable(
     match *instruction {
         Instruction::Load { dest, literal_idx } => {
             let base = format!("{}Load         r{} ← L{}", indent, dest, literal_idx);
-            let comment = match program.literals.get(usize::from(literal_idx)) {
-                Some(literal) => {
+            let comment = program.literals.get(usize::from(literal_idx)).map_or_else(
+                || "Load literal: <invalid index>".to_string(),
+                |literal| {
                     let literal_json =
                         serde_json::to_string(literal).unwrap_or_else(|_| "<invalid>".to_string());
                     format!("Load literal: {}", literal_json)
-                }
-                None => "Load literal: <invalid index>".to_string(),
-            };
+                },
+            );
             align_comment(&base, &comment, config.comment_column)
         }
         Instruction::LoadTrue { dest } => {
@@ -412,72 +411,78 @@ fn format_instruction_readable(
             let comment = format!("Logical NOT: !r{}", operand);
             align_comment(&base, &comment, config.comment_column)
         }
-        Instruction::BuiltinCall { params_index } => {
-            if let Some(params) = instruction_data.get_builtin_call_params(params_index) {
-                let args_str = params
-                    .arg_registers()
-                    .iter()
-                    .map(|&r| format!("r{}", r))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+        Instruction::BuiltinCall { params_index } => instruction_data
+            .get_builtin_call_params(params_index)
+            .map_or_else(
+                || {
+                    let base = format!("{}BuiltinCall  [INVALID P({})]", indent, params_index);
+                    align_comment(
+                        &base,
+                        "ERROR: Invalid builtin call parameters",
+                        config.comment_column,
+                    )
+                },
+                |params| {
+                    let args_str = params
+                        .arg_registers()
+                        .iter()
+                        .map(|&r| format!("r{}", r))
+                        .collect::<Vec<_>>()
+                        .join(", ");
 
-                let builtin_name = program
-                    .builtin_info_table
-                    .get(usize::from(params.builtin_index))
-                    .map(|info| info.name.as_str())
-                    .unwrap_or("<invalid>");
+                    let builtin_name = program
+                        .builtin_info_table
+                        .get(usize::from(params.builtin_index))
+                        .map(|info| info.name.as_str())
+                        .unwrap_or("<invalid>");
 
-                let base = format!(
-                    "{}BuiltinCall  r{} ← {}({})",
-                    indent, params.dest, builtin_name, args_str
-                );
-                let comment = format!(
-                    "Call builtin '{}' (B{}) with {} args",
-                    builtin_name, params.builtin_index, params.num_args
-                );
-                align_comment(&base, &comment, config.comment_column)
-            } else {
-                let base = format!("{}BuiltinCall  [INVALID P({})]", indent, params_index);
-                align_comment(
-                    &base,
-                    "ERROR: Invalid builtin call parameters",
-                    config.comment_column,
-                )
-            }
-        }
-        Instruction::FunctionCall { params_index } => {
-            if let Some(params) = instruction_data.get_function_call_params(params_index) {
-                let args_str = params
-                    .arg_registers()
-                    .iter()
-                    .map(|&r| format!("r{}", r))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                    let base = format!(
+                        "{}BuiltinCall  r{} ← {}({})",
+                        indent, params.dest, builtin_name, args_str
+                    );
+                    let comment = format!(
+                        "Call builtin '{}' (B{}) with {} args",
+                        builtin_name, params.builtin_index, params.num_args
+                    );
+                    align_comment(&base, &comment, config.comment_column)
+                },
+            ),
+        Instruction::FunctionCall { params_index } => instruction_data
+            .get_function_call_params(params_index)
+            .map_or_else(
+                || {
+                    let base = format!("{}FunctionCall [INVALID P({})]", indent, params_index);
+                    align_comment(
+                        &base,
+                        "ERROR: Invalid function call parameters",
+                        config.comment_column,
+                    )
+                },
+                |params| {
+                    let args_str = params
+                        .arg_registers()
+                        .iter()
+                        .map(|&r| format!("r{}", r))
+                        .collect::<Vec<_>>()
+                        .join(", ");
 
-                let func_name = program
-                    .rule_infos
-                    .get(usize::from(params.func_rule_index))
-                    .map(|info| info.name.as_str())
-                    .unwrap_or("<invalid>");
+                    let func_name = program
+                        .rule_infos
+                        .get(usize::from(params.func_rule_index))
+                        .map(|info| info.name.as_str())
+                        .unwrap_or("<invalid>");
 
-                let base = format!(
-                    "{}FunctionCall r{} ← {}({})",
-                    indent, params.dest, func_name, args_str
-                );
-                let comment = format!(
-                    "Call function '{}' (R{}) with {} args",
-                    func_name, params.func_rule_index, params.num_args
-                );
-                align_comment(&base, &comment, config.comment_column)
-            } else {
-                let base = format!("{}FunctionCall [INVALID P({})]", indent, params_index);
-                align_comment(
-                    &base,
-                    "ERROR: Invalid function call parameters",
-                    config.comment_column,
-                )
-            }
-        }
+                    let base = format!(
+                        "{}FunctionCall r{} ← {}({})",
+                        indent, params.dest, func_name, args_str
+                    );
+                    let comment = format!(
+                        "Call function '{}' (R{}) with {} args",
+                        func_name, params.func_rule_index, params.num_args
+                    );
+                    align_comment(&base, &comment, config.comment_column)
+                },
+            ),
         Instruction::HostAwait { dest, arg, id } => {
             let base = format!(
                 "{}HostAwait    r{} ← await r{} (id r{})",
@@ -511,14 +516,16 @@ fn format_instruction_readable(
                 indent,
                 params.map_or(0, |p| p.dest)
             );
-            let comment = match params {
-                Some(p) => format!(
-                    "Create object with {} fields (P{})",
-                    p.field_count(),
-                    params_index
-                ),
-                None => format!("Create object (P{} - INVALID)", params_index),
-            };
+            let comment = params.map_or_else(
+                || format!("Create object (P{} - INVALID)", params_index),
+                |p| {
+                    format!(
+                        "Create object with {} fields (P{})",
+                        p.field_count(),
+                        params_index,
+                    )
+                },
+            );
             align_comment(&base, &comment, config.comment_column)
         }
         Instruction::Index {
@@ -542,17 +549,19 @@ fn format_instruction_readable(
                 "{}IndexLiteral r{} ← r{}[L{}]",
                 indent, dest, container, literal_idx
             );
-            let comment = match program.literals.get(usize::from(literal_idx)) {
-                Some(literal) => {
+            let comment = program.literals.get(usize::from(literal_idx)).map_or_else(
+                || {
+                    format!(
+                        "Index with literal: r{}[L{}] (invalid index)",
+                        container, literal_idx,
+                    )
+                },
+                |literal| {
                     let literal_json =
                         serde_json::to_string(literal).unwrap_or_else(|_| "<invalid>".to_string());
                     format!("Index with literal key: r{}[{}]", container, literal_json)
-                }
-                None => format!(
-                    "Index with literal: r{}[L{}] (invalid index)",
-                    container, literal_idx
-                ),
-            };
+                },
+            );
             align_comment(&base, &comment, config.comment_column)
         }
         Instruction::ArrayNew { dest } => {
@@ -569,24 +578,25 @@ fn format_instruction_readable(
             let comment = format!("Append r{} to array r{} (skip if undefined)", value, arr);
             align_comment(&base, &comment, config.comment_column)
         }
-        Instruction::ArrayCreate { params_index } => {
-            if let Some(params) = instruction_data.get_array_create_params(params_index) {
-                let elements = params
-                    .element_registers()
-                    .iter()
-                    .map(|r| format!("r{}", r))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let base = format!("{}ArrayCreate  r{} ← [{}]", indent, params.dest, elements);
-                let comment = format!(
-                    "Create array from {} elements (undefined if any element is undefined)",
-                    params.element_count()
-                );
-                align_comment(&base, &comment, config.comment_column)
-            } else {
-                format!("{}ArrayCreate  <invalid params P{}>", indent, params_index)
-            }
-        }
+        Instruction::ArrayCreate { params_index } => instruction_data
+            .get_array_create_params(params_index)
+            .map_or_else(
+                || format!("{}ArrayCreate  <invalid params P{}>", indent, params_index),
+                |params| {
+                    let elements = params
+                        .element_registers()
+                        .iter()
+                        .map(|r| format!("r{}", r))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let base = format!("{}ArrayCreate  r{} ← [{}]", indent, params.dest, elements);
+                    let comment = format!(
+                        "Create array from {} elements (undefined if any element is undefined)",
+                        params.element_count()
+                    );
+                    align_comment(&base, &comment, config.comment_column)
+                },
+            ),
         Instruction::SetNew { dest } => {
             let base = format!("{}SetNew       r{} ← set()", indent, dest);
             align_comment(&base, "Create new empty set", config.comment_column)
@@ -596,24 +606,26 @@ fn format_instruction_readable(
             let comment = format!("Add r{} to set r{}", value, set);
             align_comment(&base, &comment, config.comment_column)
         }
-        Instruction::SetCreate { params_index } => {
-            if let Some(params) = instruction_data.get_set_create_params(params_index) {
-                let elements = params
-                    .element_registers()
-                    .iter()
-                    .map(|r| format!("r{}", r))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let base = format!("{}SetCreate    r{} ← {{{}}}", indent, params.dest, elements);
-                let comment = format!(
-                    "Create set from {} elements (undefined if any element is undefined)",
-                    params.element_count()
-                );
-                align_comment(&base, &comment, config.comment_column)
-            } else {
-                format!("{}SetCreate    <invalid params P{}>", indent, params_index)
-            }
-        }
+        Instruction::SetCreate { params_index } => instruction_data
+            .get_set_create_params(params_index)
+            .map_or_else(
+                || format!("{}SetCreate    <invalid params P{}>", indent, params_index),
+                |params| {
+                    let elements = params
+                        .element_registers()
+                        .iter()
+                        .map(|r| format!("r{}", r))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let base =
+                        format!("{}SetCreate    r{} ← {{{}}}", indent, params.dest, elements);
+                    let comment = format!(
+                        "Create set from {} elements (undefined if any element is undefined)",
+                        params.element_count()
+                    );
+                    align_comment(&base, &comment, config.comment_column)
+                },
+            ),
         Instruction::Contains {
             dest,
             collection,
@@ -664,34 +676,41 @@ fn format_instruction_readable(
             align_comment(&base, &comment, config.comment_column)
         }
         Instruction::LoopStart { params_index } => {
-            if let Some(params) = instruction_data.get_loop_params(params_index) {
-                let mode_str = match params.mode {
-                    LoopMode::Any => "any",
-                    LoopMode::Every => "every",
-                    LoopMode::ForEach => "foreach",
-                };
-                let base = format!(
-                    "{}LoopStart    {} r{},r{} in r{} → r{} {{",
-                    indent,
-                    mode_str,
-                    params.key_reg,
-                    params.value_reg,
-                    params.collection,
-                    params.result_reg
-                );
-                let comment = format!(
-                    "{} loop over r{}, body: {}-{} (P{})",
-                    mode_str, params.collection, params.body_start, params.loop_end, params_index
-                );
-                align_comment(&base, &comment, config.comment_column)
-            } else {
-                let base = format!("{}LoopStart    [INVALID P({})] {{", indent, params_index);
-                align_comment(
-                    &base,
-                    "ERROR: Invalid loop parameters",
-                    config.comment_column,
-                )
-            }
+            instruction_data.get_loop_params(params_index).map_or_else(
+                || {
+                    let base = format!("{}LoopStart    [INVALID P({})] {{", indent, params_index);
+                    align_comment(
+                        &base,
+                        "ERROR: Invalid loop parameters",
+                        config.comment_column,
+                    )
+                },
+                |params| {
+                    let mode_str = match params.mode {
+                        LoopMode::Any => "any",
+                        LoopMode::Every => "every",
+                        LoopMode::ForEach => "foreach",
+                    };
+                    let base = format!(
+                        "{}LoopStart    {} r{},r{} in r{} → r{} {{",
+                        indent,
+                        mode_str,
+                        params.key_reg,
+                        params.value_reg,
+                        params.collection,
+                        params.result_reg
+                    );
+                    let comment = format!(
+                        "{} loop over r{}, body: {}-{} (P{})",
+                        mode_str,
+                        params.collection,
+                        params.body_start,
+                        params.loop_end,
+                        params_index
+                    );
+                    align_comment(&base, &comment, config.comment_column)
+                },
+            )
         }
         Instruction::LoopNext {
             body_start,
@@ -740,52 +759,58 @@ fn format_instruction_readable(
             align_comment(&base, "End of rule evaluation", config.comment_column)
         }
         Instruction::ChainedIndex { params_index } => {
-            let (base, comment) =
-                if let Some(params) = instruction_data.get_chained_index_params(params_index) {
-                    let chain_parts: Vec<String> = params
-                        .path_components
-                        .iter()
-                        .map(|component| match *component {
-                            crate::rvm::instructions::LiteralOrRegister::Literal(idx) => {
-                                if let Some(literal) = program.literals.get(usize::from(idx)) {
-                                    match *literal {
-                                        crate::Value::String(ref s) => format!(".{}", s.as_ref()),
-                                        ref other => format!(
-                                            "[{}]",
-                                            serde_json::to_string(other)
-                                                .unwrap_or_else(|_| "?".to_string())
-                                        ),
-                                    }
-                                } else {
-                                    format!("[L{}?]", idx)
+            let (base, comment) = instruction_data
+                .get_chained_index_params(params_index)
+                .map_or_else(
+                    || {
+                        let base_str = format!("{}ChainedIndex chained_index", indent);
+                        let comment_str =
+                            "Multi-level chained indexing (invalid params)".to_string();
+                        (base_str, comment_str)
+                    },
+                    |params| {
+                        let chain_parts: Vec<String> = params
+                            .path_components
+                            .iter()
+                            .map(|component| match *component {
+                                crate::rvm::instructions::LiteralOrRegister::Literal(idx) => {
+                                    program.literals.get(usize::from(idx)).map_or_else(
+                                        || format!("[L{}?]", idx),
+                                        |literal| match *literal {
+                                            crate::Value::String(ref s) => {
+                                                format!(".{}", s.as_ref())
+                                            }
+                                            ref other => format!(
+                                                "[{}]",
+                                                serde_json::to_string(other)
+                                                    .unwrap_or_else(|_| "?".to_string())
+                                            ),
+                                        },
+                                    )
                                 }
-                            }
-                            crate::rvm::instructions::LiteralOrRegister::Register(reg) => {
-                                format!("[r{}]", reg)
-                            }
-                        })
-                        .collect();
+                                crate::rvm::instructions::LiteralOrRegister::Register(reg) => {
+                                    format!("[r{}]", reg)
+                                }
+                            })
+                            .collect();
 
-                    let chain_display = if chain_parts.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" r{}{}", params.root, chain_parts.join(""))
-                    };
+                        let chain_display = if chain_parts.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" r{}{}", params.root, chain_parts.join(""))
+                        };
 
-                    let base_str = format!(
-                        "{}ChainedIndex r{} ← r{}{}",
-                        indent, params.dest, params.root, chain_display
-                    );
-                    let comment_str = format!(
-                        "Multi-level chained indexing: r{} → r{}",
-                        params.root, params.dest
-                    );
-                    (base_str, comment_str)
-                } else {
-                    let base_str = format!("{}ChainedIndex chained_index", indent);
-                    let comment_str = "Multi-level chained indexing (invalid params)".to_string();
-                    (base_str, comment_str)
-                };
+                        let base_str = format!(
+                            "{}ChainedIndex r{} ← r{}{}",
+                            indent, params.dest, params.root, chain_display
+                        );
+                        let comment_str = format!(
+                            "Multi-level chained indexing: r{} → r{}",
+                            params.root, params.dest
+                        );
+                        (base_str, comment_str)
+                    },
+                );
 
             align_comment(&base, &comment, config.comment_column)
         }
@@ -812,51 +837,59 @@ fn format_instruction_readable(
             let base = format!("{}Halt         halt", indent);
             align_comment(&base, "Stop execution", config.comment_column)
         }
-        Instruction::ComprehensionBegin { params_index } => {
-            if let Some(params) = instruction_data.get_comprehension_begin_params(params_index) {
-                let mode_str = match params.mode {
-                    crate::rvm::instructions::ComprehensionMode::Array => "array",
-                    crate::rvm::instructions::ComprehensionMode::Set => "set",
-                    crate::rvm::instructions::ComprehensionMode::Object => "object",
-                };
-                let (source_desc, result_desc) = if params.collection_reg == params.result_reg {
-                    (
-                        format!("r{}", params.collection_reg),
-                        format!("r{}", params.result_reg),
+        Instruction::ComprehensionBegin { params_index } => instruction_data
+            .get_comprehension_begin_params(params_index)
+            .map_or_else(
+                || {
+                    let base = format!("{}CompBegin   [INVALID P({})] {{", indent, params_index);
+                    align_comment(
+                        &base,
+                        "ERROR: Invalid comprehension parameters",
+                        config.comment_column,
                     )
-                } else {
-                    (
-                        format!("r{} (src)", params.collection_reg),
-                        format!("r{} (dst)", params.result_reg),
-                    )
-                };
-                let base = format!(
-                    "{}CompBegin   {} {} → {} k:{} v:{} {{",
-                    indent, mode_str, source_desc, result_desc, params.key_reg, params.value_reg
-                );
-                let comment = format!(
-                    "{} comprehension in r{}, body: {}-{} (P{})",
-                    mode_str,
-                    params.collection_reg,
-                    params.body_start,
-                    params.comprehension_end,
-                    params_index
-                );
-                align_comment(&base, &comment, config.comment_column)
-            } else {
-                let base = format!("{}CompBegin   [INVALID P({})] {{", indent, params_index);
-                align_comment(
-                    &base,
-                    "ERROR: Invalid comprehension parameters",
-                    config.comment_column,
-                )
-            }
-        }
+                },
+                |params| {
+                    let mode_str = match params.mode {
+                        crate::rvm::instructions::ComprehensionMode::Array => "array",
+                        crate::rvm::instructions::ComprehensionMode::Set => "set",
+                        crate::rvm::instructions::ComprehensionMode::Object => "object",
+                    };
+                    let (source_desc, result_desc) = if params.collection_reg == params.result_reg {
+                        (
+                            format!("r{}", params.collection_reg),
+                            format!("r{}", params.result_reg),
+                        )
+                    } else {
+                        (
+                            format!("r{} (src)", params.collection_reg),
+                            format!("r{} (dst)", params.result_reg),
+                        )
+                    };
+                    let base = format!(
+                        "{}CompBegin   {} {} → {} k:{} v:{} {{",
+                        indent,
+                        mode_str,
+                        source_desc,
+                        result_desc,
+                        params.key_reg,
+                        params.value_reg
+                    );
+                    let comment = format!(
+                        "{} comprehension in r{}, body: {}-{} (P{})",
+                        mode_str,
+                        params.collection_reg,
+                        params.body_start,
+                        params.comprehension_end,
+                        params_index
+                    );
+                    align_comment(&base, &comment, config.comment_column)
+                },
+            ),
         Instruction::ComprehensionYield { value_reg, key_reg } => {
-            let base = match key_reg {
-                Some(k) => format!("{}CompYield    r{} r{}", indent, k, value_reg),
-                None => format!("{}CompYield    r{}", indent, value_reg),
-            };
+            let base = key_reg.map_or_else(
+                || format!("{}CompYield    r{}", indent, value_reg),
+                |k| format!("{}CompYield    r{} r{}", indent, k, value_reg),
+            );
             align_comment(&base, "Yield value to comprehension", config.comment_column)
         }
         Instruction::ComprehensionEnd {} => {
@@ -1019,6 +1052,7 @@ const fn get_instruction_name(instruction: &Instruction) -> &'static str {
         Instruction::PolicyMatchInsensitively { .. } => "POLICY_MATCH_CI",
         Instruction::PolicyNotMatchInsensitively { .. } => "POLICY_NOT_MATCH_CI",
         Instruction::PolicyExists { .. } => "POLICY_EXISTS",
+        Instruction::ValueConditionGuard { .. } => "VAL_COND_GUARD",
         Instruction::PolicyNot { .. } => "POLICY_NOT",
         // AllOf / AnyOf
         Instruction::AllOfStart { .. } => "ALL_OF_START",
@@ -1073,14 +1107,15 @@ fn format_operation_compact(
             format!("{}r{} ← r{}[L{}]", indent, dest, container, literal_idx)
         }
         Instruction::LoopStart { params_index } => {
-            if let Some(params) = instruction_data.get_loop_params(params_index) {
-                format!(
-                    "{}loop r{} in r{} {{",
-                    indent, params.value_reg, params.collection
-                )
-            } else {
-                format!("{}loop P({}) {{", indent, params_index)
-            }
+            instruction_data.get_loop_params(params_index).map_or_else(
+                || format!("{}loop P({}) {{", indent, params_index),
+                |params| {
+                    format!(
+                        "{}loop r{} in r{} {{",
+                        indent, params.value_reg, params.collection
+                    )
+                },
+            )
         }
         Instruction::LoopNext { .. } => {
             format!("{}}}", indent)

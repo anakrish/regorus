@@ -37,21 +37,26 @@ pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::Bui
 const BASE64_CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 fn base64_encode(input: &[u8]) -> String {
-    let mut result = String::with_capacity(input.len().div_ceil(3) * 4);
+    let cap = input.len().div_ceil(3).saturating_mul(4);
+    let mut result = String::with_capacity(cap);
     for chunk in input.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let b0 = u32::from(*chunk.first().unwrap_or(&0));
+        let b1 = u32::from(*chunk.get(1).unwrap_or(&0));
+        let b2 = u32::from(*chunk.get(2).unwrap_or(&0));
         let triple = (b0 << 16) | (b1 << 8) | b2;
-        result.push(BASE64_CHARS[((triple >> 18) & 0x3F) as usize] as char);
-        result.push(BASE64_CHARS[((triple >> 12) & 0x3F) as usize] as char);
+        let idx0 = usize::try_from((triple >> 18) & 0x3F).unwrap_or(0);
+        let idx1 = usize::try_from((triple >> 12) & 0x3F).unwrap_or(0);
+        let idx2 = usize::try_from((triple >> 6) & 0x3F).unwrap_or(0);
+        let idx3 = usize::try_from(triple & 0x3F).unwrap_or(0);
+        result.push(char::from(*BASE64_CHARS.get(idx0).unwrap_or(&b'A')));
+        result.push(char::from(*BASE64_CHARS.get(idx1).unwrap_or(&b'A')));
         if chunk.len() > 1 {
-            result.push(BASE64_CHARS[((triple >> 6) & 0x3F) as usize] as char);
+            result.push(char::from(*BASE64_CHARS.get(idx2).unwrap_or(&b'A')));
         } else {
             result.push('=');
         }
         if chunk.len() > 2 {
-            result.push(BASE64_CHARS[(triple & 0x3F) as usize] as char);
+            result.push(char::from(*BASE64_CHARS.get(idx3).unwrap_or(&b'A')));
         } else {
             result.push('=');
         }
@@ -59,11 +64,11 @@ fn base64_encode(input: &[u8]) -> String {
     result
 }
 
-fn base64_decode_byte(c: u8) -> Option<u8> {
+const fn base64_decode_byte(c: u8) -> Option<u8> {
     match c {
-        b'A'..=b'Z' => Some(c - b'A'),
-        b'a'..=b'z' => Some(c - b'a' + 26),
-        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'A'..=b'Z' => Some(c.wrapping_sub(b'A')),
+        b'a'..=b'z' => Some(c.wrapping_sub(b'a').wrapping_add(26)),
+        b'0'..=b'9' => Some(c.wrapping_sub(b'0').wrapping_add(52)),
         b'+' => Some(62),
         b'/' => Some(63),
         _ => None,
@@ -82,28 +87,29 @@ fn base64_decode(input: &str) -> Option<Vec<u8>> {
     if !bytes.len().is_multiple_of(4) {
         return None;
     }
-    let mut result = Vec::with_capacity(bytes.len() / 4 * 3);
+    let mut result = Vec::with_capacity((bytes.len() / 4).saturating_mul(3));
     for chunk in bytes.chunks(4) {
-        let a = base64_decode_byte(chunk[0])?;
-        let b = base64_decode_byte(chunk[1])?;
-        let triple = (a as u32) << 18
-            | (b as u32) << 12
-            | if chunk[2] != b'=' {
-                (base64_decode_byte(chunk[2])? as u32) << 6
+        let [c0, c1, c2, c3] = <[u8; 4]>::try_from(chunk).ok()?;
+        let a = base64_decode_byte(c0)?;
+        let b = base64_decode_byte(c1)?;
+        let triple = u32::from(a) << 18
+            | u32::from(b) << 12
+            | if c2 != b'=' {
+                u32::from(base64_decode_byte(c2)?) << 6
             } else {
                 0
             }
-            | if chunk[3] != b'=' {
-                base64_decode_byte(chunk[3])? as u32
+            | if c3 != b'=' {
+                u32::from(base64_decode_byte(c3)?)
             } else {
                 0
             };
-        result.push(((triple >> 16) & 0xFF) as u8);
-        if chunk[2] != b'=' {
-            result.push(((triple >> 8) & 0xFF) as u8);
+        result.push(u8::try_from((triple >> 16) & 0xFF).unwrap_or(0));
+        if c2 != b'=' {
+            result.push(u8::try_from((triple >> 8) & 0xFF).unwrap_or(0));
         }
-        if chunk[3] != b'=' {
-            result.push((triple & 0xFF) as u8);
+        if c3 != b'=' {
+            result.push(u8::try_from(triple & 0xFF).unwrap_or(0));
         }
     }
     Some(result)
@@ -130,10 +136,7 @@ fn fn_base64_to_string(
     let Some(decoded) = base64_decode(&s) else {
         return Ok(Value::Undefined);
     };
-    match String::from_utf8(decoded) {
-        Ok(text) => Ok(Value::from(text)),
-        Err(_) => Ok(Value::Undefined),
-    }
+    String::from_utf8(decoded).map_or_else(|_| Ok(Value::Undefined), |text| Ok(Value::from(text)))
 }
 
 /// `base64ToJson(base64Value)` → parsed JSON value from base64-encoded string.
@@ -152,15 +155,12 @@ fn fn_base64_to_json(
     let Ok(text) = String::from_utf8(decoded) else {
         return Ok(Value::Undefined);
     };
-    match Value::from_json_str(&text) {
-        Ok(v) => Ok(v),
-        Err(_) => Ok(Value::Undefined),
-    }
+    Value::from_json_str(&text).map_or_else(|_| Ok(Value::Undefined), Ok)
 }
 
 // ── URI helpers (pure implementation) ─────────────────────────────────
 
-fn is_unreserved(b: u8) -> bool {
+const fn is_unreserved(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~'
 }
 
@@ -168,11 +168,11 @@ fn percent_encode(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     for &b in s.as_bytes() {
         if is_unreserved(b) {
-            result.push(b as char);
+            result.push(char::from(b));
         } else {
             result.push('%');
-            result.push(core::char::from_digit((b >> 4) as u32, 16).unwrap_or('0'));
-            result.push(core::char::from_digit((b & 0x0F) as u32, 16).unwrap_or('0'));
+            result.push(core::char::from_digit(u32::from(b >> 4), 16).unwrap_or('0'));
+            result.push(core::char::from_digit(u32::from(b & 0x0F), 16).unwrap_or('0'));
         }
     }
     // ARM template uses uppercase hex
@@ -184,14 +184,14 @@ fn percent_decode(s: &str) -> Option<String> {
     let mut result = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hi = (bytes[i + 1] as char).to_digit(16)?;
-            let lo = (bytes[i + 2] as char).to_digit(16)?;
-            result.push((hi * 16 + lo) as u8);
-            i += 3;
+        if *bytes.get(i)? == b'%' && i.checked_add(2)? < bytes.len() {
+            let hi = char::from(*bytes.get(i.checked_add(1)?)?).to_digit(16)?;
+            let lo = char::from(*bytes.get(i.checked_add(2)?)?).to_digit(16)?;
+            result.push(u8::try_from(hi.checked_mul(16)?.checked_add(lo)?).ok()?);
+            i = i.checked_add(3)?;
         } else {
-            result.push(bytes[i]);
-            i += 1;
+            result.push(*bytes.get(i)?);
+            i = i.checked_add(1)?;
         }
     }
     String::from_utf8(result).ok()
@@ -202,7 +202,10 @@ fn fn_uri(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) ->
     if args.len() != 2 {
         return Ok(Value::Undefined);
     }
-    let (Some(base), Some(relative)) = (as_string(&args[0]), as_string(&args[1])) else {
+    let (Some(base), Some(relative)) = (
+        args.first().and_then(as_string),
+        args.get(1).and_then(as_string),
+    ) else {
         return Ok(Value::Undefined);
     };
 
@@ -214,11 +217,16 @@ fn fn_uri(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) ->
         alloc::format!("{}{}", base, relative.trim_start_matches('/'))
     } else {
         // Find last '/' in base and replace everything after it.
-        if let Some(pos) = base.rfind('/') {
-            alloc::format!("{}/{}", &base[..pos], relative.trim_start_matches('/'))
-        } else {
-            alloc::format!("{}/{}", base, relative)
-        }
+        base.rfind('/').map_or_else(
+            || alloc::format!("{}/{}", base, relative),
+            |pos| {
+                alloc::format!(
+                    "{}/{}",
+                    base.get(..pos).unwrap_or(&base),
+                    relative.trim_start_matches('/')
+                )
+            },
+        )
     };
 
     Ok(Value::from(combined))
@@ -247,10 +255,7 @@ fn fn_uri_component_to_string(
     let Some(s) = args.first().and_then(as_string) else {
         return Ok(Value::Undefined);
     };
-    match percent_decode(&s) {
-        Some(decoded) => Ok(Value::from(decoded)),
-        None => Ok(Value::Undefined),
-    }
+    percent_decode(&s).map_or_else(|| Ok(Value::Undefined), |decoded| Ok(Value::from(decoded)))
 }
 
 /// `dataUri(stringToConvert)` → data URI (text/plain;charset=utf8).
@@ -290,13 +295,10 @@ fn fn_data_uri_to_string(
     let Some(comma_pos) = rest.rfind(',') else {
         return Ok(Value::Undefined);
     };
-    let b64_data = &rest[comma_pos + 1..];
+    let b64_data = rest.get(comma_pos.saturating_add(1)..).unwrap_or("");
 
     let Some(decoded) = base64_decode(b64_data) else {
         return Ok(Value::Undefined);
     };
-    match String::from_utf8(decoded) {
-        Ok(text) => Ok(Value::from(text)),
-        Err(_) => Ok(Value::Undefined),
-    }
+    String::from_utf8(decoded).map_or_else(|_| Ok(Value::Undefined), |text| Ok(Value::from(text)))
 }

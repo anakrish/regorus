@@ -50,20 +50,22 @@ fn fn_json(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -
 
 /// `join(inputArray, delimiter)` → joins array elements with delimiter.
 fn fn_join(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
-    if args.len() != 2 {
-        return Ok(Value::Undefined);
-    }
-    let Value::Array(arr) = &args[0] else {
+    #[allow(clippy::pattern_type_mismatch)]
+    let [arr_val, delim_val] = args
+    else {
         return Ok(Value::Undefined);
     };
-    let Some(delim) = as_string(&args[1]) else {
+    let Value::Array(ref arr) = *arr_val else {
+        return Ok(Value::Undefined);
+    };
+    let Some(delim) = as_string(delim_val) else {
         return Ok(Value::Undefined);
     };
     let parts: Vec<String> = arr
         .iter()
-        .map(|v| match v {
-            Value::String(s) => s.to_string(),
-            Value::Number(n) => n.format_decimal(),
+        .map(|v| match *v {
+            Value::String(ref s) => s.to_string(),
+            Value::Number(ref n) => n.format_decimal(),
             Value::Bool(b) => b.to_string(),
             Value::Null => "null".to_string(),
             _ => v.to_string(),
@@ -76,7 +78,10 @@ fn fn_join(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -
 
 /// `items(object)` → array of `{"key": k, "value": v}` pairs.
 fn fn_items(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
-    let Some(Value::Object(obj)) = args.first() else {
+    let Some(first) = args.first() else {
+        return Ok(Value::Undefined);
+    };
+    let Value::Object(ref obj) = *first else {
         return Ok(Value::Undefined);
     };
     let mut result = Vec::with_capacity(obj.len());
@@ -100,41 +105,46 @@ fn fn_index_from_end(
     args: &[Value],
     _strict: bool,
 ) -> Result<Value> {
-    if args.len() != 2 {
-        return Ok(Value::Undefined);
-    }
-    let Value::Array(arr) = &args[0] else {
+    #[allow(clippy::pattern_type_mismatch)]
+    let [arr_val, idx_val] = args
+    else {
         return Ok(Value::Undefined);
     };
-    let Some(rev_idx) = extract_usize(&args[1]) else {
+    let Value::Array(ref arr) = *arr_val else {
+        return Ok(Value::Undefined);
+    };
+    let Some(rev_idx) = extract_usize(idx_val) else {
         return Ok(Value::Undefined);
     };
     if rev_idx == 0 || rev_idx > arr.len() {
         anyhow::bail!("indexFromEnd: reverse index {} out of bounds", rev_idx);
     }
-    Ok(arr[arr.len() - rev_idx].clone())
+    let pos = arr
+        .len()
+        .checked_sub(rev_idx)
+        .ok_or_else(|| anyhow::anyhow!("indexFromEnd: arithmetic overflow"))?;
+    arr.get(pos)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("indexFromEnd: index out of bounds"))
 }
 
 // ── tryGet ────────────────────────────────────────────────────────────
 
 /// `tryGet(itemToTest, keyOrIndex)` → value at key/index, or null if missing.
 fn fn_try_get(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
-    if args.len() != 2 {
+    #[allow(clippy::pattern_type_mismatch)]
+    let [item, key_or_idx] = args
+    else {
         return Ok(Value::Undefined);
-    }
-    match &args[0] {
-        Value::Object(obj) => {
+    };
+    match *item {
+        Value::Object(ref obj) => {
             // Property lookup by string key
-            let val = &obj[&args[1]];
-            if matches!(val, Value::Undefined) {
-                Ok(Value::Null)
-            } else {
-                Ok(val.clone())
-            }
+            Ok(obj.get(key_or_idx).cloned().unwrap_or(Value::Null))
         }
-        Value::Array(arr) => {
+        Value::Array(ref arr) => {
             // Index lookup
-            let Some(idx) = extract_usize(&args[1]) else {
+            let Some(idx) = extract_usize(key_or_idx) else {
                 return Ok(Value::Null);
             };
             Ok(arr.get(idx).cloned().unwrap_or(Value::Null))
@@ -152,19 +162,22 @@ fn fn_try_index_from_end(
     args: &[Value],
     _strict: bool,
 ) -> Result<Value> {
-    if args.len() != 2 {
+    #[allow(clippy::pattern_type_mismatch)]
+    let [arr_val, idx_val] = args
+    else {
         return Ok(Value::Undefined);
-    }
-    let Value::Array(arr) = &args[0] else {
+    };
+    let Value::Array(ref arr) = *arr_val else {
         return Ok(Value::Null);
     };
-    let Some(rev_idx) = extract_usize(&args[1]) else {
+    let Some(rev_idx) = extract_usize(idx_val) else {
         return Ok(Value::Null);
     };
     if rev_idx == 0 || rev_idx > arr.len() {
         return Ok(Value::Null);
     }
-    Ok(arr[arr.len() - rev_idx].clone())
+    let pos = arr.len().saturating_sub(rev_idx);
+    Ok(arr.get(pos).cloned().unwrap_or(Value::Null))
 }
 
 // ── guid ──────────────────────────────────────────────────────────────
@@ -180,9 +193,9 @@ fn fn_guid(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -
 
     let parts: Vec<String> = args
         .iter()
-        .map(|v| match v {
-            Value::String(s) => s.to_string(),
-            Value::Number(n) => n.format_decimal(),
+        .map(|v| match *v {
+            Value::String(ref s) => s.to_string(),
+            Value::Number(ref n) => n.format_decimal(),
             Value::Bool(b) => b.to_string(),
             Value::Null => "null".to_string(),
             _ => v.to_string(),
@@ -225,7 +238,7 @@ fn fn_guid(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -
 /// Computes SHA-1(namespace_bytes ++ data). Returns 20-byte digest.
 fn sha1_hash(namespace: &[u8], data: &[u8]) -> [u8; 20] {
     // Concatenate namespace + data
-    let mut message = Vec::with_capacity(namespace.len() + data.len());
+    let mut message = Vec::with_capacity(namespace.len().saturating_add(data.len()));
     message.extend_from_slice(namespace);
     message.extend_from_slice(data);
 
@@ -236,7 +249,7 @@ fn sha1_hash(namespace: &[u8], data: &[u8]) -> [u8; 20] {
     let mut h3: u32 = 0x1032_5476;
     let mut h4: u32 = 0xC3D2_E1F0;
 
-    let bit_len = (message.len() as u64) * 8;
+    let bit_len = u64::try_from(message.len()).unwrap_or(0).saturating_mul(8);
 
     // Padding
     message.push(0x80);
@@ -249,10 +262,17 @@ fn sha1_hash(namespace: &[u8], data: &[u8]) -> [u8; 20] {
     for chunk in message.chunks_exact(64) {
         let mut w = [0_u32; 80];
         for (wi, src) in chunk.chunks_exact(4).zip(w.iter_mut().take(16)) {
-            *src = u32::from_be_bytes([wi[0], wi[1], wi[2], wi[3]]);
+            let bytes: [u8; 4] = wi.first_chunk::<4>().copied().unwrap_or([0; 4]);
+            *src = u32::from_be_bytes(bytes);
         }
-        for idx in 16..80 {
-            w[idx] = (w[idx - 3] ^ w[idx - 8] ^ w[idx - 14] ^ w[idx - 16]).rotate_left(1);
+        for idx in 16_usize..80 {
+            let v = w.get(idx.wrapping_sub(3)).copied().unwrap_or(0)
+                ^ w.get(idx.wrapping_sub(8)).copied().unwrap_or(0)
+                ^ w.get(idx.wrapping_sub(14)).copied().unwrap_or(0)
+                ^ w.get(idx.wrapping_sub(16)).copied().unwrap_or(0);
+            if let Some(slot) = w.get_mut(idx) {
+                *slot = v.rotate_left(1);
+            }
         }
 
         let (mut a, mut b, mut c, mut d, mut e) = (h0, h1, h2, h3, h4);
@@ -312,9 +332,9 @@ fn fn_unique_string(
 
     let parts: Vec<String> = args
         .iter()
-        .map(|v| match v {
-            Value::String(s) => s.to_string(),
-            Value::Number(n) => n.format_decimal(),
+        .map(|v| match *v {
+            Value::String(ref s) => s.to_string(),
+            Value::Number(ref n) => n.format_decimal(),
             Value::Bool(b) => b.to_string(),
             Value::Null => "null".to_string(),
             _ => v.to_string(),
@@ -336,7 +356,10 @@ fn fn_unique_string(
     let mut result = [0_u8; 13];
     let mut remaining = val;
     for byte in result.iter_mut().rev() {
-        *byte = ALPHABET[(remaining & 0x1F) as usize];
+        *byte = ALPHABET
+            .get(usize::try_from(remaining & 0x1F).unwrap_or(0))
+            .copied()
+            .unwrap_or(b'a');
         remaining >>= 5;
     }
 
@@ -348,11 +371,16 @@ fn fn_unique_string(
 // ── Helpers ───────────────────────────────────────────────────────────
 
 fn extract_usize(v: &Value) -> Option<usize> {
-    match v {
-        Value::Number(n) => n
+    match *v {
+        Value::Number(ref n) => n
             .as_i64()
             .and_then(|x| usize::try_from(x).ok())
-            .or_else(|| n.as_f64().and_then(|x| usize::try_from(x as i64).ok())),
+            .or_else(|| n.as_f64().and_then(|x| usize::try_from(f64_to_i64(x)).ok())),
         _ => None,
     }
+}
+
+#[expect(clippy::as_conversions)]
+const fn f64_to_i64(x: f64) -> i64 {
+    x as i64
 }

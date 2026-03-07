@@ -71,11 +71,7 @@ fn format_datetime(dt: &DateTime<FixedOffset>) -> String {
 /// Note: months/years are approximated (1 month = 30 days, 1 year = 365 days)
 /// since chrono::Duration is absolute. ARM template behavior matches this.
 fn parse_iso8601_duration(s: &str) -> Option<Duration> {
-    let (s, negative) = if let Some(rest) = s.strip_prefix('-') {
-        (rest, true)
-    } else {
-        (s, false)
-    };
+    let (s, negative) = s.strip_prefix('-').map_or((s, false), |rest| (rest, true));
 
     let s = s.strip_prefix('P')?;
     let mut total_seconds: i64 = 0;
@@ -92,39 +88,39 @@ fn parse_iso8601_duration(s: &str) -> Option<Duration> {
             }
             'Y' if !in_time => {
                 let n: f64 = num_buf.parse().ok()?;
-                total_seconds += (n * 365.0 * 86400.0) as i64;
+                total_seconds = total_seconds.checked_add(f64_as_i64(n * 365.0 * 86400.0))?;
                 num_buf.clear();
             }
             'M' if !in_time => {
                 // Months in date part
                 let n: f64 = num_buf.parse().ok()?;
-                total_seconds += (n * 30.0 * 86400.0) as i64;
+                total_seconds = total_seconds.checked_add(f64_as_i64(n * 30.0 * 86400.0))?;
                 num_buf.clear();
             }
             'W' if !in_time => {
                 let n: f64 = num_buf.parse().ok()?;
-                total_seconds += (n * 7.0 * 86400.0) as i64;
+                total_seconds = total_seconds.checked_add(f64_as_i64(n * 7.0 * 86400.0))?;
                 num_buf.clear();
             }
             'D' if !in_time => {
                 let n: f64 = num_buf.parse().ok()?;
-                total_seconds += (n * 86400.0) as i64;
+                total_seconds = total_seconds.checked_add(f64_as_i64(n * 86400.0))?;
                 num_buf.clear();
             }
             'H' if in_time => {
                 let n: f64 = num_buf.parse().ok()?;
-                total_seconds += (n * 3600.0) as i64;
+                total_seconds = total_seconds.checked_add(f64_as_i64(n * 3600.0))?;
                 num_buf.clear();
             }
             'M' if in_time => {
                 // Minutes in time part
                 let n: f64 = num_buf.parse().ok()?;
-                total_seconds += (n * 60.0) as i64;
+                total_seconds = total_seconds.checked_add(f64_as_i64(n * 60.0))?;
                 num_buf.clear();
             }
             'S' if in_time => {
                 let n: f64 = num_buf.parse().ok()?;
-                total_seconds += n as i64;
+                total_seconds = total_seconds.checked_add(f64_as_i64(n))?;
                 num_buf.clear();
             }
             _ => return None,
@@ -132,7 +128,7 @@ fn parse_iso8601_duration(s: &str) -> Option<Duration> {
     }
 
     let dur = Duration::seconds(if negative {
-        -total_seconds
+        total_seconds.checked_neg()?
     } else {
         total_seconds
     });
@@ -151,13 +147,10 @@ fn fn_date_time_add(
     args: &[Value],
     _strict: bool,
 ) -> Result<Value> {
-    if args.len() < 2 {
-        return Ok(Value::Undefined);
-    }
-    let Some(base_str) = as_string(&args[0]) else {
+    let Some(base_str) = args.first().and_then(as_string) else {
         return Ok(Value::Undefined);
     };
-    let Some(duration_str) = as_string(&args[1]) else {
+    let Some(duration_str) = args.get(1).and_then(as_string) else {
         return Ok(Value::Undefined);
     };
 
@@ -168,7 +161,9 @@ fn fn_date_time_add(
         return Ok(Value::Undefined);
     };
 
-    let result = base_dt + duration;
+    let result = base_dt
+        .checked_add_signed(duration)
+        .ok_or_else(|| anyhow::anyhow!("dateTimeAdd: datetime overflow"))?;
     Ok(Value::from(format_datetime(&result)))
 }
 
@@ -213,28 +208,34 @@ fn fn_add_days(
     args: &[Value],
     _strict: bool,
 ) -> Result<Value> {
-    if args.len() < 2 {
-        return Ok(Value::Undefined);
-    }
-    let Some(base_str) = as_string(&args[0]) else {
+    let Some(base_str) = args.first().and_then(as_string) else {
         return Ok(Value::Undefined);
     };
-    let Some(days) = extract_i64(&args[1]) else {
+    let Some(days) = args.get(1).and_then(extract_i64) else {
         return Ok(Value::Undefined);
     };
 
     let Some(base_dt) = parse_datetime(&base_str) else {
         return Ok(Value::Undefined);
     };
-    let result = base_dt + Duration::days(days);
+    let duration = Duration::days(days);
+    let result = base_dt
+        .checked_add_signed(duration)
+        .ok_or_else(|| anyhow::anyhow!("addDays: datetime overflow"))?;
     Ok(Value::from(format_datetime(&result)))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
 fn extract_i64(v: &Value) -> Option<i64> {
-    match v {
-        Value::Number(n) => n.as_i64(),
+    match *v {
+        Value::Number(ref n) => n.as_i64(),
         _ => None,
     }
+}
+
+/// Deliberate truncating conversion from `f64` → `i64`.
+#[expect(clippy::as_conversions)]
+const fn f64_as_i64(x: f64) -> i64 {
+    x as i64
 }

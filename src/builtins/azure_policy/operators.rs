@@ -31,13 +31,11 @@ pub(super) fn get_parameter(
     args: &[Value],
     _strict: bool,
 ) -> Result<Value> {
-    if args.len() != 3 {
+    #[allow(clippy::pattern_type_mismatch)]
+    let [params_obj, defaults_obj, name] = args
+    else {
         return Ok(Value::Undefined);
-    }
-
-    let params_obj = &args[0];
-    let defaults_obj = &args[1];
-    let name = &args[2];
+    };
 
     // Try caller-supplied parameters first.
     let val = &params_obj[name];
@@ -57,15 +55,17 @@ pub(super) fn resolve_field(
     args: &[Value],
     _strict: bool,
 ) -> Result<Value> {
-    if args.len() != 2 {
-        return Ok(Value::Undefined);
-    }
-
-    let Some(path) = as_string(&args[1]) else {
+    #[allow(clippy::pattern_type_mismatch)]
+    let [resource, field_path] = args
+    else {
         return Ok(Value::Undefined);
     };
 
-    Ok(resolve_path(&args[0], &path))
+    let Some(path) = as_string(field_path) else {
+        return Ok(Value::Undefined);
+    };
+
+    Ok(resolve_path(resource, &path))
 }
 
 // ── Logic functions ───────────────────────────────────────────────────
@@ -103,12 +103,14 @@ pub(super) fn if_fn(
     args: &[Value],
     _strict: bool,
 ) -> Result<Value> {
-    if args.len() != 3 {
+    #[allow(clippy::pattern_type_mismatch)]
+    let [cond, when_true, when_false] = args
+    else {
         return Ok(Value::Undefined);
-    }
-    if is_true(&args[0]) {
-        Ok(args[1].clone())
+    };
+    if is_true(cond) {
+        Ok(when_true.clone())
     } else {
-        Ok(args[2].clone())
+        Ok(when_false.clone())
     }
 }

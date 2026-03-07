@@ -1,0 +1,19 @@
+[package]
+name = "azure-policy-test-runner"
+version = "0.1.0"
+edition = "2021"
+description = "Standalone test runner for Azure Policy test suites (*.Test.yaml)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "ap-test-runner"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+regorus = { path = "../..", features = ["azure_policy", "yaml", "full-opa"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"

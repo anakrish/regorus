@@ -4,6 +4,7 @@
 //! Constraint / condition / LHS compilation.
 
 use alloc::string::String;
+use alloc::string::ToString as _;
 use alloc::vec::Vec;
 
 use anyhow::{anyhow, Result};
@@ -156,6 +157,23 @@ impl Compiler {
             return self.compile_condition_wildcard_allof(&field_path, condition);
         }
 
+        // Inner unbound [*] within count where clause: the outer [*] is
+        // bound by count, but the inner [*] still needs implicit allOf.
+        // Example: `properties.ParentArray[*].NestedArray[*].Prop` inside
+        // a count iterating over `ParentArray[*]`.
+        if let Some((binding, inner_path)) =
+            self.has_inner_unbound_wildcard_field(&condition.lhs)?
+        {
+            let span = &condition.span;
+            let rhs_reg = self.compile_value_or_expr(&condition.rhs, span)?;
+            return self.compile_allof_loop_inner(
+                Some(binding.current_reg),
+                &inner_path,
+                rhs_reg,
+                condition,
+            );
+        }
+
         // Count existence optimization: compile `count > 0`, `count == 0`,
         // etc. as a `LoopMode::Any` loop that exits on the first match.
         if let Lhs::Count(count_node) = &condition.lhs {
@@ -166,7 +184,40 @@ impl Compiler {
 
         let lhs = self.compile_lhs(&condition.lhs, &condition.span)?;
         let rhs = self.compile_value_or_expr(&condition.rhs, &condition.span)?;
-        self.emit_policy_operator(&condition.operator.kind, lhs, rhs, &condition.operator.span)
+        let op_result = self.emit_policy_operator(
+            &condition.operator.kind,
+            lhs,
+            rhs,
+            &condition.operator.span,
+        )?;
+
+        // For `value:` conditions, guard against undefined LHS.
+        //
+        // When the ARM template expression in a `value:` condition resolves to
+        // Undefined (because an intermediate property in a dot-chain doesn't
+        // exist), the condition must evaluate to `false` regardless of the
+        // operator.  This differs from `field:` conditions where each operator
+        // has its own undefined semantics (e.g. `notEquals` returns true when
+        // the field is absent).
+        //
+        // The guard is emitted for ALL value conditions.  For operators that
+        // already return false on Undefined (equals, greater, etc.) it is a
+        // harmless no-op.  For "negated" operators (notEquals, notContains,
+        // etc.) it corrects their behaviour.
+        if matches!(condition.lhs, Lhs::Value { .. }) {
+            let guarded = self.alloc_register()?;
+            self.emit(
+                Instruction::ValueConditionGuard {
+                    dest: guarded,
+                    value: lhs,
+                    condition: op_result,
+                },
+                &condition.span,
+            );
+            return Ok(guarded);
+        }
+
+        Ok(op_result)
     }
 
     pub(super) fn compile_lhs(&mut self, lhs: &Lhs, span: &crate::lexer::Span) -> Result<u8> {
@@ -243,6 +294,53 @@ impl Compiler {
         }
 
         Ok(Some(path))
+    }
+
+    /// Check whether a condition's LHS has an inner unbound `[*]` that lives
+    /// *inside* an active count binding.
+    ///
+    /// For example, `properties.ParentArray[*].NestedArray[*].Prop` inside a
+    /// count over `ParentArray[*]` — the outer `[*]` is bound by count, but
+    /// the inner `NestedArray[*]` is unbound and needs implicit allOf.
+    ///
+    /// Returns `(CountBinding, inner_suffix)` where `inner_suffix` is the
+    /// path *after* the bound `prefix[*].` (e.g. `nestedarray[*].prop`).
+    fn has_inner_unbound_wildcard_field(
+        &self,
+        lhs: &Lhs,
+    ) -> Result<Option<(super::CountBinding, String)>> {
+        let field = match lhs {
+            Lhs::Field(field_node) => field_node,
+            _ => return Ok(None),
+        };
+
+        let path = match &field.kind {
+            FieldKind::Alias(alias) => self.resolve_alias_path(alias)?,
+            _ => return Ok(None),
+        };
+
+        if !path.contains("[*]") {
+            return Ok(None);
+        }
+
+        let binding = match self.resolve_count_binding(&path)? {
+            Some(b) => b,
+            None => return Ok(None),
+        };
+
+        if let Some(prefix) = &binding.field_wildcard_prefix {
+            // The count binding covers `prefix[*]`.
+            // bound_len covers "prefix[*]." (including the trailing dot).
+            let bound_len = prefix.len() + 4; // len("prefix") + len("[*].")
+            if path.len() > bound_len {
+                let remainder = &path[bound_len..];
+                if remainder.contains("[*]") {
+                    return Ok(Some((binding, remainder.to_string())));
+                }
+            }
+        }
+
+        Ok(None)
     }
 
     /// Compile a condition where the field LHS contains `[*]` outside a
@@ -339,8 +437,9 @@ impl Compiler {
                     None => current_reg,
                 };
 
-                // Missing sub-field → null (same as compile_field_kind).
-                self.emit_coalesce_undefined_to_null(element_reg, span);
+                // NOTE: No coalesce here. Undefined / Null distinction is
+                // preserved so that policy operators handle missing sub-fields
+                // correctly.
 
                 let cmp_reg = self.emit_policy_operator(
                     &condition.operator.kind,

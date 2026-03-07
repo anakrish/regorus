@@ -18,7 +18,7 @@ use super::types::{ResolvedAliases, ResolvedEntry};
 use super::AliasRegistry;
 
 /// Fields that exist at the ARM resource root (not under `properties`).
-const ROOT_FIELDS: &[&str] = &[
+pub(crate) const ROOT_FIELDS: &[&str] = &[
     "name",
     "type",
     "location",
@@ -109,13 +109,19 @@ pub fn normalize(
     registry: Option<&AliasRegistry>,
     api_version: Option<&str>,
 ) -> Value {
-    let aliases = registry.and_then(|r| {
-        arm_resource
-            .get("type")
-            .and_then(|t| t.as_str())
-            .and_then(|rt| r.get(rt))
-    });
+    let aliases = registry.and_then(|r| extract_type_field(arm_resource).and_then(|rt| r.get(rt)));
     normalize_with_aliases(arm_resource, aliases, api_version)
+}
+
+/// Extract the `type` field value from a resource JSON object.
+///
+/// Performs a case-insensitive key lookup so both `"type"` and `"Type"` work.
+fn extract_type_field(resource: &Value) -> Option<&str> {
+    resource.as_object().and_then(|obj| {
+        obj.iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("type"))
+            .and_then(|(_, v)| v.as_str())
+    })
 }
 
 /// Internal normalization with pre-resolved alias data.
@@ -136,37 +142,96 @@ pub(crate) fn normalize_with_aliases(
     let sub_arrays = aliases.map(|a| &a.sub_resource_arrays);
     let mut result = Map::new();
 
-    // Rule 2: Copy root-level fields as-is (keys lowercased).
-    // Special case: tag *names* are case-insensitive in Azure
-    // (see https://learn.microsoft.com/azure/azure-resource-manager/
-    // management/tag-resources#tag-usage-and-recommendations), so we
-    // lowercase the keys inside the `tags` object to match the
-    // compiler's lowercased lookup paths.
-    // Similarly, `identity` sub-fields (e.g. `userAssignedIdentities`,
-    // `principalId`) use camelCase in ARM but the compiler resolves them
-    // via lowercased paths, so we shallow-lowercase those keys too.
-    for &field in ROOT_FIELDS {
-        if let Some(val) = obj.get(field) {
-            let val =
-                if field.eq_ignore_ascii_case("tags") || field.eq_ignore_ascii_case("identity") {
+    // Detect data-plane resource types (type contains ".Data/").
+    // Data-plane resources place their fields at the JSON root rather than
+    // under `properties`, so the ROOT_FIELDS allowlist would strip them.
+    // For these types, preserve all root-level fields as-is.
+    let is_data_plane =
+        extract_type_field(arm_resource).is_some_and(|t| t.to_ascii_lowercase().contains(".data/"));
+
+    if is_data_plane {
+        // Preserve ALL root-level fields (keys lowercased) with recursive
+        // normalization so nested object keys are also lowercased.
+        for (key, val) in obj {
+            if key.eq_ignore_ascii_case("properties") {
+                // Data-plane resources may still have a `properties` wrapper;
+                // flatten its contents into the root just like non-data-plane.
+                continue;
+            }
+            let lc_key = key.to_ascii_lowercase();
+            let val = if key.eq_ignore_ascii_case("tags") || key.eq_ignore_ascii_case("identity") {
+                lowercase_object_keys(val)
+            } else {
+                normalize_value(val, key, sub_arrays)
+            };
+            result.insert(lc_key, val);
+        }
+
+        // Flatten `properties` into the root (same as non-data-plane path).
+        // Case-insensitive lookup: ARM resources may use `Properties` or
+        // `properties`.
+        let props_val = obj
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("properties"))
+            .map(|(_, v)| v);
+        if let Some(Value::Object(props)) = props_val {
+            for (key, val) in props {
+                let lc_key = key.to_ascii_lowercase();
+                if result.contains_key(&lc_key) {
+                    continue;
+                }
+                let normalized = normalize_value(val, key, sub_arrays);
+                result.insert(lc_key, normalized);
+            }
+        }
+    } else {
+        // Rule 2: Copy root-level fields as-is (keys lowercased).
+        // Case-insensitive matching: ARM resources may use "Type" or "type",
+        // "Name" or "name", etc.
+        //
+        // Special case: tag *names* are case-insensitive in Azure
+        // (see https://learn.microsoft.com/azure/azure-resource-manager/
+        // management/tag-resources#tag-usage-and-recommendations), so we
+        // lowercase the keys inside the `tags` object to match the
+        // compiler's lowercased lookup paths.
+        // Similarly, `identity` sub-fields (e.g. `userAssignedIdentities`,
+        // `principalId`) use camelCase in ARM but the compiler resolves them
+        // via lowercased paths, so we shallow-lowercase those keys too.
+        for &field in ROOT_FIELDS {
+            // Case-insensitive lookup among the resource's root keys.
+            let found = obj
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(field))
+                .map(|(_, v)| v);
+            if let Some(val) = found {
+                let val = if field.eq_ignore_ascii_case("tags")
+                    || field.eq_ignore_ascii_case("identity")
+                {
                     lowercase_object_keys(val)
                 } else {
                     val.clone()
                 };
-            result.insert(field.to_ascii_lowercase(), val);
-        }
-    }
-
-    // Rule 1: Flatten root `properties` into the root (keys lowercased).
-    if let Some(Value::Object(props)) = obj.get("properties") {
-        for (key, val) in props {
-            let lc_key = key.to_ascii_lowercase();
-            // Root-level fields take precedence (shouldn't happen in practice).
-            if result.contains_key(&lc_key) {
-                continue;
+                result.insert(field.to_ascii_lowercase(), val);
             }
-            let normalized = normalize_value(val, key, sub_arrays);
-            result.insert(lc_key, normalized);
+        }
+
+        // Rule 1: Flatten root `properties` into the root (keys lowercased).
+        // Case-insensitive lookup: ARM resources may use `Properties` or
+        // `properties`.
+        let props_val = obj
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("properties"))
+            .map(|(_, v)| v);
+        if let Some(Value::Object(props)) = props_val {
+            for (key, val) in props {
+                let lc_key = key.to_ascii_lowercase();
+                // Root-level fields take precedence (shouldn't happen in practice).
+                if result.contains_key(&lc_key) {
+                    continue;
+                }
+                let normalized = normalize_value(val, key, sub_arrays);
+                result.insert(lc_key, normalized);
+            }
         }
     }
 
@@ -291,6 +356,10 @@ fn apply_alias_entries(
     // Collect element-level remappings first, then apply them.  This avoids
     // borrow-conflict issues with iterating entries while mutating result.
     let mut element_remaps: Vec<ElementRemap> = Vec::new();
+    // Collect array-base renames: when alias short name `X[*]` maps to ARM
+    // path `Y[*]` (different base), the array needs to be renamed from Y→X
+    // in the normalized output.
+    let mut array_renames: Vec<(String, String)> = Vec::new(); // (source_lc, target_lc)
 
     for (_lowercase_key, entry) in entries {
         if entry.short_name.contains("[*]") {
@@ -299,6 +368,30 @@ fn apply_alias_entries(
             if let Some(remap) = compute_element_remap(entry, api_version) {
                 element_remaps.push(remap);
             }
+
+            // Check if the array base name differs between short name and ARM
+            // path.  Examples:
+            //   short_name="tags[*]"       default_path="kvtags[*]"         → rename kvtags→tags
+            //   short_name="tags[*].key"   default_path="kvtags[*].key"     → rename kvtags→tags
+            let arm_path = entry.select_path(api_version);
+            if let (Some(short_base), Some(arm_base)) = (
+                entry.short_name.split("[*]").next(),
+                arm_path.split("[*]").next(),
+            ) {
+                // Strip `properties.` from ARM path base if present (the
+                // normalizer already flattened `properties` to the root).
+                let arm_base_stripped = arm_base.strip_prefix("properties.").unwrap_or(arm_base);
+                if !short_base.eq_ignore_ascii_case(arm_base_stripped) {
+                    let pair = (
+                        arm_base_stripped.to_ascii_lowercase(),
+                        short_base.to_ascii_lowercase(),
+                    );
+                    if !array_renames.contains(&pair) {
+                        array_renames.push(pair);
+                    }
+                }
+            }
+
             continue;
         }
 
@@ -315,6 +408,14 @@ fn apply_alias_entries(
 
         let arm_path = entry.select_path(api_version);
         if let Some(value) = navigate_arm_path(raw, arm_path) {
+            // Normalize the value (recursively lowercase keys) so nested
+            // objects are consistent with the rest of the normalized resource.
+            // Without this, scalar aliases like `condition` would overwrite
+            // the already-lowercased structure from `normalize_value()` with
+            // raw ARM values containing camelCase keys (e.g. `allOf` instead
+            // of `allof`).
+            let value = normalize_value(&value, &entry.short_name, None);
+
             // When the alias short name collides with a reserved ARM root
             // field (e.g., alias short name "type" vs root "type"), store
             // the alias value under a collision-safe key so it doesn't
@@ -332,72 +433,129 @@ fn apply_alias_entries(
     for remap in &element_remaps {
         apply_element_remap(result, remap);
     }
+
+    // Apply array-base renames: copy (or move) the source array to the target
+    // key if it doesn't already exist under that name.
+    for (source_lc, target_lc) in &array_renames {
+        if !result.contains_key(target_lc.as_str()) {
+            if let Some(val) = result.get(source_lc.as_str()).cloned() {
+                result.insert(target_lc.clone(), val);
+            }
+        }
+    }
 }
 
-/// Describes a field remapping inside each element of a sub-resource array.
+/// Describes a field remapping inside each element of a (possibly nested) array.
+///
+/// Supports both simple leaf renames (e.g., `prio` → `priority` in
+/// `rules[*]`) and deep path remaps for virtual-segment aliases (e.g.,
+/// Portal dashboard extension aliases where `metadata.settings.X` in the ARM
+/// JSON must also appear at `metadata.ext-key.settings.X` in the normalized
+/// output).
 struct ElementRemap {
-    /// Dot-separated path to the array in the normalized result
-    /// (e.g., `"rules"` for `rules[*].priority`).
-    array_path: Vec<String>,
-    /// The field name to read from each element (from the versioned ARM path).
+    /// Chain of array navigations for nested `[*]` levels.
+    /// Each inner `Vec<String>` navigates from the current element to the
+    /// next array through intermediate object keys.
+    ///
+    /// - `rules[*].field`         → `[["rules"]]`
+    /// - `lenses[*].parts[*].f`   → `[["lenses"], ["parts"]]`
+    /// - `a.b[*].c.d[*].f`        → `[["a", "b"], ["c", "d"]]`
+    array_chain: Vec<Vec<String>>,
+    /// Dot-separated path to read within the innermost array element.
+    /// Derived from the ARM path (after last `[*].`, `properties.` stripped).
     source_field: String,
-    /// The field name to write in each element (from the alias short name).
+    /// Dot-separated path to write within the innermost array element.
+    /// Derived from the alias short name (after last `[*].`).
     target_field: String,
 }
 
 /// Determine if an array-element alias needs a per-element field remap for the
 /// given API version.
 ///
-/// Returns `Some(ElementRemap)` when the leaf field name in the selected ARM
-/// path differs from the leaf field name in the alias short name.
+/// Returns `Some(ElementRemap)` when the post-wildcard path in the selected ARM
+/// path differs from the post-wildcard path in the alias short name.  This
+/// handles both simple leaf renames (versioned API paths) and deep virtual-
+/// segment remaps (e.g., Portal dashboard extension aliases).
 fn compute_element_remap(entry: &ResolvedEntry, api_version: Option<&str>) -> Option<ElementRemap> {
     let selected_path = entry.select_path(api_version);
 
-    // Extract the last field name from the selected ARM path and the short name.
-    // For `rules[*].priority` (short name) and `properties.rules[*].properties.prio`
-    // (ARM path), the target leaf is "priority" and source leaf is "prio".
+    // Split alias short name and ARM path by `[*].` to isolate the
+    // post-wildcard path from the array chain.
+    let short_parts: Vec<&str> = entry.short_name.split("[*].").collect();
+    let arm_raw_parts: Vec<&str> = selected_path.split("[*].").collect();
 
-    // Find the leaf after the last `[*].` in the short name.
-    let short_leaf = entry.short_name.rsplit("[*].").next()?;
-    // Find the leaf after the last `[*].` in the ARM path, then strip any
-    // leading `properties.` wrapper (structural flattening already removed it).
-    let arm_after_wildcard = selected_path.rsplit("[*].").next()?;
-    let arm_leaf = arm_after_wildcard
-        .strip_prefix("properties.")
-        .unwrap_or(arm_after_wildcard);
-
-    // If the leaf field names are the same, no remap needed.
-    if short_leaf == arm_leaf {
+    // Need at least 2 parts (i.e., at least one `[*]` followed by `.field`).
+    if short_parts.len() < 2 || arm_raw_parts.len() < 2 {
         return None;
     }
 
-    // Extract the array path from the short name (everything before `[*]`).
-    let wildcard_pos = entry.short_name.find("[*]")?;
-    let array_name = &entry.short_name[..wildcard_pos];
+    // Compare the path after the last `[*].` in both.
+    let short_leaf = short_parts.last()?;
+    let arm_leaf_raw = arm_raw_parts.last()?;
+    let arm_leaf = arm_leaf_raw
+        .strip_prefix("properties.")
+        .unwrap_or(arm_leaf_raw);
+
+    // If the post-wildcard paths are the same, no remap needed.
+    if short_leaf.eq_ignore_ascii_case(arm_leaf) {
+        return None;
+    }
+
+    // Build array chain: each entry navigates from the current element to
+    // the next array.  For `lenses[*].parts[*].field`, this produces
+    // `[["lenses"], ["parts"]]`.
+    let array_chain: Vec<Vec<String>> = short_parts[..short_parts.len() - 1]
+        .iter()
+        .map(|part| part.split('.').map(|s| s.to_ascii_lowercase()).collect())
+        .collect();
 
     Some(ElementRemap {
-        array_path: array_name
-            .split('.')
-            .map(|s| s.to_ascii_lowercase())
-            .collect(),
+        array_chain,
         source_field: arm_leaf.to_ascii_lowercase(),
         target_field: short_leaf.to_ascii_lowercase(),
     })
 }
 
-/// Apply an element-level field remap to each element in a sub-resource array.
+/// Apply an element-level field remap to each element of an array (or nested
+/// array chain).
 fn apply_element_remap(result: &mut Map<String, Value>, remap: &ElementRemap) {
-    // Navigate to the array value at remap.array_path in result.
-    let arr = {
-        let mut cur: &mut Value = match remap.array_path.first() {
-            Some(first) => match result.get_mut(first) {
-                Some(v) => v,
-                None => return,
-            },
+    apply_remap_at_depth(
+        result,
+        &remap.array_chain,
+        0,
+        &remap.source_field,
+        &remap.target_field,
+    );
+}
+
+/// Recursively navigate nested arrays via `array_chain` and apply a field
+/// remap in each innermost element.
+fn apply_remap_at_depth(
+    obj: &mut Map<String, Value>,
+    array_chain: &[Vec<String>],
+    depth: usize,
+    source_field: &str,
+    target_field: &str,
+) {
+    if depth >= array_chain.len() {
+        // At the innermost element level — remap the field.
+        remap_deep_field(obj, source_field, target_field);
+        return;
+    }
+
+    // Navigate to the array via the segments in array_chain[depth].
+    let nav = &array_chain[depth];
+    let arr_val = {
+        let first = match nav.first() {
+            Some(f) => f,
             None => return,
         };
-        for segment in remap.array_path.iter().skip(1) {
-            cur = match cur.get_mut(segment) {
+        let mut cur: &mut Value = match obj.get_mut(first.as_str()) {
+            Some(v) => v,
+            None => return,
+        };
+        for segment in nav.iter().skip(1) {
+            cur = match cur.get_mut(segment.as_str()) {
                 Some(v) => v,
                 None => return,
             };
@@ -405,21 +563,59 @@ fn apply_element_remap(result: &mut Map<String, Value>, remap: &ElementRemap) {
         cur
     };
 
-    if let Value::Array(elements) = arr {
+    if let Value::Array(elements) = arr_val {
         for elem in elements.iter_mut() {
-            if let Value::Object(obj) = elem {
-                // Remap: take the value from the versioned source field and
-                // place it at the alias target field, overwriting any existing
-                // value.  This handles cases where both field names are present
-                // in the ARM template (e.g., `priority: 50` and `prio: 200`):
-                // the selected API version determines which value wins.
-                if obj.contains_key(&remap.source_field) {
-                    if let Some(val) = obj.remove(&remap.source_field) {
-                        obj.insert(remap.target_field.clone(), val);
-                    }
-                }
+            if let Value::Object(inner) = elem {
+                apply_remap_at_depth(inner, array_chain, depth + 1, source_field, target_field);
             }
         }
+    }
+}
+
+/// Remap a value from one (possibly nested) dot-separated path to another
+/// within an object, creating intermediate objects as needed.
+fn remap_deep_field(obj: &mut Map<String, Value>, source: &str, target: &str) {
+    // Read value at source path.
+    let val = {
+        let segments: Vec<&str> = source.split('.').collect();
+        let first = match segments.first() {
+            Some(&f) => f,
+            None => return,
+        };
+        let mut cur: &Value = match obj.get(first) {
+            Some(v) => v,
+            None => return,
+        };
+        for &seg in segments.iter().skip(1) {
+            cur = match cur.get(seg) {
+                Some(v) => v,
+                None => return,
+            };
+        }
+        cur.clone()
+    };
+
+    // Write value at target path, creating intermediate objects.
+    let segments: Vec<&str> = target.split('.').collect();
+    if segments.is_empty() {
+        return;
+    }
+    if segments.len() == 1 {
+        obj.insert(segments[0].to_string(), val);
+        return;
+    }
+    let mut current = obj;
+    for &seg in &segments[..segments.len() - 1] {
+        let entry = current
+            .entry(seg.to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        current = match entry.as_object_mut() {
+            Some(m) => m,
+            None => return,
+        };
+    }
+    if let Some(&last) = segments.last() {
+        current.insert(last.to_string(), val);
     }
 }
 

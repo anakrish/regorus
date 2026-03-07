@@ -295,6 +295,12 @@ impl Compiler {
                 let ctx_reg = self.load_context(span)?;
                 self.emit_chained_index_literal_path(ctx_reg, &["requestContext"], span)
             }
+            "claims" => {
+                // claims() returns the policy token claims from the context.
+                // Used in DenyAction policies to inspect validation output.
+                let ctx_reg = self.load_context(span)?;
+                self.emit_chained_index_literal_path(ctx_reg, &["claims"], span)
+            }
             "policy" => {
                 let ctx_reg = self.load_context(span)?;
                 self.emit_chained_index_literal_path(ctx_reg, &["policy"], span)

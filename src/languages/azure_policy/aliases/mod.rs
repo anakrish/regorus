@@ -18,6 +18,7 @@
 //! need to know about aliases — the normalizer handles the translation once
 //! before evaluation.
 
+pub mod denormalizer;
 pub mod normalizer;
 pub mod types;
 
@@ -27,7 +28,9 @@ use alloc::vec::Vec;
 
 use anyhow::Result;
 
-use types::{ProviderAliases, ResolvedAliases, ResolvedEntry};
+use types::{
+    AliasEntry, AliasPath, DataPolicyManifest, ProviderAliases, ResolvedAliases, ResolvedEntry,
+};
 
 use normalizer::{collision_safe_key, is_root_field_collision};
 
@@ -72,50 +75,147 @@ impl AliasRegistry {
         Ok(())
     }
 
+    /// Load alias data from a data policy manifest JSON string.
+    ///
+    /// Data policy manifests describe data-plane aliases (e.g.,
+    /// `Microsoft.KeyVault.Data`, `Microsoft.DataFactory.Data`).  Their format
+    /// differs from the control-plane `ProviderAliases` catalog: aliases use
+    /// `paths[0].path` instead of `defaultPath`, and may include both
+    /// top-level aliases and per-resource-type groups.
+    ///
+    /// Multiple calls accumulate data; duplicates overwrite earlier entries.
+    pub fn load_data_policy_manifest_json(&mut self, json: &str) -> Result<()> {
+        let manifest: DataPolicyManifest = serde_json::from_str(json)?;
+        self.load_data_policy_manifest(manifest);
+        Ok(())
+    }
+
+    /// Load a data policy manifest.
+    pub fn load_data_policy_manifest(&mut self, manifest: DataPolicyManifest) {
+        let namespace = &manifest.data_namespace;
+
+        // Collect known resource types so we can assign top-level aliases.
+        let known_rts: Vec<String> = manifest
+            .resource_type_aliases
+            .iter()
+            .map(|rta| rta.resource_type.clone())
+            .collect();
+
+        // 1. Process per-resource-type alias groups.
+        for rta in &manifest.resource_type_aliases {
+            let fq_type = alloc::format!("{}/{}", namespace, rta.resource_type);
+            let entries = convert_data_manifest_aliases(&fq_type, &rta.aliases);
+            self.ingest_alias_entries(&fq_type, &entries);
+        }
+
+        // 2. Process top-level aliases — determine resource type from name.
+        //    Group them by resource type, then merge into existing entries.
+        let mut grouped: BTreeMap<String, Vec<AliasEntry>> = BTreeMap::new();
+        let ns_prefix = alloc::format!("{}/", namespace);
+
+        for alias in &manifest.aliases {
+            let suffix = if alias.name.len() > ns_prefix.len()
+                && alias.name[..ns_prefix.len()].eq_ignore_ascii_case(&ns_prefix)
+            {
+                &alias.name[ns_prefix.len()..]
+            } else {
+                continue;
+            };
+
+            // Find the longest matching known resource type.
+            let mut best_rt: Option<&str> = None;
+            let mut best_len = 0;
+            for rt in &known_rts {
+                if suffix.len() > rt.len()
+                    && suffix[..rt.len()].eq_ignore_ascii_case(rt)
+                    && suffix.as_bytes().get(rt.len()) == Some(&b'/')
+                    && rt.len() > best_len
+                {
+                    best_rt = Some(rt.as_str());
+                    best_len = rt.len();
+                }
+            }
+
+            let entry = data_alias_to_alias_entry(alias);
+
+            if let Some(rt) = best_rt {
+                let fq_type = alloc::format!("{}/{}", namespace, rt);
+                grouped.entry(fq_type).or_default().push(entry);
+            }
+            // If no matching resource type, skip (shouldn't happen in practice).
+        }
+
+        // Merge grouped top-level aliases into existing resource type entries.
+        for (fq_type, entries) in &grouped {
+            self.ingest_alias_entries(fq_type, entries);
+        }
+    }
+
     /// Load a single provider's alias data.
     pub fn load_provider(&mut self, provider: ProviderAliases) {
         let namespace = &provider.namespace;
         for rt in provider.resource_types {
             let fq_type = alloc::format!("{}/{}", namespace, rt.resource_type);
-            // Build the global FQ alias → short name lookup and modifiable map.
-            let prefix = alloc::format!("{}/", fq_type);
-            for alias in &rt.aliases {
-                // Derive the short name by stripping the resource type prefix.
-                // For cross-type aliases (e.g., Microsoft.Compute/imagePublisher
-                // under the virtualMachines resource type), the name does not
-                // start with the resource type prefix.  In that case, take the
-                // part after the last '/'.
-                let raw_short = if alias.name.len() > prefix.len()
-                    && alias.name[..prefix.len()].eq_ignore_ascii_case(&prefix)
-                {
-                    alias.name[prefix.len()..].to_string()
-                } else if let Some(idx) = alias.name.rfind('/') {
-                    alias.name[idx + 1..].to_string()
-                } else {
-                    continue;
-                };
+            self.ingest_alias_entries(&fq_type, &rt.aliases);
+        }
+    }
 
-                let default_path = alias.default_path.as_deref().unwrap_or("");
-                // When an alias short name collides with a reserved ARM
-                // root field (name, type, id, etc.), use a collision-safe
-                // key so the compiler and normalizer agree on where the
-                // alias value lives in the normalized resource.
-                let short = if is_root_field_collision(&raw_short, default_path) {
-                    collision_safe_key(&raw_short)
-                } else {
-                    raw_short
-                };
-                let lc_name = alias.name.to_lowercase();
-                self.alias_to_short.insert(lc_name.clone(), short);
-                let is_modifiable = alias
-                    .default_metadata
-                    .as_ref()
-                    .and_then(|m| m.attributes.as_deref())
-                    .is_some_and(|a| a.eq_ignore_ascii_case("Modifiable"));
-                self.alias_modifiable.insert(lc_name, is_modifiable);
+    /// Ingest a batch of alias entries for a fully-qualified resource type.
+    ///
+    /// This is the shared core used by both [`load_provider`] and
+    /// [`load_data_policy_manifest`].  It updates the global lookup maps
+    /// and merges resolved entries into the per-resource-type map.
+    fn ingest_alias_entries(&mut self, fq_type: &str, aliases: &[AliasEntry]) {
+        let prefix = alloc::format!("{}/", fq_type);
+
+        for alias in aliases {
+            // Derive the short name by stripping the resource type prefix.
+            let raw_short = if alias.name.len() > prefix.len()
+                && alias.name[..prefix.len()].eq_ignore_ascii_case(&prefix)
+            {
+                alias.name[prefix.len()..].to_string()
+            } else if let Some(idx) = alias.name.rfind('/') {
+                alias.name[idx + 1..].to_string()
+            } else {
+                continue;
+            };
+
+            let default_path = alias.default_path.as_deref().unwrap_or("");
+            // The normalizer flattens `properties` into the resource root, so
+            // strip a leading `properties.` / `properties/` from the short name.
+            let raw_short_normalized = normalize_short_name(&raw_short).to_string();
+
+            let short = if is_root_field_collision(&raw_short_normalized, default_path) {
+                collision_safe_key(&raw_short_normalized)
+            } else {
+                raw_short_normalized
+            };
+            let lc_name = alias.name.to_lowercase();
+            self.alias_to_short.insert(lc_name.clone(), short);
+            let is_modifiable = alias
+                .default_metadata
+                .as_ref()
+                .and_then(|m| m.attributes.as_deref())
+                .is_some_and(|a| a.eq_ignore_ascii_case("Modifiable"));
+            self.alias_modifiable.insert(lc_name, is_modifiable);
+        }
+
+        let resolved = resolve_resource_type(fq_type, aliases);
+        let lc_type = fq_type.to_lowercase();
+
+        // Merge into existing entry if one exists (for data manifests that
+        // have both top-level and per-resource-type aliases for the same type).
+        if let Some(existing) = self.types.get_mut(&lc_type) {
+            for (key, entry) in resolved.entries {
+                existing.entries.entry(key).or_insert(entry);
             }
-            let resolved = resolve_resource_type(&fq_type, &rt.aliases);
-            self.types.insert(fq_type.to_lowercase(), resolved);
+            for s in resolved.sub_resource_arrays {
+                if !existing.sub_resource_arrays.contains(&s) {
+                    existing.sub_resource_arrays.push(s);
+                }
+            }
+        } else {
+            self.types.insert(lc_type, resolved);
         }
     }
 
@@ -185,6 +285,25 @@ impl AliasRegistry {
         let normalized = normalizer::normalize(arm_resource, Some(self), api_version);
         normalizer::build_input_envelope(normalized, context, parameters)
     }
+
+    /// Denormalize a normalized resource back to ARM JSON structure.
+    ///
+    /// Convenience method that combines alias lookup and denormalization.
+    /// The resource type is extracted from the `type` field of `normalized`
+    /// automatically.
+    ///
+    /// # Arguments
+    ///
+    /// * `normalized` — The normalized JSON object (as produced by
+    ///   [`normalizer::normalize`]).
+    /// * `api_version` — Optional API version to select versioned alias paths.
+    pub fn denormalize(
+        &self,
+        normalized: &serde_json::Value,
+        api_version: Option<&str>,
+    ) -> serde_json::Value {
+        denormalizer::denormalize(normalized, Some(self), api_version)
+    }
 }
 
 /// Resolve a resource type's alias entries into `ResolvedAliases`.
@@ -213,6 +332,10 @@ fn resolve_resource_type(fq_type: &str, aliases: &[types::AliasEntry]) -> Resolv
         } else {
             &alias.name
         };
+
+        // The normalizer flattens `properties` into the resource root, so
+        // strip a leading `properties.` / `properties/` from the short name.
+        let short_name = normalize_short_name(short_name);
 
         let default_path = match &alias.default_path {
             Some(p) => p.clone(),
@@ -314,6 +437,64 @@ fn detect_sub_resource_array(
     }
 }
 
+/// Convert a data manifest alias to a standard [`AliasEntry`].
+///
+/// Data manifest aliases use `paths[0].path` as the effective default path
+/// (the `defaultPath` field is absent).  Both `apiVersions` and
+/// `schemaVersions` are treated as version sets for versioned path lookup.
+fn data_alias_to_alias_entry(dma: &types::DataManifestAlias) -> AliasEntry {
+    let default_path = dma.paths.first().map(|p| p.path.clone());
+
+    let paths: Vec<AliasPath> = dma
+        .paths
+        .iter()
+        .map(|p| {
+            // Merge apiVersions and schemaVersions into a single version list.
+            let mut versions = p.api_versions.clone();
+            versions.extend(p.schema_versions.iter().cloned());
+            AliasPath {
+                path: p.path.clone(),
+                api_versions: versions,
+                metadata: None,
+                ..Default::default()
+            }
+        })
+        .collect();
+
+    AliasEntry {
+        name: dma.name.clone(),
+        default_path,
+        default_metadata: None,
+        paths,
+        ..Default::default()
+    }
+}
+
+/// Convert a slice of data manifest aliases to standard [`AliasEntry`] objects.
+fn convert_data_manifest_aliases(
+    _fq_type: &str,
+    aliases: &[types::DataManifestAlias],
+) -> Vec<AliasEntry> {
+    aliases.iter().map(data_alias_to_alias_entry).collect()
+}
+
+/// Normalize a short name derived from an alias FQ name.
+///
+/// The normalizer always flattens `properties` into the resource root, so a
+/// short name like `properties.domainNames[*]` must be reduced to
+/// `domainNames[*]` to match the normalized resource structure.
+///
+/// This is primarily needed for data-plane aliases where the FQ name includes
+/// `properties.` in the property part (e.g.,
+/// `Microsoft.DataFactory.Data/factories/outboundTraffic/properties.domainNames[*]`).
+/// Control-plane alias names never include `properties.` in the short portion.
+fn normalize_short_name(short: &str) -> &str {
+    short
+        .strip_prefix("properties.")
+        .or_else(|| short.strip_prefix("properties/"))
+        .unwrap_or(short)
+}
+
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -365,12 +546,14 @@ mod tests {
                 default_path: Some("properties.supportsHttpsTrafficOnly".to_string()),
                 default_metadata: None,
                 paths: vec![],
+                ..Default::default()
             },
             types::AliasEntry {
                 name: "Microsoft.Storage/storageAccounts/sku.name".to_string(),
                 default_path: Some("sku.name".to_string()),
                 default_metadata: None,
                 paths: vec![],
+                ..Default::default()
             },
         ];
 
@@ -398,12 +581,14 @@ mod tests {
                 default_path: Some("properties.securityRules[*].properties.protocol".to_string()),
                 default_metadata: None,
                 paths: vec![],
+                ..Default::default()
             },
             types::AliasEntry {
                 name: "Microsoft.Network/networkSecurityGroups/securityRules[*].access".to_string(),
                 default_path: Some("properties.securityRules[*].properties.access".to_string()),
                 default_metadata: None,
                 paths: vec![],
+                ..Default::default()
             },
         ];
 
@@ -479,13 +664,16 @@ mod tests {
                     path: "properties.siteConfig.properties.numberOfWorkers".to_string(),
                     api_versions: vec!["2014-04-01".to_string(), "2014-06-01".to_string()],
                     metadata: None,
+                    ..Default::default()
                 },
                 types::AliasPath {
                     path: "properties.siteConfig.numberOfWorkers".to_string(),
                     api_versions: vec!["2021-01-01".to_string()],
                     metadata: None,
+                    ..Default::default()
                 },
             ],
+            ..Default::default()
         }];
 
         let resolved = resolve_resource_type("Microsoft.Web/sites", &aliases);
@@ -517,12 +705,14 @@ mod tests {
                 default_path: Some("properties.good".to_string()),
                 default_metadata: None,
                 paths: vec![],
+                ..Default::default()
             },
             types::AliasEntry {
                 name: "Microsoft.Storage/storageAccounts/bad".to_string(),
                 default_path: None,
                 default_metadata: None,
                 paths: vec![],
+                ..Default::default()
             },
         ];
 
@@ -556,18 +746,21 @@ mod tests {
                 default_path: Some("properties.rules[*].properties.a".to_string()),
                 default_metadata: None,
                 paths: vec![],
+                ..Default::default()
             },
             types::AliasEntry {
                 name: "T/R/rules[*].b".to_string(),
                 default_path: Some("properties.rules[*].properties.b".to_string()),
                 default_metadata: None,
                 paths: vec![],
+                ..Default::default()
             },
             types::AliasEntry {
                 name: "T/R/rules[*].c".to_string(),
                 default_path: Some("properties.rules[*].properties.c".to_string()),
                 default_metadata: None,
                 paths: vec![],
+                ..Default::default()
             },
         ];
 
@@ -768,6 +961,10 @@ mod tests {
         registry.load_from_json(json).unwrap();
 
         let map = registry.alias_map();
+        // alias_map returns the short name derived by stripping the FQ type
+        // prefix from the alias name:
+        //   `Microsoft.Network/networkSecurityGroups/securityRules[*].protocol`
+        //   → `securityRules[*].protocol`
         assert_eq!(
             map.get("microsoft.network/networksecuritygroups/securityrules[*].protocol"),
             Some(&"securityRules[*].protocol".to_string())

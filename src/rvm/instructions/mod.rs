@@ -487,6 +487,24 @@ pub enum Instruction {
         right: u8,
     },
 
+    /// Guard for `value:` conditions in Azure Policy.
+    ///
+    /// When the LHS of a `value:` condition resolves to Undefined (because
+    /// the ARM template expression failed to evaluate — e.g. a missing
+    /// intermediate property in a dot chain), the condition result must be
+    /// `false` regardless of the operator.  This differs from `field:`
+    /// conditions where Undefined has per-operator semantics (e.g.
+    /// `notEquals` returns `true` when the field doesn't exist).
+    ///
+    /// `dest = if is_undefined(value) { false } else { condition }`
+    ValueConditionGuard {
+        dest: u8,
+        /// The LHS expression result (checked for Undefined).
+        value: u8,
+        /// The operator result to pass through when value is defined.
+        condition: u8,
+    },
+
     /// Azure Policy logic not: `!is_true(operand)`.
     PolicyNot {
         dest: u8,

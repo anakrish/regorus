@@ -281,8 +281,12 @@ impl MetadataValue {
                 // Try integer first, fall back to f64 truncation
                 n.as_i64().map_or_else(
                     || {
-                        #[allow(clippy::as_conversions)]
-                        MetadataValue::Integer(n.as_f64().map_or(0, |f| f as i64))
+                        n.as_f64().map_or(MetadataValue::Integer(0), |f| {
+                            // Deliberate truncation of f64 to i64 for metadata storage
+                            #[expect(clippy::as_conversions)]
+                            let i = f as i64;
+                            MetadataValue::Integer(i)
+                        })
                     },
                     MetadataValue::Integer,
                 )

@@ -15,6 +15,55 @@ use crate::languages::azure_policy::expr::ExprParser;
 use super::error::ParseError;
 use super::is_template_expr;
 
+/// Unescape a JSON string body (the content between the outer `"` delimiters).
+///
+/// The lexer returns the raw source text for strings which preserves backslash
+/// escape sequences (e.g., `\"`, `\\`, `\n`, `\uXXXX`).  This function
+/// converts them to the actual characters they represent so that runtime
+/// `Value::String` comparisons work correctly.
+fn json_unescape(raw: &str) -> String {
+    // Fast path: if there is no backslash, the text is already unescaped.
+    if !raw.contains('\\') {
+        return raw.into();
+    }
+
+    let mut result = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.next() {
+                Some('"') => result.push('"'),
+                Some('\\') => result.push('\\'),
+                Some('/') => result.push('/'),
+                Some('b') => result.push('\u{0008}'),
+                Some('f') => result.push('\u{000C}'),
+                Some('n') => result.push('\n'),
+                Some('r') => result.push('\r'),
+                Some('t') => result.push('\t'),
+                Some('u') => {
+                    let hex: String = chars.by_ref().take(4).collect();
+                    if let Ok(code_point) = u32::from_str_radix(&hex, 16) {
+                        if let Some(c) = char::from_u32(code_point) {
+                            result.push(c);
+                        }
+                    }
+                }
+                Some(c) => {
+                    // Unknown escape — preserve as-is.
+                    result.push('\\');
+                    result.push(c);
+                }
+                None => result.push('\\'),
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
+}
+
 // ============================================================================
 // Intermediate types for constraint building
 // ============================================================================
@@ -109,6 +158,8 @@ impl<'source> Parser<'source> {
     }
 
     /// Consume a string token and return its (span, text).
+    ///
+    /// The returned text has JSON escape sequences resolved (e.g., `\"` → `"`).
     pub fn expect_string(&mut self) -> Result<(Span, String), ParseError> {
         if self.tok.0 != TokenKind::String {
             return Err(ParseError::UnexpectedToken {
@@ -117,7 +168,7 @@ impl<'source> Parser<'source> {
             });
         }
         let span = self.tok.1.clone();
-        let text: String = span.text().into();
+        let text = json_unescape(span.text());
         self.advance()?;
         Ok((span, text))
     }
@@ -131,7 +182,7 @@ impl<'source> Parser<'source> {
         match self.tok.0 {
             TokenKind::String => {
                 let span = self.tok.1.clone();
-                let text: String = span.text().into();
+                let text = json_unescape(span.text());
                 self.advance()?;
                 Ok(JsonValue::Str(span, text))
             }

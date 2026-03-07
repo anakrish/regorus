@@ -123,6 +123,12 @@ pub struct RegoVM {
 
     /// Elapsed wall-clock time recorded when the VM entered a suspended state
     pub(super) execution_timer_elapsed_at_suspend: Option<Duration>,
+
+    /// When `true`, an `Every` loop over a non-collection value (null, string,
+    /// number, etc.) returns `false` instead of vacuous `true`.  This matches
+    /// Azure Policy semantics where `field[*]` on a non-array means "condition
+    /// not met".  Automatically set from `program.metadata.language`.
+    pub(super) virtual_element_on_non_collection: bool,
 }
 
 impl Default for RegoVM {
@@ -167,6 +173,7 @@ impl RegoVM {
             execution_timer_config: None,
             execution_timer: ExecutionTimer::new(fallback_timer),
             execution_timer_elapsed_at_suspend: None,
+            virtual_element_on_non_collection: false,
         }
     }
 
@@ -195,6 +202,9 @@ impl RegoVM {
         // Set PC to main entry point
         self.pc = usize::try_from(program.main_entry_point).unwrap_or(0);
         self.executed_instructions = 0; // Reset instruction counter
+
+        // Azure Policy: `Every` over non-collection → false (not vacuous true)
+        self.virtual_element_on_non_collection = program.metadata.language == "azure_policy";
     }
 
     /// Set the compiled policy for default rule evaluation

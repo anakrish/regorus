@@ -825,6 +825,43 @@ impl RegoVM {
         self.execute_virtual_instruction(program, instruction)
     }
 
+    /// Check whether `l` "contains" `r` using Azure Policy semantics.
+    ///
+    /// Works on strings (case-insensitive substring), arrays/sets (element
+    /// membership), objects (key membership), and coerces non-string scalars
+    /// to strings when the RHS is a string.
+    #[cfg(feature = "azure_policy")]
+    #[inline]
+    fn policy_contains_check(l: &Value, r: &Value) -> bool {
+        use crate::builtins::azure_policy::helpers::{
+            as_string, case_insensitive_equals, coerce_to_string,
+        };
+        use crate::languages::azure_policy::strings;
+
+        match *l {
+            Value::String(ref haystack) => coerce_to_string(r)
+                .is_some_and(|needle| strings::case_fold::contains(haystack, &needle)),
+            Value::Array(ref items) => items.iter().any(|item| case_insensitive_equals(item, r)),
+            Value::Set(ref items) => items.iter().any(|item| case_insensitive_equals(item, r)),
+            // ARM template contains(object, key) checks key membership.
+            Value::Object(ref map) => map.keys().any(|key| case_insensitive_equals(key, r)),
+            // Coerce non-string scalar LHS (e.g., count result)
+            // to a string only when the RHS is already a string.
+            // This handles `count(...) contains "2"` where the
+            // count yields Number(2) and RHS is String("2").
+            _ => {
+                if matches!(*r, Value::String(_)) {
+                    coerce_to_string(l).is_some_and(|haystack| {
+                        as_string(r)
+                            .is_some_and(|needle| strings::case_fold::contains(&haystack, &needle))
+                    })
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
     #[cfg(feature = "azure_policy")]
     fn execute_policy_instruction(
         &mut self,
@@ -832,81 +869,116 @@ impl RegoVM {
         instruction: Instruction,
     ) -> Result<InstructionOutcome> {
         use crate::builtins::azure_policy::helpers::{
-            as_boolish, as_string_ci, case_insensitive_equals, compare_values, is_true,
+            as_boolish, case_insensitive_equals, coerce_to_string_ci, compare_values, is_true,
             is_undefined, match_like_pattern_ci, match_pattern,
         };
-        use crate::languages::azure_policy::strings;
         use Instruction::*;
         match instruction {
             PolicyEquals { dest, left, right } => {
                 let l = self.get_register(left)?;
                 let r = self.get_register(right)?;
-                let result = case_insensitive_equals(l, r);
+                let result = if is_undefined(l) {
+                    // Missing field matches only a null RHS.
+                    matches!(r, Value::Null)
+                } else {
+                    case_insensitive_equals(l, r)
+                };
                 self.set_register(dest, Value::Bool(result))?;
                 Ok(InstructionOutcome::Continue)
             }
             PolicyNotEquals { dest, left, right } => {
                 let l = self.get_register(left)?;
-                if is_undefined(l) {
-                    self.set_register(dest, Value::Bool(true))?;
+                let r = self.get_register(right)?;
+                let result = if is_undefined(l) {
+                    // Missing field: notEquals null → false (matches), else true.
+                    !matches!(r, Value::Null)
                 } else {
-                    let r = self.get_register(right)?;
-                    let result = !case_insensitive_equals(l, r);
+                    !case_insensitive_equals(l, r)
+                };
+                self.set_register(dest, Value::Bool(result))?;
+                Ok(InstructionOutcome::Continue)
+            }
+            PolicyGreater { dest, left, right } => {
+                let l = self.get_register(left)?;
+                if is_undefined(l) {
+                    self.set_register(dest, Value::Bool(false))?;
+                } else {
+                    let args = [l.clone(), self.get_register(right)?.clone()];
+                    let result = compare_values(&args).is_some_and(|c| c > 0);
                     self.set_register(dest, Value::Bool(result))?;
                 }
                 Ok(InstructionOutcome::Continue)
             }
-            PolicyGreater { dest, left, right } => {
-                let args = [
-                    self.get_register(left)?.clone(),
-                    self.get_register(right)?.clone(),
-                ];
-                let result = compare_values(&args).is_some_and(|c| c > 0);
-                self.set_register(dest, Value::Bool(result))?;
-                Ok(InstructionOutcome::Continue)
-            }
             PolicyGreaterOrEquals { dest, left, right } => {
-                let args = [
-                    self.get_register(left)?.clone(),
-                    self.get_register(right)?.clone(),
-                ];
-                let result = compare_values(&args).is_some_and(|c| c >= 0);
-                self.set_register(dest, Value::Bool(result))?;
+                let l = self.get_register(left)?;
+                if is_undefined(l) {
+                    self.set_register(dest, Value::Bool(false))?;
+                } else {
+                    let args = [l.clone(), self.get_register(right)?.clone()];
+                    let result = compare_values(&args).is_some_and(|c| c >= 0);
+                    self.set_register(dest, Value::Bool(result))?;
+                }
                 Ok(InstructionOutcome::Continue)
             }
             PolicyLess { dest, left, right } => {
-                let args = [
-                    self.get_register(left)?.clone(),
-                    self.get_register(right)?.clone(),
-                ];
-                let result = compare_values(&args).is_some_and(|c| c < 0);
-                self.set_register(dest, Value::Bool(result))?;
+                let l = self.get_register(left)?;
+                if is_undefined(l) {
+                    self.set_register(dest, Value::Bool(false))?;
+                } else {
+                    let args = [l.clone(), self.get_register(right)?.clone()];
+                    let result = compare_values(&args).is_some_and(|c| c < 0);
+                    self.set_register(dest, Value::Bool(result))?;
+                }
                 Ok(InstructionOutcome::Continue)
             }
             PolicyLessOrEquals { dest, left, right } => {
-                let args = [
-                    self.get_register(left)?.clone(),
-                    self.get_register(right)?.clone(),
-                ];
-                let result = compare_values(&args).is_some_and(|c| c <= 0);
-                self.set_register(dest, Value::Bool(result))?;
+                let l = self.get_register(left)?;
+                if is_undefined(l) {
+                    self.set_register(dest, Value::Bool(false))?;
+                } else {
+                    let args = [l.clone(), self.get_register(right)?.clone()];
+                    let result = compare_values(&args).is_some_and(|c| c <= 0);
+                    self.set_register(dest, Value::Bool(result))?;
+                }
                 Ok(InstructionOutcome::Continue)
             }
             PolicyIn { dest, left, right } => {
                 let l = self.get_register(left)?;
                 let r = self.get_register(right)?;
 
-                if is_undefined(l) || is_undefined(r) {
-                    self.set_register(dest, Value::Bool(false))?;
-                } else {
+                if is_undefined(l) {
+                    // Missing field matches only null elements in the list.
                     let result = match *r {
                         Value::Array(ref items) => {
-                            items.iter().any(|item| case_insensitive_equals(item, l))
+                            items.iter().any(|item| matches!(item, Value::Null))
                         }
                         Value::Set(ref items) => {
-                            items.iter().any(|item| case_insensitive_equals(item, l))
+                            items.iter().any(|item| matches!(item, Value::Null))
                         }
                         _ => false,
+                    };
+                    self.set_register(dest, Value::Bool(result))?;
+                } else if matches!(*l, Value::Null) {
+                    // Explicit null field value doesn't match anything in the
+                    // in-list.  (Null in the RHS array is a sentinel for
+                    // "match missing/undefined fields" only.)
+                    self.set_register(dest, Value::Bool(false))?;
+                } else if is_undefined(r) {
+                    self.set_register(dest, Value::Bool(false))?;
+                } else {
+                    // Skip null elements in RHS — they are sentinels for
+                    // Undefined LHS only, not for matching defined values.
+                    let result = match *r {
+                        Value::Array(ref items) => items
+                            .iter()
+                            .filter(|item| !matches!(item, Value::Null))
+                            .any(|item| case_insensitive_equals(item, l)),
+                        Value::Set(ref items) => items
+                            .iter()
+                            .filter(|item| !matches!(item, Value::Null))
+                            .any(|item| case_insensitive_equals(item, l)),
+                        // Scalar RHS: treat as single-element array.
+                        _ => case_insensitive_equals(r, l),
                     };
                     self.set_register(dest, Value::Bool(result))?;
                 }
@@ -915,6 +987,20 @@ impl RegoVM {
             PolicyNotIn { dest, left, right } => {
                 let l = self.get_register(left)?;
                 if is_undefined(l) {
+                    // Missing field: notIn → !(list contains null).
+                    let r = self.get_register(right)?;
+                    let has_null = match *r {
+                        Value::Array(ref items) => {
+                            items.iter().any(|item| matches!(item, Value::Null))
+                        }
+                        Value::Set(ref items) => {
+                            items.iter().any(|item| matches!(item, Value::Null))
+                        }
+                        _ => false,
+                    };
+                    self.set_register(dest, Value::Bool(!has_null))?;
+                } else if matches!(*l, Value::Null) {
+                    // Explicit null field value: notIn always true.
                     self.set_register(dest, Value::Bool(true))?;
                 } else {
                     let r = self.get_register(right)?;
@@ -922,13 +1008,16 @@ impl RegoVM {
                         self.set_register(dest, Value::Bool(false))?;
                     } else {
                         let in_result = match *r {
-                            Value::Array(ref items) => {
-                                items.iter().any(|item| case_insensitive_equals(item, l))
-                            }
-                            Value::Set(ref items) => {
-                                items.iter().any(|item| case_insensitive_equals(item, l))
-                            }
-                            _ => false,
+                            Value::Array(ref items) => items
+                                .iter()
+                                .filter(|item| !matches!(item, Value::Null))
+                                .any(|item| case_insensitive_equals(item, l)),
+                            Value::Set(ref items) => items
+                                .iter()
+                                .filter(|item| !matches!(item, Value::Null))
+                                .any(|item| case_insensitive_equals(item, l)),
+                            // Scalar RHS: treat as single-element array.
+                            _ => case_insensitive_equals(r, l),
                         };
                         self.set_register(dest, Value::Bool(!in_result))?;
                     }
@@ -942,22 +1031,7 @@ impl RegoVM {
                 if is_undefined(l) || is_undefined(r) {
                     self.set_register(dest, Value::Bool(false))?;
                 } else {
-                    let result = match *l {
-                        Value::String(ref haystack) => {
-                            if let Value::String(ref needle) = *r {
-                                strings::case_fold::contains(haystack, needle)
-                            } else {
-                                false
-                            }
-                        }
-                        Value::Array(ref items) => {
-                            items.iter().any(|item| case_insensitive_equals(item, r))
-                        }
-                        Value::Set(ref items) => {
-                            items.iter().any(|item| case_insensitive_equals(item, r))
-                        }
-                        _ => false,
-                    };
+                    let result = Self::policy_contains_check(l, r);
                     self.set_register(dest, Value::Bool(result))?;
                 }
                 Ok(InstructionOutcome::Continue)
@@ -971,22 +1045,7 @@ impl RegoVM {
                     if is_undefined(r) {
                         self.set_register(dest, Value::Bool(false))?;
                     } else {
-                        let contains_result = match *l {
-                            Value::String(ref haystack) => {
-                                if let Value::String(ref needle) = *r {
-                                    strings::case_fold::contains(haystack, needle)
-                                } else {
-                                    false
-                                }
-                            }
-                            Value::Array(ref items) => {
-                                items.iter().any(|item| case_insensitive_equals(item, r))
-                            }
-                            Value::Set(ref items) => {
-                                items.iter().any(|item| case_insensitive_equals(item, r))
-                            }
-                            _ => false,
-                        };
+                        let contains_result = Self::policy_contains_check(l, r);
                         self.set_register(dest, Value::Bool(!contains_result))?;
                     }
                 }
@@ -1031,13 +1090,16 @@ impl RegoVM {
             }
             PolicyLike { dest, left, right } => {
                 let l = self.get_register(left)?;
-                let r = self.get_register(right)?;
-
-                let result = match (as_string_ci(l), as_string_ci(r)) {
-                    (Some(input), Some(pattern)) => match_like_pattern_ci(&input, &pattern),
-                    _ => false,
-                };
-                self.set_register(dest, Value::Bool(result))?;
+                if is_undefined(l) {
+                    self.set_register(dest, Value::Bool(false))?;
+                } else {
+                    let r = self.get_register(right)?;
+                    let result = match (coerce_to_string_ci(l), coerce_to_string_ci(r)) {
+                        (Some(input), Some(pattern)) => match_like_pattern_ci(&input, &pattern),
+                        _ => false,
+                    };
+                    self.set_register(dest, Value::Bool(result))?;
+                }
                 Ok(InstructionOutcome::Continue)
             }
             PolicyNotLike { dest, left, right } => {
@@ -1046,7 +1108,7 @@ impl RegoVM {
                     self.set_register(dest, Value::Bool(true))?;
                 } else {
                     let r = self.get_register(right)?;
-                    let result = match (as_string_ci(l), as_string_ci(r)) {
+                    let result = match (coerce_to_string_ci(l), coerce_to_string_ci(r)) {
                         (Some(input), Some(pattern)) => match_like_pattern_ci(&input, &pattern),
                         _ => false,
                     };
@@ -1055,12 +1117,14 @@ impl RegoVM {
                 Ok(InstructionOutcome::Continue)
             }
             PolicyMatch { dest, left, right } => {
-                let args = [
-                    self.get_register(left)?.clone(),
-                    self.get_register(right)?.clone(),
-                ];
-                let result = match_pattern(&args, false);
-                self.set_register(dest, Value::Bool(result))?;
+                let l = self.get_register(left)?;
+                if is_undefined(l) {
+                    self.set_register(dest, Value::Bool(false))?;
+                } else {
+                    let args = [l.clone(), self.get_register(right)?.clone()];
+                    let result = match_pattern(&args, false);
+                    self.set_register(dest, Value::Bool(result))?;
+                }
                 Ok(InstructionOutcome::Continue)
             }
             PolicyNotMatch { dest, left, right } => {
@@ -1075,12 +1139,14 @@ impl RegoVM {
                 Ok(InstructionOutcome::Continue)
             }
             PolicyMatchInsensitively { dest, left, right } => {
-                let args = [
-                    self.get_register(left)?.clone(),
-                    self.get_register(right)?.clone(),
-                ];
-                let result = match_pattern(&args, true);
-                self.set_register(dest, Value::Bool(result))?;
+                let l = self.get_register(left)?;
+                if is_undefined(l) {
+                    self.set_register(dest, Value::Bool(false))?;
+                } else {
+                    let args = [l.clone(), self.get_register(right)?.clone()];
+                    let result = match_pattern(&args, true);
+                    self.set_register(dest, Value::Bool(result))?;
+                }
                 Ok(InstructionOutcome::Continue)
             }
             PolicyNotMatchInsensitively { dest, left, right } => {
@@ -1100,6 +1166,23 @@ impl RegoVM {
                 let expected = as_boolish(r).unwrap_or(false);
                 let is_defined = !is_undefined(l) && !matches!(l, Value::Null);
                 self.set_register(dest, Value::Bool(is_defined == expected))?;
+                Ok(InstructionOutcome::Continue)
+            }
+            ValueConditionGuard {
+                dest,
+                value,
+                condition,
+            } => {
+                // For `value:` conditions: if the ARM template expression LHS
+                // resolved to Undefined (missing intermediate property), force
+                // the condition result to false.
+                let v = self.get_register(value)?;
+                if is_undefined(v) {
+                    self.set_register(dest, Value::Bool(false))?;
+                } else {
+                    let c = self.get_register(condition)?.clone();
+                    self.set_register(dest, c)?;
+                }
                 Ok(InstructionOutcome::Continue)
             }
             PolicyNot { dest, operand } => {

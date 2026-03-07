@@ -363,6 +363,16 @@ impl core::fmt::Display for Instruction {
             Instruction::PolicyExists { dest, left, right } => {
                 format!("POLICY_EXISTS R({}) R({}) R({})", dest, left, right)
             }
+            Instruction::ValueConditionGuard {
+                dest,
+                value,
+                condition,
+            } => {
+                format!(
+                    "VALUE_CONDITION_GUARD R({}) R({}) R({})",
+                    dest, value, condition
+                )
+            }
             Instruction::PolicyNot { dest, operand } => {
                 format!("POLICY_NOT R({}) R({})", dest, operand)
             }

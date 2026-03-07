@@ -139,6 +139,18 @@ pub(super) fn classify_field(
             let end = text.len().saturating_sub(2);
             Ok(FieldKind::Tag(text[6..end].into()))
         }
+        // Tags[tagName] — bracket notation without quotes.
+        // Tag name is everything between the first '[' and the LAST ']'.
+        // e.g. Tags[Dept.Name]] → tag name "Dept.Name]"
+        // Exclude tags[*] which is a wildcard iteration, not a tag name.
+        _ if text.to_lowercase().starts_with("tags[")
+            && text.ends_with(']')
+            && !text.contains("[*]") =>
+        {
+            // "tags[".len() == 5, strip last ']'
+            let end = text.len().saturating_sub(1);
+            Ok(FieldKind::Tag(text[5..end].into()))
+        }
         _ if text.starts_with('[') && text.ends_with(']') => {
             let end = text.len().saturating_sub(1);
             let inner = &text[1..end];

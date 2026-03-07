@@ -104,6 +104,7 @@ pub fn parse_instruction(text: &str) -> Result<Instruction> {
                 parse_policy_ternary(params_text, "PolicyNotMatchInsensitively")
             }
             "PolicyExists" => parse_policy_ternary(params_text, "PolicyExists"),
+            "ValueConditionGuard" => parse_policy_ternary(params_text, "ValueConditionGuard"),
             "PolicyNot" => parse_policy_not(params_text),
             // AllOf / AnyOf
             "AllOfStart" => parse_allof_start(params_text),
@@ -752,6 +753,11 @@ fn parse_policy_ternary(params_text: &str, name: &str) -> Result<Instruction> {
             Instruction::PolicyNotMatchInsensitively { dest, left, right }
         }
         "PolicyExists" => Instruction::PolicyExists { dest, left, right },
+        "ValueConditionGuard" => Instruction::ValueConditionGuard {
+            dest,
+            value: left,
+            condition: right,
+        },
         _ => bail!("Unknown policy ternary instruction: {}", name),
     })
 }

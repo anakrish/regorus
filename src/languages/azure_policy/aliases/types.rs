@@ -3,86 +3,33 @@
 
 //! Data types for Azure Policy alias definitions.
 //!
-//! These types deserialize the production alias catalog format used by
-//! `Get-AzPolicyAlias` and the ARM provider metadata API.
+//! These types deserialize production alias catalog data from multiple sources:
+//!   1. ARM API response: `GET /providers?$expand=resourceTypes/aliases`
+//!   2. Static `ResourceTypesAndAliases.json` (used by PolicyTester)
+//!   3. `az provider list --expand resourceTypes/aliases` CLI output
+//!      (where `defaultPath` may be serialized as `{ path, apiVersions }`)
+//!
+//! All data is captured for completeness; fields not yet used by the compiler
+//! are retained so the types stay in sync with the production schema.
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
-/// Metadata associated with an alias or a versioned path.
+// ─── Top-level response wrappers ────────────────────────────────────────────
+
+/// ARM API response envelope: `{ "value": [...] }`
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct AliasMetadata {
-    /// The data type of the alias value (e.g., "String", "Integer", "Boolean",
-    /// "Array", "Object").
-    #[serde(rename = "type")]
-    pub kind: Option<String>,
-
-    /// Modifiability attributes (e.g., "Modifiable", "None").
-    pub attributes: Option<String>,
+pub struct ArmProvidersResponse {
+    pub value: Vec<ProviderAliases>,
+    /// Pagination link (ARM may paginate large responses).
+    #[serde(rename = "nextLink", default)]
+    pub next_link: Option<String>,
 }
 
-/// A versioned path mapping for an alias.
-///
-/// When an alias maps to different ARM JSON paths across API versions, each
-/// distinct path is recorded as an `AliasPath` entry.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct AliasPath {
-    /// The ARM JSON path (e.g., `"properties.encryption.services.blob.enabled"`).
-    pub path: String,
-
-    /// API versions for which this path is valid. Empty means all versions.
-    #[serde(default, rename = "apiVersions")]
-    pub api_versions: Vec<String>,
-
-    /// Optional per-version metadata.
-    #[serde(default)]
-    pub metadata: Option<AliasMetadata>,
-}
-
-/// A single alias entry within a resource type.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct AliasEntry {
-    /// Fully qualified alias name
-    /// (e.g., `"Microsoft.Storage/storageAccounts/supportsHttpsTrafficOnly"`).
-    pub name: String,
-
-    /// The default ARM JSON path used when no versioned path matches.
-    /// Every alias in production has a `defaultPath`.
-    #[serde(default, rename = "defaultPath")]
-    pub default_path: Option<String>,
-
-    /// Optional default metadata (type, modifiability).
-    #[serde(default, rename = "defaultMetadata")]
-    pub default_metadata: Option<AliasMetadata>,
-
-    /// Versioned path entries. Empty for the 97.6% of aliases that have only
-    /// a `defaultPath`.
-    #[serde(default)]
-    pub paths: Vec<AliasPath>,
-}
-
-/// Aliases for a single resource type within a provider.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct ResourceTypeAliases {
-    /// The resource type name (e.g., `"storageAccounts"`).
-    #[serde(rename = "resourceType")]
-    pub resource_type: String,
-
-    /// Resource capabilities (e.g., `"SupportsTags, SupportsLocation"`).
-    #[serde(default)]
-    pub capabilities: Option<String>,
-
-    /// Default API version for the resource type.
-    #[serde(default, rename = "defaultApiVersion")]
-    pub default_api_version: Option<String>,
-
-    /// All alias entries for this resource type.
-    #[serde(default)]
-    pub aliases: Vec<AliasEntry>,
-}
+// ─── Provider / resource type ───────────────────────────────────────────────
 
 /// A resource provider's alias definitions.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -93,6 +40,282 @@ pub struct ProviderAliases {
     /// Resource types with their alias entries.
     #[serde(default, rename = "resourceTypes")]
     pub resource_types: Vec<ResourceTypeAliases>,
+}
+
+/// Aliases for a single resource type within a provider.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceTypeAliases {
+    /// The resource type name (e.g., `"storageAccounts"`).
+    pub resource_type: String,
+
+    /// All alias entries for this resource type.
+    #[serde(default)]
+    pub aliases: Vec<AliasEntry>,
+
+    /// Resource capabilities as a comma-separated string
+    /// (e.g., `"SupportsTags, SupportsLocation"`).
+    #[serde(default)]
+    pub capabilities: Option<String>,
+
+    /// Default API version for the resource type.
+    #[serde(default)]
+    pub default_api_version: Option<String>,
+}
+
+// ─── Alias ──────────────────────────────────────────────────────────────────
+
+/// A single alias entry within a resource type.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AliasEntry {
+    /// Fully qualified alias name
+    /// (e.g., `"Microsoft.Storage/storageAccounts/supportsHttpsTrafficOnly"`).
+    pub name: String,
+
+    /// The default ARM JSON path used when no versioned path matches.
+    ///
+    /// In most formats this is a plain string.  The `az CLI` format serializes
+    /// it as `{ "path": "...", "apiVersions": [...] }`.  The custom
+    /// deserializer accepts both, extracting just the path string.
+    #[serde(default, deserialize_with = "deserialize_default_path")]
+    pub default_path: Option<String>,
+
+    /// Optional metadata for the default path (type, modifiability).
+    #[serde(default)]
+    pub default_metadata: Option<AliasPathMetadata>,
+
+    /// Extraction pattern for the default path (present in ARM responses for
+    /// some aliases; absent from the static file).
+    #[serde(default)]
+    pub default_pattern: Option<AliasPattern>,
+
+    /// Alias-level type as a comma-separated string of flags:
+    /// `"PlainText"`, `"Mask"`, `"Deprecated"`, `"Preview"`, or combinations
+    /// like `"Mask, Deprecated"`.  `None` when absent.
+    #[serde(default, rename = "type")]
+    pub alias_type: Option<String>,
+
+    /// Versioned path entries.  Empty for the vast majority of aliases that
+    /// have only a `defaultPath`.
+    #[serde(default)]
+    pub paths: Vec<AliasPath>,
+}
+
+// ─── Alias path ─────────────────────────────────────────────────────────────
+
+/// A versioned path mapping for an alias.
+///
+/// When an alias maps to different ARM JSON paths across API versions, each
+/// distinct path is recorded as an `AliasPath` entry.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AliasPath {
+    /// The ARM JSON path (e.g., `"properties.encryption.services.blob.enabled"`).
+    pub path: String,
+
+    /// API versions for which this path is valid.  Empty means all versions.
+    #[serde(default)]
+    pub api_versions: Vec<String>,
+
+    /// Optional per-version metadata.
+    #[serde(default)]
+    pub metadata: Option<AliasPathMetadata>,
+
+    /// Extraction pattern for this specific path.
+    #[serde(default)]
+    pub pattern: Option<AliasPattern>,
+}
+
+// ─── Alias path metadata ───────────────────────────────────────────────────
+
+/// Metadata associated with an alias path (default or versioned).
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct AliasPathMetadata {
+    /// The data type of the alias value as a string token
+    /// (e.g., `"String"`, `"Integer"`, `"Boolean"`, `"Array"`, `"Object"`).
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+
+    /// Attribute flags as a comma-separated string
+    /// (e.g., `"Modifiable"`, `"Modifiable, SupportsCreate, SupportsRead"`).
+    pub attributes: Option<String>,
+}
+
+// ─── Alias pattern ──────────────────────────────────────────────────────────
+
+/// Extraction pattern for an alias path (URI template or regex).
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AliasPattern {
+    /// The pattern phrase (URI template or regex string).
+    pub phrase: String,
+
+    /// The variable to extract from the pattern.
+    #[serde(default)]
+    pub variable: Option<String>,
+
+    /// Pattern type (e.g., `"Extract"`).
+    #[serde(default, rename = "type")]
+    pub pattern_type: Option<String>,
+}
+
+// ─── Custom deserializer: defaultPath (string or object) ────────────────────
+
+/// Accepts either a plain string `"properties.foo"` or an az CLI object
+/// `{ "path": "properties.foo", "apiVersions": [...] }`, extracting just the
+/// path string.  Handles `null` gracefully.
+fn deserialize_default_path<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum RawDefaultPath {
+        Str(String),
+        Obj {
+            path: String,
+            #[serde(default, rename = "apiVersions")]
+            _api_versions: Vec<String>,
+        },
+        Null,
+    }
+
+    match Option::<RawDefaultPath>::deserialize(deserializer)? {
+        None | Some(RawDefaultPath::Null) => Ok(None),
+        Some(RawDefaultPath::Str(s)) => Ok(Some(s)),
+        Some(RawDefaultPath::Obj { path, .. }) => Ok(Some(path)),
+    }
+}
+
+// ─── Data Policy Manifest types (data-plane aliases) ────────────────────────
+
+/// A single alias entry in a data policy manifest.
+///
+/// Unlike control-plane [`AliasEntry`], data-plane aliases have no
+/// `defaultPath` — the path is always taken from `paths[0].path`.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct DataManifestAlias {
+    /// Fully qualified alias name
+    /// (e.g., `"Microsoft.KeyVault.Data/vaults/certificates/attributes.expiresOn"`).
+    pub name: String,
+
+    /// Versioned path entries.  `paths[0].path` serves as the default path.
+    #[serde(default)]
+    pub paths: Vec<DataManifestAliasPath>,
+}
+
+/// A path entry in a data policy manifest alias.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DataManifestAliasPath {
+    /// The ARM JSON path (e.g., `"attributes.expiresOn"`).
+    pub path: String,
+
+    /// API versions for which this path is valid.
+    #[serde(default)]
+    pub api_versions: Vec<String>,
+
+    /// Schema versions for which this path is valid (used by some data-plane
+    /// providers instead of `apiVersions`).
+    #[serde(default)]
+    pub schema_versions: Vec<String>,
+}
+
+/// Per-resource-type alias group in a data policy manifest.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DataManifestResourceTypeAliases {
+    /// Resource type suffix (e.g., `"vaults/certificates"`).
+    pub resource_type: String,
+
+    /// Aliases for this resource type.
+    #[serde(default)]
+    pub aliases: Vec<DataManifestAlias>,
+}
+
+/// A data policy manifest describing data-plane aliases for a namespace.
+///
+/// This format is used by `dataPolicyManifests/` files, as opposed to the
+/// control-plane `ProviderAliases` format used by `Get-AzPolicyAlias`.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DataPolicyManifest {
+    /// The data namespace (e.g., `"Microsoft.KeyVault.Data"`).
+    pub data_namespace: String,
+
+    /// Top-level aliases not scoped to a specific resource type.
+    #[serde(default)]
+    pub aliases: Vec<DataManifestAlias>,
+
+    /// Per-resource-type alias groups.
+    #[serde(default)]
+    pub resource_type_aliases: Vec<DataManifestResourceTypeAliases>,
+}
+
+// ─── Convenience loading functions ──────────────────────────────────────────
+
+/// Load from the static `ResourceTypesAndAliases.json` file (bare array).
+pub fn load_from_static_file(json: &str) -> Result<Vec<ProviderAliases>, serde_json::Error> {
+    serde_json::from_str(json)
+}
+
+/// Load from an ARM API `GET /providers` response (`{ "value": [...] }`).
+pub fn load_from_arm_response(json: &str) -> Result<Vec<ProviderAliases>, serde_json::Error> {
+    let resp: ArmProvidersResponse = serde_json::from_str(json)?;
+    Ok(resp.value)
+}
+
+/// Load from either format: tries ARM envelope first, then bare array.
+pub fn load_auto(json: &str) -> Result<Vec<ProviderAliases>, serde_json::Error> {
+    let trimmed = json.trim_start();
+    if trimmed.starts_with('[') {
+        load_from_static_file(json)
+    } else {
+        load_from_arm_response(json)
+    }
+}
+
+// ─── Utility methods ────────────────────────────────────────────────────────
+
+impl AliasEntry {
+    /// Returns `true` if this alias is marked as deprecated (case-insensitive).
+    pub fn is_deprecated(&self) -> bool {
+        has_flag(self.alias_type.as_deref(), "Deprecated")
+    }
+
+    /// Returns `true` if this alias is marked as preview.
+    pub fn is_preview(&self) -> bool {
+        has_flag(self.alias_type.as_deref(), "Preview")
+    }
+
+    /// Returns `true` if this alias's value should be masked (secret).
+    pub fn is_secret(&self) -> bool {
+        has_flag(self.alias_type.as_deref(), "Mask")
+    }
+
+    /// Returns the effective path string (defaultPath or first versioned path).
+    pub fn effective_path(&self) -> Option<&str> {
+        self.default_path
+            .as_deref()
+            .or_else(|| self.paths.first().map(|p| p.path.as_str()))
+    }
+}
+
+impl AliasPathMetadata {
+    /// Returns `true` if this path supports modification (Modifiable flag).
+    pub fn is_modifiable(&self) -> bool {
+        has_flag(self.attributes.as_deref(), "Modifiable")
+    }
+}
+
+/// Check whether a comma-separated flags string contains a specific flag
+/// (case-insensitive).
+fn has_flag(flags: Option<&str>, flag: &str) -> bool {
+    flags.is_some_and(|s| {
+        s.split(',')
+            .any(|part| part.trim().eq_ignore_ascii_case(flag))
+    })
 }
 
 /// Parsed alias data for a single resource type, keyed by short name.
@@ -125,7 +348,7 @@ pub struct ResolvedEntry {
     /// Versioned path overrides: `(api_version, arm_path)` pairs.
     pub versioned_paths: Vec<(String, String)>,
     /// Optional metadata from the alias catalog (type, modifiability).
-    pub metadata: Option<AliasMetadata>,
+    pub metadata: Option<AliasPathMetadata>,
 }
 
 impl ResolvedEntry {
@@ -279,5 +502,83 @@ mod tests {
         let meta = entry.default_metadata.unwrap();
         assert_eq!(meta.kind.as_deref(), Some("Integer"));
         assert_eq!(meta.attributes.as_deref(), Some("None"));
+    }
+
+    #[test]
+    fn deserialize_az_cli_default_path_object() {
+        let json = r#"{
+            "name": "Microsoft.Compute/virtualMachines/sku.name",
+            "defaultPath": {
+                "path": "properties.hardwareProfile.vmSize",
+                "apiVersions": ["2024-07-01"]
+            },
+            "paths": []
+        }"#;
+        let entry: AliasEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            entry.default_path.as_deref(),
+            Some("properties.hardwareProfile.vmSize")
+        );
+    }
+
+    #[test]
+    fn alias_type_flags() {
+        let json = r#"{
+            "name": "test",
+            "type": "Mask, Deprecated",
+            "defaultMetadata": { "type": "String", "attributes": "Modifiable, SupportsCreate" },
+            "paths": []
+        }"#;
+        let entry: AliasEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.is_secret());
+        assert!(entry.is_deprecated());
+        assert!(!entry.is_preview());
+        assert!(entry.default_metadata.as_ref().unwrap().is_modifiable());
+    }
+
+    #[test]
+    fn load_auto_detects_format() {
+        let array_json = r#"[{"namespace":"N","resourceTypes":[]}]"#;
+        let arm_json = r#"{"value":[{"namespace":"N","resourceTypes":[]}]}"#;
+        assert_eq!(load_auto(array_json).unwrap()[0].namespace, "N");
+        assert_eq!(load_auto(arm_json).unwrap()[0].namespace, "N");
+    }
+
+    #[test]
+    fn deserialize_pattern() {
+        let json = r#"{
+            "name": "test",
+            "defaultPath": "p",
+            "paths": [{
+                "path": "p",
+                "apiVersions": ["2020-01-01"],
+                "pattern": {
+                    "phrase": "/Subscriptions/{sub}/Providers/{prov}",
+                    "variable": "prov",
+                    "type": "Extract"
+                }
+            }]
+        }"#;
+        let entry: AliasEntry = serde_json::from_str(json).unwrap();
+        let pattern = entry.paths[0].pattern.as_ref().unwrap();
+        assert_eq!(pattern.pattern_type.as_deref(), Some("Extract"));
+        assert_eq!(pattern.variable.as_deref(), Some("prov"));
+    }
+
+    #[test]
+    fn capabilities_preserved() {
+        let json = r#"{
+            "namespace": "NS",
+            "resourceTypes": [{
+                "resourceType": "rt",
+                "capabilities": "SupportsTags, SupportsLocation",
+                "aliases": []
+            }]
+        }"#;
+        let provider: ProviderAliases = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            provider.resource_types[0].capabilities.as_deref(),
+            Some("SupportsTags, SupportsLocation")
+        );
     }
 }

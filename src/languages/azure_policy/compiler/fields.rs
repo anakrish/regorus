@@ -67,12 +67,20 @@ impl Compiler {
             FieldKind::Tag(tag) => {
                 self.record_field_kind("tags");
                 self.record_tag_name(tag);
-                // Lowercase tag name to match normalizer's lowercased keys.
-                // ARM tag names are case-insensitive and ASCII-only.
-                self.compile_resource_path_value(
-                    &format!("tags.{}", tag.to_ascii_lowercase()),
-                    span,
-                )?
+                // Tag names may contain dots (e.g. "Department.Name"), so we
+                // must NOT split on '.' — the whole tag name is one key inside
+                // the "tags" object.  Lowercase to match normalizer output.
+                let tag_lower = tag.to_ascii_lowercase();
+                if let Some(override_reg) = self.resource_override_reg {
+                    self.emit_chained_index_literal_path(override_reg, &["tags", &tag_lower], span)?
+                } else {
+                    let input_reg = self.load_input(span)?;
+                    self.emit_chained_index_literal_path(
+                        input_reg,
+                        &["resource", "tags", &tag_lower],
+                        span,
+                    )?
+                }
             }
             FieldKind::Alias(path) => {
                 self.record_alias(path);
@@ -81,9 +89,9 @@ impl Compiler {
             }
             FieldKind::Expr(expr) => self.compile_dynamic_field_expr(expr, span)?,
         };
-        // Azure Policy: missing field → null (prevents RVM undefined-propagation
-        // from short-circuiting subsequent builtin calls).
-        self.emit_coalesce_undefined_to_null(reg, span);
+        // NOTE: No coalesce here. The raw Undefined / Null distinction is
+        // preserved so that policy operators can handle missing-vs-null
+        // fields correctly (missing → non-evaluable, null → treated as "").
         Ok(reg)
     }
 
@@ -129,6 +137,9 @@ impl Compiler {
 
                         // Compile both branch field lookups (ChainedIndex).
                         let then_reg = self.compile_field_path_expression(&short_a, span)?;
+                        // Must coalesce: the RVM's undefined-propagation would
+                        // short-circuit the azure.policy.if builtin if either
+                        // branch register is Undefined.
                         self.emit_coalesce_undefined_to_null(then_reg, span);
 
                         let else_reg = self.compile_field_path_expression(&short_b, span)?;
@@ -276,16 +287,19 @@ impl Compiler {
     ) -> Result<()> {
         let (prefix, suffix) = split_count_wildcard_path(remaining_path)?;
 
+        // Lowercase the prefix to match normalized resource keys.
+        let prefix_lower = prefix.to_lowercase();
+
         // Navigate to the collection (the array before [*]).
         let collection_reg = match base_reg {
-            Some(base) if prefix.is_empty() => base,
+            Some(base) if prefix_lower.is_empty() => base,
             Some(base) => {
-                let parts = split_path_without_wildcards(&prefix)?;
+                let parts = split_path_without_wildcards(&prefix_lower)?;
                 let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
                 self.emit_chained_index_literal_path(base, &refs, span)?
             }
-            None if prefix.is_empty() => self.compile_resource_root(span)?,
-            None => self.compile_resource_path_value(&prefix, span)?,
+            None if prefix_lower.is_empty() => self.compile_resource_root(span)?,
+            None => self.compile_resource_path_value(&prefix_lower, span)?,
         };
 
         // Set up a ForEach loop over the collection.
@@ -317,7 +331,9 @@ impl Compiler {
             }
             Some(ref s) => {
                 // Simple suffix: chain-index into the current element.
-                let parts = split_path_without_wildcards(s)?;
+                // Lowercase to match normalized resource keys.
+                let s_lower = s.to_lowercase();
+                let parts = split_path_without_wildcards(&s_lower)?;
                 let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
                 let val_reg = self.emit_chained_index_literal_path(current_reg, &refs, span)?;
                 // Use ArrayPushDefined to skip absent nested properties,

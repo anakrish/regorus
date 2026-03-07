@@ -47,7 +47,7 @@ use crate::{Rc, Value};
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
-struct CountBinding {
+pub(super) struct CountBinding {
     name: Option<String>,
     field_wildcard_prefix: Option<String>,
     current_reg: u8,
@@ -119,6 +119,12 @@ struct Compiler {
     observed_has_dynamic_fields: bool,
     /// Whether any alias contains `[*]` (wildcard array traversal).
     observed_has_wildcard_aliases: bool,
+
+    /// When `true`, unknown aliases are silently treated as raw property paths
+    /// instead of producing a compile error.  Useful for running test suites
+    /// that use bare field names (e.g. `"field": "location"`) without a
+    /// fully-qualified alias.
+    alias_fallback_to_raw: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -380,7 +386,8 @@ impl Compiler {
         let lc = path.to_lowercase();
         if let Some(short) = self.alias_map.get(&lc) {
             let resolved = short.clone();
-            return Ok(self.strip_fq_prefix(&resolved).to_lowercase());
+            let result = self.strip_fq_prefix(&resolved).to_lowercase();
+            return Ok(result);
         }
 
         // Fallback: if the alias isn't found, try deriving the array path
@@ -397,16 +404,28 @@ impl Compiler {
             }
         }
 
-        // When aliases are loaded, every field must be a known alias.
-        if !self.alias_map.is_empty() {
+        // When aliases are loaded, every field must be a known alias —
+        // unless the caller opted into fallback mode.
+        if !self.alias_map.is_empty() && !self.alias_fallback_to_raw {
             bail!(
                 "unknown alias '{}': field references must use fully-qualified alias names when an alias catalog is loaded",
                 path
             );
         }
 
-        // No alias catalog — pass through as-is (legacy / no-alias mode).
-        Ok(path.to_string())
+        // No alias catalog, or fallback mode — pass through.
+        if self.alias_map.is_empty() {
+            // No alias catalog at all (e.g. internal tests): pass raw path.
+            // The caller lowercases the result where needed.
+            Ok(path.to_string())
+        } else {
+            // Alias catalog loaded but this specific alias wasn't found.
+            // Strip the FQ resource-type prefix so the property path resolves
+            // against the normalized resource (which flattens properties to
+            // the root level with lowercased keys).
+            let result = self.strip_fq_prefix(path).to_lowercase();
+            Ok(result)
+        }
     }
 
     /// Strip any resource-type prefix segments from a resolved alias short
@@ -431,17 +450,15 @@ impl Compiler {
         let span = &effect.span;
         if matches!(effect.kind, EffectKind::Other(_)) {
             let resolved_effect_kind = self.resolve_effect_kind(effect);
-            if resolved_effect_kind == EffectKind::AuditIfNotExists {
-                let effect_text = self
-                    .resolve_effect_name_from_parameter_default(effect)
-                    .unwrap_or_else(|| "AuditIfNotExists".to_string());
-                return self.compile_cross_resource_effect(rule, &effect_text);
-            }
-            if resolved_effect_kind == EffectKind::DeployIfNotExists {
-                let effect_text = self
-                    .resolve_effect_name_from_parameter_default(effect)
-                    .unwrap_or_else(|| "DeployIfNotExists".to_string());
-                return self.compile_cross_resource_effect(rule, &effect_text);
+            if resolved_effect_kind == EffectKind::AuditIfNotExists
+                || resolved_effect_kind == EffectKind::DeployIfNotExists
+            {
+                // Compile the effect expression to a runtime register so
+                // the actual effect name (AINE vs DINE vs Disabled) is
+                // determined at runtime from input.parameters, not baked
+                // in from the policy definition's defaultValue.
+                let effect_name_reg = self.compile_effect_name_expression(effect)?;
+                return self.compile_cross_resource_effect(rule, effect_name_reg);
             }
 
             // Parameterized effect with resolved kind that has details
@@ -493,7 +510,8 @@ impl Compiler {
 
         match &effect.kind {
             EffectKind::AuditIfNotExists | EffectKind::DeployIfNotExists => {
-                self.compile_cross_resource_effect(rule, &effect.raw)
+                let effect_name_reg = self.load_literal(Value::from(effect.raw.clone()), span)?;
+                self.compile_cross_resource_effect(rule, effect_name_reg)
             }
             EffectKind::Modify | EffectKind::Append => {
                 let effect_name_reg = self.load_literal(Value::from(effect.raw.clone()), span)?;
@@ -917,6 +935,26 @@ impl Compiler {
         self.load_literal(val, span)
     }
 
+    /// Compile the raw effect expression string into a runtime register.
+    ///
+    /// For bracketed expressions like `[parameters('effect')]`, this compiles
+    /// the expression so the actual value is resolved at runtime (reading
+    /// `input.parameters` with default fallback).  For plain strings like
+    /// `"AuditIfNotExists"`, this loads the literal.
+    fn compile_effect_name_expression(&mut self, effect: &EffectNode) -> Result<u8> {
+        let span = &effect.span;
+        if effect.raw.starts_with('[') && effect.raw.ends_with(']') && !effect.raw.starts_with("[[")
+        {
+            let inner = &effect.raw[1..effect.raw.len().saturating_sub(1)];
+            let expr =
+                crate::languages::azure_policy::expr::ExprParser::parse_from_brackets(inner, span)
+                    .map_err(|error| anyhow!("invalid effect expression: {}", error))?;
+            self.compile_expr(&expr)
+        } else {
+            self.load_literal(Value::from(effect.raw.clone()), span)
+        }
+    }
+
     /// Compile cross-resource effects (auditIfNotExists / deployIfNotExists).
     ///
     /// These effects use a two-phase evaluation:
@@ -932,13 +970,43 @@ impl Compiler {
     fn compile_cross_resource_effect(
         &mut self,
         rule: &PolicyRule,
-        effect_text: &str,
+        effect_name_reg: u8,
     ) -> Result<u8> {
         let span = &rule.then_block.effect.span;
 
         let Some(details) = rule.then_block.details.as_ref() else {
-            return self.load_literal(Value::from(effect_text.to_string()), span);
+            return Ok(effect_name_reg);
         };
+
+        // Guard: if the runtime effect is "Disabled", skip the existence
+        // check entirely and return Undefined (Compliant).
+        let disabled_reg = self.load_literal(Value::from("Disabled"), span)?;
+        let is_disabled_reg = self.alloc_register()?;
+        self.emit(
+            Instruction::PolicyEquals {
+                dest: is_disabled_reg,
+                left: effect_name_reg,
+                right: disabled_reg,
+            },
+            span,
+        );
+        // ReturnUndefinedIfNotTrue returns Undefined when condition is NOT
+        // true.  We want to return Undefined when the effect IS Disabled,
+        // so negate: not_disabled is false when disabled → returns Undefined.
+        let not_disabled_reg = self.alloc_register()?;
+        self.emit(
+            Instruction::PolicyNot {
+                dest: not_disabled_reg,
+                operand: is_disabled_reg,
+            },
+            span,
+        );
+        self.emit(
+            Instruction::ReturnUndefinedIfNotTrue {
+                condition: not_disabled_reg,
+            },
+            span,
+        );
 
         // Phase 1: Request related resource from host via HostAwait.
         // Host contract:
@@ -1028,7 +1096,6 @@ impl Compiler {
             span,
         );
 
-        let effect_name_reg = self.load_literal(Value::from(effect_text.to_string()), span)?;
         self.emit(
             Instruction::ReturnUndefinedIfNotTrue {
                 condition: not_exists_reg,
@@ -1037,6 +1104,7 @@ impl Compiler {
         );
 
         // Build structured result with roleDefinitionIds if present.
+        // effect_name_reg carries the runtime-resolved effect name.
         self.compile_cross_resource_details(effect_name_reg, details, span)
     }
 
@@ -1551,6 +1619,35 @@ pub fn compile_policy_definition_with_aliases(
     compiler.program.metadata.language = "azure_policy".to_string();
     compiler.alias_map = alias_map;
     compiler.alias_modifiable = alias_modifiable;
+    compiler.parameter_defaults = Some(build_parameter_defaults(&defn.parameters)?);
+    compiler.populate_definition_metadata(defn);
+    let effect = compiler.resolve_effect_annotation(&defn.policy_rule);
+    compiler
+        .program
+        .metadata
+        .annotations
+        .insert("effect".to_string(), Value::String(effect.as_str().into()));
+    compiler.compile(&defn.policy_rule)
+}
+
+/// Compile a parsed Azure Policy definition with alias resolution and
+/// optional fallback behaviour for unknown aliases.
+///
+/// When `alias_fallback_to_raw` is `true`, field paths that do not resolve to
+/// a known alias are silently treated as raw property paths (instead of
+/// producing a compile error).  This is useful for running test suites that
+/// use bare field names like `"location"` without fully-qualified alias names.
+pub fn compile_policy_definition_with_aliases_opts(
+    defn: &PolicyDefinition,
+    alias_map: BTreeMap<String, String>,
+    alias_modifiable: BTreeMap<String, bool>,
+    alias_fallback_to_raw: bool,
+) -> Result<Rc<Program>> {
+    let mut compiler = Compiler::new();
+    compiler.program.metadata.language = "azure_policy".to_string();
+    compiler.alias_map = alias_map;
+    compiler.alias_modifiable = alias_modifiable;
+    compiler.alias_fallback_to_raw = alias_fallback_to_raw;
     compiler.parameter_defaults = Some(build_parameter_defaults(&defn.parameters)?);
     compiler.populate_definition_metadata(defn);
     let effect = compiler.resolve_effect_annotation(&defn.policy_rule);

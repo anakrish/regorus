@@ -43,6 +43,38 @@ impl Compiler {
                 field,
                 where_,
             } => {
+                let field_path = self.extract_field_count_path(field)?;
+                let (_prefix, suffix) = split_count_wildcard_path(&field_path)?;
+
+                // Multi-level wildcard (e.g. `A[*].B[*]`) → emit nested loops.
+                // If an outer count binding covers part of the path, start
+                // from the bound element instead of the resource root.
+                if suffix.as_ref().is_some_and(|s| s.contains("[*]")) {
+                    if let Some(binding) = self.resolve_count_binding(&field_path)? {
+                        if let Some(outer_prefix) = &binding.field_wildcard_prefix {
+                            let strip_len = outer_prefix.len() + 4; // prefix + "[*]."
+                            if field_path.len() > strip_len {
+                                let inner_path = &field_path[strip_len..];
+                                return self.compile_count_nested(
+                                    Some(binding.current_reg),
+                                    inner_path,
+                                    where_.as_deref(),
+                                    outer_prefix,
+                                    span,
+                                );
+                            }
+                        }
+                    }
+                    return self.compile_count_nested(
+                        None,
+                        &field_path,
+                        where_.as_deref(),
+                        "",
+                        span,
+                    );
+                }
+
+                // Single wildcard → existing path via resolve + single count loop.
                 let (collection_reg, prefix) = self.resolve_count_field_collection(field, span)?;
                 self.compile_count_loop(collection_reg, None, Some(prefix), where_.as_deref(), span)
             }
@@ -76,24 +108,315 @@ impl Compiler {
             }
         }
 
-        // Multi-level wildcard (e.g., `lenses[*].parts[*]`): flatten all
-        // nested elements into a single array so a single count loop can
-        // iterate every inner element across all outer containers.
-        // The binding prefix covers everything up to the last `[*]` so
-        // that field references like `lenses[*].parts[*].metadata.type`
-        // resolve to `current_element.metadata.type`.
+        // Multi-level wildcard: now handled by compile_count_nested in compile_count.
+        // (Single-wildcard paths fall through to here.)
         if suffix.as_ref().is_some_and(|s| s.contains("[*]")) {
-            let flat_reg = self.compile_field_wildcard_collect(&field_path, span)?;
-            // Binding prefix = path up to the last `[*]`.
-            let last_wc = field_path
-                .rfind("[*]")
-                .ok_or_else(|| anyhow!("expected [*] in multi-wildcard path: {}", field_path))?;
-            let binding_prefix = field_path[..last_wc].to_string();
-            return Ok((flat_reg, binding_prefix));
+            bail!(
+                "multi-wildcard path should have been handled before resolve_count_field_collection: {}",
+                field_path
+            );
         }
 
         let collection_reg = self.compile_resource_path_value(&collection_prefix, span)?;
         Ok((collection_reg, collection_prefix))
+    }
+
+    /// Compile a multi-wildcard count path as nested loops.
+    ///
+    /// Each intermediate `[*]` level emits a `ForEach` loop that accumulates
+    /// the inner count.  The innermost `[*]` emits the real count loop with
+    /// the where clause and binding.
+    ///
+    /// * `base_reg` — `None` for resource root, `Some` when inside an outer loop.
+    /// * `remaining_path` — the portion of the field path still to process;
+    ///   must contain at least one `[*]`.
+    /// * `where_clause` — the optional where constraint (applied only at the
+    ///   innermost level).
+    /// * `accumulated_prefix` — the path prefix accumulated from outer levels,
+    ///   used to build binding prefixes.
+    fn compile_count_nested(
+        &mut self,
+        base_reg: Option<u8>,
+        remaining_path: &str,
+        where_clause: Option<&Constraint>,
+        accumulated_prefix: &str,
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        let (collection_part, suffix) = split_count_wildcard_path(remaining_path)?;
+        let has_more_wildcards = suffix.as_ref().is_some_and(|s| s.contains("[*]"));
+
+        // Build the binding prefix for this level.
+        let binding_prefix = if accumulated_prefix.is_empty() {
+            collection_part.clone()
+        } else {
+            format!("{}[*].{}", accumulated_prefix, collection_part)
+        };
+
+        // Lowercase the collection path to match normalized resource keys.
+        let collection_lower = collection_part.to_lowercase();
+
+        // Navigate to the collection.
+        let collection_reg = match base_reg {
+            Some(base) if collection_lower.is_empty() => base,
+            Some(base) => {
+                let parts = split_path_without_wildcards(&collection_lower)?;
+                let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+                self.emit_chained_index_literal_path(base, &refs, span)?
+            }
+            None if collection_lower.is_empty() => self.compile_resource_root(span)?,
+            None => self.compile_resource_path_value(&collection_lower, span)?,
+        };
+
+        if !has_more_wildcards {
+            // Innermost wildcard → delegate to the regular count loop.
+            // Optimization: if no where clause, just emit Count instruction.
+            if where_clause.is_none() {
+                let dest = self.alloc_register()?;
+                self.emit(
+                    Instruction::Count {
+                        dest,
+                        collection: collection_reg,
+                    },
+                    span,
+                );
+                return Ok(dest);
+            }
+            return self.compile_count_loop(
+                collection_reg,
+                None,
+                Some(binding_prefix),
+                where_clause,
+                span,
+            );
+        }
+
+        // Intermediate wildcard → ForEach loop that accumulates inner counts.
+        let count_reg = self.load_literal(Value::from(0_i64), span)?;
+        let key_reg = self.alloc_register()?;
+        let current_reg = self.alloc_register()?;
+        let loop_result_reg = self.alloc_register()?;
+
+        let params_index = self.program.add_loop_params(LoopStartParams {
+            mode: LoopMode::ForEach,
+            collection: collection_reg,
+            key_reg,
+            value_reg: current_reg,
+            result_reg: loop_result_reg,
+            body_start: 0,
+            loop_end: 0,
+        });
+
+        self.emit(Instruction::LoopStart { params_index }, span);
+
+        let body_start = u16::try_from(self.program.instructions.len())
+            .map_err(|_| anyhow!("instruction index overflow"))?;
+
+        // Push binding for this level so inner where-clause field references
+        // can resolve through this wildcard level.
+        self.count_bindings.push(CountBinding {
+            name: None,
+            field_wildcard_prefix: Some(binding_prefix.clone()),
+            current_reg,
+        });
+
+        // Recurse for the inner level(s).
+        let suffix_ref = suffix
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("suffix should be Some for nested count"))?;
+        let inner_count = self.compile_count_nested(
+            Some(current_reg),
+            suffix_ref,
+            where_clause,
+            &binding_prefix,
+            span,
+        )?;
+
+        // Accumulate inner count into outer count.
+        self.emit(
+            Instruction::Add {
+                dest: count_reg,
+                left: count_reg,
+                right: inner_count,
+            },
+            span,
+        );
+
+        self.count_bindings.pop();
+
+        self.emit(
+            Instruction::LoopNext {
+                body_start,
+                loop_end: 0,
+            },
+            span,
+        );
+
+        let loop_end = u16::try_from(self.program.instructions.len())
+            .map_err(|_| anyhow!("instruction index overflow"))?;
+
+        self.program.update_loop_params(params_index, |params| {
+            params.body_start = body_start;
+            params.loop_end = loop_end;
+        });
+
+        if let Some(Instruction::LoopNext { loop_end: le, .. }) =
+            self.program.instructions.last_mut()
+        {
+            *le = loop_end;
+        }
+
+        Ok(count_reg)
+    }
+
+    /// Compile a multi-wildcard count path as nested `Any` loops for the
+    /// `count > 0` / `count == 0` existence-pattern optimization.
+    ///
+    /// Each intermediate `[*]` level emits an `Any` loop whose body is the
+    /// next level.  The innermost `[*]` emits `compile_count_any_loop` with
+    /// the where clause.  If `exists` is false the result is negated.
+    fn compile_count_nested_any(
+        &mut self,
+        base_reg: Option<u8>,
+        remaining_path: &str,
+        where_clause: &Constraint,
+        accumulated_prefix: &str,
+        exists: bool,
+        span: &crate::lexer::Span,
+    ) -> Result<Option<u8>> {
+        let (collection_part, suffix) = split_count_wildcard_path(remaining_path)?;
+        let has_more_wildcards = suffix.as_ref().is_some_and(|s| s.contains("[*]"));
+
+        let binding_prefix = if accumulated_prefix.is_empty() {
+            collection_part.clone()
+        } else {
+            format!("{}[*].{}", accumulated_prefix, collection_part)
+        };
+
+        // Lowercase the collection path to match normalized resource keys.
+        let collection_lower = collection_part.to_lowercase();
+
+        // Navigate to the collection.
+        let collection_reg = match base_reg {
+            Some(base) if collection_lower.is_empty() => base,
+            Some(base) => {
+                let parts = split_path_without_wildcards(&collection_lower)?;
+                let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+                self.emit_chained_index_literal_path(base, &refs, span)?
+            }
+            None if collection_lower.is_empty() => self.compile_resource_root(span)?,
+            None => self.compile_resource_path_value(&collection_lower, span)?,
+        };
+
+        if !has_more_wildcards {
+            // Innermost wildcard → regular Any loop.
+            let any_result = self.compile_count_any_loop(
+                collection_reg,
+                None,
+                Some(binding_prefix),
+                where_clause,
+                span,
+            )?;
+            return if exists {
+                Ok(Some(any_result))
+            } else {
+                let dest = self.alloc_register()?;
+                self.emit(
+                    Instruction::PolicyNot {
+                        dest,
+                        operand: any_result,
+                    },
+                    span,
+                );
+                Ok(Some(dest))
+            };
+        }
+
+        // Intermediate wildcard → Any loop wrapping inner nested Any.
+        let key_reg = self.alloc_register()?;
+        let current_reg = self.alloc_register()?;
+        let result_reg = self.alloc_register()?;
+
+        let params_index = self.program.add_loop_params(LoopStartParams {
+            mode: LoopMode::Any,
+            collection: collection_reg,
+            key_reg,
+            value_reg: current_reg,
+            result_reg,
+            body_start: 0,
+            loop_end: 0,
+        });
+
+        self.emit(Instruction::LoopStart { params_index }, span);
+
+        let body_start = u16::try_from(self.program.instructions.len())
+            .map_err(|_| anyhow!("instruction index overflow"))?;
+
+        // Push binding for this level.
+        self.count_bindings.push(CountBinding {
+            name: None,
+            field_wildcard_prefix: Some(binding_prefix.clone()),
+            current_reg,
+        });
+
+        // Recurse — the inner call returns Some(result_reg) with the final
+        // negation already applied at the innermost level.  For the outer
+        // Any loop, we need "any inner satisfies" so we pass `exists = true`
+        // here and handle the overall negation at the end.
+        let suffix_ref = suffix
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("suffix should be Some for nested any"))?;
+        let inner = self
+            .compile_count_nested_any(
+                Some(current_reg),
+                suffix_ref,
+                where_clause,
+                &binding_prefix,
+                /* exists */ true,
+                span,
+            )?
+            .ok_or_else(|| anyhow::anyhow!("nested any should always return Some"))?;
+
+        // The outer Any body succeeds when the inner Any returned true.
+        self.emit(Instruction::AssertCondition { condition: inner }, span);
+
+        self.count_bindings.pop();
+
+        self.emit(
+            Instruction::LoopNext {
+                body_start,
+                loop_end: 0,
+            },
+            span,
+        );
+
+        let loop_end = u16::try_from(self.program.instructions.len())
+            .map_err(|_| anyhow!("instruction index overflow"))?;
+
+        self.program.update_loop_params(params_index, |params| {
+            params.body_start = body_start;
+            params.loop_end = loop_end;
+        });
+
+        if let Some(Instruction::LoopNext { loop_end: le, .. }) =
+            self.program.instructions.last_mut()
+        {
+            *le = loop_end;
+        }
+
+        // If !exists (count == 0), negate the Any result.
+        if exists {
+            Ok(Some(result_reg))
+        } else {
+            let dest = self.alloc_register()?;
+            self.emit(
+                Instruction::PolicyNot {
+                    dest,
+                    operand: result_reg,
+                },
+                span,
+            );
+            Ok(Some(dest))
+        }
     }
 
     fn extract_field_count_path(
@@ -249,6 +572,37 @@ impl Compiler {
                 )?
             }
             CountNode::Field { span, field, .. } => {
+                // Multi-wildcard field paths use nested Any loops.
+                // Resolve outer bindings so we start from the bound element.
+                let field_path = self.extract_field_count_path(field)?;
+                let (_, suffix) = split_count_wildcard_path(&field_path)?;
+                if suffix.as_ref().is_some_and(|s| s.contains("[*]")) {
+                    if let Some(binding) = self.resolve_count_binding(&field_path)? {
+                        if let Some(outer_prefix) = &binding.field_wildcard_prefix {
+                            let strip_len = outer_prefix.len() + 4;
+                            if field_path.len() > strip_len {
+                                let inner_path = &field_path[strip_len..];
+                                return self.compile_count_nested_any(
+                                    Some(binding.current_reg),
+                                    inner_path,
+                                    where_constraint,
+                                    outer_prefix,
+                                    exists,
+                                    span,
+                                );
+                            }
+                        }
+                    }
+                    return self.compile_count_nested_any(
+                        None,
+                        &field_path,
+                        where_constraint,
+                        "",
+                        exists,
+                        span,
+                    );
+                }
+
                 let (collection_reg, prefix) = self.resolve_count_field_collection(field, span)?;
                 self.compile_count_any_loop(
                     collection_reg,

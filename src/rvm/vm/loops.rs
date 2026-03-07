@@ -9,6 +9,18 @@ use super::errors::{Result, VmError};
 use super::execution_model::{ExecutionFrame, ExecutionMode, FrameKind};
 use super::machine::RegoVM;
 
+/// Result for a loop over a non-iterable value (null, string, number, bool, Undefined).
+/// In standard Rego, `Every` over empty is vacuously `true`.
+/// In Azure Policy mode, this code path is only reached when
+/// `virtual_element_on_non_collection` is false (standard Rego).
+#[inline]
+const fn non_collection_result(mode: &LoopMode) -> Value {
+    match *mode {
+        LoopMode::Every => Value::Bool(true),
+        LoopMode::Any | LoopMode::ForEach => Value::Bool(false),
+    }
+}
+
 fn compute_body_resume_pc(loop_start_pc: usize, body_start: u16) -> usize {
     if body_start == 0 {
         return 0;
@@ -90,14 +102,28 @@ impl RegoVM {
                 }
             }
             Value::Object(ref obj) => {
-                if obj.is_empty() {
-                    self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
-                    return Ok(());
-                }
-                IterationState::Object {
-                    obj: obj.clone(),
-                    current_key: None,
-                    first_iteration: true,
+                if self.virtual_element_on_non_collection {
+                    // Azure Policy: `[*]` expects an array.  Objects are
+                    // treated as non-collections — virtual element for Every
+                    // mode, immediate false for Any/ForEach.
+                    if matches!(*mode, LoopMode::Every) {
+                        IterationState::Single { consumed: false }
+                    } else {
+                        let result = non_collection_result(mode);
+                        self.set_register(params.result_reg, result)?;
+                        self.pc = usize::from(params.loop_end).saturating_sub(1);
+                        return Ok(());
+                    }
+                } else {
+                    if obj.is_empty() {
+                        self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
+                        return Ok(());
+                    }
+                    IterationState::Object {
+                        obj: obj.clone(),
+                        current_key: None,
+                        first_iteration: true,
+                    }
                 }
             }
             Value::Set(ref set) => {
@@ -112,8 +138,18 @@ impl RegoVM {
                 }
             }
             _ => {
-                self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
-                return Ok(());
+                if self.virtual_element_on_non_collection && matches!(*mode, LoopMode::Every) {
+                    // Azure Policy: allOf [*] on non-collection iterates once
+                    // over a virtual null element. The loop body runs and
+                    // operators see Null/Undefined for sub-field accesses.
+                    IterationState::Single { consumed: false }
+                } else {
+                    // Standard Rego or count/forEach: non-collection → immediate result.
+                    let result = non_collection_result(mode);
+                    self.set_register(params.result_reg, result)?;
+                    self.pc = usize::from(params.loop_end).saturating_sub(1);
+                    return Ok(());
+                }
             }
         };
 
@@ -255,14 +291,27 @@ impl RegoVM {
                 }
             }
             Value::Object(ref obj) => {
-                if obj.is_empty() {
-                    self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
-                    return Ok(());
-                }
-                IterationState::Object {
-                    obj: obj.clone(),
-                    current_key: None,
-                    first_iteration: true,
+                if self.virtual_element_on_non_collection {
+                    // Azure Policy: `[*]` expects an array.  Objects are
+                    // treated as non-collections.
+                    if matches!(*mode, LoopMode::Every) {
+                        IterationState::Single { consumed: false }
+                    } else {
+                        let result = non_collection_result(mode);
+                        self.set_register(params.result_reg, result)?;
+                        self.pc = usize::from(params.loop_end).saturating_sub(1);
+                        return Ok(());
+                    }
+                } else {
+                    if obj.is_empty() {
+                        self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
+                        return Ok(());
+                    }
+                    IterationState::Object {
+                        obj: obj.clone(),
+                        current_key: None,
+                        first_iteration: true,
+                    }
                 }
             }
             Value::Set(ref set) => {
@@ -277,8 +326,17 @@ impl RegoVM {
                 }
             }
             _ => {
-                self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
-                return Ok(());
+                if self.virtual_element_on_non_collection && matches!(*mode, LoopMode::Every) {
+                    // Azure Policy: allOf [*] on non-collection iterates once
+                    // over a virtual null element.
+                    IterationState::Single { consumed: false }
+                } else {
+                    // Standard Rego or count/forEach: non-collection → immediate result.
+                    let result = non_collection_result(mode);
+                    self.set_register(params.result_reg, result)?;
+                    self.pc = usize::from(params.loop_end).saturating_sub(1);
+                    return Ok(());
+                }
             }
         };
 
@@ -603,6 +661,20 @@ impl RegoVM {
                     }
                 } else {
                     Ok(false)
+                }
+            }
+            IterationState::Single { ref consumed } => {
+                if *consumed {
+                    Ok(false)
+                } else {
+                    // Virtual single element: key=0, value=Null.
+                    // Sub-field accesses on Null produce Undefined, which is
+                    // what Azure Policy expects for missing/non-array [*].
+                    if key_reg != value_reg {
+                        self.set_register(key_reg, Value::from(0))?;
+                    }
+                    self.set_register(value_reg, Value::Null)?;
+                    Ok(true)
                 }
             }
         }

@@ -41,6 +41,12 @@ pub enum IterationState {
         current_item: Option<Value>,
         first_iteration: bool,
     },
+    /// Virtual single-element iteration for non-collection values.
+    /// Used by Azure Policy's `[*]` on scalar/null fields: iterates once
+    /// with the original value (typically Null/Undefined) as the element.
+    Single {
+        consumed: bool,
+    },
 }
 
 impl IterationState {
@@ -58,6 +64,11 @@ impl IterationState {
                 ..
             } => {
                 *first_iteration = false;
+            }
+            Self::Single {
+                ref mut consumed, ..
+            } => {
+                *consumed = true;
             }
         }
     }

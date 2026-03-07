@@ -3,6 +3,7 @@
 members = [
     "tests/ensure_no_std",
   "xtask",
+  "tools/test-runner",
 ]
 
 [package]

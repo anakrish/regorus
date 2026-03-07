@@ -18,6 +18,116 @@ use wasm_bindgen::prelude::*;
 #[cfg(feature = "azure_policy")]
 use regorus::languages::azure_policy::{compiler as ap_compiler, parser as ap_parser};
 
+// ---------------------------------------------------------------------------
+// AliasRegistry (azure_policy feature)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "azure_policy")]
+#[wasm_bindgen]
+/// Manages Azure Policy alias definitions used for resource normalization,
+/// denormalization, and policy compilation.
+pub struct AliasRegistry {
+    inner: regorus::languages::azure_policy::aliases::AliasRegistry,
+}
+
+#[cfg(feature = "azure_policy")]
+#[wasm_bindgen]
+impl AliasRegistry {
+    /// Create an empty alias registry.
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner: regorus::languages::azure_policy::aliases::AliasRegistry::new(),
+        }
+    }
+
+    /// Load control-plane alias data (array of `ProviderAliases`) from a JSON
+    /// string, e.g. from `Get-AzPolicyAlias` or `ResourceTypesAndAliases.json`.
+    pub fn loadJson(&mut self, json: String) -> Result<(), JsValue> {
+        self.inner.load_from_json(&json).map_err(error_to_jsvalue)
+    }
+
+    /// Load a data-plane policy manifest from a JSON string.
+    pub fn loadManifest(&mut self, json: String) -> Result<(), JsValue> {
+        self.inner
+            .load_data_policy_manifest_json(&json)
+            .map_err(error_to_jsvalue)
+    }
+
+    /// Number of resource types loaded in the registry.
+    #[wasm_bindgen(getter)]
+    pub fn length(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Normalize an ARM resource JSON and wrap it into the standard input
+    /// envelope expected by a compiled Azure Policy program.
+    ///
+    /// Returns a JSON string: `{ "resource": <normalized>, "parameters": <params> }`.
+    pub fn normalizeAndWrap(
+        &self,
+        resource_json: String,
+        api_version: String,
+        context_json: String,
+        parameters_json: String,
+    ) -> Result<String, JsValue> {
+        let resource: serde_json::Value =
+            serde_json::from_str(&resource_json).map_err(error_to_jsvalue)?;
+        let context: serde_json::Value =
+            serde_json::from_str(&context_json).map_err(error_to_jsvalue)?;
+        let params: serde_json::Value =
+            serde_json::from_str(&parameters_json).map_err(error_to_jsvalue)?;
+
+        let wrapped = self.inner.normalize_and_wrap(
+            &resource,
+            Some(&api_version),
+            Some(context),
+            Some(params),
+        );
+        serde_json::to_string(&wrapped).map_err(error_to_jsvalue)
+    }
+
+    /// Denormalize a previously-normalized resource JSON back to ARM format.
+    ///
+    /// `normalized_json` should be the normalized resource object (the
+    /// `resource` field from the input envelope), not the full envelope.
+    pub fn denormalize(
+        &self,
+        normalized_json: String,
+        api_version: String,
+    ) -> Result<String, JsValue> {
+        let normalized: serde_json::Value =
+            serde_json::from_str(&normalized_json).map_err(error_to_jsvalue)?;
+        let result = self.inner.denormalize(&normalized, Some(&api_version));
+        serde_json::to_string(&result).map_err(error_to_jsvalue)
+    }
+
+    /// Compile an Azure Policy definition JSON into an RVM `Program`, using
+    /// this registry for alias resolution (including `alias_modifiable`).
+    pub fn compileDefinition(&self, policy_definition_json: String) -> Result<Program, JsValue> {
+        let source =
+            regorus::Source::from_contents("policyDefinition.json".into(), policy_definition_json)
+                .map_err(error_to_jsvalue)?;
+        let definition = ap_parser::parse_policy_definition(&source).map_err(error_to_jsvalue)?;
+        let alias_map = self.inner.alias_map();
+        let alias_modifiable = self.inner.alias_modifiable_map();
+        let program = ap_compiler::compile_policy_definition_with_aliases(
+            &definition,
+            alias_map,
+            alias_modifiable,
+        )
+        .map_err(error_to_jsvalue)?;
+        Ok(Program { program })
+    }
+}
+
+#[cfg(feature = "azure_policy")]
+impl Default for AliasRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[wasm_bindgen]
 /// WASM wrapper for [`regorus::Engine`]
 pub struct Engine {

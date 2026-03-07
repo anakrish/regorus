@@ -197,7 +197,7 @@ vm.setInputJson(JSON.stringify({
 }));
 
 const result = JSON.parse(vm.execute());
-assert.equal(result, 'deny', 'matching resource should evaluate to deny');
+assert.deepEqual(result, { effect: 'deny' }, 'matching resource should evaluate to deny');
 }
 
 // Azure Policy definition compilation API example (parameter defaults)
@@ -239,7 +239,7 @@ vm.setInputJson(JSON.stringify({
 }));
 
 const defaultResult = JSON.parse(vm.execute());
-assert.equal(defaultResult, 'deny', 'default parameter value should be used when missing');
+assert.deepEqual(defaultResult, { effect: 'deny' }, 'default parameter value should be used when missing');
 
 vm.setInputJson(JSON.stringify({
   resource: {
@@ -252,7 +252,87 @@ vm.setInputJson(JSON.stringify({
 }));
 
 const overrideResult = JSON.parse(vm.execute());
-assert.equal(overrideResult, 'audit', 'provided parameter value should override default');
+assert.deepEqual(overrideResult, { effect: 'audit' }, 'provided parameter value should override default');
+}
+
+// AliasRegistry – lifecycle, normalize, denormalize, compile
+{
+const fs = require('node:fs');
+const path = require('node:path');
+
+const aliasPath = path.resolve(__dirname, '../../tests/azure_policy/aliases/test_aliases.json');
+const aliasJson = fs.readFileSync(aliasPath, 'utf8');
+
+// Create and load
+const registry = new regorus.AliasRegistry();
+assert.equal(registry.length, 0, 'empty registry should have length 0');
+
+registry.loadJson(aliasJson);
+assert.ok(registry.length > 0, 'registry should have loaded resource types');
+console.log(`AliasRegistry loaded ${registry.length} resource types`);
+
+// Compile a policy definition using the registry
+const policyDefinition = JSON.stringify({
+  policyRule: {
+    if: {
+      field: "type",
+      equals: "Microsoft.Compute/virtualMachines"
+    },
+    then: {
+      effect: "deny"
+    }
+  }
+});
+
+const program = registry.compileDefinition(policyDefinition);
+const listing = program.generateListing();
+assert.ok(listing.length > 0, 'compiled listing should not be empty');
+
+// Normalize a VM resource
+const vmResource = JSON.stringify({
+  type: "Microsoft.Compute/virtualMachines",
+  name: "myVM",
+  location: "eastus",
+  properties: {
+    hardwareProfile: {
+      vmSize: "Standard_DS1_v2"
+    }
+  }
+});
+
+const inputJson = registry.normalizeAndWrap(vmResource, "2024-03-01", "{}", "{}");
+const input = JSON.parse(inputJson);
+assert.ok(input.resource, 'input envelope should have a resource field');
+assert.ok(input.resource.type, 'normalized resource should have a type');
+
+// Execute the compiled policy
+const vm = new regorus.Rvm();
+vm.loadProgram(program);
+vm.setInputJson(inputJson);
+const result = JSON.parse(vm.execute());
+assert.deepEqual(result, { effect: 'deny' }, 'matching VM resource should evaluate to deny');
+
+// Denormalize roundtrip: normalized → denormalized → re-normalized should match
+const normalizedResource = input.resource;
+const denormalizedJson = registry.denormalize(JSON.stringify(normalizedResource), "2024-03-01");
+const denormalized = JSON.parse(denormalizedJson);
+assert.ok(denormalized.type, 'denormalized resource should have a type field');
+assert.equal(
+  denormalized.type.toLowerCase(),
+  'microsoft.compute/virtualmachines',
+  'denormalized resource should preserve the resource type'
+);
+
+// Re-normalize the denormalized resource and compare
+const reInputJson = registry.normalizeAndWrap(denormalizedJson, "2024-03-01", "{}", "{}");
+const reInput = JSON.parse(reInputJson);
+assert.deepEqual(
+  reInput.resource,
+  normalizedResource,
+  'denormalize → re-normalize should produce identical normalized resource'
+);
+
+console.log('AliasRegistry tests passed (load, compile, normalize, denormalize roundtrip)');
 }
 
 console.log('WASM JS tests completed successfully.');

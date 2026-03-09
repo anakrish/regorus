@@ -10,6 +10,12 @@
   wasm-pack build --target nodejs --release
   ```
 
+- Build `regorusjs` for browsers.
+  ```
+  cd bindings/wasm
+  wasm-pack build --target web --release
+  ```
+
 - Install [nodejs](https://nodejs.org/en/download)
 
 - Run the test script

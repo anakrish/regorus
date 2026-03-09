@@ -9,8 +9,8 @@ use regorus::rvm::program::{
     DeserializationResult, Program as RvmProgram,
 };
 use regorus::rvm::vm::{ExecutionMode, RegoVM};
-use regorus::{compile_policy_with_entrypoint, PolicyModule, Rc, Value};
-use serde::Deserialize;
+use regorus::{compile_policy_with_entrypoint, CompiledPolicy, PolicyModule, Rc, Value};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
@@ -24,6 +24,17 @@ pub struct Engine {
 struct ModuleSpec {
     id: String,
     content: String,
+}
+
+#[derive(Serialize)]
+struct ReasonsOutput {
+    reasons: Vec<ReasonEntry>,
+}
+
+#[derive(Serialize)]
+struct ReasonEntry {
+    result: Value,
+    conditions: Vec<regorus::ExplanationRecord>,
 }
 
 #[wasm_bindgen]
@@ -60,6 +71,86 @@ pub struct Rvm {
 
 fn error_to_jsvalue<E: std::fmt::Display>(e: E) -> JsValue {
     JsValue::from_str(&format!("{e}"))
+}
+
+fn parse_explanation_value_mode(
+    value_mode: &str,
+) -> Result<regorus::ExplanationValueMode, JsValue> {
+    match value_mode.trim().to_ascii_lowercase().as_str() {
+        "redacted" => Ok(regorus::ExplanationValueMode::Redacted),
+        "full" => Ok(regorus::ExplanationValueMode::Full),
+        _ => Err(error_to_jsvalue(
+            "invalid explanation value mode; expected 'redacted' or 'full'",
+        )),
+    }
+}
+
+fn parse_explanation_condition_mode(
+    condition_mode: &str,
+) -> Result<regorus::ExplanationConditionMode, JsValue> {
+    match condition_mode.trim().to_ascii_lowercase().as_str() {
+        "primary" | "primary_only" => Ok(regorus::ExplanationConditionMode::PrimaryOnly),
+        "all" | "all_contributing" => Ok(regorus::ExplanationConditionMode::AllContributing),
+        _ => Err(error_to_jsvalue(
+            "invalid explanation condition mode; expected 'primary_only' or 'all_contributing'",
+        )),
+    }
+}
+
+fn explanation_settings(
+    enabled: bool,
+    value_mode: &str,
+    condition_mode: &str,
+) -> Result<regorus::ExplanationSettings, JsValue> {
+    Ok(regorus::ExplanationSettings {
+        enabled,
+        value_mode: parse_explanation_value_mode(value_mode)?,
+        condition_mode: parse_explanation_condition_mode(condition_mode)?,
+    })
+}
+
+fn compile_program_bundle(
+    data_json: String,
+    modules_json: String,
+    entry_points_json: String,
+) -> Result<(CompiledPolicy, Arc<RvmProgram>), JsValue> {
+    let data = Value::from_json_str(&data_json).map_err(error_to_jsvalue)?;
+    let modules: Vec<ModuleSpec> = serde_json::from_str(&modules_json).map_err(error_to_jsvalue)?;
+    let entry_points: Vec<String> =
+        serde_json::from_str(&entry_points_json).map_err(error_to_jsvalue)?;
+    if entry_points.is_empty() {
+        return Err(error_to_jsvalue(
+            "entry_points must contain at least one entry",
+        ));
+    }
+
+    let policy_modules: Vec<PolicyModule> = modules
+        .into_iter()
+        .map(|module| PolicyModule {
+            id: Rc::from(module.id.as_str()),
+            content: Rc::from(module.content.as_str()),
+        })
+        .collect();
+
+    let entry_points_ref: Vec<&str> = entry_points.iter().map(|entry| entry.as_str()).collect();
+    let compiled =
+        compile_policy_with_entrypoint(data, &policy_modules, Rc::from(entry_points_ref[0]))
+            .map_err(error_to_jsvalue)?;
+    let program =
+        Compiler::compile_from_policy(&compiled, &entry_points_ref).map_err(error_to_jsvalue)?;
+    Ok((compiled, program))
+}
+
+fn explanations_to_json(
+    explanations: std::collections::BTreeMap<Value, Vec<regorus::ExplanationRecord>>,
+) -> Result<String, JsValue> {
+    let output = ReasonsOutput {
+        reasons: explanations
+            .into_iter()
+            .map(|(result, conditions)| ReasonEntry { result, conditions })
+            .collect(),
+    };
+    serde_json::to_string_pretty(&output).map_err(error_to_jsvalue)
 }
 
 impl Default for Engine {
@@ -175,6 +266,26 @@ impl Engine {
         v.to_json_str().map_err(error_to_jsvalue)
     }
 
+    /// Configure explanation capture for subsequent evaluations.
+    pub fn setExplanationOptions(
+        &mut self,
+        enabled: bool,
+        value_mode: String,
+        condition_mode: String,
+    ) -> Result<(), JsValue> {
+        self.engine.set_explanation_settings(explanation_settings(
+            enabled,
+            &value_mode,
+            &condition_mode,
+        )?);
+        Ok(())
+    }
+
+    /// Take the explanations captured by the most recent evaluation as pretty JSON.
+    pub fn takeExplanations(&mut self) -> Result<String, JsValue> {
+        explanations_to_json(self.engine.take_explanations())
+    }
+
     /// Gather output from print statements instead of emiting to stderr.
     ///
     /// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.set_gather_prints
@@ -248,31 +359,7 @@ impl Program {
         modules_json: String,
         entry_points_json: String,
     ) -> Result<Program, JsValue> {
-        let data = Value::from_json_str(&data_json).map_err(error_to_jsvalue)?;
-        let modules: Vec<ModuleSpec> =
-            serde_json::from_str(&modules_json).map_err(error_to_jsvalue)?;
-        let entry_points: Vec<String> =
-            serde_json::from_str(&entry_points_json).map_err(error_to_jsvalue)?;
-        if entry_points.is_empty() {
-            return Err(error_to_jsvalue(
-                "entry_points must contain at least one entry",
-            ));
-        }
-
-        let policy_modules: Vec<PolicyModule> = modules
-            .into_iter()
-            .map(|module| PolicyModule {
-                id: Rc::from(module.id.as_str()),
-                content: Rc::from(module.content.as_str()),
-            })
-            .collect();
-
-        let entry_points_ref: Vec<&str> = entry_points.iter().map(|s| s.as_str()).collect();
-        let compiled =
-            compile_policy_with_entrypoint(data, &policy_modules, Rc::from(entry_points_ref[0]))
-                .map_err(error_to_jsvalue)?;
-        let program = Compiler::compile_from_policy(&compiled, &entry_points_ref)
-            .map_err(error_to_jsvalue)?;
+        let (_, program) = compile_program_bundle(data_json, modules_json, entry_points_json)?;
         Ok(Program { program })
     }
 
@@ -325,6 +412,20 @@ impl Rvm {
         self.vm.load_program(program.program.clone());
     }
 
+    /// Compile modules directly into the VM and retain compiled policy metadata.
+    pub fn loadModules(
+        &mut self,
+        data_json: String,
+        modules_json: String,
+        entry_points_json: String,
+    ) -> Result<(), JsValue> {
+        let (compiled, program) =
+            compile_program_bundle(data_json, modules_json, entry_points_json)?;
+        self.vm.set_compiled_policy(compiled);
+        self.vm.load_program(program);
+        Ok(())
+    }
+
     /// Set VM data from JSON.
     pub fn setDataJson(&mut self, data_json: String) -> Result<(), JsValue> {
         let data = Value::from_json_str(&data_json).map_err(error_to_jsvalue)?;
@@ -362,6 +463,26 @@ impl Rvm {
             .execute_entry_point_by_name(&entry_point)
             .map_err(error_to_jsvalue)?;
         value.to_json_str().map_err(error_to_jsvalue)
+    }
+
+    /// Configure explanation capture for subsequent evaluations.
+    pub fn setExplanationOptions(
+        &mut self,
+        enabled: bool,
+        value_mode: String,
+        condition_mode: String,
+    ) -> Result<(), JsValue> {
+        self.vm.set_explanation_settings(explanation_settings(
+            enabled,
+            &value_mode,
+            &condition_mode,
+        )?);
+        Ok(())
+    }
+
+    /// Take the explanations captured by the most recent evaluation as pretty JSON.
+    pub fn takeExplanations(&mut self) -> Result<String, JsValue> {
+        explanations_to_json(self.vm.take_explanations())
     }
 
     /// Resume execution with an optional JSON value.

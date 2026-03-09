@@ -17,6 +17,7 @@ crate-type = ["cdylib"]
 default = [
 	"ast",
 	"coverage",
+	"explanations",
 	"regorus/std",
 	"regorus/base64",
 	"regorus/base64url",
@@ -36,9 +37,10 @@ default = [
 ]
 ast = ["regorus/ast"]
 coverage = ["regorus/coverage"]
+explanations = ["regorus/explanations"]
 
 [dependencies]
-regorus = { path  = "../..", default-features = false, features = ["arc", "rvm"] }
+regorus = { path  = "../..", default-features = false, features = ["arc", "rvm", "explanations"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 wasm-bindgen = "0.2.100"

@@ -47,4 +47,10 @@ The final site is static. After running `./causality-demo/build-demo.sh`, publis
 - comprehension summaries
 - multiple contributing conditions
 - redacted versus full-value bindings
+- Kubernetes admission control with stacked container violations
+- RBAC role resolution with passing/failing iteration witnesses
+- data pipeline schema validation with type-check builtins
+- Terraform/cloud resource compliance with `glob.match`
+- SBOM supply chain license audit across transitive dependencies
+- feature flag targeting with segment rules and percentage rollouts
 - custom playground evaluations

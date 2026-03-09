@@ -35,6 +35,8 @@ impl<'a> Compiler<'a> {
                     },
                     span,
                 );
+                #[cfg(feature = "explanations")]
+                self.attach_explanation_to_last_instruction(span.text(), expr, result_reg);
             }
             return Ok(result_reg);
         }
@@ -116,6 +118,8 @@ impl<'a> Compiler<'a> {
                 },
                 span,
             );
+            #[cfg(feature = "explanations")]
+            self.attach_explanation_to_last_instruction(span.text(), expr, result_reg);
         }
 
         Ok(result_reg)

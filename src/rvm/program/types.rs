@@ -4,6 +4,64 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "explanations")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExplanationBindingInfo {
+    /// Variable name visible at the capture point.
+    pub name: String,
+    /// Register holding the variable's value.
+    pub register: u8,
+}
+
+#[cfg(feature = "explanations")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum InstructionConditionProbe {
+    Comparison {
+        operator: crate::ConditionOperator,
+        actual_register: u8,
+        expected_register: u8,
+        actual_hint: Option<String>,
+        expected_hint: Option<String>,
+    },
+    Membership {
+        operator: crate::ConditionOperator,
+        actual_register: u8,
+        expected_register: Option<u8>,
+        actual_hint: Option<String>,
+        expected_hint: Option<String>,
+    },
+    Truthiness {
+        register: u8,
+        hint: Option<String>,
+    },
+    Builtin {
+        operator: crate::ConditionOperator,
+        actual_register: u8,
+        expected_register: Option<u8>,
+        actual_hint: Option<String>,
+        expected_hint: Option<String>,
+    },
+    Loop {
+        result_register: u8,
+        operator: Option<crate::ConditionOperator>,
+        condition_texts: Vec<String>,
+    },
+    Comprehension {
+        result_register: u8,
+    },
+}
+
+#[cfg(feature = "explanations")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstructionExplanationInfo {
+    /// Source text for the successful contributing condition.
+    pub text: String,
+    /// Visible named bindings at the capture point.
+    pub bindings: Vec<ExplanationBindingInfo>,
+    /// Optional structured probe used to resolve observed values at runtime.
+    pub probe: Option<InstructionConditionProbe>,
+}
+
 /// Builtin function information stored in program's builtin info table
 #[repr(C)]
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -3,7 +3,11 @@
 
 use crate::rvm::instructions::LoopMode;
 use crate::value::Value;
+#[cfg(feature = "explanations")]
+use alloc::vec::Vec;
 
+#[cfg(feature = "explanations")]
+use super::context::LoopExplanationRecordSet;
 use super::context::{IterationState, LoopContext};
 use super::errors::{Result, VmError};
 use super::execution_model::{ExecutionFrame, ExecutionMode, FrameKind};
@@ -40,6 +44,88 @@ enum LoopAction {
 }
 
 impl RegoVM {
+    #[cfg(feature = "explanations")]
+    fn bindings_from_records(
+        records: &[crate::ExplanationRecord],
+    ) -> Vec<crate::ExplanationBinding> {
+        records
+            .last()
+            .map(|record| record.bindings.clone())
+            .unwrap_or_default()
+    }
+
+    #[cfg(feature = "explanations")]
+    fn make_loop_iteration_witness(
+        &self,
+        key_reg: u8,
+        value_reg: u8,
+        bindings: Vec<crate::ExplanationBinding>,
+    ) -> Result<crate::explanations::RawConditionIterationWitness> {
+        Ok(crate::explanations::RawConditionIterationWitness {
+            sample_key: if key_reg != value_reg {
+                Some(self.get_register(key_reg)?.clone())
+            } else {
+                None
+            },
+            sample_key_hint: None,
+            sample_value: Some(self.get_register(value_reg)?.clone()),
+            sample_value_hint: None,
+            bindings,
+        })
+    }
+
+    #[cfg(feature = "explanations")]
+    fn capture_iteration_records(
+        &mut self,
+        block_record_start: usize,
+    ) -> Vec<crate::ExplanationRecord> {
+        let _ = self.finalize_current_block_records();
+        let records = self
+            .block_records
+            .get(block_record_start..)
+            .unwrap_or(&[])
+            .to_vec();
+        self.block_records.truncate(block_record_start);
+        records
+    }
+
+    #[cfg(feature = "explanations")]
+    fn insert_loop_summary_state(
+        &mut self,
+        result_reg: u8,
+        mode: LoopMode,
+        total_iterations: usize,
+        success_count: usize,
+        witness: &super::context::WitnessState,
+    ) {
+        self.loop_witnesses.insert(
+            result_reg,
+            crate::explanations::RawConditionEvaluationWitness {
+                iteration_count: Some(u32::try_from(total_iterations).unwrap_or(u32::MAX)),
+                success_count: Some(u32::try_from(success_count).unwrap_or(u32::MAX)),
+                yield_count: None,
+                condition_texts: Vec::new(),
+                sample_key: witness.sample_key.clone(),
+                sample_key_hint: None,
+                sample_value: witness.sample_value.clone(),
+                sample_value_hint: None,
+                passing_iteration: witness.passing_iteration.clone(),
+                failing_iteration: witness.failing_iteration.clone(),
+            },
+        );
+        self.loop_records.insert(
+            result_reg,
+            LoopExplanationRecordSet {
+                passing: witness.passing_records.clone(),
+                failing: witness.failing_records.clone(),
+            },
+        );
+
+        if matches!(mode, LoopMode::Any) && success_count == 0 {
+            self.loop_records.entry(result_reg).or_default();
+        }
+    }
+
     pub(super) fn execute_loop_start(&mut self, mode: &LoopMode, params: LoopParams) -> Result<()> {
         match self.execution_mode {
             ExecutionMode::RunToCompletion => {
@@ -140,6 +226,11 @@ impl RegoVM {
             success_count: 0,
             total_iterations: 0,
             current_iteration_failed: false,
+            #[cfg(feature = "explanations")]
+            witness: super::context::WitnessState {
+                block_record_start: self.block_records.len(),
+                ..Default::default()
+            },
         };
 
         self.loop_stack.push(loop_context);
@@ -162,19 +253,68 @@ impl RegoVM {
 
             let iteration_succeeded = Self::check_iteration_success(&loop_ctx)?;
 
+            #[cfg(feature = "explanations")]
+            let iteration_records =
+                self.capture_iteration_records(loop_ctx.witness.block_record_start);
+
             if iteration_succeeded {
                 loop_ctx.success_count = loop_ctx.success_count.saturating_add(1);
+            }
+
+            #[cfg(feature = "explanations")]
+            {
+                let bindings = Self::bindings_from_records(&iteration_records);
+                let witness = self.make_loop_iteration_witness(
+                    loop_ctx.key_reg,
+                    loop_ctx.value_reg,
+                    bindings,
+                )?;
+                if loop_ctx.witness.sample_value.is_none() {
+                    loop_ctx.witness.sample_key = witness.sample_key.clone();
+                    loop_ctx.witness.sample_value = witness.sample_value.clone();
+                }
+                if iteration_succeeded {
+                    if loop_ctx.witness.passing_iteration.is_none() {
+                        loop_ctx.witness.passing_iteration = Some(witness);
+                    }
+                    if loop_ctx.witness.passing_records.is_none() && !iteration_records.is_empty() {
+                        loop_ctx.witness.passing_records = Some(iteration_records.clone());
+                    }
+                } else {
+                    if loop_ctx.witness.failing_iteration.is_none() {
+                        loop_ctx.witness.failing_iteration = Some(witness);
+                    }
+                    if loop_ctx.witness.failing_records.is_none() && !iteration_records.is_empty() {
+                        loop_ctx.witness.failing_records = Some(iteration_records.clone());
+                    }
+                }
             }
 
             let action = Self::determine_loop_action(&loop_ctx.mode, iteration_succeeded);
 
             match action {
                 LoopAction::ExitWithSuccess => {
+                    #[cfg(feature = "explanations")]
+                    self.insert_loop_summary_state(
+                        loop_ctx.result_reg,
+                        loop_ctx.mode,
+                        loop_ctx.total_iterations,
+                        loop_ctx.success_count,
+                        &loop_ctx.witness,
+                    );
                     self.set_register(loop_ctx.result_reg, Value::Bool(true))?;
                     self.pc = usize::from(loop_end_local.saturating_sub(1));
                     return Ok(());
                 }
                 LoopAction::ExitWithFailure => {
+                    #[cfg(feature = "explanations")]
+                    self.insert_loop_summary_state(
+                        loop_ctx.result_reg,
+                        loop_ctx.mode,
+                        loop_ctx.total_iterations,
+                        loop_ctx.success_count,
+                        &loop_ctx.witness,
+                    );
                     self.set_register(loop_ctx.result_reg, Value::Bool(false))?;
                     self.pc = usize::from(loop_end_local.saturating_sub(1));
                     return Ok(());
@@ -218,6 +358,15 @@ impl RegoVM {
                     }
                     LoopMode::ForEach => Value::Bool(loop_ctx.success_count > 0),
                 };
+
+                #[cfg(feature = "explanations")]
+                self.insert_loop_summary_state(
+                    loop_ctx.result_reg,
+                    loop_ctx.mode,
+                    loop_ctx.total_iterations,
+                    loop_ctx.success_count,
+                    &loop_ctx.witness,
+                );
 
                 self.set_register(loop_ctx.result_reg, final_result)?;
 
@@ -305,6 +454,11 @@ impl RegoVM {
             success_count: 0,
             total_iterations: 0,
             current_iteration_failed: false,
+            #[cfg(feature = "explanations")]
+            witness: super::context::WitnessState {
+                block_record_start: self.block_records.len(),
+                ..Default::default()
+            },
         };
 
         let frame = ExecutionFrame::new(
@@ -364,10 +518,87 @@ impl RegoVM {
             }
         };
 
+        #[cfg(feature = "explanations")]
+        {
+            let block_record_start = self
+                .execution_stack
+                .last()
+                .and_then(|frame| match frame.kind {
+                    FrameKind::Loop { ref context, .. } => Some(context.witness.block_record_start),
+                    _ => None,
+                })
+                .ok_or(VmError::AssertionFailed { pc: self.pc })?;
+            let iteration_records = self.capture_iteration_records(block_record_start);
+            let (key_reg, value_reg) = self
+                .execution_stack
+                .last()
+                .and_then(|frame| match frame.kind {
+                    FrameKind::Loop { ref context, .. } => {
+                        Some((context.key_reg, context.value_reg))
+                    }
+                    _ => None,
+                })
+                .ok_or(VmError::AssertionFailed { pc: self.pc })?;
+            let bindings = Self::bindings_from_records(&iteration_records);
+            let witness = self.make_loop_iteration_witness(key_reg, value_reg, bindings)?;
+            if let Some(frame) = self.execution_stack.last_mut() {
+                if let FrameKind::Loop {
+                    ref mut context, ..
+                } = frame.kind
+                {
+                    if context.witness.sample_value.is_none() {
+                        context.witness.sample_key = witness.sample_key.clone();
+                        context.witness.sample_value = witness.sample_value.clone();
+                    }
+                    if iteration_succeeded {
+                        if context.witness.passing_iteration.is_none() {
+                            context.witness.passing_iteration = Some(witness);
+                        }
+                        if context.witness.passing_records.is_none()
+                            && !iteration_records.is_empty()
+                        {
+                            context.witness.passing_records = Some(iteration_records.clone());
+                        }
+                    } else {
+                        if context.witness.failing_iteration.is_none() {
+                            context.witness.failing_iteration = Some(witness);
+                        }
+                        if context.witness.failing_records.is_none()
+                            && !iteration_records.is_empty()
+                        {
+                            context.witness.failing_records = Some(iteration_records.clone());
+                        }
+                    }
+                }
+            }
+        }
+
         let action = Self::determine_loop_action(&loop_mode, iteration_succeeded);
 
         match action {
             LoopAction::ExitWithSuccess => {
+                #[cfg(feature = "explanations")]
+                if let Some((total_iterations, success_count, witness)) =
+                    self.execution_stack.last().and_then(|frame| {
+                        if let FrameKind::Loop { ref context, .. } = frame.kind {
+                            Some((
+                                context.total_iterations,
+                                context.success_count,
+                                context.witness.clone(),
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                {
+                    self.insert_loop_summary_state(
+                        result_reg,
+                        loop_mode,
+                        total_iterations,
+                        success_count,
+                        &witness,
+                    );
+                }
                 self.set_register(result_reg, Value::Bool(true))?;
                 let completed_frame = self
                     .execution_stack
@@ -381,6 +612,28 @@ impl RegoVM {
                 Ok(())
             }
             LoopAction::ExitWithFailure => {
+                #[cfg(feature = "explanations")]
+                if let Some((total_iterations, success_count, witness)) =
+                    self.execution_stack.last().and_then(|frame| {
+                        if let FrameKind::Loop { ref context, .. } = frame.kind {
+                            Some((
+                                context.total_iterations,
+                                context.success_count,
+                                context.witness.clone(),
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                {
+                    self.insert_loop_summary_state(
+                        result_reg,
+                        loop_mode,
+                        total_iterations,
+                        success_count,
+                        &witness,
+                    );
+                }
                 self.set_register(result_reg, Value::Bool(false))?;
                 let completed_frame = self
                     .execution_stack
@@ -478,6 +731,23 @@ impl RegoVM {
                         LoopMode::ForEach => Value::Bool(success_count > 0),
                     };
 
+                    #[cfg(feature = "explanations")]
+                    if let Some(witness) = self.execution_stack.last().and_then(|frame| {
+                        if let FrameKind::Loop { ref context, .. } = frame.kind {
+                            Some(context.witness.clone())
+                        } else {
+                            None
+                        }
+                    }) {
+                        self.insert_loop_summary_state(
+                            result_reg,
+                            mode,
+                            total_iterations,
+                            success_count,
+                            &witness,
+                        );
+                    }
+
                     self.set_register(result_reg, final_result)?;
 
                     let completed_frame = self
@@ -507,6 +777,15 @@ impl RegoVM {
             LoopMode::Every => Value::Bool(true),
             LoopMode::ForEach => Value::Bool(false),
         };
+
+        #[cfg(feature = "explanations")]
+        self.insert_loop_summary_state(
+            result_reg,
+            *mode,
+            0,
+            0,
+            &super::context::WitnessState::default(),
+        );
 
         self.set_register(result_reg, result)?;
         self.pc = usize::from(loop_end).saturating_sub(1);
@@ -649,6 +928,77 @@ impl RegoVM {
                     self.pc = usize::from(loop_next_pc.saturating_sub(1));
                 }
                 LoopMode::Every => {
+                    #[cfg(feature = "explanations")]
+                    if let Some((key_reg, value_reg)) = self.loop_stack.last().and_then(|ctx| {
+                        ctx.witness
+                            .sample_value
+                            .is_none()
+                            .then_some((ctx.key_reg, ctx.value_reg))
+                    }) {
+                        let sample_key = if key_reg != value_reg {
+                            Some(self.get_register(key_reg)?.clone())
+                        } else {
+                            None
+                        };
+                        let sample_value = self.get_register(value_reg)?.clone();
+                        if let Some(loop_ctx_mut) = self.loop_stack.last_mut() {
+                            loop_ctx_mut.witness.sample_key = sample_key;
+                            loop_ctx_mut.witness.sample_value = Some(sample_value);
+                        }
+                    }
+                    #[cfg(feature = "explanations")]
+                    if let Some(block_record_start) = self
+                        .loop_stack
+                        .last()
+                        .map(|ctx| ctx.witness.block_record_start)
+                    {
+                        let iteration_records = self.capture_iteration_records(block_record_start);
+                        if let Some((key_reg, value_reg)) = self
+                            .loop_stack
+                            .last()
+                            .map(|ctx| (ctx.key_reg, ctx.value_reg))
+                        {
+                            let bindings = Self::bindings_from_records(&iteration_records);
+                            let witness =
+                                self.make_loop_iteration_witness(key_reg, value_reg, bindings)?;
+                            if let Some(loop_ctx_mut) = self.loop_stack.last_mut() {
+                                if loop_ctx_mut.witness.sample_value.is_none() {
+                                    loop_ctx_mut.witness.sample_key = witness.sample_key.clone();
+                                    loop_ctx_mut.witness.sample_value =
+                                        witness.sample_value.clone();
+                                }
+                                if loop_ctx_mut.witness.failing_iteration.is_none() {
+                                    loop_ctx_mut.witness.failing_iteration = Some(witness);
+                                }
+                                if loop_ctx_mut.witness.failing_records.is_none()
+                                    && !iteration_records.is_empty()
+                                {
+                                    loop_ctx_mut.witness.failing_records =
+                                        Some(iteration_records.clone());
+                                }
+                            }
+                        }
+                    }
+
+                    #[cfg(feature = "explanations")]
+                    if let Some((total_iterations, success_count, witness)) =
+                        self.loop_stack.last().map(|loop_ctx| {
+                            (
+                                loop_ctx.total_iterations.saturating_add(1),
+                                loop_ctx.success_count,
+                                loop_ctx.witness.clone(),
+                            )
+                        })
+                    {
+                        self.insert_loop_summary_state(
+                            result_reg,
+                            LoopMode::Every,
+                            total_iterations,
+                            success_count,
+                            &witness,
+                        );
+                    }
+
                     self.loop_stack.pop();
                     self.pc = usize::from(loop_end.saturating_sub(1));
                     self.set_register(result_reg, Value::Bool(false))?;
@@ -715,6 +1065,37 @@ impl RegoVM {
                     Ok(())
                 }
                 LoopMode::Every => {
+                    #[cfg(feature = "explanations")]
+                    let sample_regs = self.execution_stack.last().and_then(|frame| {
+                        if let FrameKind::Loop {
+                            context: ref ctx, ..
+                        } = frame.kind
+                        {
+                            ctx.witness
+                                .sample_value
+                                .is_none()
+                                .then_some((ctx.key_reg, ctx.value_reg))
+                        } else {
+                            None
+                        }
+                    });
+                    #[cfg(feature = "explanations")]
+                    let sample_key = if let Some((key_reg, value_reg)) = sample_regs {
+                        if key_reg != value_reg {
+                            Some(self.get_register(key_reg)?.clone())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    #[cfg(feature = "explanations")]
+                    let sample_value = if let Some((_, value_reg)) = sample_regs {
+                        Some(self.get_register(value_reg)?.clone())
+                    } else {
+                        None
+                    };
+
                     if let Some(&mut ExecutionFrame {
                         kind:
                             FrameKind::Loop {
@@ -725,9 +1106,84 @@ impl RegoVM {
                     }) = self.execution_stack.last_mut()
                     {
                         ctx.current_iteration_failed = true;
+                        #[cfg(feature = "explanations")]
+                        if ctx.witness.sample_value.is_none() {
+                            ctx.witness.sample_key = sample_key;
+                            ctx.witness.sample_value = sample_value;
+                        }
+                    }
+
+                    #[cfg(feature = "explanations")]
+                    {
+                        let block_record_start = self
+                            .execution_stack
+                            .last()
+                            .and_then(|frame| {
+                                if let FrameKind::Loop { ref context, .. } = frame.kind {
+                                    Some(context.witness.block_record_start)
+                                } else {
+                                    None
+                                }
+                            })
+                            .ok_or(VmError::AssertionFailed { pc: self.pc })?;
+                        let iteration_records = self.capture_iteration_records(block_record_start);
+                        let (key_reg, value_reg) = self
+                            .execution_stack
+                            .last()
+                            .and_then(|frame| {
+                                if let FrameKind::Loop { ref context, .. } = frame.kind {
+                                    Some((context.key_reg, context.value_reg))
+                                } else {
+                                    None
+                                }
+                            })
+                            .ok_or(VmError::AssertionFailed { pc: self.pc })?;
+                        let bindings = Self::bindings_from_records(&iteration_records);
+                        let witness =
+                            self.make_loop_iteration_witness(key_reg, value_reg, bindings)?;
+                        if let Some(&mut ExecutionFrame {
+                            kind:
+                                FrameKind::Loop {
+                                    context: ref mut ctx,
+                                    ..
+                                },
+                            ..
+                        }) = self.execution_stack.last_mut()
+                        {
+                            if ctx.witness.failing_iteration.is_none() {
+                                ctx.witness.failing_iteration = Some(witness);
+                            }
+                            if ctx.witness.failing_records.is_none()
+                                && !iteration_records.is_empty()
+                            {
+                                ctx.witness.failing_records = Some(iteration_records.clone());
+                            }
+                        }
                     }
 
                     self.set_register(result_reg, Value::Bool(false))?;
+                    #[cfg(feature = "explanations")]
+                    if let Some((total_iterations, success_count, witness)) =
+                        self.execution_stack.last().and_then(|frame| {
+                            if let FrameKind::Loop { ref context, .. } = frame.kind {
+                                Some((
+                                    context.total_iterations.saturating_add(1),
+                                    context.success_count,
+                                    context.witness.clone(),
+                                ))
+                            } else {
+                                None
+                            }
+                        })
+                    {
+                        self.insert_loop_summary_state(
+                            result_reg,
+                            LoopMode::Every,
+                            total_iterations,
+                            success_count,
+                            &witness,
+                        );
+                    }
                     let completed_frame = self
                         .execution_stack
                         .pop()

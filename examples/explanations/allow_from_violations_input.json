@@ -1,0 +1,6 @@
+{
+  "deployments": [
+    { "name": "web", "image": "nginx", "replicas": 2 },
+    { "name": "worker", "image": "busybox", "replicas": 7 }
+  ]
+}

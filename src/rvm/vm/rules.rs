@@ -211,6 +211,8 @@ impl RegoVM {
             rule_type: rule_type.clone(),
             current_definition_index: 0,
             current_body_index: 0,
+            #[cfg(feature = "explanations")]
+            block_record_start: self.block_records.len(),
         });
 
         let (final_result, rule_failed_due_to_inconsistency) = self
@@ -222,6 +224,14 @@ impl RegoVM {
             .call_rule_stack
             .pop()
             .ok_or(VmError::CallRuleStackUnderflow { pc: self.pc })?;
+        #[cfg(feature = "explanations")]
+        {
+            self.last_rule_block_records = self
+                .block_records
+                .get(call_context.block_record_start..)
+                .unwrap_or(&[])
+                .to_vec();
+        }
         self.pc = call_context.return_pc;
 
         let result_from_rule = if !rule_failed_due_to_inconsistency {
@@ -401,6 +411,8 @@ impl RegoVM {
             rule_type: rule_info.rule_type.clone(),
             current_definition_index: 0,
             current_body_index: 0,
+            #[cfg(feature = "explanations")]
+            block_record_start: self.block_records.len(),
         });
 
         let mut frame_data = RuleFrameData {
@@ -765,8 +777,21 @@ impl RegoVM {
 
         self.registers = parent_registers;
 
-        if self.call_rule_stack.pop().is_none() {
-            return Err(VmError::CallRuleStackUnderflow { pc: self.pc });
+        let call_context = self
+            .call_rule_stack
+            .pop()
+            .ok_or(VmError::CallRuleStackUnderflow { pc: self.pc })?;
+
+        #[cfg(not(feature = "explanations"))]
+        let _ = &call_context;
+
+        #[cfg(feature = "explanations")]
+        {
+            self.last_rule_block_records = self
+                .block_records
+                .get(call_context.block_record_start..)
+                .unwrap_or(&[])
+                .to_vec();
         }
 
         self.pc = return_pc;

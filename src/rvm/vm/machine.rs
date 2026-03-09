@@ -19,6 +19,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::time::Duration;
 
+#[cfg(feature = "explanations")]
+use super::context::LoopExplanationRecordSet;
 use super::context::{CallRuleContext, ComprehensionContext, LoopContext};
 use super::errors::{Result, VmError};
 use super::execution_model::{
@@ -120,6 +122,37 @@ pub struct RegoVM {
 
     /// Elapsed wall-clock time recorded when the VM entered a suspended state
     pub(super) execution_timer_elapsed_at_suspend: Option<Duration>,
+
+    #[cfg(feature = "explanations")]
+    /// Explanation records collected during the current execution.
+    pub(super) explanations: Option<BTreeMap<Value, Vec<crate::ExplanationRecord>>>,
+
+    #[cfg(feature = "explanations")]
+    /// Finalized block summaries collected during the current execution.
+    pub(super) block_records: Vec<crate::ExplanationRecord>,
+
+    #[cfg(feature = "explanations")]
+    /// Pending conditions for the currently executing block.
+    pub(super) current_block_records: Vec<crate::ExplanationRecord>,
+
+    #[cfg(feature = "explanations")]
+    /// Finalized block summaries produced by the most recent nested rule call.
+    pub(super) last_rule_block_records: Vec<crate::ExplanationRecord>,
+
+    #[cfg(feature = "explanations")]
+    /// Runtime settings for explanation capture.
+    pub(super) explanation_settings: crate::ExplanationSettings,
+    #[cfg(feature = "explanations")]
+    pub(super) loop_witnesses: BTreeMap<u8, crate::explanations::RawConditionEvaluationWitness>,
+    #[cfg(feature = "explanations")]
+    pub(super) loop_records: BTreeMap<u8, LoopExplanationRecordSet>,
+    #[cfg(feature = "explanations")]
+    pub(super) comprehension_witnesses:
+        BTreeMap<u8, crate::explanations::RawConditionEvaluationWitness>,
+    #[cfg(feature = "explanations")]
+    pub(super) last_entrypoint_rule_type: Option<crate::rvm::program::RuleType>,
+    #[cfg(feature = "explanations")]
+    pub(super) last_explanation_result: Option<Value>,
 }
 
 impl Default for RegoVM {
@@ -163,12 +196,35 @@ impl RegoVM {
             execution_timer_config: None,
             execution_timer: ExecutionTimer::new(fallback_timer),
             execution_timer_elapsed_at_suspend: None,
+            #[cfg(feature = "explanations")]
+            explanations: None,
+            #[cfg(feature = "explanations")]
+            block_records: Vec::new(),
+            #[cfg(feature = "explanations")]
+            current_block_records: Vec::new(),
+            #[cfg(feature = "explanations")]
+            last_rule_block_records: Vec::new(),
+            #[cfg(feature = "explanations")]
+            explanation_settings: crate::ExplanationSettings::default(),
+            #[cfg(feature = "explanations")]
+            loop_witnesses: BTreeMap::new(),
+            #[cfg(feature = "explanations")]
+            loop_records: BTreeMap::new(),
+            #[cfg(feature = "explanations")]
+            comprehension_witnesses: BTreeMap::new(),
+            #[cfg(feature = "explanations")]
+            last_entrypoint_rule_type: None,
+            #[cfg(feature = "explanations")]
+            last_explanation_result: None,
         }
     }
 
     /// Create a new virtual machine with compiled policy for default rule support
     pub fn new_with_policy(compiled_policy: CompiledPolicy) -> Self {
         let mut vm = Self::new();
+        if let Some(data) = compiled_policy.inner.data.clone() {
+            vm.data = data;
+        }
         vm.compiled_policy = Some(compiled_policy);
         vm
     }
@@ -195,6 +251,9 @@ impl RegoVM {
 
     /// Set the compiled policy for default rule evaluation
     pub fn set_compiled_policy(&mut self, compiled_policy: CompiledPolicy) {
+        if let Some(data) = compiled_policy.inner.data.clone() {
+            self.data = data;
+        }
         self.compiled_policy = Some(compiled_policy);
     }
 
@@ -225,6 +284,40 @@ impl RegoVM {
     /// Set the global input object
     pub fn set_input(&mut self, input: Value) {
         self.input = input;
+    }
+
+    #[cfg(feature = "explanations")]
+    pub fn set_explanation_settings(&mut self, settings: crate::ExplanationSettings) {
+        self.explanation_settings = settings;
+        self.explanations = self.explanation_settings.enabled.then(BTreeMap::new);
+        self.block_records.clear();
+        self.current_block_records.clear();
+        self.last_rule_block_records.clear();
+        self.loop_witnesses.clear();
+        self.loop_records.clear();
+        self.comprehension_witnesses.clear();
+        self.last_entrypoint_rule_type = None;
+        self.last_explanation_result = None;
+    }
+
+    #[cfg(feature = "explanations")]
+    pub fn take_explanations(&mut self) -> BTreeMap<Value, Vec<crate::ExplanationRecord>> {
+        let explanations = crate::explanations::normalize_explanations(
+            self.explanations.take().unwrap_or_default(),
+        );
+
+        if matches!(
+            self.last_entrypoint_rule_type,
+            Some(crate::rvm::program::RuleType::Complete)
+        ) {
+            if let Some(result) = self.last_explanation_result.as_ref() {
+                crate::explanations::filter_explanations_for_complete_rule(explanations, result)
+            } else {
+                explanations
+            }
+        } else {
+            explanations
+        }
     }
 
     /// Get the number of entry points available

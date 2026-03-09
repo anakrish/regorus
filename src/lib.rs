@@ -123,6 +123,8 @@ mod compile;
 mod compiled_policy;
 mod compiler;
 mod engine;
+#[cfg(feature = "explanations")]
+mod explanations;
 mod indexchecker;
 mod interpreter;
 
@@ -164,6 +166,13 @@ pub use {
 pub use compile::{compile_policy_with_entrypoint, PolicyModule};
 pub use compiled_policy::CompiledPolicy;
 pub use engine::Engine;
+#[cfg(feature = "explanations")]
+pub use explanations::{
+    ConditionEvaluation, ConditionEvaluationKind, ConditionEvaluationWitness,
+    ConditionIterationWitness, ConditionOperator, ExplanationBinding, ExplanationConditionMode,
+    ExplanationOutcome, ExplanationRecord, ExplanationSettings, ExplanationValueMode,
+    RuleWithExplanations, SourceLocation,
+};
 pub use lexer::Source;
 pub use policy_info::PolicyInfo;
 pub use utils::limits::LimitError;

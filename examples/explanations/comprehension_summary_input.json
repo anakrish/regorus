@@ -1,0 +1,11 @@
+{
+  "services": [
+    {"name": "public-web", "public": true, "ports": [80, 443]},
+    {"name": "metrics", "public": false, "ports": [9090]},
+    {"name": "admin", "public": true, "ports": [8443]}
+  ],
+  "buckets": [
+    {"name": "receipts", "owner": "finance"},
+    {"name": "scratch", "owner": ""}
+  ]
+}

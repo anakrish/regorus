@@ -25,6 +25,8 @@ impl<'a> Compiler<'a> {
         self.program
             .instructions
             .push(Instruction::Return { value: result_reg });
+        #[cfg(feature = "explanations")]
+        self.program.instruction_explanations.push(None);
         self.spans.push(SpanInfo::new(0, 0, 0, 0));
     }
 
@@ -32,6 +34,8 @@ impl<'a> Compiler<'a> {
         self.program
             .instructions
             .push(Instruction::CallRule { dest, rule_index });
+        #[cfg(feature = "explanations")]
+        self.program.instruction_explanations.push(None);
         self.spans.push(SpanInfo::new(0, 0, 0, 0));
     }
 

@@ -1,0 +1,9 @@
+{
+  "config": {
+    "DEVICE_METADATA": {
+      "localhost": {
+        "timezone": "PST"
+      }
+    }
+  }
+}

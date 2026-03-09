@@ -5,6 +5,10 @@ use crate::rvm::instructions::{Instruction, LiteralOrRegister};
 use crate::rvm::program::Program;
 use crate::value::Value;
 use alloc::collections::BTreeSet;
+#[cfg(feature = "explanations")]
+use alloc::string::ToString as _;
+#[cfg(feature = "explanations")]
+use alloc::vec;
 use alloc::vec::Vec;
 use core::mem;
 
@@ -21,6 +25,339 @@ pub(super) enum InstructionOutcome {
 }
 
 impl RegoVM {
+    #[cfg(feature = "explanations")]
+    const fn capture_all_contributing_conditions(&self) -> bool {
+        matches!(
+            self.explanation_settings.condition_mode,
+            crate::ExplanationConditionMode::AllContributing
+        )
+    }
+
+    #[cfg(feature = "explanations")]
+    const fn invert_explanation_outcome(
+        outcome: crate::explanations::ExplanationOutcome,
+    ) -> crate::explanations::ExplanationOutcome {
+        match outcome {
+            crate::explanations::ExplanationOutcome::Success => {
+                crate::explanations::ExplanationOutcome::Failure
+            }
+            crate::explanations::ExplanationOutcome::Failure => {
+                crate::explanations::ExplanationOutcome::Success
+            }
+        }
+    }
+
+    #[cfg(feature = "explanations")]
+    fn nested_rule_explanation_records_for_assert(
+        &self,
+        condition: u8,
+        outcome: crate::explanations::ExplanationOutcome,
+    ) -> Option<Vec<crate::ExplanationRecord>> {
+        let expected_outcome = match *self.program.instructions.get(self.pc.checked_sub(1)?)? {
+            Instruction::CallRule { dest, .. } if dest == condition => outcome,
+            Instruction::Not { dest, operand } if dest == condition => {
+                match *self.program.instructions.get(self.pc.checked_sub(2)?)? {
+                    Instruction::CallRule {
+                        dest: nested_dest, ..
+                    } if nested_dest == operand => Self::invert_explanation_outcome(outcome),
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+
+        let nested_record = self.last_rule_block_records.last()?.clone();
+        if nested_record.outcome != expected_outcome {
+            return None;
+        }
+
+        if self.capture_all_contributing_conditions() {
+            Some(self.last_rule_block_records.clone())
+        } else {
+            Some(vec![nested_record])
+        }
+    }
+
+    #[cfg(feature = "explanations")]
+    fn resolve_condition_probe(
+        &self,
+        probe: &crate::rvm::program::InstructionConditionProbe,
+    ) -> Option<crate::ConditionEvaluation> {
+        let raw = match *probe {
+            crate::rvm::program::InstructionConditionProbe::Comparison {
+                operator,
+                actual_register,
+                expected_register,
+                ref actual_hint,
+                ref expected_hint,
+            } => crate::explanations::RawConditionEvaluation {
+                kind: crate::ConditionEvaluationKind::Comparison,
+                operator: Some(operator),
+                actual_value: Some(self.get_register(actual_register).ok()?.clone()),
+                actual_hint: actual_hint.clone(),
+                expected_value: Some(self.get_register(expected_register).ok()?.clone()),
+                expected_hint: expected_hint.clone(),
+                witness: None,
+            },
+            crate::rvm::program::InstructionConditionProbe::Membership {
+                operator,
+                actual_register,
+                expected_register,
+                ref actual_hint,
+                ref expected_hint,
+            } => crate::explanations::RawConditionEvaluation {
+                kind: crate::ConditionEvaluationKind::Membership,
+                operator: Some(operator),
+                actual_value: Some(self.get_register(actual_register).ok()?.clone()),
+                actual_hint: actual_hint.clone(),
+                expected_value: expected_register
+                    .and_then(|register| self.get_register(register).ok().cloned()),
+                expected_hint: expected_hint.clone(),
+                witness: None,
+            },
+            crate::rvm::program::InstructionConditionProbe::Truthiness { register, ref hint } => {
+                let value = self.get_register(register).ok()?.clone();
+                crate::explanations::RawConditionEvaluation {
+                    kind: crate::ConditionEvaluationKind::Truthiness,
+                    operator: Some(match value {
+                        Value::Bool(false) | Value::Null | Value::Undefined => {
+                            crate::ConditionOperator::Falsy
+                        }
+                        _ => crate::ConditionOperator::Truthy,
+                    }),
+                    actual_value: Some(value),
+                    actual_hint: hint.clone(),
+                    expected_value: None,
+                    expected_hint: None,
+                    witness: None,
+                }
+            }
+            crate::rvm::program::InstructionConditionProbe::Builtin {
+                operator,
+                actual_register,
+                expected_register,
+                ref actual_hint,
+                ref expected_hint,
+            } => crate::explanations::RawConditionEvaluation {
+                kind: crate::ConditionEvaluationKind::Builtin,
+                operator: Some(operator),
+                actual_value: Some(self.get_register(actual_register).ok()?.clone()),
+                actual_hint: actual_hint.clone(),
+                expected_value: expected_register
+                    .and_then(|register| self.get_register(register).ok().cloned()),
+                expected_hint: expected_hint.clone(),
+                witness: None,
+            },
+            crate::rvm::program::InstructionConditionProbe::Loop {
+                result_register,
+                operator,
+                ref condition_texts,
+            } => {
+                let mut witness = self.loop_witnesses.get(&result_register).cloned();
+                if let Some(ref mut witness) = witness {
+                    witness.condition_texts = condition_texts.clone();
+                } else if !condition_texts.is_empty() {
+                    witness = Some(crate::explanations::RawConditionEvaluationWitness {
+                        iteration_count: None,
+                        success_count: None,
+                        yield_count: None,
+                        condition_texts: condition_texts.clone(),
+                        sample_key: None,
+                        sample_key_hint: None,
+                        sample_value: None,
+                        sample_value_hint: None,
+                        passing_iteration: None,
+                        failing_iteration: None,
+                    });
+                }
+
+                crate::explanations::RawConditionEvaluation {
+                    kind: crate::ConditionEvaluationKind::Quantifier,
+                    operator,
+                    actual_value: Some(self.get_register(result_register).ok()?.clone()),
+                    actual_hint: None,
+                    expected_value: None,
+                    expected_hint: None,
+                    witness,
+                }
+            }
+            crate::rvm::program::InstructionConditionProbe::Comprehension { result_register } => {
+                crate::explanations::RawConditionEvaluation {
+                    kind: crate::ConditionEvaluationKind::Comprehension,
+                    operator: None,
+                    actual_value: Some(self.get_register(result_register).ok()?.clone()),
+                    actual_hint: None,
+                    expected_value: None,
+                    expected_hint: None,
+                    witness: self.comprehension_witnesses.get(&result_register).cloned(),
+                }
+            }
+        };
+
+        Some(raw.sanitize(&self.explanation_settings))
+    }
+
+    #[cfg(feature = "explanations")]
+    fn make_current_instruction_record(
+        &self,
+        metadata: crate::rvm::program::InstructionExplanationInfo,
+        outcome: crate::explanations::ExplanationOutcome,
+    ) -> crate::ExplanationRecord {
+        let evaluation = metadata
+            .probe
+            .as_ref()
+            .and_then(|probe| self.resolve_condition_probe(probe));
+
+        let location = self
+            .program
+            .instruction_spans
+            .get(self.pc)
+            .and_then(|span| span.as_ref())
+            .map(|span| crate::SourceLocation {
+                file: span
+                    .get_source_name(&self.program.sources)
+                    .unwrap_or_default()
+                    .to_string()
+                    .into(),
+                row: u32::try_from(span.line).unwrap_or(u32::MAX),
+                col: u32::try_from(span.column).unwrap_or(u32::MAX),
+            })
+            .unwrap_or(crate::SourceLocation {
+                file: "".into(),
+                row: 0,
+                col: 0,
+            });
+
+        let bindings = metadata
+            .bindings
+            .into_iter()
+            .filter_map(|binding| {
+                self.get_register(binding.register)
+                    .ok()
+                    .filter(|value| **value != Value::Undefined)
+                    .map(|value| {
+                        crate::explanations::sanitize_explanation_binding(
+                            &binding.name,
+                            value,
+                            &self.explanation_settings,
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+
+        crate::ExplanationRecord {
+            outcome,
+            location,
+            text: metadata.text.into(),
+            evaluation,
+            bindings,
+        }
+    }
+
+    #[cfg(feature = "explanations")]
+    fn record_current_instruction_condition(
+        &mut self,
+        outcome: crate::explanations::ExplanationOutcome,
+    ) -> Result<()> {
+        if self.explanations.is_none() {
+            return Ok(());
+        }
+
+        let metadata = match self
+            .program
+            .instruction_explanations
+            .get(self.pc)
+            .cloned()
+            .flatten()
+        {
+            Some(metadata) => metadata,
+            None => return Ok(()),
+        };
+
+        if let Some(result_register) = metadata.probe.as_ref().and_then(|probe| match probe {
+            &crate::rvm::program::InstructionConditionProbe::Loop {
+                result_register, ..
+            } => Some(result_register),
+            _ => None,
+        }) {
+            let mut records = self
+                .loop_records
+                .get(&result_register)
+                .map(|record_set| match outcome {
+                    crate::explanations::ExplanationOutcome::Success => {
+                        record_set.passing.clone().unwrap_or_default()
+                    }
+                    crate::explanations::ExplanationOutcome::Failure => record_set
+                        .failing
+                        .clone()
+                        .or_else(|| record_set.passing.clone())
+                        .unwrap_or_default(),
+                })
+                .unwrap_or_default();
+            records.push(self.make_current_instruction_record(metadata, outcome));
+            self.current_block_records = records;
+            return Ok(());
+        }
+
+        if let Some(&Instruction::AssertCondition { condition }) =
+            self.program.instructions.get(self.pc)
+        {
+            if let Some(nested_records) =
+                self.nested_rule_explanation_records_for_assert(condition, outcome)
+            {
+                if self.capture_all_contributing_conditions() {
+                    self.current_block_records.extend(nested_records);
+                } else {
+                    self.current_block_records = nested_records;
+                }
+                return Ok(());
+            }
+        }
+
+        let record = self.make_current_instruction_record(metadata, outcome);
+
+        if self.capture_all_contributing_conditions() {
+            self.current_block_records.push(record);
+        } else {
+            self.current_block_records.clear();
+            self.current_block_records.push(record);
+        }
+
+        Ok(())
+    }
+
+    #[cfg(feature = "explanations")]
+    pub(super) fn finalize_current_block_records(&mut self) -> Vec<crate::ExplanationRecord> {
+        if self.current_block_records.is_empty() {
+            return Vec::new();
+        }
+
+        let records = mem::take(&mut self.current_block_records);
+        self.block_records.extend(records.iter().cloned());
+        records
+    }
+
+    #[cfg(feature = "explanations")]
+    pub(super) fn snapshot_latest_block(&mut self, explanation_key: Value) {
+        let latest_block = self.finalize_current_block_records();
+        if !latest_block.is_empty() {
+            if let Some(explanations) = self.explanations.as_mut() {
+                explanations
+                    .entry(explanation_key)
+                    .or_default()
+                    .extend(latest_block);
+            }
+        }
+    }
+
+    #[cfg(feature = "explanations")]
+    pub(super) fn snapshot_all_blocks(&mut self, explanation_key: Value) {
+        let _ = self.finalize_current_block_records();
+        if let Some(explanations) = self.explanations.as_mut() {
+            explanations.insert(explanation_key, self.block_records.clone());
+        }
+    }
+
     pub(super) fn execute_instruction(
         &mut self,
         program: &Program,
@@ -75,6 +412,8 @@ impl RegoVM {
             Move { dest, src } => {
                 let value = self.get_register(src)?.clone();
                 self.set_register(dest, value)?;
+                #[cfg(feature = "explanations")]
+                self.snapshot_latest_block(self.get_register(dest)?.clone());
                 Ok(InstructionOutcome::Continue)
             }
             other => self.execute_arithmetic_instruction(program, other),
@@ -348,6 +687,18 @@ impl RegoVM {
                     _ => true,
                 };
 
+                #[cfg(feature = "explanations")]
+                self.record_current_instruction_condition(if condition_result {
+                    crate::explanations::ExplanationOutcome::Success
+                } else {
+                    crate::explanations::ExplanationOutcome::Failure
+                })?;
+
+                #[cfg(feature = "explanations")]
+                if !condition_result {
+                    let _ = self.finalize_current_block_records();
+                }
+
                 self.handle_condition(condition_result)?;
                 Ok(InstructionOutcome::Continue)
             }
@@ -355,6 +706,17 @@ impl RegoVM {
                 let value = self.get_register(register)?;
 
                 let is_undefined = matches!(value, Value::Undefined);
+                #[cfg(feature = "explanations")]
+                self.record_current_instruction_condition(if is_undefined {
+                    crate::explanations::ExplanationOutcome::Failure
+                } else {
+                    crate::explanations::ExplanationOutcome::Success
+                })?;
+
+                #[cfg(feature = "explanations")]
+                if is_undefined {
+                    let _ = self.finalize_current_block_records();
+                }
                 self.handle_condition(!is_undefined)?;
                 Ok(InstructionOutcome::Continue)
             }
@@ -401,6 +763,10 @@ impl RegoVM {
             }
             Return { value } => {
                 let result = self.get_register(value)?.clone();
+                #[cfg(feature = "explanations")]
+                if !matches!(result, Value::Array(_) | Value::Set(_) | Value::Object(_)) {
+                    self.snapshot_all_blocks(result.clone());
+                }
                 Ok(InstructionOutcome::Return(result))
             }
             CallRule { dest, rule_index } => {
@@ -448,6 +814,8 @@ impl RegoVM {
                         pc: self.pc,
                     });
                 }
+                #[cfg(feature = "explanations")]
+                self.snapshot_latest_block(self.get_register(key)?.clone());
                 Ok(InstructionOutcome::Continue)
             }
             ObjectCreate { params_index } => {
@@ -646,6 +1014,8 @@ impl RegoVM {
                         pc: self.pc,
                     });
                 }
+                #[cfg(feature = "explanations")]
+                self.snapshot_latest_block(self.get_register(value)?.clone());
                 Ok(InstructionOutcome::Continue)
             }
             SetCreate { params_index } => {

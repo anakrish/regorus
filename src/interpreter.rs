@@ -30,6 +30,8 @@ use crate::query::traversal::traverse;
 use crate::Rc;
 use alloc::collections::btree_map::Entry as BTreeMapEntry;
 use alloc::collections::{BTreeMap, BTreeSet};
+#[cfg(feature = "explanations")]
+use alloc::string::ToString as _;
 use anyhow::{anyhow, bail, Result};
 use core::ops::Bound::*;
 
@@ -75,6 +77,17 @@ pub struct Interpreter {
     enable_coverage: bool,
 
     traces: Option<Vec<Rc<str>>>,
+
+    #[cfg(feature = "explanations")]
+    explanations: Option<BTreeMap<Value, Vec<crate::ExplanationRecord>>>,
+    #[cfg(feature = "explanations")]
+    explanation_settings: crate::ExplanationSettings,
+    #[cfg(feature = "explanations")]
+    last_rule_block_records: Vec<crate::ExplanationRecord>,
+    #[cfg(feature = "explanations")]
+    observed_conditions: BTreeMap<u32, crate::explanations::RawConditionEvaluation>,
+    #[cfg(feature = "explanations")]
+    observed_stmt_conditions: BTreeMap<u32, crate::explanations::RawConditionEvaluation>,
 
     gather_prints: bool,
     prints: Vec<String>,
@@ -124,6 +137,16 @@ impl Clone for Interpreter {
             gather_prints: self.gather_prints,
             prints: self.prints.clone(),
             traces: self.traces.clone(),
+            #[cfg(feature = "explanations")]
+            explanations: None,
+            #[cfg(feature = "explanations")]
+            explanation_settings: self.explanation_settings.clone(),
+            #[cfg(feature = "explanations")]
+            last_rule_block_records: Vec::new(),
+            #[cfg(feature = "explanations")]
+            observed_conditions: BTreeMap::new(),
+            #[cfg(feature = "explanations")]
+            observed_stmt_conditions: BTreeMap::new(),
 
             extensions: self.extensions.clone(),
 
@@ -168,6 +191,10 @@ struct Context {
     is_old_style_set: bool,
     output_constness_determined: bool,
     early_return: bool,
+    #[cfg(feature = "explanations")]
+    block_records: Vec<crate::ExplanationRecord>,
+    #[cfg(feature = "explanations")]
+    latest_block_records: Vec<crate::ExplanationRecord>,
 }
 
 impl Default for Context {
@@ -185,11 +212,23 @@ impl Default for Context {
             is_old_style_set: false,
             output_constness_determined: false,
             early_return: false,
+            #[cfg(feature = "explanations")]
+            block_records: Vec::new(),
+            #[cfg(feature = "explanations")]
+            latest_block_records: Vec::new(),
         }
     }
 }
 
 impl Interpreter {
+    #[cfg(feature = "explanations")]
+    fn sync_explanation_capture_state(&mut self) {
+        self.explanations = self.explanation_settings.enabled.then(BTreeMap::new);
+        self.last_rule_block_records.clear();
+        self.observed_conditions.clear();
+        self.observed_stmt_conditions.clear();
+    }
+
     pub fn new() -> Interpreter {
         let compiled_policy = compiled_policy::CompiledPolicyData {
             strict_builtin_errors: true, // Preserve current behavior
@@ -221,6 +260,16 @@ impl Interpreter {
             builtins_cache: BTreeMap::default(),
             no_rules_lookup: false,
             traces: None,
+            #[cfg(feature = "explanations")]
+            explanations: None,
+            #[cfg(feature = "explanations")]
+            explanation_settings: crate::ExplanationSettings::default(),
+            #[cfg(feature = "explanations")]
+            last_rule_block_records: Vec::new(),
+            #[cfg(feature = "explanations")]
+            observed_conditions: BTreeMap::new(),
+            #[cfg(feature = "explanations")]
+            observed_stmt_conditions: BTreeMap::new(),
             extensions: Map::default(),
 
             #[cfg(feature = "coverage")]
@@ -259,6 +308,16 @@ impl Interpreter {
             builtins_cache: BTreeMap::default(),
             no_rules_lookup: false,
             traces: None,
+            #[cfg(feature = "explanations")]
+            explanations: None,
+            #[cfg(feature = "explanations")]
+            explanation_settings: crate::ExplanationSettings::default(),
+            #[cfg(feature = "explanations")]
+            last_rule_block_records: Vec::new(),
+            #[cfg(feature = "explanations")]
+            observed_conditions: BTreeMap::new(),
+            #[cfg(feature = "explanations")]
+            observed_stmt_conditions: BTreeMap::new(),
 
             #[cfg(feature = "coverage")]
             coverage: Map::default(),
@@ -362,6 +421,17 @@ impl Interpreter {
         };
     }
 
+    #[cfg(feature = "explanations")]
+    pub fn set_explanation_settings(&mut self, settings: crate::ExplanationSettings) {
+        self.explanation_settings = settings;
+        self.sync_explanation_capture_state();
+    }
+
+    #[cfg(feature = "explanations")]
+    pub fn take_explanations(&mut self) -> BTreeMap<Value, Vec<crate::ExplanationRecord>> {
+        crate::explanations::normalize_explanations(self.explanations.take().unwrap_or_default())
+    }
+
     pub fn set_strict_builtin_errors(&mut self, b: bool) {
         self.compiled_policy_mut().strict_builtin_errors = b;
     }
@@ -400,6 +470,8 @@ impl Interpreter {
         self.rule_values.clear();
         self.builtins_cache.clear();
         self.reset_execution_timer_state();
+        #[cfg(feature = "explanations")]
+        self.sync_explanation_capture_state();
     }
 
     #[cfg(feature = "allocator-memory-limits")]
@@ -617,12 +689,39 @@ impl Interpreter {
 
     fn eval_bool_expr(
         &mut self,
+        expr: &ExprRef,
         op: &BoolOp,
         lhs_expr: &ExprRef,
         rhs_expr: &ExprRef,
     ) -> Result<Value> {
+        #[cfg(not(feature = "explanations"))]
+        let _ = expr;
         let lhs = self.eval_expr(lhs_expr)?;
         let rhs = self.eval_expr(rhs_expr)?;
+
+        #[cfg(feature = "explanations")]
+        self.record_condition_observation(
+            lhs_expr,
+            rhs_expr,
+            crate::explanations::RawConditionEvaluation {
+                kind: crate::ConditionEvaluationKind::Comparison,
+                operator: Some(match op {
+                    BoolOp::Eq => crate::ConditionOperator::Equals,
+                    BoolOp::Ne => crate::ConditionOperator::NotEquals,
+                    BoolOp::Lt => crate::ConditionOperator::LessThan,
+                    BoolOp::Le => crate::ConditionOperator::LessThanOrEquals,
+                    BoolOp::Gt => crate::ConditionOperator::GreaterThan,
+                    BoolOp::Ge => crate::ConditionOperator::GreaterThanOrEquals,
+                }),
+                actual_value: Some(lhs.clone()),
+                actual_hint: Self::expr_redaction_hint(lhs_expr),
+                expected_value: Some(rhs.clone()),
+                expected_hint: Self::expr_redaction_hint(lhs_expr)
+                    .or_else(|| Self::expr_redaction_hint(rhs_expr)),
+                witness: None,
+            },
+            expr.eidx(),
+        );
 
         if lhs == Value::Undefined || rhs == Value::Undefined {
             return Ok(Value::Undefined);
@@ -678,11 +777,14 @@ impl Interpreter {
     fn eval_every(
         &mut self,
         _span: &Span,
+        stmt_id: u32,
         key: &Option<Span>,
         value: &Span,
         domain: &ExprRef,
         query: &Ref<Query>,
     ) -> Result<bool> {
+        #[cfg(not(feature = "explanations"))]
+        let _ = stmt_id;
         self.check_execution_time()?;
         let domain = self.eval_expr(domain)?;
 
@@ -692,14 +794,54 @@ impl Interpreter {
             ..Context::default()
         });
         let mut r = true;
+        #[cfg(feature = "explanations")]
+        let mut iteration_count = 0_u32;
+        #[cfg(feature = "explanations")]
+        let mut success_count = 0_u32;
+        #[cfg(feature = "explanations")]
+        let mut passing_iteration = None;
+        #[cfg(feature = "explanations")]
+        let mut failing_iteration = None;
+        #[cfg(feature = "explanations")]
+        let condition_texts = Self::loop_condition_texts(query.as_ref());
         match domain {
             Value::Array(a) => {
                 for (idx, v) in a.iter().enumerate() {
+                    #[cfg(feature = "explanations")]
+                    {
+                        iteration_count = iteration_count.saturating_add(1);
+                    }
                     self.add_variable(&value.source_str(), v.clone())?;
                     if let Some(key) = key {
                         self.add_variable(&key.source_str(), Value::from(idx))?;
                     }
-                    if !self.eval_query(query)? {
+                    let succeeded = self.eval_query(query)?;
+                    #[cfg(feature = "explanations")]
+                    if succeeded {
+                        success_count = success_count.saturating_add(1);
+                        if passing_iteration.is_none() {
+                            passing_iteration =
+                                Some(crate::explanations::RawConditionIterationWitness {
+                                    sample_key: key.as_ref().map(|_| Value::from(idx)),
+                                    sample_key_hint: key
+                                        .as_ref()
+                                        .map(|k| k.source_str().to_string()),
+                                    sample_value: Some(v.clone()),
+                                    sample_value_hint: Some(value.source_str().to_string()),
+                                    bindings: self.collect_visible_explanation_bindings(),
+                                });
+                        }
+                    } else if failing_iteration.is_none() {
+                        failing_iteration =
+                            Some(crate::explanations::RawConditionIterationWitness {
+                                sample_key: key.as_ref().map(|_| Value::from(idx)),
+                                sample_key_hint: key.as_ref().map(|k| k.source_str().to_string()),
+                                sample_value: Some(v.clone()),
+                                sample_value_hint: Some(value.source_str().to_string()),
+                                bindings: self.collect_visible_explanation_bindings(),
+                            });
+                    }
+                    if !succeeded {
                         r = false;
                         break;
                     }
@@ -707,11 +849,41 @@ impl Interpreter {
             }
             Value::Set(s) => {
                 for v in s.iter() {
+                    #[cfg(feature = "explanations")]
+                    {
+                        iteration_count = iteration_count.saturating_add(1);
+                    }
                     self.add_variable(&value.source_str(), v.clone())?;
                     if let Some(key) = key {
                         self.add_variable(&key.source_str(), v.clone())?;
                     }
-                    if !self.eval_query(query)? {
+                    let succeeded = self.eval_query(query)?;
+                    #[cfg(feature = "explanations")]
+                    if succeeded {
+                        success_count = success_count.saturating_add(1);
+                        if passing_iteration.is_none() {
+                            passing_iteration =
+                                Some(crate::explanations::RawConditionIterationWitness {
+                                    sample_key: key.as_ref().map(|_| v.clone()),
+                                    sample_key_hint: key
+                                        .as_ref()
+                                        .map(|k| k.source_str().to_string()),
+                                    sample_value: Some(v.clone()),
+                                    sample_value_hint: Some(value.source_str().to_string()),
+                                    bindings: self.collect_visible_explanation_bindings(),
+                                });
+                        }
+                    } else if failing_iteration.is_none() {
+                        failing_iteration =
+                            Some(crate::explanations::RawConditionIterationWitness {
+                                sample_key: key.as_ref().map(|_| v.clone()),
+                                sample_key_hint: key.as_ref().map(|k| k.source_str().to_string()),
+                                sample_value: Some(v.clone()),
+                                sample_value_hint: Some(value.source_str().to_string()),
+                                bindings: self.collect_visible_explanation_bindings(),
+                            });
+                    }
+                    if !succeeded {
                         r = false;
                         break;
                     }
@@ -719,11 +891,43 @@ impl Interpreter {
             }
             Value::Object(o) => {
                 for (k, v) in o.iter() {
+                    #[cfg(feature = "explanations")]
+                    {
+                        iteration_count = iteration_count.saturating_add(1);
+                    }
                     self.add_variable(&value.source_str(), v.clone())?;
                     if let Some(key) = key {
                         self.add_variable(&key.source_str(), k.clone())?;
                     }
-                    if !self.eval_query(query)? {
+                    let succeeded = self.eval_query(query)?;
+                    #[cfg(feature = "explanations")]
+                    if succeeded {
+                        success_count = success_count.saturating_add(1);
+                        if passing_iteration.is_none() {
+                            passing_iteration =
+                                Some(crate::explanations::RawConditionIterationWitness {
+                                    sample_key: key.as_ref().map(|_| k.clone()),
+                                    sample_key_hint: key
+                                        .as_ref()
+                                        .map(|key| key.source_str().to_string()),
+                                    sample_value: Some(v.clone()),
+                                    sample_value_hint: Some(value.source_str().to_string()),
+                                    bindings: self.collect_visible_explanation_bindings(),
+                                });
+                        }
+                    } else if failing_iteration.is_none() {
+                        failing_iteration =
+                            Some(crate::explanations::RawConditionIterationWitness {
+                                sample_key: key.as_ref().map(|_| k.clone()),
+                                sample_key_hint: key
+                                    .as_ref()
+                                    .map(|key| key.source_str().to_string()),
+                                sample_value: Some(v.clone()),
+                                sample_value_hint: Some(value.source_str().to_string()),
+                                bindings: self.collect_visible_explanation_bindings(),
+                            });
+                    }
+                    if !succeeded {
                         r = false;
                         break;
                     }
@@ -733,6 +937,34 @@ impl Interpreter {
                 r = false;
             }
         };
+        #[cfg(feature = "explanations")]
+        let representative_iteration = failing_iteration.as_ref().or(passing_iteration.as_ref());
+        #[cfg(feature = "explanations")]
+        self.record_stmt_condition_observation(
+            stmt_id,
+            crate::explanations::RawConditionEvaluation {
+                kind: crate::ConditionEvaluationKind::Quantifier,
+                operator: Some(crate::ConditionOperator::Every),
+                actual_value: Some(Value::Bool(r)),
+                actual_hint: None,
+                expected_value: None,
+                expected_hint: None,
+                witness: Some(crate::explanations::RawConditionEvaluationWitness {
+                    iteration_count: Some(iteration_count),
+                    success_count: Some(success_count),
+                    yield_count: None,
+                    condition_texts,
+                    sample_key: representative_iteration.and_then(|w| w.sample_key.clone()),
+                    sample_key_hint: representative_iteration
+                        .and_then(|w| w.sample_key_hint.clone()),
+                    sample_value: representative_iteration.and_then(|w| w.sample_value.clone()),
+                    sample_value_hint: representative_iteration
+                        .and_then(|w| w.sample_value_hint.clone()),
+                    passing_iteration,
+                    failing_iteration,
+                }),
+            },
+        );
         self.contexts.pop();
         self.scopes.pop();
         Ok(r)
@@ -934,15 +1166,37 @@ impl Interpreter {
 
     fn eval_some_in(
         &mut self,
-        _span: &Span,
+        span: &Span,
         _key_expr: &Option<ExprRef>,
-        _value_expr: &ExprRef,
+        value_expr: &ExprRef,
         collection: &ExprRef,
         stmts: &[&LiteralStmt],
     ) -> Result<bool> {
+        #[cfg(not(feature = "explanations"))]
+        {
+            let _ = span;
+            let _ = value_expr;
+        }
         self.check_execution_time()?;
         let scope_saved = self.current_scope()?.clone();
         let mut count: usize = 0;
+        #[cfg(feature = "explanations")]
+        let mut iteration_count = 0_u32;
+        #[cfg(feature = "explanations")]
+        let mut passing_iteration = None;
+        #[cfg(feature = "explanations")]
+        let mut failing_iteration = None;
+        #[cfg(feature = "explanations")]
+        let mut passing_records = None;
+        #[cfg(feature = "explanations")]
+        let mut failing_records = None;
+        #[cfg(feature = "explanations")]
+        let condition_texts = Self::loop_condition_texts_from_stmts(stmts);
+        #[cfg(feature = "explanations")]
+        let block_record_start = self
+            .get_current_context()
+            .map(|ctx| ctx.block_records.len())
+            .unwrap_or_default();
 
         // Fetch the binding plan for this some..in expression
         let module_idx = self.current_module_index;
@@ -966,6 +1220,10 @@ impl Interpreter {
         match self.eval_expr(collection)? {
             Value::Array(a) => {
                 for (idx, value) in a.iter().enumerate() {
+                    #[cfg(feature = "explanations")]
+                    {
+                        iteration_count = iteration_count.saturating_add(1);
+                    }
                     *self.current_scope_mut()? = scope_saved.clone();
 
                     let mut success = if let Some(key_plan) = &key_plan {
@@ -986,14 +1244,59 @@ impl Interpreter {
                     }
 
                     let mut should_break = false;
-                    if self.eval_stmts(stmts)? {
+                    let iteration_succeeded = self.eval_stmts(stmts)?;
+                    #[cfg(feature = "explanations")]
+                    let iteration_records = self
+                        .get_current_context()
+                        .map(|ctx| ctx.latest_block_records.clone())
+                        .unwrap_or_default();
+                    if iteration_succeeded {
                         count = count.saturating_add(1);
+                        #[cfg(feature = "explanations")]
+                        {
+                            if passing_iteration.is_none() {
+                                passing_iteration =
+                                    Some(crate::explanations::RawConditionIterationWitness {
+                                        sample_key: Some(Value::from(idx)),
+                                        sample_key_hint: None,
+                                        sample_value: Some(value.clone()),
+                                        sample_value_hint: Some(
+                                            value_expr.span().text().to_string(),
+                                        ),
+                                        bindings: self.collect_visible_explanation_bindings(),
+                                    });
+                            }
+                            if passing_records.is_none() && !iteration_records.is_empty() {
+                                passing_records = Some(iteration_records.clone());
+                            }
+                        }
                         if let Some(ctx) = self.contexts.last() {
                             if ctx.early_return {
                                 should_break = true;
                             }
                         }
+                    } else {
+                        #[cfg(feature = "explanations")]
+                        {
+                            if failing_iteration.is_none() {
+                                failing_iteration =
+                                    Some(crate::explanations::RawConditionIterationWitness {
+                                        sample_key: Some(Value::from(idx)),
+                                        sample_key_hint: None,
+                                        sample_value: Some(value.clone()),
+                                        sample_value_hint: Some(
+                                            value_expr.span().text().to_string(),
+                                        ),
+                                        bindings: self.collect_visible_explanation_bindings(),
+                                    });
+                            }
+                            if failing_records.is_none() && !iteration_records.is_empty() {
+                                failing_records = Some(iteration_records.clone());
+                            }
+                        }
                     }
+                    #[cfg(feature = "explanations")]
+                    self.truncate_current_context_block_records(block_record_start);
                     *self.current_scope_mut()? = scope_saved.clone();
 
                     if should_break {
@@ -1003,6 +1306,10 @@ impl Interpreter {
             }
             Value::Set(s) => {
                 for value in s.iter() {
+                    #[cfg(feature = "explanations")]
+                    {
+                        iteration_count = iteration_count.saturating_add(1);
+                    }
                     *self.current_scope_mut()? = scope_saved.clone();
 
                     let mut success = if let Some(key_plan) = &key_plan {
@@ -1022,14 +1329,59 @@ impl Interpreter {
                     }
 
                     let mut should_break = false;
-                    if self.eval_stmts(stmts)? {
+                    let iteration_succeeded = self.eval_stmts(stmts)?;
+                    #[cfg(feature = "explanations")]
+                    let iteration_records = self
+                        .get_current_context()
+                        .map(|ctx| ctx.latest_block_records.clone())
+                        .unwrap_or_default();
+                    if iteration_succeeded {
                         count = count.saturating_add(1);
+                        #[cfg(feature = "explanations")]
+                        {
+                            if passing_iteration.is_none() {
+                                passing_iteration =
+                                    Some(crate::explanations::RawConditionIterationWitness {
+                                        sample_key: Some(value.clone()),
+                                        sample_key_hint: None,
+                                        sample_value: Some(value.clone()),
+                                        sample_value_hint: Some(
+                                            value_expr.span().text().to_string(),
+                                        ),
+                                        bindings: self.collect_visible_explanation_bindings(),
+                                    });
+                            }
+                            if passing_records.is_none() && !iteration_records.is_empty() {
+                                passing_records = Some(iteration_records.clone());
+                            }
+                        }
                         if let Some(ctx) = self.contexts.last() {
                             if ctx.early_return {
                                 should_break = true;
                             }
                         }
+                    } else {
+                        #[cfg(feature = "explanations")]
+                        {
+                            if failing_iteration.is_none() {
+                                failing_iteration =
+                                    Some(crate::explanations::RawConditionIterationWitness {
+                                        sample_key: Some(value.clone()),
+                                        sample_key_hint: None,
+                                        sample_value: Some(value.clone()),
+                                        sample_value_hint: Some(
+                                            value_expr.span().text().to_string(),
+                                        ),
+                                        bindings: self.collect_visible_explanation_bindings(),
+                                    });
+                            }
+                            if failing_records.is_none() && !iteration_records.is_empty() {
+                                failing_records = Some(iteration_records.clone());
+                            }
+                        }
                     }
+                    #[cfg(feature = "explanations")]
+                    self.truncate_current_context_block_records(block_record_start);
                     *self.current_scope_mut()? = scope_saved.clone();
 
                     if should_break {
@@ -1040,6 +1392,10 @@ impl Interpreter {
 
             Value::Object(o) => {
                 for (key, value) in o.iter() {
+                    #[cfg(feature = "explanations")]
+                    {
+                        iteration_count = iteration_count.saturating_add(1);
+                    }
                     *self.current_scope_mut()? = scope_saved.clone();
 
                     let mut success = if let Some(key_plan) = &key_plan {
@@ -1059,14 +1415,59 @@ impl Interpreter {
                     }
 
                     let mut should_break = false;
-                    if self.eval_stmts(stmts)? {
+                    let iteration_succeeded = self.eval_stmts(stmts)?;
+                    #[cfg(feature = "explanations")]
+                    let iteration_records = self
+                        .get_current_context()
+                        .map(|ctx| ctx.latest_block_records.clone())
+                        .unwrap_or_default();
+                    if iteration_succeeded {
                         count = count.saturating_add(1);
+                        #[cfg(feature = "explanations")]
+                        {
+                            if passing_iteration.is_none() {
+                                passing_iteration =
+                                    Some(crate::explanations::RawConditionIterationWitness {
+                                        sample_key: Some(key.clone()),
+                                        sample_key_hint: None,
+                                        sample_value: Some(value.clone()),
+                                        sample_value_hint: Some(
+                                            value_expr.span().text().to_string(),
+                                        ),
+                                        bindings: self.collect_visible_explanation_bindings(),
+                                    });
+                            }
+                            if passing_records.is_none() && !iteration_records.is_empty() {
+                                passing_records = Some(iteration_records.clone());
+                            }
+                        }
                         if let Some(ctx) = self.contexts.last() {
                             if ctx.early_return {
                                 should_break = true;
                             }
                         }
+                    } else {
+                        #[cfg(feature = "explanations")]
+                        {
+                            if failing_iteration.is_none() {
+                                failing_iteration =
+                                    Some(crate::explanations::RawConditionIterationWitness {
+                                        sample_key: Some(key.clone()),
+                                        sample_key_hint: None,
+                                        sample_value: Some(value.clone()),
+                                        sample_value_hint: Some(
+                                            value_expr.span().text().to_string(),
+                                        ),
+                                        bindings: self.collect_visible_explanation_bindings(),
+                                    });
+                            }
+                            if failing_records.is_none() && !iteration_records.is_empty() {
+                                failing_records = Some(iteration_records.clone());
+                            }
+                        }
                     }
+                    #[cfg(feature = "explanations")]
+                    self.truncate_current_context_block_records(block_record_start);
                     *self.current_scope_mut()? = scope_saved.clone();
 
                     if should_break {
@@ -1080,6 +1481,69 @@ impl Interpreter {
                     format!("`some .. in collection` expects array/set/object. Got `{v}`").as_str()
                 ))
             }
+        }
+
+        #[cfg(feature = "explanations")]
+        {
+            let succeeded = count > 0;
+            let outcome = if succeeded {
+                crate::explanations::ExplanationOutcome::Success
+            } else {
+                crate::explanations::ExplanationOutcome::Failure
+            };
+            let representative_iteration = if succeeded {
+                passing_iteration.clone()
+            } else {
+                failing_iteration
+                    .clone()
+                    .or_else(|| passing_iteration.clone())
+            };
+            let mut records = if succeeded {
+                passing_records.unwrap_or_default()
+            } else {
+                failing_records.unwrap_or_default()
+            };
+            records.push(
+                self.make_loop_summary_record(
+                    span,
+                    span.text(),
+                    outcome,
+                    crate::explanations::RawConditionEvaluation {
+                        kind: crate::ConditionEvaluationKind::Quantifier,
+                        operator: Some(crate::ConditionOperator::ForEach),
+                        actual_value: Some(Value::Bool(succeeded)),
+                        actual_hint: None,
+                        expected_value: None,
+                        expected_hint: None,
+                        witness: Some(crate::explanations::RawConditionEvaluationWitness {
+                            iteration_count: Some(iteration_count),
+                            success_count: Some(u32::try_from(count).unwrap_or(u32::MAX)),
+                            yield_count: None,
+                            condition_texts,
+                            sample_key: representative_iteration
+                                .as_ref()
+                                .and_then(|w| w.sample_key.clone()),
+                            sample_key_hint: representative_iteration
+                                .as_ref()
+                                .and_then(|w| w.sample_key_hint.clone()),
+                            sample_value: representative_iteration
+                                .as_ref()
+                                .and_then(|w| w.sample_value.clone()),
+                            sample_value_hint: representative_iteration
+                                .as_ref()
+                                .and_then(|w| w.sample_value_hint.clone()),
+                            passing_iteration,
+                            failing_iteration,
+                        }),
+                    },
+                    representative_iteration
+                        .as_ref()
+                        .map(|w| w.bindings.clone())
+                        .unwrap_or_default(),
+                ),
+            );
+            self.truncate_current_context_block_records(block_record_start);
+            self.finalize_block_records(records);
         }
 
         Ok(count > 0)
@@ -1135,6 +1599,9 @@ impl Interpreter {
                     }
                 }
 
+                #[cfg(feature = "explanations")]
+                self.record_truthiness_condition_observation(expr, &value);
+
                 if let Value::Bool(bool) = value {
                     bool
                 } else {
@@ -1174,6 +1641,9 @@ impl Interpreter {
                             .push(Self::make_expression_result(span, &Value::Bool(true)));
                     }
                 }
+
+                #[cfg(feature = "explanations")]
+                self.record_truthiness_condition_observation(expr, &value);
 
                 // https://github.com/open-policy-agent/opa/issues/1622#issuecomment-520547385
                 matches!(value, Value::Bool(false) | Value::Undefined)
@@ -1224,7 +1694,7 @@ impl Interpreter {
                             .push(Self::make_expression_result(span, &Value::Bool(true)));
                     }
                 }
-                self.eval_every(span, key, value, domain, query)?
+                self.eval_every(span, stmt.sidx, key, value, domain, query)?
             }
         })
     }
@@ -1535,18 +2005,97 @@ impl Interpreter {
             // Create a new scope.
             self.scopes.push(Scope::default());
 
+            #[cfg(feature = "explanations")]
+            let block_record_start = self
+                .get_current_context()
+                .map(|ctx| ctx.block_records.len())
+                .unwrap_or_default();
+            #[cfg(feature = "explanations")]
+            let mut iteration_count = 0_u32;
+            #[cfg(feature = "explanations")]
+            let mut success_count = 0_u32;
+            #[cfg(feature = "explanations")]
+            let mut passing_iteration = None;
+            #[cfg(feature = "explanations")]
+            let mut failing_iteration = None;
+            #[cfg(feature = "explanations")]
+            let mut passing_records = None;
+            #[cfg(feature = "explanations")]
+            let mut failing_records = None;
+            #[cfg(feature = "explanations")]
+            let condition_texts = Self::loop_condition_texts_from_stmts(stmts);
+            #[cfg(feature = "explanations")]
+            let loop_summary_text = loop_info
+                .loop_expr
+                .as_ref()
+                .map(|expr| expr.span().text().to_string())
+                .unwrap_or_else(|| {
+                    Self::loop_collection_expr(loop_info)
+                        .span()
+                        .text()
+                        .to_string()
+                });
+
             let query_result = self.get_current_context()?.result.clone();
             let loop_target_expr = Self::loop_assignment_expr(loop_info);
             match loop_value {
                 Value::Array(items) => {
                     for (idx, v) in items.iter().enumerate() {
                         self.memory_check()?;
+                        #[cfg(feature = "explanations")]
+                        {
+                            iteration_count = iteration_count.saturating_add(1);
+                        }
                         self.set_loop_var_value(loop_target_expr, v.clone())?;
 
                         if self.execute_destructuring_plan(&index_plan, &Value::from(idx))?
                             == Value::from(true)
                         {
-                            result = self.eval_stmts_in_loop(stmts, loop_tail)? || result;
+                            let iteration_succeeded = self.eval_stmts_in_loop(stmts, loop_tail)?;
+                            #[cfg(feature = "explanations")]
+                            let iteration_records = self
+                                .get_current_context()
+                                .map(|ctx| ctx.latest_block_records.clone())
+                                .unwrap_or_default();
+                            result = iteration_succeeded || result;
+                            #[cfg(feature = "explanations")]
+                            {
+                                if iteration_succeeded {
+                                    success_count = success_count.saturating_add(1);
+                                    if passing_iteration.is_none() {
+                                        passing_iteration = Some(
+                                            crate::explanations::RawConditionIterationWitness {
+                                                sample_key: Some(Value::from(idx)),
+                                                sample_key_hint: None,
+                                                sample_value: Some(v.clone()),
+                                                sample_value_hint: Some(loop_summary_text.clone()),
+                                                bindings: self
+                                                    .collect_visible_explanation_bindings(),
+                                            },
+                                        );
+                                    }
+                                    if passing_records.is_none() && !iteration_records.is_empty() {
+                                        passing_records = Some(iteration_records.clone());
+                                    }
+                                } else {
+                                    if failing_iteration.is_none() {
+                                        failing_iteration = Some(
+                                            crate::explanations::RawConditionIterationWitness {
+                                                sample_key: Some(Value::from(idx)),
+                                                sample_key_hint: None,
+                                                sample_value: Some(v.clone()),
+                                                sample_value_hint: Some(loop_summary_text.clone()),
+                                                bindings: self
+                                                    .collect_visible_explanation_bindings(),
+                                            },
+                                        );
+                                    }
+                                    if failing_records.is_none() && !iteration_records.is_empty() {
+                                        failing_records = Some(iteration_records.clone());
+                                    }
+                                }
+                                self.truncate_current_context_block_records(block_record_start);
+                            }
                         }
 
                         Self::clear_scope(self.current_scope_mut()?);
@@ -1563,11 +2112,59 @@ impl Interpreter {
                 Value::Set(items) => {
                     for v in items.iter() {
                         self.memory_check()?;
+                        #[cfg(feature = "explanations")]
+                        {
+                            iteration_count = iteration_count.saturating_add(1);
+                        }
                         self.set_loop_var_value(loop_target_expr, v.clone())?;
 
                         // For sets, index is also the value.
                         if self.execute_destructuring_plan(&index_plan, v)? == Value::from(true) {
-                            result = self.eval_stmts_in_loop(stmts, loop_tail)? || result;
+                            let iteration_succeeded = self.eval_stmts_in_loop(stmts, loop_tail)?;
+                            #[cfg(feature = "explanations")]
+                            let iteration_records = self
+                                .get_current_context()
+                                .map(|ctx| ctx.latest_block_records.clone())
+                                .unwrap_or_default();
+                            result = iteration_succeeded || result;
+                            #[cfg(feature = "explanations")]
+                            {
+                                if iteration_succeeded {
+                                    success_count = success_count.saturating_add(1);
+                                    if passing_iteration.is_none() {
+                                        passing_iteration = Some(
+                                            crate::explanations::RawConditionIterationWitness {
+                                                sample_key: Some(v.clone()),
+                                                sample_key_hint: None,
+                                                sample_value: Some(v.clone()),
+                                                sample_value_hint: Some(loop_summary_text.clone()),
+                                                bindings: self
+                                                    .collect_visible_explanation_bindings(),
+                                            },
+                                        );
+                                    }
+                                    if passing_records.is_none() && !iteration_records.is_empty() {
+                                        passing_records = Some(iteration_records.clone());
+                                    }
+                                } else {
+                                    if failing_iteration.is_none() {
+                                        failing_iteration = Some(
+                                            crate::explanations::RawConditionIterationWitness {
+                                                sample_key: Some(v.clone()),
+                                                sample_key_hint: None,
+                                                sample_value: Some(v.clone()),
+                                                sample_value_hint: Some(loop_summary_text.clone()),
+                                                bindings: self
+                                                    .collect_visible_explanation_bindings(),
+                                            },
+                                        );
+                                    }
+                                    if failing_records.is_none() && !iteration_records.is_empty() {
+                                        failing_records = Some(iteration_records.clone());
+                                    }
+                                }
+                                self.truncate_current_context_block_records(block_record_start);
+                            }
                         }
 
                         Self::clear_scope(self.current_scope_mut()?);
@@ -1583,10 +2180,58 @@ impl Interpreter {
                 Value::Object(obj) => {
                     for (k, v) in obj.iter() {
                         self.memory_check()?;
+                        #[cfg(feature = "explanations")]
+                        {
+                            iteration_count = iteration_count.saturating_add(1);
+                        }
                         self.set_loop_var_value(loop_target_expr, v.clone())?;
                         // For objects, index is key.
                         if self.execute_destructuring_plan(&index_plan, k)? == Value::from(true) {
-                            result = self.eval_stmts_in_loop(stmts, loop_tail)? || result;
+                            let iteration_succeeded = self.eval_stmts_in_loop(stmts, loop_tail)?;
+                            #[cfg(feature = "explanations")]
+                            let iteration_records = self
+                                .get_current_context()
+                                .map(|ctx| ctx.latest_block_records.clone())
+                                .unwrap_or_default();
+                            result = iteration_succeeded || result;
+                            #[cfg(feature = "explanations")]
+                            {
+                                if iteration_succeeded {
+                                    success_count = success_count.saturating_add(1);
+                                    if passing_iteration.is_none() {
+                                        passing_iteration = Some(
+                                            crate::explanations::RawConditionIterationWitness {
+                                                sample_key: Some(k.clone()),
+                                                sample_key_hint: None,
+                                                sample_value: Some(v.clone()),
+                                                sample_value_hint: Some(loop_summary_text.clone()),
+                                                bindings: self
+                                                    .collect_visible_explanation_bindings(),
+                                            },
+                                        );
+                                    }
+                                    if passing_records.is_none() && !iteration_records.is_empty() {
+                                        passing_records = Some(iteration_records.clone());
+                                    }
+                                } else {
+                                    if failing_iteration.is_none() {
+                                        failing_iteration = Some(
+                                            crate::explanations::RawConditionIterationWitness {
+                                                sample_key: Some(k.clone()),
+                                                sample_key_hint: None,
+                                                sample_value: Some(v.clone()),
+                                                sample_value_hint: Some(loop_summary_text.clone()),
+                                                bindings: self
+                                                    .collect_visible_explanation_bindings(),
+                                            },
+                                        );
+                                    }
+                                    if failing_records.is_none() && !iteration_records.is_empty() {
+                                        failing_records = Some(iteration_records.clone());
+                                    }
+                                }
+                                self.truncate_current_context_block_records(block_record_start);
+                            }
                         }
 
                         Self::clear_scope(self.current_scope_mut()?);
@@ -1609,6 +2254,68 @@ impl Interpreter {
             }
 
             self.scopes.pop();
+
+            #[cfg(feature = "explanations")]
+            {
+                let outcome = if result {
+                    crate::explanations::ExplanationOutcome::Success
+                } else {
+                    crate::explanations::ExplanationOutcome::Failure
+                };
+                let representative_iteration = if result {
+                    passing_iteration.clone()
+                } else {
+                    failing_iteration
+                        .clone()
+                        .or_else(|| passing_iteration.clone())
+                };
+                let mut records = if result {
+                    passing_records.unwrap_or_default()
+                } else {
+                    failing_records.unwrap_or_default()
+                };
+                records.push(
+                    self.make_loop_summary_record(
+                        &Self::loop_span(loop_info),
+                        &loop_summary_text,
+                        outcome,
+                        crate::explanations::RawConditionEvaluation {
+                            kind: crate::ConditionEvaluationKind::Quantifier,
+                            operator: Some(crate::ConditionOperator::ForEach),
+                            actual_value: Some(Value::Bool(result)),
+                            actual_hint: None,
+                            expected_value: None,
+                            expected_hint: None,
+                            witness: Some(crate::explanations::RawConditionEvaluationWitness {
+                                iteration_count: Some(iteration_count),
+                                success_count: Some(success_count),
+                                yield_count: None,
+                                condition_texts,
+                                sample_key: representative_iteration
+                                    .as_ref()
+                                    .and_then(|w| w.sample_key.clone()),
+                                sample_key_hint: representative_iteration
+                                    .as_ref()
+                                    .and_then(|w| w.sample_key_hint.clone()),
+                                sample_value: representative_iteration
+                                    .as_ref()
+                                    .and_then(|w| w.sample_value.clone()),
+                                sample_value_hint: representative_iteration
+                                    .as_ref()
+                                    .and_then(|w| w.sample_value_hint.clone()),
+                                passing_iteration,
+                                failing_iteration,
+                            }),
+                        },
+                        representative_iteration
+                            .as_ref()
+                            .map(|w| w.bindings.clone())
+                            .unwrap_or_default(),
+                    ),
+                );
+                self.truncate_current_context_block_records(block_record_start);
+                self.finalize_block_records(records);
+            }
 
             // Return true if at least on iteration returned true
             Ok(result)
@@ -1802,6 +2509,14 @@ impl Interpreter {
                 };
 
                 let comps_defined = comps.iter().all(|v| v != &Value::Undefined);
+                #[cfg(feature = "explanations")]
+                let explanation_key = if is_set {
+                    Some(output.clone())
+                } else if key_expr.is_some() {
+                    comps.last().cloned()
+                } else {
+                    Some(output.clone())
+                };
                 let ctx_mut = self.get_current_context_mut()?;
 
                 if is_const_rule {
@@ -1825,6 +2540,10 @@ impl Interpreter {
                         .or_insert(Value::new_set());
                     if output != Value::Undefined {
                         set.as_set_mut()?.insert(output);
+                        #[cfg(feature = "explanations")]
+                        if let Some(explanation_key) = explanation_key {
+                            self.record_current_rule_explanation(explanation_key);
+                        }
                         return Ok(true);
                     }
                     return Ok(false);
@@ -1845,6 +2564,11 @@ impl Interpreter {
                     _ => {
                         // Rule produced same value.
                     }
+                }
+
+                #[cfg(feature = "explanations")]
+                if let Some(explanation_key) = explanation_key {
+                    self.record_current_rule_explanation(explanation_key);
                 }
 
                 return Ok(true);
@@ -2043,6 +2767,10 @@ impl Interpreter {
 
     fn eval_stmts(&mut self, stmts: &[&LiteralStmt]) -> Result<bool> {
         let mut eval_success = true;
+        #[cfg(feature = "explanations")]
+        let mut terminal_record = None;
+        #[cfg(feature = "explanations")]
+        let mut contributing_records = Vec::new();
 
         for (idx, stmt) in stmts.iter().enumerate() {
             self.memory_check()?;
@@ -2081,14 +2809,71 @@ impl Interpreter {
                 .and_then(|n| stmts.get(n..))
                 .unwrap_or(&[]);
 
+            #[cfg(feature = "explanations")]
+            self.last_rule_block_records.clear();
+
             eval_success = self.eval_stmt(stmt, tail)?;
 
+            #[cfg(feature = "explanations")]
+            {
+                if matches!(&stmt.literal, Literal::SomeIn { .. }) {
+                    let has_loop_summary = self
+                        .get_current_context()
+                        .ok()
+                        .and_then(|ctx| ctx.latest_block_records.last())
+                        .and_then(|record| record.evaluation.as_ref())
+                        .is_some_and(|evaluation| {
+                            evaluation.kind == crate::ConditionEvaluationKind::Quantifier
+                                && evaluation.operator == Some(crate::ConditionOperator::ForEach)
+                        });
+
+                    if has_loop_summary {
+                        return Ok(eval_success);
+                    }
+                }
+
+                let outcome = if eval_success {
+                    crate::explanations::ExplanationOutcome::Success
+                } else {
+                    crate::explanations::ExplanationOutcome::Failure
+                };
+                let next_records = self.make_stmt_explanation_records(stmt, outcome);
+                let next_record = next_records.last().cloned();
+                if self.capture_all_contributing_conditions() {
+                    if !eval_success {
+                        contributing_records.extend(next_records.clone());
+                        terminal_record = next_record;
+                    } else {
+                        if Self::is_preferred_causal_stmt(stmt) {
+                            contributing_records.extend(next_records.clone());
+                        }
+
+                        if Self::is_preferred_causal_stmt(stmt) || terminal_record.is_none() {
+                            terminal_record = next_record;
+                        }
+                    }
+                } else if !eval_success
+                    || Self::is_preferred_causal_stmt(stmt)
+                    || terminal_record.is_none()
+                {
+                    terminal_record = next_record;
+                }
+            }
+
             if matches!(&stmt.literal, Literal::SomeIn { .. }) {
+                #[cfg(feature = "explanations")]
+                self.finalize_block_records(
+                    self.collect_block_records(&mut contributing_records, terminal_record.take()),
+                );
                 return Ok(eval_success);
             }
         }
 
         if eval_success {
+            #[cfg(feature = "explanations")]
+            self.finalize_block_records(
+                self.collect_block_records(&mut contributing_records, terminal_record.take()),
+            );
             eval_success = self.eval_output_expr()?;
         } else {
             // If a query snippet is being run, gather results.
@@ -2119,6 +2904,11 @@ impl Interpreter {
                 }
             }
         }
+
+        #[cfg(feature = "explanations")]
+        self.finalize_block_records(
+            self.collect_block_records(&mut contributing_records, terminal_record),
+        );
 
         Ok(eval_success)
     }
@@ -2263,36 +3053,39 @@ impl Interpreter {
 
     fn eval_membership(
         &mut self,
+        expr: &ExprRef,
         key: &Option<ExprRef>,
         value: &ExprRef,
         collection: &ExprRef,
     ) -> Result<Value> {
+        #[cfg(not(feature = "explanations"))]
+        let _ = expr;
         self.check_execution_time()?;
-        let value = self.eval_expr(value)?;
-        let collection = self.eval_expr(collection)?;
+        let member_value = self.eval_expr(value)?;
+        let collection_value = self.eval_expr(collection)?;
+        let evaluated_key = match key {
+            Some(key_expr) => Some(self.eval_expr(key_expr)?),
+            None => None,
+        };
 
-        let result = match &collection {
-            Value::Array(array) => {
-                if let Some(key) = key {
-                    let key = self.eval_expr(key)?;
-                    collection[&key] == value
-                } else {
-                    array.contains(&value)
-                }
-            }
-            Value::Object(object) => {
-                if let Some(key) = key {
-                    let key = self.eval_expr(key)?;
-                    collection[&key] == value
-                } else {
-                    object.values().any(|item| *item == value)
-                }
-            }
+        let result = match &collection_value {
+            Value::Array(array) => evaluated_key.as_ref().map_or_else(
+                || array.contains(&member_value),
+                |evaluated_member_key| {
+                    collection_value[evaluated_member_key.clone()] == member_value
+                },
+            ),
+            Value::Object(object) => evaluated_key.as_ref().map_or_else(
+                || object.values().any(|item| *item == member_value),
+                |evaluated_member_key| {
+                    collection_value[evaluated_member_key.clone()] == member_value
+                },
+            ),
             Value::Set(set) => {
                 if key.is_some() {
                     false
                 } else {
-                    set.contains(&value)
+                    set.contains(&member_value)
                 }
             }
             _ => {
@@ -2301,10 +3094,44 @@ impl Interpreter {
             }
         };
 
+        #[cfg(feature = "explanations")]
+        self.record_condition_observation(
+            value,
+            collection,
+            crate::explanations::RawConditionEvaluation {
+                kind: crate::ConditionEvaluationKind::Membership,
+                operator: Some(if key.is_some() {
+                    crate::ConditionOperator::Equals
+                } else {
+                    crate::ConditionOperator::In
+                }),
+                actual_value: Some(evaluated_key.as_ref().map_or_else(
+                    || member_value.clone(),
+                    |evaluated_member_key| collection_value[evaluated_member_key.clone()].clone(),
+                )),
+                actual_hint: Self::expr_redaction_hint(value),
+                expected_value: Some(if key.is_some() {
+                    member_value.clone()
+                } else {
+                    collection_value.clone()
+                }),
+                expected_hint: Self::expr_redaction_hint(collection),
+                witness: None,
+            },
+            expr.eidx(),
+        );
+
         Ok(Value::Bool(result))
     }
 
-    fn eval_array_compr(&mut self, term: &ExprRef, query: &Ref<Query>) -> Result<Value> {
+    fn eval_array_compr(
+        &mut self,
+        expr: &ExprRef,
+        term: &ExprRef,
+        query: &Ref<Query>,
+    ) -> Result<Value> {
+        #[cfg(not(feature = "explanations"))]
+        let _ = expr;
         self.check_execution_time()?;
         // Push new context
         self.contexts.push(Context {
@@ -2318,12 +3145,23 @@ impl Interpreter {
         self.eval_query(query)?;
 
         match self.contexts.pop() {
-            Some(ctx) => Ok(ctx.value),
+            Some(ctx) => {
+                #[cfg(feature = "explanations")]
+                self.record_comprehension_condition_observation(expr, &ctx.value);
+                Ok(ctx.value)
+            }
             None => bail!("internal error: context already popped"),
         }
     }
 
-    fn eval_set_compr(&mut self, term: &ExprRef, query: &Ref<Query>) -> Result<Value> {
+    fn eval_set_compr(
+        &mut self,
+        expr: &ExprRef,
+        term: &ExprRef,
+        query: &Ref<Query>,
+    ) -> Result<Value> {
+        #[cfg(not(feature = "explanations"))]
+        let _ = expr;
         self.check_execution_time()?;
         // Push new context
         self.contexts.push(Context {
@@ -2336,17 +3174,24 @@ impl Interpreter {
         self.eval_query(query)?;
 
         match self.contexts.pop() {
-            Some(ctx) => Ok(ctx.value),
+            Some(ctx) => {
+                #[cfg(feature = "explanations")]
+                self.record_comprehension_condition_observation(expr, &ctx.value);
+                Ok(ctx.value)
+            }
             None => bail!("internal error: context already popped"),
         }
     }
 
     fn eval_object_compr(
         &mut self,
+        expr: &ExprRef,
         key: &ExprRef,
         value: &ExprRef,
         query: &Ref<Query>,
     ) -> Result<Value> {
+        #[cfg(not(feature = "explanations"))]
+        let _ = expr;
         self.check_execution_time()?;
         // Push new context
         self.contexts.push(Context {
@@ -2360,7 +3205,11 @@ impl Interpreter {
         self.eval_query(query)?;
 
         match self.contexts.pop() {
-            Some(ctx) => Ok(ctx.value),
+            Some(ctx) => {
+                #[cfg(feature = "explanations")]
+                self.record_comprehension_condition_observation(expr, &ctx.value);
+                Ok(ctx.value)
+            }
             None => bail!("internal error: context already popped"),
         }
     }
@@ -2380,11 +3229,14 @@ impl Interpreter {
     fn eval_builtin_call(
         &mut self,
         span: &Span,
+        expr: &ExprRef,
         name: &str,
         builtin: builtins::BuiltinFcn,
         params: &[ExprRef],
         args: Vec<Value>,
     ) -> Result<Value> {
+        #[cfg(not(feature = "explanations"))]
+        let _ = expr;
         self.check_execution_time()?;
         // If any argument is undefined, then the call is undefined.
         if args.iter().any(|a| a == &Value::Undefined) {
@@ -2419,6 +3271,9 @@ impl Interpreter {
                 return Ok(Value::Bool(true));
             }
         }
+
+        #[cfg(feature = "explanations")]
+        self.record_builtin_condition_observation(expr, name, params, &args, &v);
 
         if let Some(cached_key) = cache {
             self.builtins_cache.insert((cached_key, args), v.clone());
@@ -2592,6 +3447,7 @@ impl Interpreter {
                 else if let Some(builtin) = Self::lookup_builtin(span, &selected_fcn_path)? {
                     let r = self.eval_builtin_call(
                         span,
+                        expr,
                         &selected_fcn_path.clone(),
                         *builtin,
                         params,
@@ -3188,13 +4044,13 @@ impl Interpreter {
                 self.execute_assignment_plan(&plan)
             }
             Expr::BinExpr { op, lhs, rhs, .. } => self.eval_bin_expr(op, lhs, rhs),
-            Expr::BoolExpr { op, lhs, rhs, .. } => self.eval_bool_expr(op, lhs, rhs),
+            Expr::BoolExpr { op, lhs, rhs, .. } => self.eval_bool_expr(expr, op, lhs, rhs),
             Expr::Membership {
                 key,
                 value,
                 collection,
                 ..
-            } => self.eval_membership(key, value, collection),
+            } => self.eval_membership(expr, key, value, collection),
 
             #[cfg(feature = "rego-extensions")]
             Expr::OrExpr { lhs, rhs, .. } => {
@@ -3211,11 +4067,11 @@ impl Interpreter {
             Expr::Set { items, .. } => self.eval_set(items),
 
             // Comprehensions
-            Expr::ArrayCompr { term, query, .. } => self.eval_array_compr(term, query),
+            Expr::ArrayCompr { term, query, .. } => self.eval_array_compr(expr, term, query),
             Expr::ObjectCompr {
                 key, value, query, ..
-            } => self.eval_object_compr(key, value, query),
-            Expr::SetCompr { term, query, .. } => self.eval_set_compr(term, query),
+            } => self.eval_object_compr(expr, key, value, query),
+            Expr::SetCompr { term, query, .. } => self.eval_set_compr(expr, term, query),
             Expr::UnaryExpr {
                 span, expr: uexpr, ..
             } => match uexpr.as_ref() {
@@ -3332,6 +4188,11 @@ impl Interpreter {
             _ => bail!("internal error: rule's context already popped"),
         };
 
+        #[cfg(feature = "explanations")]
+        {
+            self.last_rule_block_records = popped_ctx.block_records.clone();
+        }
+
         let result = result?;
 
         if self.scopes.len() != n_scopes {
@@ -3378,6 +4239,500 @@ impl Interpreter {
             obj = obj[&Value::String(p.to_string().into())].clone();
         }
         obj
+    }
+
+    #[cfg(feature = "explanations")]
+    const fn should_record_stmt_condition(stmt: &LiteralStmt) -> bool {
+        !matches!(stmt.literal, Literal::SomeVars { .. })
+    }
+
+    #[cfg(feature = "explanations")]
+    fn is_preferred_causal_stmt(stmt: &LiteralStmt) -> bool {
+        match &stmt.literal {
+            Literal::NotExpr { .. } | Literal::Every { .. } => true,
+            Literal::SomeVars { .. } | Literal::SomeIn { .. } => false,
+            Literal::Expr { expr, .. } => Self::is_preferred_causal_expr(expr.as_ref()),
+        }
+    }
+
+    #[cfg(feature = "explanations")]
+    const fn is_preferred_causal_expr(expr: &Expr) -> bool {
+        match expr {
+            Expr::AssignExpr { op, .. } => matches!(op, AssignOp::Eq),
+            Expr::BoolExpr { .. }
+            | Expr::Membership { .. }
+            | Expr::Call { .. }
+            | Expr::RefDot { .. }
+            | Expr::RefBrack { .. }
+            | Expr::Var { .. }
+            | Expr::UnaryExpr { .. } => true,
+            Expr::ArithExpr { .. }
+            | Expr::BinExpr { .. }
+            | Expr::Array { .. }
+            | Expr::Set { .. }
+            | Expr::Object { .. }
+            | Expr::ArrayCompr { .. }
+            | Expr::SetCompr { .. }
+            | Expr::ObjectCompr { .. }
+            | Expr::String { .. }
+            | Expr::RawString { .. }
+            | Expr::Number { .. }
+            | Expr::Bool { .. }
+            | Expr::Null { .. } => false,
+            #[cfg(feature = "rego-extensions")]
+            Expr::OrExpr { .. } => true,
+        }
+    }
+
+    #[cfg(feature = "explanations")]
+    fn expr_redaction_hint(expr: &ExprRef) -> Option<String> {
+        match *expr.as_ref() {
+            Expr::Var {
+                value: Value::String(ref name),
+                ..
+            } => Some(name.as_ref().to_string()),
+            Expr::RefDot { ref field, .. } => Some(field.0.text().to_string()),
+            Expr::RefBrack { ref index, .. } => match *index.as_ref() {
+                Expr::String {
+                    value: Value::String(ref name),
+                    ..
+                } => Some(name.as_ref().to_string()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "explanations")]
+    fn loop_condition_texts(query: &Query) -> Vec<String> {
+        let stmts = query.stmts.iter().collect::<Vec<_>>();
+        Self::loop_condition_texts_from_stmts(&stmts)
+    }
+
+    #[cfg(feature = "explanations")]
+    fn loop_condition_texts_from_stmts(stmts: &[&LiteralStmt]) -> Vec<String> {
+        let mut texts = Vec::new();
+
+        for stmt in stmts {
+            if !Self::should_record_loop_condition_text(stmt) {
+                continue;
+            }
+
+            let text = stmt.span.text().to_string();
+            if !texts.iter().any(|existing| existing == &text) {
+                texts.push(text);
+            }
+        }
+
+        texts
+    }
+
+    #[cfg(feature = "explanations")]
+    fn should_record_loop_condition_text(stmt: &LiteralStmt) -> bool {
+        match &stmt.literal {
+            Literal::Expr { expr, .. } => !matches!(expr.as_ref(), Expr::AssignExpr { .. }),
+            Literal::NotExpr { .. } | Literal::Every { .. } => true,
+            _ => false,
+        }
+    }
+
+    #[cfg(feature = "explanations")]
+    fn truncate_current_context_block_records(&mut self, len: usize) {
+        if let Ok(ctx) = self.get_current_context_mut() {
+            ctx.block_records.truncate(len);
+            ctx.latest_block_records.clear();
+        }
+    }
+
+    #[cfg(feature = "explanations")]
+    fn make_loop_summary_record(
+        &self,
+        span: &Span,
+        text: &str,
+        outcome: crate::explanations::ExplanationOutcome,
+        evaluation: crate::explanations::RawConditionEvaluation,
+        bindings: Vec<crate::ExplanationBinding>,
+    ) -> crate::ExplanationRecord {
+        crate::ExplanationRecord {
+            outcome,
+            location: crate::SourceLocation {
+                file: span.source.file().clone().into(),
+                row: span.line,
+                col: span.col,
+            },
+            text: text.to_string().into(),
+            evaluation: Some(evaluation.sanitize(&self.explanation_settings)),
+            bindings,
+        }
+    }
+
+    #[cfg(feature = "explanations")]
+    fn record_condition_observation(
+        &mut self,
+        _actual_expr: &ExprRef,
+        _expected_expr: &ExprRef,
+        observation: crate::explanations::RawConditionEvaluation,
+        expr_id: u32,
+    ) {
+        if !self.explanation_settings.enabled {
+            return;
+        }
+        self.observed_conditions.insert(expr_id, observation);
+    }
+
+    #[cfg(feature = "explanations")]
+    fn record_stmt_condition_observation(
+        &mut self,
+        stmt_id: u32,
+        observation: crate::explanations::RawConditionEvaluation,
+    ) {
+        if !self.explanation_settings.enabled {
+            return;
+        }
+        self.observed_stmt_conditions.insert(stmt_id, observation);
+    }
+
+    #[cfg(feature = "explanations")]
+    fn record_truthiness_condition_observation(&mut self, expr: &ExprRef, value: &Value) {
+        if !self.explanation_settings.enabled || self.observed_conditions.contains_key(&expr.eidx())
+        {
+            return;
+        }
+
+        self.observed_conditions.insert(
+            expr.eidx(),
+            crate::explanations::RawConditionEvaluation {
+                kind: crate::ConditionEvaluationKind::Truthiness,
+                operator: Some(match value {
+                    Value::Bool(false) | Value::Null | Value::Undefined => {
+                        crate::ConditionOperator::Falsy
+                    }
+                    _ => crate::ConditionOperator::Truthy,
+                }),
+                actual_value: Some(value.clone()),
+                actual_hint: Self::expr_redaction_hint(expr),
+                expected_value: None,
+                expected_hint: None,
+                witness: None,
+            },
+        );
+    }
+
+    #[cfg(feature = "explanations")]
+    fn record_comprehension_condition_observation(&mut self, expr: &ExprRef, value: &Value) {
+        if !self.explanation_settings.enabled {
+            return;
+        }
+
+        let (sample_key, sample_value, yield_count) = match value {
+            Value::Array(items) => (None, items.first().cloned(), Some(items.len())),
+            Value::Set(items) => (None, items.iter().next().cloned(), Some(items.len())),
+            Value::Object(fields) => (
+                fields.iter().next().map(|(key, _)| key.clone()),
+                fields
+                    .iter()
+                    .next()
+                    .map(|(_, entry_value)| entry_value.clone()),
+                Some(fields.len()),
+            ),
+            _ => (None, None, None),
+        };
+
+        self.observed_conditions.insert(
+            expr.eidx(),
+            crate::explanations::RawConditionEvaluation {
+                kind: crate::ConditionEvaluationKind::Comprehension,
+                operator: None,
+                actual_value: Some(value.clone()),
+                actual_hint: None,
+                expected_value: None,
+                expected_hint: None,
+                witness: Some(crate::explanations::RawConditionEvaluationWitness {
+                    iteration_count: None,
+                    success_count: None,
+                    yield_count: yield_count.map(|count| u32::try_from(count).unwrap_or(u32::MAX)),
+                    condition_texts: Vec::new(),
+                    sample_key,
+                    sample_key_hint: None,
+                    sample_value,
+                    sample_value_hint: None,
+                    passing_iteration: None,
+                    failing_iteration: None,
+                }),
+            },
+        );
+    }
+
+    #[cfg(feature = "explanations")]
+    fn record_builtin_condition_observation(
+        &mut self,
+        expr: &ExprRef,
+        name: &str,
+        params: &[ExprRef],
+        args: &[Value],
+        result: &Value,
+    ) {
+        if !self.explanation_settings.enabled
+            || !matches!(result, Value::Bool(_) | Value::Undefined)
+        {
+            return;
+        }
+
+        let mapping = match name {
+            "contains" if args.len() >= 2 => {
+                Some((crate::ConditionOperator::Contains, 0_usize, Some(1_usize)))
+            }
+            "startswith" if args.len() >= 2 => {
+                Some((crate::ConditionOperator::StartsWith, 0_usize, Some(1_usize)))
+            }
+            "endswith" if args.len() >= 2 => {
+                Some((crate::ConditionOperator::EndsWith, 0_usize, Some(1_usize)))
+            }
+            "regex.match" if args.len() >= 2 => {
+                Some((crate::ConditionOperator::RegexMatch, 1_usize, Some(0_usize)))
+            }
+            "glob.match" if args.len() >= 3 => {
+                Some((crate::ConditionOperator::GlobMatch, 2_usize, Some(0_usize)))
+            }
+            "is_array" if !args.is_empty() => {
+                Some((crate::ConditionOperator::IsArray, 0_usize, None))
+            }
+            "is_boolean" if !args.is_empty() => {
+                Some((crate::ConditionOperator::IsBoolean, 0_usize, None))
+            }
+            "is_null" if !args.is_empty() => {
+                Some((crate::ConditionOperator::IsNull, 0_usize, None))
+            }
+            "is_number" if !args.is_empty() => {
+                Some((crate::ConditionOperator::IsNumber, 0_usize, None))
+            }
+            "is_object" if !args.is_empty() => {
+                Some((crate::ConditionOperator::IsObject, 0_usize, None))
+            }
+            "is_set" if !args.is_empty() => Some((crate::ConditionOperator::IsSet, 0_usize, None)),
+            "is_string" if !args.is_empty() => {
+                Some((crate::ConditionOperator::IsString, 0_usize, None))
+            }
+            _ => None,
+        };
+
+        let Some((operator, actual_index, expected_index)) = mapping else {
+            return;
+        };
+
+        self.observed_conditions.insert(
+            expr.eidx(),
+            crate::explanations::RawConditionEvaluation {
+                kind: crate::ConditionEvaluationKind::Builtin,
+                operator: Some(operator),
+                actual_value: args.get(actual_index).cloned(),
+                actual_hint: params.get(actual_index).and_then(Self::expr_redaction_hint),
+                expected_value: expected_index.and_then(|index| args.get(index).cloned()),
+                expected_hint: expected_index.and_then(|index| {
+                    params
+                        .get(actual_index)
+                        .and_then(Self::expr_redaction_hint)
+                        .or_else(|| params.get(index).and_then(Self::expr_redaction_hint))
+                }),
+                witness: None,
+            },
+        );
+    }
+
+    #[cfg(feature = "explanations")]
+    fn stmt_condition_evaluation(&self, stmt: &LiteralStmt) -> Option<crate::ConditionEvaluation> {
+        let expr = match &stmt.literal {
+            Literal::Expr { expr, .. } | Literal::NotExpr { expr, .. } => expr,
+            Literal::Every { .. } => {
+                return self
+                    .observed_stmt_conditions
+                    .get(&stmt.sidx)
+                    .cloned()
+                    .map(|evaluation| evaluation.sanitize(&self.explanation_settings));
+            }
+            _ => return None,
+        };
+
+        self.observed_conditions
+            .get(&expr.eidx())
+            .cloned()
+            .map(|evaluation| evaluation.sanitize(&self.explanation_settings))
+    }
+
+    #[cfg(feature = "explanations")]
+    fn make_stmt_explanation_records(
+        &self,
+        stmt: &LiteralStmt,
+        outcome: crate::explanations::ExplanationOutcome,
+    ) -> Vec<crate::ExplanationRecord> {
+        if !Self::should_record_stmt_condition(stmt) {
+            return Vec::new();
+        }
+
+        if let Some(records) = self.make_nested_rule_explanation_records(stmt, outcome) {
+            return records;
+        }
+
+        let location = crate::SourceLocation {
+            file: stmt.span.source.file().clone().into(),
+            row: stmt.span.line,
+            col: stmt.span.col,
+        };
+
+        vec![crate::ExplanationRecord {
+            outcome,
+            location,
+            text: stmt.span.text().to_string().into(),
+            evaluation: self.stmt_condition_evaluation(stmt),
+            bindings: self.collect_visible_explanation_bindings(),
+        }]
+    }
+
+    #[cfg(feature = "explanations")]
+    fn make_nested_rule_explanation_records(
+        &self,
+        stmt: &LiteralStmt,
+        outcome: crate::explanations::ExplanationOutcome,
+    ) -> Option<Vec<crate::ExplanationRecord>> {
+        let (expr, expected_nested_outcome) = match &stmt.literal {
+            Literal::Expr { expr, .. } => (expr.as_ref(), outcome),
+            Literal::NotExpr { expr, .. } => (
+                expr.as_ref(),
+                match outcome {
+                    crate::explanations::ExplanationOutcome::Success => {
+                        crate::explanations::ExplanationOutcome::Failure
+                    }
+                    crate::explanations::ExplanationOutcome::Failure => {
+                        crate::explanations::ExplanationOutcome::Success
+                    }
+                },
+            ),
+            _ => return None,
+        };
+
+        let rule_path = self.resolve_explanation_rule_path(expr)?;
+
+        if !self.compiled_policy.rule_paths.contains(&rule_path) {
+            return None;
+        }
+
+        let nested_record = self.last_rule_block_records.last()?.clone();
+        if nested_record.outcome != expected_nested_outcome {
+            return None;
+        }
+
+        if self.capture_all_contributing_conditions() {
+            Some(self.last_rule_block_records.clone())
+        } else {
+            Some(vec![nested_record])
+        }
+    }
+
+    #[cfg(feature = "explanations")]
+    fn resolve_explanation_rule_path(&self, expr: &Expr) -> Option<String> {
+        Self::get_path_string(expr, Some(&self.current_module_path))
+            .ok()
+            .filter(|path| self.compiled_policy.rule_paths.contains(path))
+            .or_else(|| {
+                Self::get_path_string(expr, None)
+                    .ok()
+                    .filter(|path| self.compiled_policy.rule_paths.contains(path))
+            })
+    }
+
+    #[cfg(feature = "explanations")]
+    fn collect_visible_explanation_bindings(&self) -> Vec<crate::ExplanationBinding> {
+        let mut visible_bindings = BTreeMap::new();
+
+        for scope in &self.scopes {
+            for (name, value) in scope {
+                if name.text() != "_" && value != &Value::Undefined {
+                    visible_bindings.insert(name.text().to_string(), value.clone());
+                }
+            }
+        }
+
+        visible_bindings
+            .into_iter()
+            .map(|(name, value)| {
+                crate::explanations::sanitize_explanation_binding(
+                    &name,
+                    &value,
+                    &self.explanation_settings,
+                )
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "explanations")]
+    const fn capture_all_contributing_conditions(&self) -> bool {
+        matches!(
+            self.explanation_settings.condition_mode,
+            crate::ExplanationConditionMode::AllContributing
+        )
+    }
+
+    #[cfg(feature = "explanations")]
+    fn collect_block_records(
+        &self,
+        contributing_records: &mut Vec<crate::ExplanationRecord>,
+        terminal_record: Option<crate::ExplanationRecord>,
+    ) -> Vec<crate::ExplanationRecord> {
+        if self.capture_all_contributing_conditions() {
+            if contributing_records.is_empty() {
+                if let Some(record) = terminal_record {
+                    contributing_records.push(record);
+                }
+            }
+
+            core::mem::take(contributing_records)
+        } else {
+            terminal_record.into_iter().collect()
+        }
+    }
+
+    #[cfg(feature = "explanations")]
+    fn finalize_block_records(&mut self, records: Vec<crate::ExplanationRecord>) {
+        if records.is_empty() {
+            return;
+        }
+
+        if let Ok(ctx) = self.get_current_context_mut() {
+            ctx.latest_block_records = records.clone();
+            ctx.block_records.extend(records);
+        }
+    }
+
+    #[cfg(feature = "explanations")]
+    fn record_current_rule_explanation(&mut self, explanation_key: Value) {
+        if self.explanations.is_none() {
+            return;
+        }
+
+        let block_records = match self.get_current_context() {
+            Ok(ctx) => ctx.latest_block_records.clone(),
+            Err(_) => return,
+        };
+
+        if let (Some(explanations), false) = (&mut self.explanations, block_records.is_empty()) {
+            explanations
+                .entry(explanation_key)
+                .or_default()
+                .extend(block_records);
+        }
+    }
+
+    #[cfg(feature = "explanations")]
+    fn record_final_rule_result_explanation(&mut self, value: &Value) {
+        if self.explanations.is_none() || self.last_rule_block_records.is_empty() {
+            return;
+        }
+
+        if let Some(explanations) = &mut self.explanations {
+            explanations
+                .entry(value.clone())
+                .or_insert_with(|| self.last_rule_block_records.clone());
+        }
     }
 
     #[inline]
@@ -4398,6 +5753,10 @@ impl Interpreter {
                     target_info.effect_schema.validate(&value)?;
                 }
             }
+        }
+        #[cfg(feature = "explanations")]
+        if matches!(value, Value::Bool(_)) {
+            self.record_final_rule_result_explanation(&value);
         }
         Ok(value)
     }

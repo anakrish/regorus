@@ -100,6 +100,8 @@ impl RegoVM {
             comprehension_end: params.comprehension_end,
             iteration_state,
             resume_pc,
+            #[cfg(feature = "explanations")]
+            witness: Default::default(),
         };
 
         if auto_iterate {
@@ -189,6 +191,8 @@ impl RegoVM {
             comprehension_end: params.comprehension_end,
             iteration_state,
             resume_pc,
+            #[cfg(feature = "explanations")]
+            witness: Default::default(),
         };
 
         let next_pc = if auto_iterate {
@@ -270,9 +274,9 @@ impl RegoVM {
                 Value::Array(crate::Rc::new(new_arr))
             }
             (ComprehensionMode::Object, Value::Object(obj)) => {
-                if let Some(key) = key_value {
+                if let Some(ref key) = key_value {
                     let mut new_obj = obj.as_ref().clone();
-                    new_obj.insert(key, value_to_add);
+                    new_obj.insert(key.clone(), value_to_add);
                     Value::Object(crate::Rc::new(new_obj))
                 } else {
                     self.comprehension_stack.push(comprehension_context);
@@ -292,6 +296,17 @@ impl RegoVM {
         };
 
         self.set_register(result_reg, updated_result)?;
+
+        #[cfg(feature = "explanations")]
+        {
+            comprehension_context.witness.yield_count =
+                comprehension_context.witness.yield_count.saturating_add(1);
+            if comprehension_context.witness.sample_value.is_none() {
+                comprehension_context.witness.sample_key = key_value.clone();
+                comprehension_context.witness.sample_value =
+                    Some(self.get_register(value_reg)?.clone());
+            }
+        }
 
         if let Some(iter_state) = comprehension_context.iteration_state.as_mut() {
             match *iter_state {
@@ -420,9 +435,9 @@ impl RegoVM {
                 Value::Array(crate::Rc::new(new_arr))
             }
             (ComprehensionMode::Object, Value::Object(obj)) => {
-                if let Some(key) = key_value {
+                if let Some(ref key) = key_value {
                     let mut new_obj = obj.as_ref().clone();
-                    new_obj.insert(key, value_to_add);
+                    new_obj.insert(key.clone(), value_to_add);
                     Value::Object(crate::Rc::new(new_obj))
                 } else {
                     return Err(VmError::InvalidIteration {
@@ -490,6 +505,23 @@ impl RegoVM {
         };
 
         self.set_register(result_reg_idx, updated_result)?;
+
+        #[cfg(feature = "explanations")]
+        {
+            let sample_value = self.get_register(value_reg_idx)?.clone();
+            if let Some(frame) = self.execution_stack.get_mut(comprehension_index) {
+                if let FrameKind::Comprehension {
+                    ref mut context, ..
+                } = frame.kind
+                {
+                    context.witness.yield_count = context.witness.yield_count.saturating_add(1);
+                    if context.witness.sample_value.is_none() {
+                        context.witness.sample_key = key_value.clone();
+                        context.witness.sample_value = Some(sample_value);
+                    }
+                }
+            }
+        }
 
         if let Some(state) = iteration_state_snapshot.as_ref() {
             let has_next = self.setup_next_iteration(state, key_reg_idx, value_reg_idx)?;
@@ -617,7 +649,27 @@ impl RegoVM {
                     pc: self.pc,
                 })
             },
-            |_context| Ok(()),
+            |context| {
+                #[cfg(not(feature = "explanations"))]
+                let _ = &context;
+                #[cfg(feature = "explanations")]
+                self.comprehension_witnesses.insert(
+                    context.result_reg,
+                    crate::explanations::RawConditionEvaluationWitness {
+                        iteration_count: None,
+                        success_count: None,
+                        yield_count: Some(context.witness.yield_count),
+                        condition_texts: Vec::new(),
+                        sample_key: context.witness.sample_key,
+                        sample_key_hint: None,
+                        sample_value: context.witness.sample_value,
+                        sample_value_hint: None,
+                        passing_iteration: None,
+                        failing_iteration: None,
+                    },
+                );
+                Ok(())
+            },
         )
     }
 
@@ -649,6 +701,22 @@ impl RegoVM {
                     return_pc: _,
                     context,
                 } => {
+                    #[cfg(feature = "explanations")]
+                    self.comprehension_witnesses.insert(
+                        context.result_reg,
+                        crate::explanations::RawConditionEvaluationWitness {
+                            iteration_count: None,
+                            success_count: None,
+                            yield_count: Some(context.witness.yield_count),
+                            condition_texts: Vec::new(),
+                            sample_key: context.witness.sample_key.clone(),
+                            sample_key_hint: None,
+                            sample_value: context.witness.sample_value.clone(),
+                            sample_value_hint: None,
+                            passing_iteration: None,
+                            failing_iteration: None,
+                        },
+                    );
                     let raw_target = context.resume_pc;
                     let resume_pc = if raw_target <= self.pc {
                         self.pc.saturating_add(1)

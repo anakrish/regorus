@@ -11,9 +11,43 @@ use crate::ast::{self, LiteralStmt, Query};
 use crate::rvm::program::RuleType;
 use crate::rvm::Instruction;
 use alloc::format;
+#[cfg(feature = "explanations")]
+use alloc::string::{String, ToString as _};
 use alloc::vec::Vec;
 
 impl<'a> Compiler<'a> {
+    #[cfg(feature = "explanations")]
+    pub(super) fn collect_loop_condition_texts_from_stmts(stmts: &[&LiteralStmt]) -> Vec<String> {
+        let mut texts = Vec::new();
+
+        for stmt in stmts {
+            let should_include = match &stmt.literal {
+                ast::Literal::Expr { expr, .. } => {
+                    !matches!(expr.as_ref(), ast::Expr::AssignExpr { .. })
+                }
+                ast::Literal::NotExpr { .. } | ast::Literal::Every { .. } => true,
+                _ => false,
+            };
+
+            if !should_include {
+                continue;
+            }
+
+            let text = stmt.span.text().to_string();
+            if !texts.iter().any(|existing| existing == &text) {
+                texts.push(text);
+            }
+        }
+
+        texts
+    }
+
+    #[cfg(feature = "explanations")]
+    fn collect_loop_condition_texts(query: &Query) -> Vec<String> {
+        let stmts = query.stmts.iter().collect::<Vec<_>>();
+        Self::collect_loop_condition_texts_from_stmts(&stmts)
+    }
+
     pub(super) fn compile_query(&mut self, query: &Query) -> Result<()> {
         self.push_scope();
 
@@ -70,6 +104,7 @@ impl<'a> Compiler<'a> {
                 } = &stmt.literal
                 {
                     self.compile_some_in_loop_with_remaining_statements(
+                        stmt,
                         key,
                         value,
                         collection,
@@ -230,7 +265,19 @@ impl<'a> Compiler<'a> {
                 query,
                 ..
             } => {
-                self.compile_every_quantifier(key, value, domain, query, &stmt.span)?;
+                let result_reg =
+                    self.compile_every_quantifier(key, value, domain, query, &stmt.span)?;
+                #[cfg(not(feature = "explanations"))]
+                let _ = result_reg;
+                #[cfg(feature = "explanations")]
+                self.attach_explanation_probe_to_last_instruction(
+                    stmt.span.text(),
+                    Some(crate::rvm::program::InstructionConditionProbe::Loop {
+                        result_register: result_reg,
+                        operator: Some(crate::ConditionOperator::Every),
+                        condition_texts: Self::collect_loop_condition_texts(query),
+                    }),
+                );
             }
             ast::Literal::SomeVars { vars, .. } => {
                 for var in vars {
@@ -257,6 +304,8 @@ impl<'a> Compiler<'a> {
                     },
                     &stmt.span,
                 );
+                #[cfg(feature = "explanations")]
+                self.attach_explanation_to_last_instruction(stmt.span.text(), expr, negated_reg);
             }
         }
         Ok(())

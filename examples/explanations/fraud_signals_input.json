@@ -1,0 +1,28 @@
+{
+  "account": {
+    "home_country": "US"
+  },
+  "transactions": [
+    {
+      "id": "tx-100",
+      "merchant": "gift galaxy",
+      "amount": 1200,
+      "country": "MT",
+      "card_present": false
+    },
+    {
+      "id": "tx-101",
+      "merchant": "compute-hub.ru",
+      "amount": 240,
+      "country": "US",
+      "card_present": true
+    },
+    {
+      "id": "tx-102",
+      "merchant": "coffee-stop",
+      "amount": 8,
+      "country": "US",
+      "card_present": true
+    }
+  ]
+}

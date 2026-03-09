@@ -773,6 +773,22 @@ impl Engine {
         self.interpreter.eval_rule_in_path(rule)
     }
 
+    #[cfg(feature = "explanations")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "explanations")))]
+    /// Set runtime settings for explanation capture.
+    pub fn set_explanation_settings(&mut self, settings: ExplanationSettings) {
+        self.interpreter.set_explanation_settings(settings);
+    }
+
+    #[cfg(feature = "explanations")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "explanations")))]
+    /// Take explanations captured during the most recent evaluation.
+    pub fn take_explanations(
+        &mut self,
+    ) -> alloc::collections::BTreeMap<Value, Vec<ExplanationRecord>> {
+        self.interpreter.take_explanations()
+    }
+
     /// Evaluate a Rego query.
     ///
     /// ```

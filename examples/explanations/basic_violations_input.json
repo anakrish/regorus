@@ -1,0 +1,7 @@
+{
+  "services": [
+    { "name": "frontend", "protocol": "http", "port": 8080 },
+    { "name": "dns", "protocol": "udp", "port": 53 },
+    { "name": "api", "protocol": "https", "port": 8443 }
+  ]
+}

@@ -3,6 +3,27 @@
 
 use anyhow::{anyhow, bail, Result};
 
+#[derive(clap::ValueEnum, Clone, Copy, Debug, Eq, PartialEq)]
+enum EvalEngine {
+    #[value(alias = "interp", alias = "int")]
+    Interpreter,
+    #[value(alias = "vm")]
+    Rvm,
+}
+
+fn single_value_query_results(query: String, value: regorus::Value) -> regorus::QueryResults {
+    regorus::QueryResults {
+        result: vec![regorus::QueryResult {
+            expressions: vec![regorus::Expression {
+                value,
+                text: query.into(),
+                location: regorus::Location { row: 1, col: 1 },
+            }],
+            bindings: regorus::Value::new_object(),
+        }],
+    }
+}
+
 #[allow(dead_code)]
 fn read_file(path: &String) -> Result<String> {
     std::fs::read_to_string(path).map_err(|_| anyhow!("could not read {path}"))
@@ -33,26 +54,105 @@ fn add_policy_from_file(engine: &mut regorus::Engine, path: String) -> Result<St
     engine.add_policy(path.clone(), read_file(&path)?)
 }
 
+#[cfg(feature = "explanations")]
+#[derive(serde::Serialize)]
+struct ReasonsOutput {
+    reasons: Vec<ReasonEntry>,
+}
+
+#[cfg(feature = "explanations")]
+#[derive(serde::Serialize)]
+struct ReasonEntry {
+    result: regorus::Value,
+    conditions: Vec<PrintableExplanationRecord>,
+}
+
+#[cfg(feature = "explanations")]
+#[derive(serde::Serialize)]
+struct PrintableExplanationRecord {
+    outcome: regorus::ExplanationOutcome,
+    location: regorus::SourceLocation,
+    text: regorus::Rc<str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evaluation: Option<regorus::ConditionEvaluation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bindings: Option<Vec<regorus::ExplanationBinding>>,
+}
+
+#[cfg(feature = "explanations")]
+fn print_reasons(
+    explanations: std::collections::BTreeMap<regorus::Value, Vec<regorus::ExplanationRecord>>,
+    include_bindings: bool,
+) -> Result<()> {
+    let output = ReasonsOutput {
+        reasons: explanations
+            .into_iter()
+            .map(|(result, conditions)| ReasonEntry {
+                result,
+                conditions: conditions
+                    .into_iter()
+                    .map(|condition| PrintableExplanationRecord {
+                        outcome: condition.outcome,
+                        location: condition.location,
+                        text: condition.text,
+                        evaluation: condition.evaluation,
+                        bindings: include_bindings.then_some(condition.bindings),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    };
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn rego_eval(
     bundles: &[String],
     files: &[String],
     input: Option<String>,
     query: String,
+    engine: EvalEngine,
     enable_tracing: bool,
     non_strict: bool,
+    #[cfg(feature = "explanations")] why: bool,
+    #[cfg(feature = "explanations")] why_bindings: bool,
+    #[cfg(feature = "explanations")] why_full_values: bool,
+    #[cfg(feature = "explanations")] why_all_conditions: bool,
     #[cfg(feature = "coverage")] coverage: bool,
     v0: bool,
 ) -> Result<()> {
-    // Create engine.
-    let mut engine = regorus::Engine::new();
+    #[cfg(feature = "explanations")]
+    let why_enabled = why || why_bindings || why_all_conditions;
 
-    engine.set_strict_builtin_errors(!non_strict);
+    // Create engine.
+    let mut policy_engine = regorus::Engine::new();
+
+    policy_engine.set_strict_builtin_errors(!non_strict);
 
     #[cfg(feature = "coverage")]
-    engine.set_enable_coverage(coverage);
+    policy_engine.set_enable_coverage(coverage);
 
-    engine.set_rego_v0(v0);
+    policy_engine.set_rego_v0(v0);
+
+    #[cfg(feature = "explanations")]
+    if why_enabled {
+        let value_mode = if why_full_values {
+            regorus::ExplanationValueMode::Full
+        } else {
+            regorus::ExplanationValueMode::Redacted
+        };
+        let condition_mode = if why_all_conditions {
+            regorus::ExplanationConditionMode::AllContributing
+        } else {
+            regorus::ExplanationConditionMode::PrimaryOnly
+        };
+        policy_engine.set_explanation_settings(regorus::ExplanationSettings {
+            enabled: true,
+            value_mode,
+            condition_mode,
+        });
+    }
 
     // Load files from given bundles.
     for dir in bundles.iter() {
@@ -69,7 +169,8 @@ fn rego_eval(
                 _ => continue,
             }
 
-            let _package = add_policy_from_file(&mut engine, entry.path().display().to_string())?;
+            let _package =
+                add_policy_from_file(&mut policy_engine, entry.path().display().to_string())?;
         }
     }
 
@@ -77,7 +178,7 @@ fn rego_eval(
     for file in files.iter() {
         if file.ends_with(".rego") {
             // Read policy file.
-            let _package = add_policy_from_file(&mut engine, file.clone())?;
+            let _package = add_policy_from_file(&mut policy_engine, file.clone())?;
         } else {
             // Read data file.
             let data = if file.ends_with(".json") {
@@ -89,36 +190,125 @@ fn rego_eval(
             };
 
             // Merge given data.
-            engine.add_data(data)?;
+            policy_engine.add_data(data)?;
         }
     }
 
-    if let Some(file) = input {
+    let input_value = if let Some(file) = input.as_ref() {
         let input = if file.ends_with(".json") {
-            read_value_from_json_file(&file)?
+            read_value_from_json_file(file)?
         } else if file.ends_with(".yaml") {
-            read_value_from_yaml_file(&file)?
+            read_value_from_yaml_file(file)?
         } else {
             bail!("Unsupported input file `{file}`. Must be json or yaml.")
         };
-        engine.set_input(input);
+        Some(input)
+    } else {
+        None
+    };
+
+    if let Some(input) = input_value.clone() {
+        policy_engine.set_input(input);
     }
 
-    // Note: The `eval_query` function is used below since it produces output
-    // in the same format as OPA. It also allows evaluating arbitrary statements
-    // as queries.
-    //
-    // Most applications will want to use `eval_rule` instead.
-    // It is faster since it does not have to parse the query string.
-    // It also returns the value of the rule directly and thus is easier
-    // to use.
-    let results = engine.eval_query(query, enable_tracing)?;
+    #[cfg(feature = "explanations")]
+    let mut deferred_explanations = None;
+
+    let results = match engine {
+        EvalEngine::Interpreter => {
+            // Note: The `eval_query` function is used below since it produces output
+            // in the same format as OPA. It also allows evaluating arbitrary statements
+            // as queries.
+            //
+            // Most applications will want to use `eval_rule` instead.
+            // It is faster since it does not have to parse the query string.
+            // It also returns the value of the rule directly and thus is easier
+            // to use.
+            policy_engine.eval_query(query.clone(), enable_tracing)?
+        }
+        EvalEngine::Rvm => {
+            #[cfg(not(feature = "rvm"))]
+            {
+                bail!("the example was built without the `rvm` feature");
+            }
+
+            #[cfg(feature = "rvm")]
+            {
+                if enable_tracing {
+                    bail!("trace output is not supported when --engine rvm is selected");
+                }
+
+                #[cfg(feature = "coverage")]
+                if coverage {
+                    bail!("coverage is not supported when --engine rvm is selected");
+                }
+
+                let entrypoint: regorus::Rc<str> = query.clone().into();
+                let compiled = policy_engine.compile_with_entrypoint(&entrypoint)?;
+                let program = regorus::languages::rego::compiler::Compiler::compile_from_policy(
+                    &compiled,
+                    &[entrypoint.as_ref()],
+                )?;
+
+                let mut vm = regorus::rvm::RegoVM::new_with_policy(compiled);
+                vm.load_program(program);
+                vm.set_strict_builtin_errors(!non_strict);
+
+                #[cfg(feature = "explanations")]
+                if why_enabled {
+                    let value_mode = if why_full_values {
+                        regorus::ExplanationValueMode::Full
+                    } else {
+                        regorus::ExplanationValueMode::Redacted
+                    };
+                    let condition_mode = if why_all_conditions {
+                        regorus::ExplanationConditionMode::AllContributing
+                    } else {
+                        regorus::ExplanationConditionMode::PrimaryOnly
+                    };
+                    vm.set_explanation_settings(regorus::ExplanationSettings {
+                        enabled: true,
+                        value_mode,
+                        condition_mode,
+                    });
+                }
+
+                if let Some(input) = input_value {
+                    vm.set_input(input);
+                }
+
+                let value = vm.execute_entry_point_by_name(entrypoint.as_ref())?;
+
+                #[cfg(feature = "explanations")]
+                if why_enabled {
+                    deferred_explanations = Some(vm.take_explanations());
+                }
+
+                single_value_query_results(query.clone(), value)
+            }
+        }
+    };
 
     println!("{}", serde_json::to_string_pretty(&results)?);
 
+    #[cfg(feature = "explanations")]
+    if why_enabled {
+        match engine {
+            EvalEngine::Interpreter => {
+                let explanations = policy_engine.take_explanations();
+                print_reasons(explanations, why_bindings)?;
+            }
+            EvalEngine::Rvm => {
+                if let Some(explanations) = deferred_explanations.take() {
+                    print_reasons(explanations, why_bindings)?;
+                }
+            }
+        }
+    }
+
     #[cfg(feature = "coverage")]
     if coverage {
-        let report = engine.get_coverage_report()?;
+        let report = policy_engine.get_coverage_report()?;
         println!("{}", report.to_string_pretty()?);
     }
 
@@ -230,6 +420,10 @@ enum RegorusCommand {
         /// Query. Rego query block.
         query: String,
 
+        /// Evaluation backend.
+        #[arg(long, default_value = "interpreter")]
+        engine: EvalEngine,
+
         /// Enable tracing.
         #[arg(long, short)]
         trace: bool,
@@ -237,6 +431,26 @@ enum RegorusCommand {
         /// Perform non-strict evaluation. (default behavior of OPA).
         #[arg(long, short)]
         non_strict: bool,
+
+        /// Capture reasons for rule evaluations referenced by the query.
+        #[cfg(feature = "explanations")]
+        #[arg(long = "why")]
+        why: bool,
+
+        /// Include captured bindings in printed reasons.
+        #[cfg(feature = "explanations")]
+        #[arg(long = "why-bindings")]
+        why_bindings: bool,
+
+        /// Preserve secret-looking values in captured reasons.
+        #[cfg(feature = "explanations")]
+        #[arg(long = "why-full-values", requires = "why")]
+        why_full_values: bool,
+
+        /// Include all successful contributing conditions, not just the primary one.
+        #[cfg(feature = "explanations")]
+        #[arg(long = "why-all-conditions")]
+        why_all_conditions: bool,
 
         /// Display coverage information
         #[cfg(feature = "coverage")]
@@ -287,8 +501,17 @@ fn main() -> Result<()> {
             data,
             input,
             query,
+            engine,
             trace,
             non_strict,
+            #[cfg(feature = "explanations")]
+            why,
+            #[cfg(feature = "explanations")]
+            why_bindings,
+            #[cfg(feature = "explanations")]
+            why_full_values,
+            #[cfg(feature = "explanations")]
+            why_all_conditions,
             #[cfg(feature = "coverage")]
             coverage,
             v0,
@@ -297,8 +520,17 @@ fn main() -> Result<()> {
             &data,
             input,
             query,
+            engine,
             trace,
             non_strict,
+            #[cfg(feature = "explanations")]
+            why,
+            #[cfg(feature = "explanations")]
+            why_bindings,
+            #[cfg(feature = "explanations")]
+            why_full_values,
+            #[cfg(feature = "explanations")]
+            why_all_conditions,
             #[cfg(feature = "coverage")]
             coverage,
             v0,

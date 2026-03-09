@@ -34,6 +34,22 @@ impl RegoVM {
 
         // Builtin cache entries only live for a single execution
         self.builtins_cache.clear();
+
+        #[cfg(feature = "explanations")]
+        {
+            self.block_records.clear();
+            self.current_block_records.clear();
+            self.last_rule_block_records.clear();
+            self.loop_witnesses.clear();
+            self.loop_records.clear();
+            self.comprehension_witnesses.clear();
+            self.last_entrypoint_rule_type = None;
+            self.last_explanation_result = None;
+            self.explanations = self
+                .explanation_settings
+                .enabled
+                .then(alloc::collections::BTreeMap::new);
+        }
     }
 
     /// Return all active objects to their respective pools for reuse

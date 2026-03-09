@@ -8,6 +8,8 @@ use anyhow::Result as AnyResult;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "explanations")]
+use super::types::InstructionExplanationInfo;
 use super::types::{BuiltinInfo, ProgramMetadata, RuleInfo, SourceFile, SpanInfo};
 use crate::builtins::BuiltinFcn;
 use crate::rvm::instructions::InstructionData;
@@ -43,6 +45,10 @@ pub struct Program {
 
     /// Span information for each instruction (for debugging)
     pub instruction_spans: Vec<Option<SpanInfo>>,
+
+    /// Optional explanation metadata aligned with the instruction stream.
+    #[cfg(feature = "explanations")]
+    pub instruction_explanations: Vec<Option<InstructionExplanationInfo>>,
 
     /// Main program entry point
     pub main_entry_point: u32,
@@ -114,6 +120,8 @@ impl Program {
             sources: Vec::new(),
             rule_infos: Vec::new(),
             instruction_spans: Vec::new(),
+            #[cfg(feature = "explanations")]
+            instruction_explanations: Vec::new(),
             main_entry_point: 0,
             max_rule_window_size: 0,
             dispatch_window_size: 0,

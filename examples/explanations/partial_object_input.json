@@ -1,0 +1,7 @@
+{
+  "resources": [
+    { "id": "pod-a", "kind": "pod", "run_as_root": true },
+    { "id": "svc-a", "kind": "service", "exposed": true },
+    { "id": "pod-b", "kind": "pod", "run_as_root": false }
+  ]
+}

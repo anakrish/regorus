@@ -3,6 +3,8 @@
 
 use alloc::format;
 use alloc::string::{String, ToString as _};
+#[cfg(feature = "explanations")]
+use alloc::vec;
 use alloc::vec::Vec;
 
 use super::super::types::SourceFile;
@@ -160,6 +162,8 @@ impl Program {
             .get("instruction_spans")
             .map(|v| serde_json::from_value(v.clone()).unwrap_or_default())
             .unwrap_or_default();
+        #[cfg(feature = "explanations")]
+        let instruction_count = instructions.len();
 
         let rule_tree: Value = json_data
             .get("rule_tree")
@@ -175,6 +179,8 @@ impl Program {
             sources,
             rule_infos,
             instruction_spans,
+            #[cfg(feature = "explanations")]
+            instruction_explanations: vec![None; instruction_count],
             main_entry_point,
             max_rule_window_size,
             dispatch_window_size,

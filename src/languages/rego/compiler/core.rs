@@ -8,13 +8,21 @@
 )]
 
 use super::{CompilationContext, Compiler, CompilerError, Register, Result, Scope};
+#[cfg(feature = "explanations")]
+use crate::ast::Expr;
 use crate::ast::ExprRef;
 use crate::builtins;
 use crate::compiler::destructuring_planner::plans::BindingPlan;
 use crate::lexer::Span;
 use crate::rvm::program::{BuiltinInfo, SpanInfo};
+#[cfg(feature = "explanations")]
+use crate::rvm::program::{
+    ExplanationBindingInfo, InstructionConditionProbe, InstructionExplanationInfo,
+};
 use crate::rvm::Instruction;
 use crate::Value;
+#[cfg(feature = "explanations")]
+use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::{String, ToString};
 
@@ -260,6 +268,8 @@ impl<'a> Compiler<'a> {
 
     pub fn emit_instruction(&mut self, instruction: Instruction, span: &Span) {
         self.program.instructions.push(instruction);
+        #[cfg(feature = "explanations")]
+        self.program.instruction_explanations.push(None);
 
         let source_path = span.source.get_path().to_string();
         let source_index = self.get_or_create_source_index(&source_path);
@@ -275,6 +285,311 @@ impl<'a> Compiler<'a> {
             let index = self.source_to_index.len();
             self.source_to_index.insert(source_path.to_string(), index);
             index
+        }
+    }
+
+    #[cfg(feature = "explanations")]
+    fn expr_redaction_hint(expr: &ExprRef) -> Option<String> {
+        match *expr.as_ref() {
+            Expr::Var {
+                value: Value::String(ref name),
+                ..
+            } => Some(name.as_ref().to_string()),
+            Expr::RefDot { ref field, .. } => Some(field.0.text().to_string()),
+            Expr::RefBrack { ref index, .. } => match *index.as_ref() {
+                Expr::String {
+                    value: Value::String(ref name),
+                    ..
+                } => Some(name.as_ref().to_string()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "explanations")]
+    fn make_builtin_probe(
+        &self,
+        expr: &ExprRef,
+        params_index: u16,
+    ) -> Option<InstructionConditionProbe> {
+        let Expr::Call { ref params, .. } = *expr.as_ref() else {
+            return None;
+        };
+        let params_info = self
+            .program
+            .instruction_data
+            .get_builtin_call_params(params_index)?;
+        let builtin = self
+            .program
+            .builtin_info_table
+            .get(usize::from(params_info.builtin_index))?;
+        let mapping = match builtin.name.as_str() {
+            "contains" if params_info.arg_count() >= 2 => {
+                Some((crate::ConditionOperator::Contains, 0_usize, Some(1_usize)))
+            }
+            "startswith" if params_info.arg_count() >= 2 => {
+                Some((crate::ConditionOperator::StartsWith, 0_usize, Some(1_usize)))
+            }
+            "endswith" if params_info.arg_count() >= 2 => {
+                Some((crate::ConditionOperator::EndsWith, 0_usize, Some(1_usize)))
+            }
+            "regex.match" if params_info.arg_count() >= 2 => {
+                Some((crate::ConditionOperator::RegexMatch, 1_usize, Some(0_usize)))
+            }
+            "glob.match" if params_info.arg_count() >= 3 => {
+                Some((crate::ConditionOperator::GlobMatch, 2_usize, Some(0_usize)))
+            }
+            "is_array" if params_info.arg_count() >= 1 => {
+                Some((crate::ConditionOperator::IsArray, 0_usize, None))
+            }
+            "is_boolean" if params_info.arg_count() >= 1 => {
+                Some((crate::ConditionOperator::IsBoolean, 0_usize, None))
+            }
+            "is_null" if params_info.arg_count() >= 1 => {
+                Some((crate::ConditionOperator::IsNull, 0_usize, None))
+            }
+            "is_number" if params_info.arg_count() >= 1 => {
+                Some((crate::ConditionOperator::IsNumber, 0_usize, None))
+            }
+            "is_object" if params_info.arg_count() >= 1 => {
+                Some((crate::ConditionOperator::IsObject, 0_usize, None))
+            }
+            "is_set" if params_info.arg_count() >= 1 => {
+                Some((crate::ConditionOperator::IsSet, 0_usize, None))
+            }
+            "is_string" if params_info.arg_count() >= 1 => {
+                Some((crate::ConditionOperator::IsString, 0_usize, None))
+            }
+            _ => None,
+        }?;
+
+        let (operator, actual_index, expected_index) = mapping;
+        Some(InstructionConditionProbe::Builtin {
+            operator,
+            actual_register: *params_info.arg_registers().get(actual_index)?,
+            expected_register: expected_index
+                .and_then(|index| params_info.arg_registers().get(index).copied()),
+            actual_hint: params.get(actual_index).and_then(Self::expr_redaction_hint),
+            expected_hint: expected_index.and_then(|index| {
+                params
+                    .get(actual_index)
+                    .and_then(Self::expr_redaction_hint)
+                    .or_else(|| params.get(index).and_then(Self::expr_redaction_hint))
+            }),
+        })
+    }
+
+    #[cfg(feature = "explanations")]
+    fn make_condition_probe(
+        &self,
+        expr: &ExprRef,
+        result_register: Register,
+    ) -> Option<InstructionConditionProbe> {
+        let previous_instruction = self.program.instructions.iter().rev().nth(1).copied();
+
+        match previous_instruction {
+            _ if matches!(
+                expr.as_ref(),
+                Expr::ArrayCompr { .. } | Expr::SetCompr { .. } | Expr::ObjectCompr { .. }
+            ) =>
+            {
+                Some(InstructionConditionProbe::Comprehension { result_register })
+            }
+            Some(Instruction::Eq { dest, left, right }) if dest == result_register => {
+                let Expr::BoolExpr {
+                    ref lhs, ref rhs, ..
+                } = *expr.as_ref()
+                else {
+                    return None;
+                };
+                Some(InstructionConditionProbe::Comparison {
+                    operator: crate::ConditionOperator::Equals,
+                    actual_register: left,
+                    expected_register: right,
+                    actual_hint: Self::expr_redaction_hint(lhs),
+                    expected_hint: Self::expr_redaction_hint(lhs)
+                        .or_else(|| Self::expr_redaction_hint(rhs)),
+                })
+            }
+            Some(Instruction::Ne { dest, left, right }) if dest == result_register => {
+                let Expr::BoolExpr {
+                    ref lhs, ref rhs, ..
+                } = *expr.as_ref()
+                else {
+                    return None;
+                };
+                Some(InstructionConditionProbe::Comparison {
+                    operator: crate::ConditionOperator::NotEquals,
+                    actual_register: left,
+                    expected_register: right,
+                    actual_hint: Self::expr_redaction_hint(lhs),
+                    expected_hint: Self::expr_redaction_hint(lhs)
+                        .or_else(|| Self::expr_redaction_hint(rhs)),
+                })
+            }
+            Some(Instruction::Lt { dest, left, right }) if dest == result_register => {
+                let Expr::BoolExpr {
+                    ref lhs, ref rhs, ..
+                } = *expr.as_ref()
+                else {
+                    return None;
+                };
+                Some(InstructionConditionProbe::Comparison {
+                    operator: crate::ConditionOperator::LessThan,
+                    actual_register: left,
+                    expected_register: right,
+                    actual_hint: Self::expr_redaction_hint(lhs),
+                    expected_hint: Self::expr_redaction_hint(lhs)
+                        .or_else(|| Self::expr_redaction_hint(rhs)),
+                })
+            }
+            Some(Instruction::Le { dest, left, right }) if dest == result_register => {
+                let Expr::BoolExpr {
+                    ref lhs, ref rhs, ..
+                } = *expr.as_ref()
+                else {
+                    return None;
+                };
+                Some(InstructionConditionProbe::Comparison {
+                    operator: crate::ConditionOperator::LessThanOrEquals,
+                    actual_register: left,
+                    expected_register: right,
+                    actual_hint: Self::expr_redaction_hint(lhs),
+                    expected_hint: Self::expr_redaction_hint(lhs)
+                        .or_else(|| Self::expr_redaction_hint(rhs)),
+                })
+            }
+            Some(Instruction::Gt { dest, left, right }) if dest == result_register => {
+                let Expr::BoolExpr {
+                    ref lhs, ref rhs, ..
+                } = *expr.as_ref()
+                else {
+                    return None;
+                };
+                Some(InstructionConditionProbe::Comparison {
+                    operator: crate::ConditionOperator::GreaterThan,
+                    actual_register: left,
+                    expected_register: right,
+                    actual_hint: Self::expr_redaction_hint(lhs),
+                    expected_hint: Self::expr_redaction_hint(lhs)
+                        .or_else(|| Self::expr_redaction_hint(rhs)),
+                })
+            }
+            Some(Instruction::Ge { dest, left, right }) if dest == result_register => {
+                let Expr::BoolExpr {
+                    ref lhs, ref rhs, ..
+                } = *expr.as_ref()
+                else {
+                    return None;
+                };
+                Some(InstructionConditionProbe::Comparison {
+                    operator: crate::ConditionOperator::GreaterThanOrEquals,
+                    actual_register: left,
+                    expected_register: right,
+                    actual_hint: Self::expr_redaction_hint(lhs),
+                    expected_hint: Self::expr_redaction_hint(lhs)
+                        .or_else(|| Self::expr_redaction_hint(rhs)),
+                })
+            }
+            Some(Instruction::Contains {
+                dest,
+                collection,
+                value,
+            }) if dest == result_register => Some(InstructionConditionProbe::Membership {
+                operator: crate::ConditionOperator::In,
+                actual_register: value,
+                expected_register: Some(collection),
+                actual_hint: match *expr.as_ref() {
+                    Expr::Membership {
+                        value: ref member_expr,
+                        ..
+                    } => Self::expr_redaction_hint(member_expr),
+                    _ => None,
+                },
+                expected_hint: match *expr.as_ref() {
+                    Expr::Membership {
+                        collection: ref collection_expr,
+                        ..
+                    } => Self::expr_redaction_hint(collection_expr),
+                    _ => None,
+                },
+            }),
+            Some(Instruction::BuiltinCall { params_index }) => {
+                self.make_builtin_probe(expr, params_index)
+            }
+            _ => Some(InstructionConditionProbe::Truthiness {
+                register: result_register,
+                hint: Self::expr_redaction_hint(expr),
+            }),
+        }
+    }
+
+    #[cfg(feature = "explanations")]
+    pub(super) fn attach_explanation_to_last_instruction(
+        &mut self,
+        text: &str,
+        expr: &ExprRef,
+        result_register: Register,
+    ) {
+        let bindings = self
+            .scopes
+            .iter()
+            .fold(
+                BTreeMap::<String, Register>::new(),
+                |mut visible_bindings, scope| {
+                    for (name, register) in &scope.bound_vars {
+                        if name != "_" {
+                            visible_bindings.insert(name.clone(), *register);
+                        }
+                    }
+                    visible_bindings
+                },
+            )
+            .into_iter()
+            .map(|(name, register)| ExplanationBindingInfo { name, register })
+            .collect();
+
+        let probe = self.make_condition_probe(expr, result_register);
+        if let Some(slot) = self.program.instruction_explanations.last_mut() {
+            *slot = Some(InstructionExplanationInfo {
+                text: text.to_string(),
+                bindings,
+                probe,
+            });
+        }
+    }
+
+    #[cfg(feature = "explanations")]
+    pub(super) fn attach_explanation_probe_to_last_instruction(
+        &mut self,
+        text: &str,
+        probe: Option<InstructionConditionProbe>,
+    ) {
+        let bindings = self
+            .scopes
+            .iter()
+            .fold(
+                BTreeMap::<String, Register>::new(),
+                |mut visible_bindings, scope| {
+                    for (name, register) in &scope.bound_vars {
+                        if name != "_" {
+                            visible_bindings.insert(name.clone(), *register);
+                        }
+                    }
+                    visible_bindings
+                },
+            )
+            .into_iter()
+            .map(|(name, register)| ExplanationBindingInfo { name, register })
+            .collect();
+
+        if let Some(slot) = self.program.instruction_explanations.last_mut() {
+            *slot = Some(InstructionExplanationInfo {
+                text: text.to_string(),
+                bindings,
+                probe,
+            });
         }
     }
 }

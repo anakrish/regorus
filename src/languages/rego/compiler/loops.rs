@@ -115,7 +115,7 @@ impl<'a> Compiler<'a> {
         domain: &ExprRef,
         query: &Query,
         span: &Span,
-    ) -> Result<()> {
+    ) -> Result<Register> {
         let collection_reg = self.compile_rego_expr(domain)?;
 
         let key_reg = self.alloc_register();
@@ -180,24 +180,31 @@ impl<'a> Compiler<'a> {
             span,
         );
 
-        let loop_end = self.program.instructions.len() as u16;
+        let quantifier_assert_pc = self.program.instructions.len() as u16;
+
+        self.emit_instruction(
+            Instruction::AssertCondition {
+                condition: result_reg,
+            },
+            span,
+        );
 
         self.program
             .update_loop_params(loop_params_index, |params| {
                 params.body_start = body_start;
-                params.loop_end = loop_end;
+                params.loop_end = quantifier_assert_pc;
             });
 
-        let loop_next_idx = self.program.instructions.len() - 1;
+        let loop_next_idx = self.program.instructions.len() - 2;
         if let Instruction::LoopNext {
             loop_end: ref mut end,
             ..
         } = &mut self.program.instructions[loop_next_idx]
         {
-            *end = loop_end;
+            *end = quantifier_assert_pc;
         }
 
-        Ok(())
+        Ok(result_reg)
     }
 
     fn compile_index_iteration_loop(
@@ -295,21 +302,43 @@ impl<'a> Compiler<'a> {
             collection.span(),
         );
 
-        let loop_end = self.program.instructions.len() as u16;
+        let loop_assert_pc = self.program.instructions.len() as u16;
+
+        self.emit_instruction(
+            Instruction::AssertCondition {
+                condition: result_reg,
+            },
+            collection.span(),
+        );
+
+        #[cfg(feature = "explanations")]
+        self.attach_explanation_probe_to_last_instruction(
+            loop_expr
+                .as_ref()
+                .map(|expr| expr.span().text())
+                .unwrap_or_else(|| collection.span().text()),
+            Some(crate::rvm::program::InstructionConditionProbe::Loop {
+                result_register: result_reg,
+                operator: Some(crate::ConditionOperator::ForEach),
+                condition_texts: Self::collect_loop_condition_texts_from_stmts(remaining_stmts),
+            }),
+        );
+
+        let _loop_end = self.program.instructions.len() as u16;
 
         self.program
             .update_loop_params(loop_params_index, |params| {
                 params.body_start = body_start;
-                params.loop_end = loop_end;
+                params.loop_end = loop_assert_pc;
             });
 
-        let loop_next_idx = self.program.instructions.len() - 1;
+        let loop_next_idx = self.program.instructions.len() - 2;
         if let Instruction::LoopNext {
             loop_end: ref mut end,
             ..
         } = &mut self.program.instructions[loop_next_idx]
         {
-            *end = loop_end;
+            *end = loop_assert_pc;
         }
 
         Ok(())
@@ -317,17 +346,19 @@ impl<'a> Compiler<'a> {
 
     pub(super) fn compile_some_in_loop_with_remaining_statements(
         &mut self,
+        stmt: &LiteralStmt,
         key: &Option<ExprRef>,
         value: &ExprRef,
         collection: &ExprRef,
         remaining_stmts: &[&LiteralStmt],
     ) -> Result<Register> {
         let loop_body_stmts = &remaining_stmts[1..];
-        self.compile_some_in_loop_with_body(key, value, collection, loop_body_stmts)
+        self.compile_some_in_loop_with_body(stmt, key, value, collection, loop_body_stmts)
     }
 
     fn compile_some_in_loop_with_body(
         &mut self,
+        stmt: &LiteralStmt,
         key: &Option<ExprRef>,
         value: &ExprRef,
         collection: &ExprRef,
@@ -444,21 +475,40 @@ impl<'a> Compiler<'a> {
             collection.span(),
         );
 
-        let loop_end = self.program.instructions.len() as u16;
+        let loop_assert_pc = self.program.instructions.len() as u16;
+
+        self.emit_instruction(
+            Instruction::AssertCondition {
+                condition: result_reg,
+            },
+            &stmt.span,
+        );
+
+        #[cfg(feature = "explanations")]
+        self.attach_explanation_probe_to_last_instruction(
+            stmt.span.text(),
+            Some(crate::rvm::program::InstructionConditionProbe::Loop {
+                result_register: result_reg,
+                operator: Some(crate::ConditionOperator::ForEach),
+                condition_texts: Self::collect_loop_condition_texts_from_stmts(loop_body_stmts),
+            }),
+        );
+
+        let _loop_end = self.program.instructions.len() as u16;
 
         self.program
             .update_loop_params(loop_params_index, |params| {
                 params.body_start = body_start;
-                params.loop_end = loop_end;
+                params.loop_end = loop_assert_pc;
             });
 
-        let loop_next_idx = self.program.instructions.len() - 1;
+        let loop_next_idx = self.program.instructions.len() - 2;
         if let Instruction::LoopNext {
             loop_end: ref mut end,
             ..
         } = &mut self.program.instructions[loop_next_idx]
         {
-            *end = loop_end;
+            *end = loop_assert_pc;
         }
 
         Ok(result_reg)

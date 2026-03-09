@@ -16,6 +16,23 @@ use super::execution_model::{
 use super::machine::RegoVM;
 
 impl RegoVM {
+    #[cfg(feature = "explanations")]
+    fn explanation_rule_type_for_entry_point(
+        &self,
+        entry_point_pc: usize,
+    ) -> Option<crate::rvm::program::RuleType> {
+        self.program
+            .instructions
+            .get(entry_point_pc)
+            .and_then(|instruction| match *instruction {
+                Instruction::CallRule { rule_index, .. } => self
+                    .program
+                    .get_rule_info(usize::from(rule_index))
+                    .map(|rule_info| rule_info.rule_type.clone()),
+                _ => None,
+            })
+    }
+
     pub fn execute(&mut self) -> Result<Value> {
         match self.execution_mode {
             ExecutionMode::RunToCompletion => self.execute_run_to_completion(),
@@ -61,6 +78,13 @@ impl RegoVM {
                 self.reset_execution_state();
                 self.reset_execution_timer_state();
 
+                #[cfg(feature = "explanations")]
+                {
+                    self.last_entrypoint_rule_type =
+                        self.explanation_rule_type_for_entry_point(entry_point_pc);
+                    self.last_explanation_result = None;
+                }
+
                 self.validate_vm_state()?;
                 let entry_point_pc_u32 = u32::try_from(entry_point_pc).map_err(|_| {
                     VmError::EntryPointPcOutOfBounds {
@@ -70,14 +94,31 @@ impl RegoVM {
                     }
                 })?;
 
-                self.jump_to(entry_point_pc_u32)
+                let result = self.jump_to(entry_point_pc_u32)?;
+                #[cfg(feature = "explanations")]
+                {
+                    self.last_explanation_result = Some(result.clone());
+                }
+                Ok(result)
             }
             ExecutionMode::Suspendable => {
                 self.reset_execution_state();
                 self.reset_execution_timer_state();
 
+                #[cfg(feature = "explanations")]
+                {
+                    self.last_entrypoint_rule_type =
+                        self.explanation_rule_type_for_entry_point(entry_point_pc);
+                    self.last_explanation_result = None;
+                }
+
                 self.validate_vm_state()?;
-                self.execute_suspendable_entry(entry_point_pc)
+                let result = self.execute_suspendable_entry(entry_point_pc)?;
+                #[cfg(feature = "explanations")]
+                {
+                    self.last_explanation_result = Some(result.clone());
+                }
+                Ok(result)
             }
         }
     }
@@ -105,6 +146,13 @@ impl RegoVM {
                 self.reset_execution_state();
                 self.reset_execution_timer_state();
 
+                #[cfg(feature = "explanations")]
+                {
+                    self.last_entrypoint_rule_type =
+                        self.explanation_rule_type_for_entry_point(entry_point_pc);
+                    self.last_explanation_result = None;
+                }
+
                 self.validate_vm_state()?;
                 let entry_point_pc_u32 = u32::try_from(entry_point_pc).map_err(|_| {
                     VmError::EntryPointPcOutOfBounds {
@@ -114,14 +162,31 @@ impl RegoVM {
                     }
                 })?;
 
-                self.jump_to(entry_point_pc_u32)
+                let result = self.jump_to(entry_point_pc_u32)?;
+                #[cfg(feature = "explanations")]
+                {
+                    self.last_explanation_result = Some(result.clone());
+                }
+                Ok(result)
             }
             ExecutionMode::Suspendable => {
                 self.reset_execution_state();
                 self.reset_execution_timer_state();
 
+                #[cfg(feature = "explanations")]
+                {
+                    self.last_entrypoint_rule_type =
+                        self.explanation_rule_type_for_entry_point(entry_point_pc);
+                    self.last_explanation_result = None;
+                }
+
                 self.validate_vm_state()?;
-                self.execute_suspendable_entry(entry_point_pc)
+                let result = self.execute_suspendable_entry(entry_point_pc)?;
+                #[cfg(feature = "explanations")]
+                {
+                    self.last_explanation_result = Some(result.clone());
+                }
+                Ok(result)
             }
         }
     }
@@ -154,10 +219,19 @@ impl RegoVM {
                     self.pc = self.pc.saturating_add(1);
                 }
                 InstructionOutcome::Return(value) => {
+                    #[cfg(feature = "explanations")]
+                    if matches!(value, Value::Bool(_)) {
+                        self.snapshot_all_blocks(value.clone());
+                    }
                     return Ok(value);
                 }
                 InstructionOutcome::Break => {
-                    return Ok(self.registers.first().cloned().unwrap_or(Value::Undefined));
+                    let result = self.registers.first().cloned().unwrap_or(Value::Undefined);
+                    #[cfg(feature = "explanations")]
+                    if matches!(result, Value::Bool(_)) {
+                        self.snapshot_all_blocks(result.clone());
+                    }
+                    return Ok(result);
                 }
                 InstructionOutcome::Suspend { reason } => {
                     return Err(VmError::UnsupportedSuspendInRunToCompletion {
@@ -276,6 +350,10 @@ impl RegoVM {
             self.execution_state = ExecutionState::Completed {
                 result: last_result.clone(),
             };
+            #[cfg(feature = "explanations")]
+            if matches!(last_result, Value::Bool(_)) {
+                self.snapshot_all_blocks(last_result.clone());
+            }
             Ok(last_result)
         }
     }
@@ -297,6 +375,10 @@ impl RegoVM {
             self.execution_state = ExecutionState::Completed {
                 result: last_result.clone(),
             };
+            #[cfg(feature = "explanations")]
+            if matches!(last_result, Value::Bool(_)) {
+                self.snapshot_all_blocks(last_result.clone());
+            }
             Ok(last_result)
         }
     }

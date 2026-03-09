@@ -17,3 +17,5 @@ pub use serialization::{DeserializationResult, VersionedProgram};
 pub use types::{
     BuiltinInfo, FunctionInfo, ProgramMetadata, RuleInfo, RuleType, SourceFile, SpanInfo,
 };
+#[cfg(feature = "explanations")]
+pub use types::{ExplanationBindingInfo, InstructionConditionProbe, InstructionExplanationInfo};

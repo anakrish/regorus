@@ -1,0 +1,23 @@
+{
+  "services": [
+    {
+      "name": "frontend",
+      "port_ids": ["p1", "p2"],
+      "protocols": ["https", "http"]
+    },
+    {
+      "name": "admin",
+      "port_ids": ["p3"],
+      "protocols": ["ssh", "telnet"]
+    }
+  ],
+  "ports": [
+    { "id": "p1", "network": "n1" },
+    { "id": "p2", "network": "n2" },
+    { "id": "p3", "network": "n1" }
+  ],
+  "networks": [
+    { "id": "n1", "public": true },
+    { "id": "n2", "public": false }
+  ]
+}

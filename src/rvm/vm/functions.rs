@@ -31,8 +31,7 @@ impl RegoVM {
         };
 
         call_result?;
-
-        self.memory_check()?;
+        // Note: memory_check removed — covered by stride-based checking in the execution loop.
         Ok(())
     }
 
@@ -76,7 +75,6 @@ impl RegoVM {
         if args.iter().any(|a| a == &Value::Undefined) {
             self.cached_builtin_args = args;
             self.set_register(params.dest, Value::Undefined)?;
-            self.memory_check()?;
             return Ok(());
         }
 
@@ -150,6 +148,8 @@ impl RegoVM {
             self.set_register(params.dest, result)?;
         }
 
+        // Builtins can allocate unbounded memory (e.g. json.unmarshal),
+        // so check immediately rather than waiting for the next stride.
         self.memory_check()?;
 
         Ok(())

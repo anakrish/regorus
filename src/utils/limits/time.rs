@@ -263,6 +263,30 @@ impl ExecutionTimer {
         self.check_now(now)
     }
 
+    /// Like [`tick`](Self::tick), but defers the clock read until the check
+    /// interval is actually reached.
+    ///
+    /// In hot loops this avoids calling [`monotonic_now`] (a syscall on most
+    /// platforms) on every work unit.  The timestamp is only queried once the
+    /// accumulated units meet the configured interval threshold.
+    pub fn tick_with_deferred_clock(&mut self, work_units: u32) -> Result<(), LimitError> {
+        let Some(config) = self.config else {
+            return Ok(());
+        };
+        self.accumulated_units = self.accumulated_units.saturating_add(work_units);
+        if self.accumulated_units < config.check_interval.get() {
+            return Ok(());
+        }
+
+        let interval = config.check_interval.get();
+        self.accumulated_units %= interval;
+
+        let Some(now) = monotonic_now() else {
+            return Ok(());
+        };
+        self.check_now(now)
+    }
+
     /// Force an immediate check against the configured deadline.
     pub fn check_now(&mut self, now: Duration) -> Result<(), LimitError> {
         let Some(config) = self.config else {

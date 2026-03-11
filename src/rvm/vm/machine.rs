@@ -390,16 +390,8 @@ impl RegoVM {
     }
 
     pub(super) fn execution_timer_tick(&mut self, work_units: u32) -> Result<()> {
-        if self.execution_timer.limit().is_none() {
-            return Ok(());
-        }
-
-        let Some(now) = monotonic_now() else {
-            return Ok(());
-        };
-
         self.execution_timer
-            .tick(work_units, now)
+            .tick_with_deferred_clock(work_units)
             .map_err(|err| match err {
                 LimitError::TimeLimitExceeded { elapsed, limit } => VmError::TimeLimitExceeded {
                     elapsed,

@@ -21,6 +21,7 @@
 //! | `startup`                | Isolated VM creation & setup overhead                 |
 //! | `stats`                  | Instruction/literal counts (reported as throughput)    |
 //! | `end_to_end`             | Full roundtrip: compile → serialize → deserialize → eval |
+//! | `micro`                  | Targeted stress tests for specific optimization paths |
 //!
 //! # Running subsets
 //!
@@ -34,6 +35,7 @@
 //! cargo bench --bench rvm_benchmark -- compilation               # compilation only
 //! cargo bench --bench rvm_benchmark -- serialization             # serialization only
 //! cargo bench --bench rvm_benchmark -- startup                   # startup overhead
+//! cargo bench --bench rvm_benchmark -- micro                     # micro optimization benchmarks
 //! ```
 
 use std::hint::black_box;
@@ -658,6 +660,370 @@ fn bench_end_to_end(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// Micro-benchmarks — targeted stress tests for specific optimizations
+//
+// Each benchmark constructs a Rego policy that heavily exercises the code
+// path improved by one or more RVM optimizations, compiled to an RVM
+// program and executed in a hot loop.
+//
+// Opt 1-2: comprehension_array, comprehension_set, comprehension_object
+// Opt 3-4: rule_caching, helper_chain
+// Opt 5-7: builtin_heavy
+// Opt 8:   entry_point_indexed
+// Opt 9-10: virtual_document
+// Opt 11:  suspendable_overhead
+// ---------------------------------------------------------------------------
+
+/// Helper: compile an inline Rego policy string into an RVM Program.
+fn compile_inline(rego: &str, entry_point: &str) -> Arc<Program> {
+    let entry_point_rc: Rc<str> = entry_point.into();
+    let mut engine = Engine::new();
+    engine
+        .add_policy("bench.rego".to_string(), rego.to_string())
+        .expect("failed to add policy");
+    let compiled = engine
+        .compile_with_entrypoint(&entry_point_rc)
+        .expect("failed to compile");
+    Compiler::compile_from_policy(&compiled, &[entry_point]).expect("failed to compile to RVM")
+}
+
+/// Helper: create a hot VM ready to execute, with optional warm-up.
+fn hot_vm(program: Arc<Program>, input: Value, mode: ExecutionMode) -> RegoVM {
+    let mut vm = RegoVM::new();
+    vm.set_execution_mode(mode);
+    vm.load_program(program);
+    vm.set_input(input.clone());
+    // warm up: fills register pools, builtin caches, etc.
+    vm.execute().expect("warm-up failed");
+    vm
+}
+
+fn bench_micro(c: &mut Criterion) {
+    let mut group = c.benchmark_group("micro");
+
+    // -------------------------------------------------------------------
+    // Opts 1-2: Comprehension O(n^2) fix + Container clone-mutate-writeback
+    //
+    // Builds large array, set, and object via comprehensions. Pre-opt,
+    // each element insertion cloned the entire container.
+    // -------------------------------------------------------------------
+    {
+        let rego = r#"
+package bench
+
+arr = [x | x := input.items[_]]
+st = {x | x := input.items[_]}
+obj = {k: v | v := input.pairs[_]; k := v.id}
+
+allow if {
+    count(arr) > 0
+    count(st) > 0
+    count(obj) > 0
+}
+"#;
+        let program = compile_inline(rego, "data.bench.allow");
+
+        let items_json: String = (0..500)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let pairs_json: String = (0..500)
+            .map(|i| format!(r#"{{"id":"k{i}","val":{i}}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let input_json = format!(r#"{{"items":[{items_json}],"pairs":[{pairs_json}]}}"#);
+        let input = Value::from_json_str(&input_json).expect("bad json");
+
+        for mode in [ExecutionMode::RunToCompletion, ExecutionMode::Suspendable] {
+            let label = if mode == ExecutionMode::RunToCompletion {
+                "regular"
+            } else {
+                "suspendable"
+            };
+            let mut vm = hot_vm(program.clone(), input.clone(), mode);
+            group.bench_function(BenchmarkId::new("comprehension_500", label), |b| {
+                b.iter(|| {
+                    vm.set_input(black_box(input.clone()));
+                    black_box(vm.execute().unwrap())
+                })
+            });
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Opts 5-7: Builtin arg caching, cache lookup, dummy Span/Expr
+    //
+    // Policy that calls many builtins per evaluation. Exercises the
+    // cached args Vec, builtin result cache, and cached Span/Expr.
+    // -------------------------------------------------------------------
+    {
+        let rego = r#"
+package bench
+
+fields := ["name", "email", "phone", "address", "city", "state", "zip", "country"]
+
+field_lengths[f] = n if {
+    f := fields[_]
+    v := object.get(input.record, f, "")
+    n := count(v)
+}
+
+valid_fields contains f if {
+    f := fields[_]
+    v := object.get(input.record, f, "")
+    count(v) > 0
+    v != "N/A"
+}
+
+allow if {
+    count(valid_fields) >= 5
+    count(field_lengths) == count(fields)
+}
+"#;
+        let program = compile_inline(rego, "data.bench.allow");
+        let input = Value::from_json_str(
+            r#"{"record":{"name":"Alice","email":"alice@example.com","phone":"555-1234","address":"123 Main St","city":"Somewhere","state":"CA","zip":"90210","country":"US"}}"#,
+        )
+        .expect("bad json");
+
+        let mut vm = hot_vm(program, input.clone(), ExecutionMode::RunToCompletion);
+        group.bench_function("builtin_heavy", |b| {
+            b.iter(|| {
+                vm.set_input(black_box(input.clone()));
+                black_box(vm.execute().unwrap())
+            })
+        });
+    }
+
+    // -------------------------------------------------------------------
+    // Opts 3-4: Rule caching + RuleInfo clone avoidance
+    //
+    // Helper rules called from several places. The rule cache avoids
+    // re-evaluation, and we avoid cloning RuleInfo per call.
+    // -------------------------------------------------------------------
+    {
+        let rego = r#"
+package bench
+
+is_allowed_role if {
+    input.user.role == "admin"
+}
+
+is_allowed_role if {
+    input.user.role == "editor"
+    input.user.active == true
+}
+
+is_allowed_role if {
+    input.user.role == "viewer"
+    input.action == "read"
+}
+
+check_permissions if {
+    is_allowed_role
+    count(input.user.groups) > 0
+}
+
+check_resource if {
+    is_allowed_role
+    input.resource.public == true
+}
+
+check_resource if {
+    is_allowed_role
+    some group in input.user.groups
+    group == input.resource.owner_group
+}
+
+allow if {
+    check_permissions
+    check_resource
+}
+"#;
+        let program = compile_inline(rego, "data.bench.allow");
+        let input = Value::from_json_str(
+            r#"{"user":{"role":"editor","active":true,"groups":["engineering","devops"]},"action":"write","resource":{"public":false,"owner_group":"engineering"}}"#,
+        )
+        .expect("bad json");
+
+        let mut vm = hot_vm(program, input.clone(), ExecutionMode::RunToCompletion);
+        group.bench_function("rule_caching", |b| {
+            b.iter(|| {
+                vm.set_input(black_box(input.clone()));
+                black_box(vm.execute().unwrap())
+            })
+        });
+    }
+
+    // -------------------------------------------------------------------
+    // Opts 9-10: Virtual data path allocation + borrow chain
+    //
+    // Rules at different depths in the package hierarchy, accessed via
+    // data.* references. Stresses virtual document lookup, path Vec
+    // allocations, and the borrow-walk optimization.
+    // -------------------------------------------------------------------
+    {
+        let rego = r#"
+package bench.config
+
+import future.keywords.in
+
+defaults := {
+    "timeout": 30,
+    "retries": 3,
+    "debug": false,
+}
+
+overrides := object.union(defaults, input.settings) if {
+    is_object(input.settings)
+} else := defaults
+
+auth.roles.admin := {"read", "write", "delete"}
+
+auth.roles.editor := {"read", "write"}
+
+auth.roles.viewer := {"read"}
+
+auth.enabled := true if {
+    count(data.bench.config.auth.roles) > 0
+}
+
+result := {
+    "config": overrides,
+    "auth_enabled": data.bench.config.auth.enabled,
+    "user_perms": data.bench.config.auth.roles[input.role],
+    "can_write": "write" in data.bench.config.auth.roles[input.role],
+}
+"#;
+        let program = compile_inline(rego, "data.bench.config.result");
+        let input =
+            Value::from_json_str(r#"{"role":"editor","settings":{"timeout":60,"verbose":true}}"#)
+                .expect("bad json");
+
+        let mut vm = hot_vm(program, input.clone(), ExecutionMode::RunToCompletion);
+        group.bench_function("virtual_document", |b| {
+            b.iter(|| {
+                vm.set_input(black_box(input.clone()));
+                black_box(vm.execute().unwrap())
+            })
+        });
+    }
+
+    // -------------------------------------------------------------------
+    // Opt 8: Entry point indexed lookup
+    //
+    // Measures the overhead of calling execute_entry_point_by_index
+    // directly (which used to allocate a Vec of all entry points).
+    // We compile a program with several entry points and exercise one.
+    // -------------------------------------------------------------------
+    {
+        let rego = r#"
+package bench
+
+ep_a := 1 if { input.x > 0 } else := 0
+
+ep_b := "yes" if { input.flag == true } else := "no"
+
+ep_c := count(input.items) if { is_array(input.items) } else := 0
+"#;
+
+        // Compile with multiple entry points
+        let entry_points = ["data.bench.ep_a", "data.bench.ep_b", "data.bench.ep_c"];
+        let entry_point_rc: Rc<str> = "data.bench.ep_a".into();
+        let mut engine = Engine::new();
+        engine
+            .add_policy("bench.rego".to_string(), rego.to_string())
+            .expect("failed to add policy");
+        let compiled = engine
+            .compile_with_entrypoint(&entry_point_rc)
+            .expect("failed to compile");
+        let program =
+            Compiler::compile_from_policy(&compiled, &entry_points).expect("compile to RVM");
+
+        let input =
+            Value::from_json_str(r#"{"x":42,"flag":true,"items":[1,2,3]}"#).expect("bad json");
+
+        // Benchmark executing different entry points by index
+        let mut vm = RegoVM::new();
+        vm.load_program(program);
+        vm.set_input(input.clone());
+        vm.execute().expect("warm-up failed");
+
+        for (idx, ep) in entry_points.iter().enumerate().take(3) {
+            let ep_name = ep.rsplit('.').next().unwrap_or("?");
+            group.bench_function(BenchmarkId::new("entry_point_idx", ep_name), |b| {
+                b.iter(|| {
+                    vm.set_input(black_box(input.clone()));
+                    black_box(vm.execute_entry_point_by_index(black_box(idx)).unwrap())
+                })
+            });
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Opt 11: Suspendable resume overhead
+    //
+    // Compare RunToCompletion vs Suspendable on the same workload to
+    // measure the overhead of mem::replace in resume() and the
+    // suspend/resume path.
+    // -------------------------------------------------------------------
+    {
+        // Use the rule_caching policy for a non-trivial workload
+        let rego = r#"
+package bench
+
+allowed_actions := {"read", "write", "list"}
+
+validate_action if {
+    input.action in allowed_actions
+}
+
+check_quota if {
+    input.usage < input.quota
+}
+
+check_region if {
+    input.region in {"us-east-1", "eu-west-1", "ap-southeast-1"}
+}
+
+allow if {
+    validate_action
+    check_quota
+    check_region
+    count(input.tags) > 0
+}
+"#;
+        let program = compile_inline(rego, "data.bench.allow");
+        let input = Value::from_json_str(
+            r#"{"action":"read","usage":50,"quota":100,"region":"us-east-1","tags":["prod","v2"]}"#,
+        )
+        .expect("bad json");
+
+        let mut vm_regular = hot_vm(
+            program.clone(),
+            input.clone(),
+            ExecutionMode::RunToCompletion,
+        );
+        let mut vm_suspend = hot_vm(program, input.clone(), ExecutionMode::Suspendable);
+
+        group.bench_function("suspend_overhead/regular", |b| {
+            b.iter(|| {
+                vm_regular.set_input(black_box(input.clone()));
+                black_box(vm_regular.execute().unwrap())
+            })
+        });
+        group.bench_function("suspend_overhead/suspendable", |b| {
+            b.iter(|| {
+                vm_suspend.set_input(black_box(input.clone()));
+                black_box(vm_suspend.execute().unwrap())
+            })
+        });
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
 // Criterion groups — organised for selective runs
 // ---------------------------------------------------------------------------
 
@@ -674,4 +1040,6 @@ criterion_group!(
     bench_end_to_end,
 );
 
-criterion_main!(cold_benches, hot_benches, misc_benches);
+criterion_group!(micro_benches, bench_micro);
+
+criterion_main!(cold_benches, hot_benches, misc_benches, micro_benches);

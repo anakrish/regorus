@@ -112,11 +112,17 @@ impl RegoVM {
         }
     }
 
+    /// Number of instructions between expensive timer checks (syscall amortization).
+    const CHECK_STRIDE: u32 = 16;
+
     pub(super) fn jump_to(&mut self, target: u32) -> Result<Value> {
         let program = self.program.clone();
         let target = self.convert_pc(target, "jump target")?;
         self.pc = target;
-        while self.pc < program.instructions.len() {
+        let instructions = &program.instructions;
+        let num_instructions = instructions.len();
+        let mut stride_counter: u32 = 0;
+        while self.pc < num_instructions {
             self.memory_check()?;
             if self.executed_instructions >= self.max_instructions {
                 return Err(VmError::InstructionLimitExceeded {
@@ -126,14 +132,21 @@ impl RegoVM {
                 });
             }
 
-            self.execution_timer_tick(1)?;
+            stride_counter = stride_counter.saturating_add(1);
+            if stride_counter >= Self::CHECK_STRIDE {
+                stride_counter = 0;
+                self.execution_timer_tick(Self::CHECK_STRIDE)?;
+            }
+
             self.executed_instructions = self.executed_instructions.saturating_add(1);
-            let instruction = program.instructions.get(self.pc).cloned().ok_or(
-                VmError::ProgramCounterOutOfBounds {
-                    pc: self.pc,
-                    instruction_count: program.instructions.len(),
-                },
-            )?;
+            let instruction =
+                instructions
+                    .get(self.pc)
+                    .copied()
+                    .ok_or(VmError::ProgramCounterOutOfBounds {
+                        pc: self.pc,
+                        instruction_count: num_instructions,
+                    })?;
 
             match self.execute_instruction(&program, instruction)? {
                 InstructionOutcome::Continue => {
@@ -291,33 +304,52 @@ impl RegoVM {
     }
 
     fn run_stackless_loop(&mut self, program: &Program, last_result: &mut Value) -> Result<()> {
+        let instructions = &program.instructions;
+        let num_instructions = instructions.len();
+        let has_breakpoints = !self.breakpoints.is_empty();
+        let mut stride_counter: u32 = 0;
+
         while !self.execution_stack.is_empty() {
             self.memory_check()?;
+            if self.executed_instructions >= self.max_instructions {
+                self.execution_state = ExecutionState::Error {
+                    error: VmError::InstructionLimitExceeded {
+                        limit: self.max_instructions,
+                        executed: self.executed_instructions,
+                        pc: self.pc,
+                    },
+                };
+                return Err(VmError::InstructionLimitExceeded {
+                    limit: self.max_instructions,
+                    executed: self.executed_instructions,
+                    pc: self.pc,
+                });
+            }
+
+            // ── Stride-based timer check (amortizes syscall) ─────────
+            stride_counter = stride_counter.saturating_add(1);
+            if stride_counter >= Self::CHECK_STRIDE {
+                stride_counter = 0;
+                self.execution_timer_tick(Self::CHECK_STRIDE)?;
+            }
+
+            // ── Pre-instruction checks (slow path) ──────────────────
             self.frame_pc_overridden = false;
-            let should_finalize_rule = self.execution_stack.last().is_some_and(|frame| {
-                matches!(
+
+            // NOTE: Rule frames with Finalizing phase are never pushed to
+            // execution_stack — finalization is always handled inline by
+            // handle_instruction_break / handle_instruction_error.
+            // Therefore no should_finalize_rule check is needed here.
+            debug_assert!(
+                !self.execution_stack.last().is_some_and(|frame| matches!(
                     frame.kind,
                     FrameKind::Rule(RuleFrameData {
                         phase: RuleFramePhase::Finalizing,
                         ..
                     })
-                )
-            });
-
-            if should_finalize_rule {
-                let frame = self
-                    .execution_stack
-                    .pop()
-                    .ok_or(VmError::MissingExecutionFrame {
-                        context: "finalizing rule",
-                        pc: self.pc,
-                    })?;
-                self.finalize_rule_execution_frame(frame, last_result)?;
-                if self.execution_stack.is_empty() {
-                    break;
-                }
-                continue;
-            }
+                )),
+                "Unexpected Finalizing rule frame on execution stack"
+            );
 
             let frame_pc = {
                 let frame = self
@@ -330,7 +362,8 @@ impl RegoVM {
                 frame.pc
             };
 
-            if self.execution_mode == ExecutionMode::Suspendable
+            if has_breakpoints
+                && self.execution_mode == ExecutionMode::Suspendable
                 && self.breakpoints.contains(&frame_pc)
             {
                 self.pc = frame_pc;
@@ -343,7 +376,7 @@ impl RegoVM {
                 return Ok(());
             }
 
-            if frame_pc >= program.instructions.len() {
+            if frame_pc >= num_instructions {
                 let frame = self
                     .execution_stack
                     .pop()
@@ -358,32 +391,18 @@ impl RegoVM {
                 continue;
             }
 
-            if self.executed_instructions >= self.max_instructions {
-                self.execution_state = ExecutionState::Error {
-                    error: VmError::InstructionLimitExceeded {
-                        limit: self.max_instructions,
-                        executed: self.executed_instructions,
-                        pc: frame_pc,
-                    },
-                };
-                return Err(VmError::InstructionLimitExceeded {
-                    limit: self.max_instructions,
-                    executed: self.executed_instructions,
-                    pc: frame_pc,
-                });
-            }
-
             self.pc = frame_pc;
-            if let Err(err) = self.execution_timer_tick(1) {
-                self.execution_state = ExecutionState::Error { error: err.clone() };
-                return Err(err);
-            }
-            let instruction = program.instructions.get(self.pc).cloned().ok_or(
-                VmError::ProgramCounterOutOfBounds {
-                    pc: self.pc,
-                    instruction_count: program.instructions.len(),
-                },
-            )?;
+            let instruction =
+                instructions
+                    .get(self.pc)
+                    .copied()
+                    .ok_or(VmError::ProgramCounterOutOfBounds {
+                        pc: self.pc,
+                        instruction_count: num_instructions,
+                    })?;
+
+            // Comprehension unwinding: if the top frame is a non-iterating
+            // comprehension that has reached its end PC, pop it.
             if let Some(frame_info) = self.execution_stack.last() {
                 if let FrameKind::Comprehension { ref context, .. } = frame_info.kind {
                     if context.iteration_state.is_none()
@@ -406,6 +425,7 @@ impl RegoVM {
                     }
                 }
             }
+            // ── Execute instruction ─────────────────────────────────
             self.executed_instructions = self.executed_instructions.saturating_add(1);
 
             let stack_depth_before = self.execution_stack.len();

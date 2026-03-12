@@ -818,7 +818,7 @@ impl Value {
     }
 
     pub(crate) fn is_empty_object(&self) -> bool {
-        self == &Value::new_object()
+        matches!(self, Value::Object(m) if m.is_empty())
     }
 }
 

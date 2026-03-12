@@ -729,29 +729,28 @@ impl RegoVM {
                 available: program.instruction_data.chained_index_params.len(),
             })?;
 
-        let mut current_value = self.get_register(params.root)?.clone();
+        let mut current_ref = self.get_register(params.root)?;
 
         for component in &params.path_components {
-            let key_value = match *component {
+            let key_ref = match *component {
                 LiteralOrRegister::Literal(idx) => program
                     .literals
                     .get(usize::from(idx))
                     .ok_or(VmError::LiteralIndexOutOfBounds {
                         index: idx,
                         pc: self.pc,
-                    })?
-                    .clone(),
-                LiteralOrRegister::Register(reg) => self.get_register(reg)?.clone(),
+                    })?,
+                LiteralOrRegister::Register(reg) => self.get_register(reg)?,
             };
 
-            current_value = current_value[&key_value].clone();
+            current_ref = &current_ref[key_ref];
 
-            if current_value == Value::Undefined {
+            if *current_ref == Value::Undefined {
                 break;
             }
         }
 
-        self.set_register(params.dest, current_value)?;
+        self.set_register(params.dest, current_ref.clone())?;
         Ok(InstructionOutcome::Continue)
     }
 }

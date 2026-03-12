@@ -131,7 +131,7 @@ impl Number {
         }
     }
 
-    fn is_zero(&self) -> bool {
+    pub(crate) fn is_zero(&self) -> bool {
         match self {
             Number::UInt(0) | Number::Int(0) => true,
             Number::Float(f) => *f == 0.0,
@@ -289,16 +289,23 @@ impl FromStr for Number {
 
 impl PartialEq for Number {
     fn eq(&self, other: &Self) -> bool {
-        if let (Some(a), Some(b)) = (self.to_bigint_owned(), other.to_bigint_owned()) {
-            return a == b;
+        match (self, other) {
+            (Number::UInt(a), Number::UInt(b)) => a == b,
+            (Number::Int(a), Number::Int(b)) => a == b,
+            (Number::UInt(a), Number::Int(b)) => *b >= 0 && *a == *b as u64,
+            (Number::Int(a), Number::UInt(b)) => *a >= 0 && *a as u64 == *b,
+            _ => {
+                if let (Some(a), Some(b)) = (self.to_bigint_owned(), other.to_bigint_owned()) {
+                    return a == b;
+                }
+                let a = self.to_f64_lossy();
+                let b = other.to_f64_lossy();
+                if a.is_nan() || b.is_nan() {
+                    return false;
+                }
+                a == b
+            }
         }
-
-        let a = self.to_f64_lossy();
-        let b = other.to_f64_lossy();
-        if a.is_nan() || b.is_nan() {
-            return false;
-        }
-        a == b
     }
 }
 
@@ -306,13 +313,32 @@ impl Eq for Number {}
 
 impl Ord for Number {
     fn cmp(&self, other: &Self) -> Ordering {
-        if let (Some(a), Some(b)) = (self.to_bigint_owned(), other.to_bigint_owned()) {
-            return a.cmp(&b);
+        match (self, other) {
+            (Number::UInt(a), Number::UInt(b)) => a.cmp(b),
+            (Number::Int(a), Number::Int(b)) => a.cmp(b),
+            (Number::UInt(a), Number::Int(b)) => {
+                if *b < 0 {
+                    Ordering::Greater
+                } else {
+                    a.cmp(&(*b as u64))
+                }
+            }
+            (Number::Int(a), Number::UInt(b)) => {
+                if *a < 0 {
+                    Ordering::Less
+                } else {
+                    (*a as u64).cmp(b)
+                }
+            }
+            _ => {
+                if let (Some(a), Some(b)) = (self.to_bigint_owned(), other.to_bigint_owned()) {
+                    return a.cmp(&b);
+                }
+                self.to_f64_lossy()
+                    .partial_cmp(&other.to_f64_lossy())
+                    .unwrap_or(Ordering::Equal)
+            }
         }
-
-        self.to_f64_lossy()
-            .partial_cmp(&other.to_f64_lossy())
-            .unwrap_or(Ordering::Equal)
     }
 }
 

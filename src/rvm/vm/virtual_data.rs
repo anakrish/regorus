@@ -17,7 +17,7 @@ impl RegoVM {
     ) -> Result<Value> {
         let mut root_path = Vec::new();
         for component in path_components {
-            let key_value = self.literal_or_register_value(component)?;
+            let key_value = self.literal_or_register_value(component)?.clone();
             root_path.push(key_value);
         }
 
@@ -220,7 +220,7 @@ impl RegoVM {
         for (i, component) in params.path_components.iter().enumerate() {
             let key_value = self.literal_or_register_value(component)?;
 
-            current_node = &current_node[&key_value];
+            current_node = &current_node[key_value];
             components_consumed = self.checked_add_one(i, "path components traversed")?;
 
             match *current_node {
@@ -246,7 +246,7 @@ impl RegoVM {
 
                         for component in params.path_components.iter().skip(components_consumed) {
                             let key_value = self.literal_or_register_value(component)?;
-                            ref_val = &ref_val[&key_value];
+                            ref_val = &ref_val[key_value];
                         }
 
                         let leaf = ref_val.clone();
@@ -267,7 +267,7 @@ impl RegoVM {
 
                 for component in &params.path_components {
                     let key_value = self.literal_or_register_value(component)?;
-                    data_ref = &data_ref[&key_value];
+                    data_ref = &data_ref[key_value];
                 }
 
                 let result = data_ref.clone();
@@ -293,8 +293,8 @@ impl RegoVM {
         Ok(())
     }
 
-    fn literal_or_register_value(&self, source: &LiteralOrRegister) -> Result<Value> {
-        let value = match *source {
+    fn literal_or_register_value(&self, source: &LiteralOrRegister) -> Result<&Value> {
+        match *source {
             LiteralOrRegister::Literal(ref idx) => self
                 .program
                 .literals
@@ -302,11 +302,8 @@ impl RegoVM {
                 .ok_or(VmError::LiteralIndexOutOfBounds {
                     index: *idx,
                     pc: self.pc,
-                })?
-                .clone(),
-            LiteralOrRegister::Register(ref reg) => self.get_register(*reg)?.clone(),
-        };
-
-        Ok(value)
+                }),
+            LiteralOrRegister::Register(ref reg) => self.get_register(*reg),
+        }
     }
 }

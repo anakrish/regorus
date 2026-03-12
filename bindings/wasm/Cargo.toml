@@ -40,6 +40,7 @@ cedar = ["regorus/cedar"]
 ast = ["regorus/ast"]
 azure_policy = ["regorus/azure_policy"]
 coverage = ["regorus/coverage"]
+policy-analysis = ["regorus/policy-analysis"]
 
 [dependencies]
 regorus = { path  = "../..", default-features = false, features = ["arc", "rvm"] }

@@ -1,0 +1,14 @@
+{
+  "name": "regorus-web-demo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Regorus policy analysis web demo — fully in WASM",
+  "scripts": {
+    "build:wasm": "cd ../../bindings/wasm && wasm-pack build --target web --release -- --features policy-analysis",
+    "start": "node server.mjs",
+    "build": "npm run build:wasm"
+  },
+  "dependencies": {
+    "z3-solver": "^4.16.0"
+  }
+}

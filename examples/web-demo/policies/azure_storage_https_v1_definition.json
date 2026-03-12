@@ -1,0 +1,35 @@
+{
+  "properties": {
+    "displayName": "Storage accounts should enforce HTTPS-only traffic",
+    "policyType": "Custom",
+    "mode": "Indexed",
+    "parameters": {
+      "effect": {
+        "type": "String",
+        "allowedValues": [
+          "deny",
+          "audit",
+          "disabled"
+        ],
+        "defaultValue": "deny"
+      }
+    },
+    "policyRule": {
+      "if": {
+        "allOf": [
+          {
+            "field": "type",
+            "equals": "Microsoft.Storage/storageAccounts"
+          },
+          {
+            "field": "Microsoft.Storage/storageAccounts/supportsHttpsTrafficOnly",
+            "equals": false
+          }
+        ]
+      },
+      "then": {
+        "effect": "[parameters('effect')]"
+      }
+    }
+  }
+}

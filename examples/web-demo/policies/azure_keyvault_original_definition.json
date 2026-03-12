@@ -1,0 +1,68 @@
+{
+  "properties": {
+    "displayName": "Key Vault – enterprise hardening baseline (original)",
+    "policyType": "Custom",
+    "mode": "Indexed",
+    "description": "Production security baseline for Azure Key Vault.  Denies any vault that fails ANY of three compliance groups: (1) Network isolation — public access enabled AND no firewall default-deny, (2) Data protection — soft-delete OR purge-protection missing, (3) Access control — premium-tier vaults must use RBAC authorization.  Uses the 'list violations' style: anyOf at the top with nested allOf/anyOf per group.",
+    "parameters": {
+      "effect": {
+        "type": "String",
+        "allowedValues": ["deny", "audit", "disabled"],
+        "defaultValue": "deny"
+      }
+    },
+    "policyRule": {
+      "if": {
+        "allOf": [
+          {
+            "field": "type",
+            "equals": "Microsoft.KeyVault/vaults"
+          },
+          {
+            "anyOf": [
+              {
+                "allOf": [
+                  {
+                    "field": "Microsoft.KeyVault/vaults/publicNetworkAccess",
+                    "notEquals": "Disabled"
+                  },
+                  {
+                    "field": "Microsoft.KeyVault/vaults/networkAcls.defaultAction",
+                    "notEquals": "Deny"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "field": "Microsoft.KeyVault/vaults/enableSoftDelete",
+                    "equals": false
+                  },
+                  {
+                    "field": "Microsoft.KeyVault/vaults/enablePurgeProtection",
+                    "equals": false
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "field": "Microsoft.KeyVault/vaults/sku.name",
+                    "equals": "premium"
+                  },
+                  {
+                    "field": "Microsoft.KeyVault/vaults/enableRbacAuthorization",
+                    "equals": false
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "then": {
+        "effect": "[parameters('effect')]"
+      }
+    }
+  }
+}

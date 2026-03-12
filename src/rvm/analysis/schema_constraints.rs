@@ -1,9 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! JSON Schema → Z3 constraint generator.
+//! JSON Schema → SMT constraint generator.
 //!
-//! Walks a subset of JSON Schema (draft-07 style) and emits Z3 constraints
+//! Walks a subset of JSON Schema (draft-07 style) and emits SMT constraints
 //! that restrict the symbolic `input` so that only well-typed, non-degenerate
 //! values are produced by the solver.
 //!
@@ -23,9 +23,10 @@
 //! | `uniqueItems` | Pairwise ≠ across all elements of a plain-value array     |
 
 use alloc::format;
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-use z3::ast::{Ast, Bool as Z3Bool, Int as Z3Int};
+use regorus_smt::SmtExpr;
 
 use super::path_registry::PathRegistry;
 use super::types::ValueSort;
@@ -36,17 +37,15 @@ use super::types::ValueSort;
 /// `prefix` is the access-path prefix (typically `"input"`).
 /// `max_elements` caps the array expansion depth (from `AnalysisConfig::max_loop_depth`).
 ///
-/// Returns a vector of Z3 constraints that should be asserted into the solver.
-pub fn apply_schema_constraints<'ctx>(
-    ctx: &'ctx z3::Context,
-    registry: &mut PathRegistry<'ctx>,
+/// Returns a vector of SMT constraints that should be asserted into the solver.
+pub fn apply_schema_constraints(
+    registry: &mut PathRegistry,
     schema: &serde_json::Value,
     prefix: &str,
     max_elements: usize,
-) -> Vec<Z3Bool<'ctx>> {
+) -> Vec<SmtExpr> {
     let mut constraints = Vec::new();
     walk_schema(
-        ctx,
         registry,
         schema,
         prefix,
@@ -57,13 +56,12 @@ pub fn apply_schema_constraints<'ctx>(
 }
 
 /// Recursive schema walker.
-fn walk_schema<'ctx>(
-    ctx: &'ctx z3::Context,
-    registry: &mut PathRegistry<'ctx>,
+fn walk_schema(
+    registry: &mut PathRegistry,
     schema: &serde_json::Value,
     path: &str,
     max_elements: usize,
-    constraints: &mut Vec<Z3Bool<'ctx>>,
+    constraints: &mut Vec<SmtExpr>,
 ) {
     let obj = match schema.as_object() {
         Some(o) => o,
@@ -107,7 +105,6 @@ fn walk_schema<'ctx>(
         for (key, sub_schema) in props {
             let child_path = format!("{}.{}", path, key);
             walk_schema(
-                ctx,
                 registry,
                 sub_schema,
                 &child_path,
@@ -145,7 +142,6 @@ fn walk_schema<'ctx>(
         for idx in 0..n {
             let child_path = format!("{}[{}]", path, idx);
             walk_schema(
-                ctx,
                 registry,
                 items_schema,
                 &child_path,
@@ -165,12 +161,12 @@ fn walk_schema<'ctx>(
         // an object, assert all its required fields.
         for idx in 0..min_items.min(n) {
             let child_path = format!("{}[{}]", path, idx);
-            apply_min_items_defined(ctx, registry, items_schema, &child_path, constraints);
+            apply_min_items_defined(registry, items_schema, &child_path, constraints);
         }
 
         // ---- x-unique fields across array siblings ----
         if let Some(unique_fields) = obj.get("x-unique").and_then(|u| u.as_array()) {
-            apply_x_unique(ctx, registry, unique_fields, path, n, constraints);
+            apply_x_unique(registry, unique_fields, path, n, constraints);
         }
 
         // ---- uniqueItems: pairwise ≠ for plain-value arrays ----
@@ -179,7 +175,7 @@ fn walk_schema<'ctx>(
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
         {
-            apply_unique_items(ctx, registry, path, n, constraints);
+            apply_unique_items(registry, path, n, constraints);
         }
 
         // ---- closed-world: elements beyond maxItems are undefined ----
@@ -191,7 +187,6 @@ fn walk_schema<'ctx>(
             for idx in n..max_elements {
                 let child_path = format!("{}[{}]", path, idx);
                 assert_element_undefined(
-                    ctx,
                     registry,
                     items_schema,
                     &child_path,
@@ -207,19 +202,9 @@ fn walk_schema<'ctx>(
         if min_len > 0 {
             // Ensure the string variable exists.
             let str_var = registry.get_string(path);
-            // The z3 crate doesn't expose a `length()` method on String, nor
-            // does it make `Context::z3_ctx` public.  We extract the raw
-            // context pointer from the single-field `Context` struct in order
-            // to call `Z3_mk_seq_length` directly.
-            #[allow(unsafe_code)]
-            let str_len = unsafe {
-                let ctx_ptr: *const z3::Context = ctx;
-                let raw_ctx: z3_sys::Z3_context = *(ctx_ptr as *const z3_sys::Z3_context);
-                let len_ast = z3_sys::Z3_mk_seq_length(raw_ctx, str_var.get_z3_ast());
-                Z3Int::wrap(ctx, len_ast)
-            };
-            let min_val = Z3Int::from_i64(ctx, min_len as i64);
-            let ge = str_len.ge(&min_val);
+            let str_len = SmtExpr::SeqLength(Box::new(str_var));
+            let min_val = SmtExpr::IntLit(min_len as i64);
+            let ge = SmtExpr::ge(str_len, min_val);
             constraints.push(ge);
         }
     }
@@ -228,14 +213,12 @@ fn walk_schema<'ctx>(
     if let Some(enum_vals) = obj.get("enum").and_then(|e| e.as_array()) {
         let mut disj = Vec::new();
         for val in enum_vals {
-            if let Some(eq) = value_equals_json(ctx, registry, path, val, sort) {
+            if let Some(eq) = value_equals_json(registry, path, val, sort) {
                 disj.push(eq);
             }
         }
         if !disj.is_empty() {
-            let refs: Vec<&Z3Bool<'ctx>> = disj.iter().collect();
-            let or = Z3Bool::or(ctx, &refs);
-            constraints.push(or);
+            constraints.push(SmtExpr::Or(disj));
         }
     }
 }
@@ -246,12 +229,11 @@ fn walk_schema<'ctx>(
 /// For objects with required fields, those fields become defined.
 /// For objects without required fields, we assert the first property is defined
 /// as a proxy.
-fn apply_min_items_defined<'ctx>(
-    _ctx: &'ctx z3::Context,
-    registry: &mut PathRegistry<'ctx>,
+fn apply_min_items_defined(
+    registry: &mut PathRegistry,
     items_schema: &serde_json::Value,
     element_path: &str,
-    constraints: &mut Vec<Z3Bool<'ctx>>,
+    constraints: &mut Vec<SmtExpr>,
 ) {
     let obj = match items_schema.as_object() {
         Some(o) => o,
@@ -297,13 +279,12 @@ fn apply_min_items_defined<'ctx>(
 /// `maxItems` must not exist in the input. We walk the item schema
 /// recursively and assert `NOT defined` for every path that `walk_schema`
 /// would create — leaf variables, object properties, and nested arrays.
-fn assert_element_undefined<'ctx>(
-    ctx: &'ctx z3::Context,
-    registry: &mut PathRegistry<'ctx>,
+fn assert_element_undefined(
+    registry: &mut PathRegistry,
     items_schema: &serde_json::Value,
     element_path: &str,
     max_elements: usize,
-    constraints: &mut Vec<Z3Bool<'ctx>>,
+    constraints: &mut Vec<SmtExpr>,
 ) {
     let obj = match items_schema.as_object() {
         Some(o) => o,
@@ -319,7 +300,6 @@ fn assert_element_undefined<'ctx>(
                 for (key, sub_schema) in props {
                     let child_path = format!("{}.{}", element_path, key);
                     assert_element_undefined(
-                        ctx,
                         registry,
                         sub_schema,
                         &child_path,
@@ -341,7 +321,6 @@ fn assert_element_undefined<'ctx>(
                 for idx in 0..nested_max {
                     let child_path = format!("{}[{}]", element_path, idx);
                     assert_element_undefined(
-                        ctx,
                         registry,
                         nested_items,
                         &child_path,
@@ -362,7 +341,7 @@ fn assert_element_undefined<'ctx>(
             };
             registry.get_or_create(element_path, sort, true, 0);
             let entry = registry.get(element_path).unwrap();
-            constraints.push(entry.defined.clone().not());
+            constraints.push(SmtExpr::not(entry.defined.clone()));
         }
     }
 }
@@ -371,12 +350,11 @@ fn assert_element_undefined<'ctx>(
 ///
 /// For arrays whose items are strings, ints, or bools (not objects),
 /// this asserts that all defined elements are pairwise distinct.
-fn apply_unique_items<'ctx>(
-    ctx: &'ctx z3::Context,
-    registry: &mut PathRegistry<'ctx>,
+fn apply_unique_items(
+    registry: &mut PathRegistry,
     array_path: &str,
     num_elements: usize,
-    constraints: &mut Vec<Z3Bool<'ctx>>,
+    constraints: &mut Vec<SmtExpr>,
 ) {
     for i in 0..num_elements {
         for j in (i + 1)..num_elements {
@@ -392,27 +370,27 @@ fn apply_unique_items<'ctx>(
                     let vj = registry.get_string(&path_j);
                     let di = registry.get(&path_i).unwrap().defined.clone();
                     let dj = registry.get(&path_j).unwrap().defined.clone();
-                    let neq = vi._eq(&vj).not();
-                    let both_def = Z3Bool::and(ctx, &[&di, &dj]);
-                    constraints.push(Z3Bool::implies(&both_def, &neq));
+                    let neq = SmtExpr::not(SmtExpr::eq(vi.clone(), vj.clone()));
+                    let both_def = SmtExpr::and2(di, dj);
+                    constraints.push(SmtExpr::implies(both_def, neq));
                 }
                 (Some(ValueSort::Int), Some(ValueSort::Int)) => {
                     let vi = registry.get_int(&path_i);
                     let vj = registry.get_int(&path_j);
                     let di = registry.get(&path_i).unwrap().defined.clone();
                     let dj = registry.get(&path_j).unwrap().defined.clone();
-                    let neq = vi._eq(&vj).not();
-                    let both_def = Z3Bool::and(ctx, &[&di, &dj]);
-                    constraints.push(Z3Bool::implies(&both_def, &neq));
+                    let neq = SmtExpr::not(SmtExpr::eq(vi.clone(), vj.clone()));
+                    let both_def = SmtExpr::and2(di, dj);
+                    constraints.push(SmtExpr::implies(both_def, neq));
                 }
                 (Some(ValueSort::Bool), Some(ValueSort::Bool)) => {
                     let vi = registry.get_bool(&path_i);
                     let vj = registry.get_bool(&path_j);
                     let di = registry.get(&path_i).unwrap().defined.clone();
                     let dj = registry.get(&path_j).unwrap().defined.clone();
-                    let neq = vi._eq(&vj).not();
-                    let both_def = Z3Bool::and(ctx, &[&di, &dj]);
-                    constraints.push(Z3Bool::implies(&both_def, &neq));
+                    let neq = SmtExpr::not(SmtExpr::eq(vi.clone(), vj.clone()));
+                    let both_def = SmtExpr::and2(di, dj);
+                    constraints.push(SmtExpr::implies(both_def, neq));
                 }
                 _ => {}
             }
@@ -425,13 +403,12 @@ fn apply_unique_items<'ctx>(
 /// `unique_fields` is a JSON array of field names (strings).
 /// For each field name, we create pairwise ≠ constraints across all
 /// array element indices.
-fn apply_x_unique<'ctx>(
-    ctx: &'ctx z3::Context,
-    registry: &mut PathRegistry<'ctx>,
+fn apply_x_unique(
+    registry: &mut PathRegistry,
     unique_fields: &[serde_json::Value],
     array_path: &str,
     num_elements: usize,
-    constraints: &mut Vec<Z3Bool<'ctx>>,
+    constraints: &mut Vec<SmtExpr>,
 ) {
     for field_val in unique_fields {
         let field_name = match field_val.as_str() {
@@ -455,36 +432,36 @@ fn apply_x_unique<'ctx>(
                         // Both defined → not equal.
                         let di = registry.get(&path_i).unwrap().defined.clone();
                         let dj = registry.get(&path_j).unwrap().defined.clone();
-                        let neq = vi._eq(&vj).not();
-                        let both_def = Z3Bool::and(ctx, &[&di, &dj]);
-                        constraints.push(Z3Bool::implies(&both_def, &neq));
+                        let neq = SmtExpr::not(SmtExpr::eq(vi.clone(), vj.clone()));
+                        let both_def = SmtExpr::and2(di, dj);
+                        constraints.push(SmtExpr::implies(both_def, neq));
                     }
                     (Some(ValueSort::Int), Some(ValueSort::Int)) => {
                         let vi = registry.get_int(&path_i);
                         let vj = registry.get_int(&path_j);
                         let di = registry.get(&path_i).unwrap().defined.clone();
                         let dj = registry.get(&path_j).unwrap().defined.clone();
-                        let neq = vi._eq(&vj).not();
-                        let both_def = Z3Bool::and(ctx, &[&di, &dj]);
-                        constraints.push(Z3Bool::implies(&both_def, &neq));
+                        let neq = SmtExpr::not(SmtExpr::eq(vi.clone(), vj.clone()));
+                        let both_def = SmtExpr::and2(di, dj);
+                        constraints.push(SmtExpr::implies(both_def, neq));
                     }
                     (Some(ValueSort::Bool), Some(ValueSort::Bool)) => {
                         let vi = registry.get_bool(&path_i);
                         let vj = registry.get_bool(&path_j);
                         let di = registry.get(&path_i).unwrap().defined.clone();
                         let dj = registry.get(&path_j).unwrap().defined.clone();
-                        let neq = vi._eq(&vj).not();
-                        let both_def = Z3Bool::and(ctx, &[&di, &dj]);
-                        constraints.push(Z3Bool::implies(&both_def, &neq));
+                        let neq = SmtExpr::not(SmtExpr::eq(vi.clone(), vj.clone()));
+                        let both_def = SmtExpr::and2(di, dj);
+                        constraints.push(SmtExpr::implies(both_def, neq));
                     }
                     (Some(ValueSort::Real), Some(ValueSort::Real)) => {
                         let vi = registry.get_real(&path_i);
                         let vj = registry.get_real(&path_j);
                         let di = registry.get(&path_i).unwrap().defined.clone();
                         let dj = registry.get(&path_j).unwrap().defined.clone();
-                        let neq = vi._eq(&vj).not();
-                        let both_def = Z3Bool::and(ctx, &[&di, &dj]);
-                        constraints.push(Z3Bool::implies(&both_def, &neq));
+                        let neq = SmtExpr::not(SmtExpr::eq(vi.clone(), vj.clone()));
+                        let both_def = SmtExpr::and2(di, dj);
+                        constraints.push(SmtExpr::implies(both_def, neq));
                     }
                     _ => {
                         // Sorts don't match or unknown — skip.
@@ -495,35 +472,34 @@ fn apply_x_unique<'ctx>(
     }
 }
 
-/// Build a Z3 equality constraint: `path == json_value`.
-fn value_equals_json<'ctx>(
-    ctx: &'ctx z3::Context,
-    registry: &mut PathRegistry<'ctx>,
+/// Build an SMT equality constraint: `path == json_value`.
+fn value_equals_json(
+    registry: &mut PathRegistry,
     path: &str,
     val: &serde_json::Value,
     _hint_sort: Option<ValueSort>,
-) -> Option<Z3Bool<'ctx>> {
+) -> Option<SmtExpr> {
     match val {
         serde_json::Value::String(s) => {
             let var = registry.get_string(path);
-            let lit = z3::ast::String::from_str(ctx, s).unwrap();
-            Some(var._eq(&lit))
+            let lit = SmtExpr::StringLit(s.clone());
+            Some(SmtExpr::eq(var, lit))
         }
         serde_json::Value::Bool(b) => {
             let var = registry.get_bool(path);
-            let lit = Z3Bool::from_bool(ctx, *b);
-            Some(var._eq(&lit))
+            let lit = SmtExpr::bool_lit(*b);
+            Some(SmtExpr::eq(var, lit))
         }
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
                 let var = registry.get_int(path);
-                let lit = Z3Int::from_i64(ctx, i);
-                Some(var._eq(&lit))
+                let lit = SmtExpr::IntLit(i);
+                Some(SmtExpr::eq(var, lit))
             } else if let Some(f) = n.as_f64() {
                 // Approximate — use string representation for real.
                 let var = registry.get_int(path);
-                let lit = Z3Int::from_i64(ctx, f as i64);
-                Some(var._eq(&lit))
+                let lit = SmtExpr::IntLit(f as i64);
+                Some(SmtExpr::eq(var, lit))
             } else {
                 None
             }

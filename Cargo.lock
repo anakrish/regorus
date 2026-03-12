@@ -1339,6 +1339,7 @@ dependencies = [
  "rand",
  "regex",
  "regorus-mimalloc",
+ "regorus-smt",
  "semver",
  "serde",
  "serde_json",
@@ -1365,6 +1366,15 @@ name = "regorus-mimalloc-sys"
 version = "2.2.6"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "regorus-smt"
+version = "0.1.0"
+dependencies = [
+ "itoa",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

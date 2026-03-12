@@ -1,0 +1,56 @@
+{
+    "type": "object",
+    "required": ["containers", "hosts", "volumes"],
+    "properties": {
+        "containers": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "x-unique": ["name"],
+            "items": {
+                "type": "object",
+                "required": ["name", "privileged", "host_id", "volume_ids"],
+                "properties": {
+                    "name":       { "type": "string",  "enum": ["web", "api", "worker"] },
+                    "privileged": { "type": "boolean" },
+                    "host_id":    { "type": "string",  "enum": ["host1", "host2", "host3"] },
+                    "volume_ids": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 2,
+                        "uniqueItems": true,
+                        "items": { "type": "string", "enum": ["vol1", "vol2", "vol3"] }
+                    }
+                }
+            }
+        },
+        "hosts": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "x-unique": ["id"],
+            "items": {
+                "type": "object",
+                "required": ["id", "public"],
+                "properties": {
+                    "id":     { "type": "string",  "enum": ["host1", "host2", "host3"] },
+                    "public": { "type": "boolean" }
+                }
+            }
+        },
+        "volumes": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "x-unique": ["id"],
+            "items": {
+                "type": "object",
+                "required": ["id", "encrypted"],
+                "properties": {
+                    "id":        { "type": "string",  "enum": ["vol1", "vol2", "vol3"] },
+                    "encrypted": { "type": "boolean" }
+                }
+            }
+        }
+    }
+}

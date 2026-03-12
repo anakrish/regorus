@@ -1,0 +1,19 @@
+[package]
+name = "regorus-smt"
+description = "SMT abstraction layer — Z3-compatible expression AST, SMT-LIB2 renderer, and solver interface"
+version = "0.1.0"
+edition = "2021"
+license = "MIT AND Apache-2.0"
+repository = "https://github.com/microsoft/regorus"
+
+[lib]
+doctest = false
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+itoa = "1.0"

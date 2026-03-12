@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Policy Intelligence — Z3 Symbolic Analysis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<!-- coi-serviceworker: enables SharedArrayBuffer on GitHub Pages (no server headers needed) -->
+<script src="coi-serviceworker.js"></script>
+</head>
+<body>
+
+<header>
+  <h1>⚡ Policy Intelligence</h1>
+  <p>Z3 SMT Solver — Symbolic Policy Analysis for Rego, Cedar &amp; Azure Policy</p>
+</header>
+
+<div class="app">
+  <div id="initStatus" class="init-status">Loading WASM modules…</div>
+  <nav class="tab-bar" id="tabBar"></nav>
+  <div id="tabPanels"></div>
+</div>
+
+<!-- Z3 WASM (loaded as a global script; provides window.initZ3) -->
+<script src="/z3-solver/build/z3-built.js"></script>
+
+<!-- Application modules -->
+<script type="module">
+  import { DEMOS, OVERVIEW_CARDS, TAG_CLASSES, LANG_BADGE } from './demos.js';
+  import { initApp } from './app.js';
+
+  // Make config available globally for app.js internals
+  window.DEMOS = DEMOS;
+  window.OVERVIEW_CARDS = OVERVIEW_CARDS;
+  window.TAG_CLASSES = TAG_CLASSES;
+  window.LANG_BADGE = LANG_BADGE;
+
+  initApp();
+</script>
+
+</body>
+</html>

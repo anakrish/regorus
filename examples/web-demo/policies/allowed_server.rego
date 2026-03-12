@@ -1,0 +1,26 @@
+package example
+
+default allow := false                              # unless otherwise defined, allow is false
+
+allow := true if {                                     # allow is true if...
+   count(violation) == 0                           # there are zero violations.
+}
+
+violation contains server.id if {                              # a server is in the violation set if...
+    some server in public_server
+    "http" in server.protocols                  # it contains the insecure "http" protocol.
+}
+
+violation contains server.id if {                              # a server is in the violation set if...
+    some server in input.servers                      # it exists in the input.servers collection and...
+    "telnet" in server.protocols                 # it contains the "telnet" protocol.
+}
+
+public_server contains server if  {                             # a server exists in the public_server set if...
+    some server in input.servers 
+    some port in input.ports                  # it exists in the input.servers collection and...
+    port.id in server.ports   
+    some network in input.networks         # it references a port in the input.ports collection and...
+    port.network == network.id  # the port references a network in the input.networks collection and...
+    network.public                        # the network is public.
+}

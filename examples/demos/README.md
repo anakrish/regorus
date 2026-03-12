@@ -9,21 +9,21 @@ executing the policy at all.
 ## Quick start
 
 ```bash
-# One-time build (requires Z3: brew install z3)
-BINDGEN_EXTRA_CLANG_ARGS="-I/opt/homebrew/include" \
-LIBRARY_PATH="/opt/homebrew/lib" \
-cargo build --example regorus --features z3-analysis,cedar
+# One-time install (requires Z3: brew install z3)
+Z3_SYS_Z3_HEADER=/opt/homebrew/include/z3.h \
+LIBRARY_PATH=/opt/homebrew/lib \
+cargo install --path . --example regorus --features z3-analysis,cedar
 
 # Run all demos (Rust + Python)
 ./examples/demos/run_demos.sh
 ```
 
-For Azure Policy demos (21–33), build with `azure_policy` as well:
+For Azure Policy demos (21–33), install with `azure_policy` as well:
 
 ```bash
-BINDGEN_EXTRA_CLANG_ARGS="-I/opt/homebrew/include" \
-LIBRARY_PATH="/opt/homebrew/lib" \
-cargo build --example regorus --features z3-analysis,cedar,azure_policy
+Z3_SYS_Z3_HEADER=/opt/homebrew/include/z3.h \
+LIBRARY_PATH=/opt/homebrew/lib \
+cargo install --path . --example regorus --features z3-analysis,cedar,azure_policy
 ```
 
 **Python-only alternative** (no C toolchain needed):
@@ -245,7 +245,7 @@ permit-unless-forbid structure are all directly visible.
 
 The same analysis can be performed with the **Python Z3 analyzer** — a
 pure-Python reimplementation under [`../../tools/z3analyze/`](../../tools/z3analyze/).
-It requires only `pip install z3-solver` (no C toolchain or bindgen).
+It requires only `pip install z3-solver` (no C toolchain needed).
 
 Pre-compiled bytecode JSON files are checked in alongside the policies:
 

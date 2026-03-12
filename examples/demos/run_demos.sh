@@ -8,18 +8,24 @@
 #
 # Prerequisites:
 #   brew install z3          # Z3 SMT solver
-#   # Build once:
-#   BINDGEN_EXTRA_CLANG_ARGS="-I/opt/homebrew/include" \
-#   LIBRARY_PATH="/opt/homebrew/lib" \
-#   cargo build --example regorus --features z3-analysis,cedar,azure_policy
+#   # Install once:
+#   Z3_SYS_Z3_HEADER=/opt/homebrew/include/z3.h \
+#   LIBRARY_PATH=/opt/homebrew/lib \
+#   cargo install --path . --example regorus \
+#     --features z3-analysis,policy-analysis,cedar,azure_policy
 # ============================================================
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-BIN="cargo run --example regorus --features z3-analysis,cedar,azure_policy --"
-export BINDGEN_EXTRA_CLANG_ARGS="${BINDGEN_EXTRA_CLANG_ARGS:--I/opt/homebrew/include}"
-export LIBRARY_PATH="${LIBRARY_PATH:-/opt/homebrew/lib}"
+# Use the installed binary; fall back to cargo run if not installed.
+if command -v regorus &>/dev/null; then
+  BIN="regorus"
+else
+  BIN="cargo run --example regorus --features z3-analysis,cedar,azure_policy --"
+  export Z3_SYS_Z3_HEADER="${Z3_SYS_Z3_HEADER:-/opt/homebrew/include/z3.h}"
+  export LIBRARY_PATH="${LIBRARY_PATH:-/opt/homebrew/lib}"
+fi
 
 # Helpers
 sep()   { printf '\n%s\n' "$(printf '═%.0s' {1..70})"; }

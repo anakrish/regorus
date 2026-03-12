@@ -1,0 +1,51 @@
+{
+  "type": "object",
+  "required": ["resource"],
+  "properties": {
+    "resource": {
+      "type": "object",
+      "required": [
+        "type",
+        "publicNetworkAccess",
+        "enableSoftDelete",
+        "enablePurgeProtection",
+        "enableRbacAuthorization",
+        "networkAcls.defaultAction",
+        "sku.name"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["Microsoft.KeyVault/vaults"]
+        },
+        "publicNetworkAccess": {
+          "type": "string",
+          "enum": ["Enabled", "Disabled"]
+        },
+        "enableSoftDelete": {
+          "type": "boolean"
+        },
+        "enablePurgeProtection": {
+          "type": "boolean"
+        },
+        "enableRbacAuthorization": {
+          "type": "boolean"
+        },
+        "networkAcls.defaultAction": {
+          "type": "string",
+          "enum": ["Allow", "Deny"]
+        },
+        "sku.name": {
+          "type": "string",
+          "enum": ["standard", "premium"]
+        }
+      }
+    },
+    "parameters": {
+      "type": "object"
+    },
+    "context": {
+      "type": "object"
+    }
+  }
+}

@@ -81,8 +81,20 @@ fn error_to_jsvalue<E: std::fmt::Display>(e: E) -> JsValue {
 fn parse_alias_map_json(
     alias_map_json: Option<String>,
 ) -> Result<BTreeMap<String, String>, JsValue> {
+    use regorus::languages::azure_policy::aliases::AliasRegistry;
     match alias_map_json {
-        Some(json) => serde_json::from_str(&json).map_err(error_to_jsvalue),
+        Some(json) => {
+            // Try parsing as a flat BTreeMap<String, String> first (pre-processed).
+            if let Ok(map) = serde_json::from_str::<BTreeMap<String, String>>(&json) {
+                return Ok(map);
+            }
+            // Otherwise, parse as the raw provider-alias catalog array and convert.
+            let mut registry = AliasRegistry::new();
+            registry
+                .load_from_json(&json)
+                .map_err(error_to_jsvalue)?;
+            Ok(registry.alias_map())
+        }
         None => Ok(BTreeMap::new()),
     }
 }
@@ -497,6 +509,437 @@ impl Rvm {
 impl Default for Rvm {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Policy Analysis (requires `policy-analysis` feature)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "policy-analysis")]
+mod analysis_wasm {
+    use super::*;
+    use regorus::rvm::analysis::{
+        self, AnalysisConfig, PreparedProblem,
+    };
+
+    /// Deserialize an `AnalysisConfig` from JSON, applying defaults for
+    /// omitted fields.
+    fn parse_config(config_json: Option<String>) -> Result<AnalysisConfig, JsValue> {
+        match config_json {
+            Some(json) => serde_json::from_str(&json).map_err(error_to_jsvalue),
+            None => Ok(AnalysisConfig::default()),
+        }
+    }
+
+    /// Parse `"file:line"` strings into `(file, line)` tuples.
+    fn parse_line_specs_vec(specs: &[String]) -> Result<Vec<(String, usize)>, JsValue> {
+        let mut out = Vec::with_capacity(specs.len());
+        for spec in specs {
+            let parts: Vec<&str> = spec.rsplitn(2, ':').collect();
+            if parts.len() != 2 {
+                return Err(JsValue::from_str(&format!("Invalid line spec: '{spec}'. Expected FILE:LINE")));
+            }
+            let line: usize = parts[0]
+                .parse()
+                .map_err(|_| JsValue::from_str(&format!("Invalid line number in '{spec}'")))?;
+            out.push((parts[1].to_string(), line));
+        }
+        Ok(out)
+    }
+
+    /// WASM wrapper for a prepared analysis problem.
+    ///
+    /// Holds the translated SMT constraints and extraction plan in memory.
+    /// Call `smtLib2()` to get SMT-LIB2 text for an external solver,
+    /// or `problemJson()` to get the full problem as JSON.
+    /// After solving, call `interpretSolution()` with the solver result.
+    #[wasm_bindgen]
+    pub struct AnalysisProblem {
+        prepared: PreparedProblem,
+    }
+
+    #[wasm_bindgen]
+    impl AnalysisProblem {
+        /// Get the SMT-LIB2 text representation of this problem.
+        ///
+        /// Send this to an external SMT solver (e.g., Z3 WASM).
+        pub fn smtLib2(&self) -> String {
+            self.prepared.render_smt_lib2()
+        }
+
+        /// Get the full problem as a JSON string.
+        ///
+        /// The JSON conforms to the `SmtProblem` schema from `regorus-smt`.
+        /// Use this for fine-grained control over solver interaction.
+        pub fn problemJson(&self) -> Result<String, JsValue> {
+            self.prepared.problem_json().map_err(error_to_jsvalue)
+        }
+
+        /// Get any warnings produced during translation.
+        pub fn warnings(&self) -> Vec<String> {
+            self.prepared.warnings.clone()
+        }
+
+        /// Interpret a solver result and produce an analysis result.
+        ///
+        /// `solution_json` must be a JSON-serialized `SmtCheckResult` from
+        /// `regorus-smt`.  Returns a JSON object with `satisfiable`,
+        /// `input`, `warnings`, etc.
+        pub fn interpretSolution(&self, solution_json: String) -> Result<String, JsValue> {
+            let check: regorus::regorus_smt::SmtCheckResult =
+                serde_json::from_str(&solution_json).map_err(error_to_jsvalue)?;
+            let result = self.prepared.interpret(&check);
+            // Serialize the AnalysisResult to JSON.
+            let output = serde_json::json!({
+                "satisfiable": result.satisfiable,
+                "input": result.input.map(|v| v.to_json_str().ok()).flatten(),
+                "warnings": result.warnings,
+                "solver_smt": result.solver_smt,
+                "model_string": result.model_string,
+            });
+            serde_json::to_string_pretty(&output).map_err(error_to_jsvalue)
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TestSuitePlan — iterative test-generation via external solver
+    // -----------------------------------------------------------------------
+
+    /// WASM wrapper for iterative test-suite generation.
+    ///
+    /// Usage from JS:
+    /// ```js
+    /// const suite = wasm.prepareTestSuite(program, data, output, ep, config, 10);
+    /// while (true) {
+    ///     const problem = suite.nextProblem();
+    ///     if (!problem) break;
+    ///     const solution = await solveWithZ3(problem.smtLib2());
+    ///     suite.recordSolution(solution);
+    /// }
+    /// const result = suite.getResult();
+    /// ```
+    #[wasm_bindgen]
+    pub struct TestSuitePlan {
+        suite: analysis::PreparedTestSuite,
+    }
+
+    #[wasm_bindgen]
+    impl TestSuitePlan {
+        /// Get the next SMT problem to solve, or `undefined` if all lines
+        /// have been covered (or `max_tests` reached).
+        #[wasm_bindgen(js_name = "nextProblem")]
+        pub fn next_problem(&mut self) -> Option<AnalysisProblem> {
+            self.suite.next_problem().map(|p| AnalysisProblem { prepared: p })
+        }
+
+        /// Record a solver result for the current target line.
+        ///
+        /// `solution_json` is a JSON `SmtCheckResult`.
+        /// Returns JSON: `{ "satisfiable": bool, "input": string|null,
+        ///   "covered_lines": [[file, line], ...],
+        ///   "condition_coverage": [["file:line", bool], ...] }` on SAT, or
+        /// `{ "satisfiable": false }` on UNSAT/Unknown.
+        #[wasm_bindgen(js_name = "recordSolution")]
+        pub fn record_solution(&mut self, solution_json: String) -> Result<String, JsValue> {
+            let check: regorus::regorus_smt::SmtCheckResult =
+                serde_json::from_str(&solution_json).map_err(error_to_jsvalue)?;
+            let tc = self.suite.record_solution(&check);
+            match tc {
+                Some(tc) => {
+                    let input_json = tc.input.to_json_str().map_err(error_to_jsvalue)?;
+                    let lines: Vec<serde_json::Value> = tc.covered_lines.iter().map(|(f, l)| {
+                        serde_json::json!([f, l])
+                    }).collect();
+                    let cond_cov: Vec<serde_json::Value> = tc.condition_coverage.iter().map(|(loc, val, expr)| {
+                        serde_json::json!([loc, val, expr])
+                    }).collect();
+                    let output = serde_json::json!({
+                        "satisfiable": true,
+                        "input": input_json,
+                        "covered_lines": lines,
+                        "condition_coverage": cond_cov,
+                    });
+                    serde_json::to_string_pretty(&output).map_err(error_to_jsvalue)
+                }
+                None => {
+                    let output = serde_json::json!({ "satisfiable": false });
+                    serde_json::to_string_pretty(&output).map_err(error_to_jsvalue)
+                }
+            }
+        }
+
+        /// Get the final test-suite result as JSON.
+        ///
+        /// Returns `{ test_cases, coverable_lines, covered_lines,
+        ///   condition_goals, condition_goals_covered, warnings }`.
+        #[wasm_bindgen(js_name = "getResult")]
+        pub fn get_result(&self) -> Result<String, JsValue> {
+            let cases: Vec<serde_json::Value> = self.suite.test_cases().iter().map(|tc| {
+                let input_json = tc.input.to_json_str().unwrap_or_default();
+                let lines: Vec<serde_json::Value> = tc.covered_lines.iter().map(|(f, l)| {
+                    serde_json::json!([f, l])
+                }).collect();
+                let cond_cov: Vec<serde_json::Value> = tc.condition_coverage.iter().map(|(loc, val, expr)| {
+                    serde_json::json!([loc, val, expr])
+                }).collect();
+                serde_json::json!({
+                    "input": input_json,
+                    "covered_lines": lines,
+                    "condition_coverage": cond_cov,
+                })
+            }).collect();
+            let output = serde_json::json!({
+                "test_cases": cases,
+                "coverable_lines": self.suite.coverable_lines(),
+                "covered_lines": self.suite.covered_count(),
+                "condition_goals": self.suite.condition_goals(),
+                "condition_goals_covered": self.suite.condition_goals_covered(),
+                "warnings": self.suite.current_warnings(),
+            });
+            serde_json::to_string_pretty(&output).map_err(error_to_jsvalue)
+        }
+    }
+
+    /// Prepare an iterative test-suite generator.
+    ///
+    /// * `program` — Compiled RVM program.
+    /// * `data_json` — JSON-encoded policy data.
+    /// * `desired_output_json` — Optional output constraint (e.g., `"false"`).
+    /// * `entry_point` — Entry point name.
+    /// * `config_json` — Optional JSON `AnalysisConfig`.
+    /// * `max_tests` — Maximum number of test cases to generate.
+    /// * `condition_coverage` — Whether to include condition-coverage (Phase 2).
+    #[wasm_bindgen(js_name = "prepareTestSuite")]
+    pub fn prepare_test_suite(
+        program: &Program,
+        data_json: String,
+        desired_output_json: Option<String>,
+        entry_point: String,
+        config_json: Option<String>,
+        max_tests: u32,
+        condition_coverage: bool,
+    ) -> Result<TestSuitePlan, JsValue> {
+        let data = Value::from_json_str(&data_json).map_err(error_to_jsvalue)?;
+        let desired = match desired_output_json {
+            Some(json) => Some(Value::from_json_str(&json).map_err(error_to_jsvalue)?),
+            None => None,
+        };
+        let config = parse_config(config_json)?;
+
+        let suite = analysis::prepare_test_suite(
+            &program.program,
+            &data,
+            &entry_point,
+            desired.as_ref(),
+            &config,
+            max_tests as usize,
+            condition_coverage,
+        )
+        .map_err(error_to_jsvalue)?;
+
+        Ok(TestSuitePlan { suite })
+    }
+
+    /// Prepare a generate-input analysis problem.
+    ///
+    /// Translates the policy to SMT constraints targeting the given output.
+    /// Returns an `AnalysisProblem` that can be sent to an external solver.
+    ///
+    /// * `program` — Compiled RVM program.
+    /// * `data_json` — JSON-encoded policy data (or `"{}"`).
+    /// * `desired_output_json` — The value the entry point should produce (e.g., `"true"`).
+    /// * `entry_point` — Entry point name (e.g., `"data.test.allow"`).
+    /// * `config_json` — Optional JSON `AnalysisConfig` (uses defaults if omitted).
+    #[wasm_bindgen(js_name = "prepareGenerateInput")]
+    pub fn prepare_generate_input(
+        program: &Program,
+        data_json: String,
+        desired_output_json: String,
+        entry_point: String,
+        config_json: Option<String>,
+    ) -> Result<AnalysisProblem, JsValue> {
+        let data = Value::from_json_str(&data_json).map_err(error_to_jsvalue)?;
+        let desired = Value::from_json_str(&desired_output_json).map_err(error_to_jsvalue)?;
+        let config = parse_config(config_json)?;
+
+        let prepared = analysis::prepare_generate_input(
+            &program.program, &data, &desired, &entry_point, &config,
+        )
+        .map_err(error_to_jsvalue)?;
+
+        Ok(AnalysisProblem { prepared })
+    }
+
+    /// Prepare a satisfiability-check analysis problem.
+    ///
+    /// Checks whether any input can make the entry point produce a
+    /// non-undefined result.
+    ///
+    /// * `program` — Compiled RVM program.
+    /// * `data_json` — JSON-encoded policy data.
+    /// * `entry_point` — Entry point name.
+    /// * `config_json` — Optional JSON `AnalysisConfig`.
+    #[wasm_bindgen(js_name = "prepareIsSatisfiable")]
+    pub fn prepare_is_satisfiable(
+        program: &Program,
+        data_json: String,
+        entry_point: String,
+        config_json: Option<String>,
+    ) -> Result<AnalysisProblem, JsValue> {
+        let data = Value::from_json_str(&data_json).map_err(error_to_jsvalue)?;
+        let config = parse_config(config_json)?;
+
+        let prepared = analysis::prepare_is_satisfiable(
+            &program.program, &data, &entry_point, &config,
+        )
+        .map_err(error_to_jsvalue)?;
+
+        Ok(AnalysisProblem { prepared })
+    }
+
+    /// Prepare an analysis problem for a given goal.
+    ///
+    /// `goal` is one of:
+    ///   - `"expected"` — entry point must produce `desired_output_json` (required).
+    ///   - `"non-default"` — entry point must produce any non-default value.
+    ///   - `"satisfiable"` — entry point must produce any defined value.
+    ///   - `"cover"` — cover specific lines (via `cover_lines`/`avoid_lines` in config).
+    ///   - `"output-and-cover"` — both expected output AND line coverage.
+    ///
+    /// * `program` — Compiled RVM program.
+    /// * `data_json` — JSON-encoded policy data.
+    /// * `entry_point` — Entry point name.
+    /// * `goal` — Goal type string (see above).
+    /// * `desired_output_json` — Required for `"expected"` and `"output-and-cover"`.
+    /// * `config_json` — Optional JSON `AnalysisConfig`.
+    #[wasm_bindgen(js_name = "prepareForGoal")]
+    pub fn prepare_for_goal(
+        program: &Program,
+        data_json: String,
+        entry_point: String,
+        goal: String,
+        desired_output_json: Option<String>,
+        config_json: Option<String>,
+    ) -> Result<AnalysisProblem, JsValue> {
+        let data = Value::from_json_str(&data_json).map_err(error_to_jsvalue)?;
+        let config = parse_config(config_json)?;
+
+        let analysis_goal = match goal.as_str() {
+            "non-default" => analysis::AnalysisGoal::NonDefault,
+            "expected" => {
+                let json = desired_output_json
+                    .ok_or_else(|| JsValue::from_str("desired_output_json is required for 'expected' goal"))?;
+                let desired = Value::from_json_str(&json).map_err(error_to_jsvalue)?;
+                analysis::AnalysisGoal::ExpectedOutput(desired)
+            }
+            "output-and-cover" => {
+                let json = desired_output_json
+                    .ok_or_else(|| JsValue::from_str("desired_output_json is required for 'output-and-cover' goal"))?;
+                let desired = Value::from_json_str(&json).map_err(error_to_jsvalue)?;
+                let cover = parse_line_specs_vec(&config.cover_lines)?;
+                let avoid = parse_line_specs_vec(&config.avoid_lines)?;
+                analysis::AnalysisGoal::OutputAndCoverLines { expected: desired, cover, avoid }
+            }
+            "cover" => {
+                let cover = parse_line_specs_vec(&config.cover_lines)?;
+                let avoid = parse_line_specs_vec(&config.avoid_lines)?;
+                analysis::AnalysisGoal::CoverLines { cover, avoid }
+            }
+            _ => {
+                // Default to satisfiable check
+                return {
+                    let prepared = analysis::prepare_is_satisfiable(
+                        &program.program, &data, &entry_point, &config,
+                    ).map_err(error_to_jsvalue)?;
+                    Ok(AnalysisProblem { prepared })
+                };
+            }
+        };
+
+        let prepared = analysis::prepare_for_goal(
+            &program.program, &data, &entry_point, &analysis_goal, &config,
+        )
+        .map_err(error_to_jsvalue)?;
+
+        Ok(AnalysisProblem { prepared })
+    }
+
+    /// Prepare a policy-diff analysis problem.
+    ///
+    /// Finds an input where two policies disagree.
+    ///
+    /// * `program1`, `program2` — The two compiled RVM programs to compare.
+    /// * `data_json` — JSON-encoded policy data (shared).
+    /// * `entry_point` — Entry point name (must exist in both programs).
+    /// * `desired_output_json` — Optional desired output; defaults to `true`.
+    /// * `config_json` — Optional JSON `AnalysisConfig`.
+    #[wasm_bindgen(js_name = "preparePolicyDiff")]
+    pub fn prepare_policy_diff(
+        program1: &Program,
+        program2: &Program,
+        data_json: String,
+        entry_point: String,
+        desired_output_json: Option<String>,
+        config_json: Option<String>,
+    ) -> Result<AnalysisProblem, JsValue> {
+        let data = Value::from_json_str(&data_json).map_err(error_to_jsvalue)?;
+        let desired = match desired_output_json {
+            Some(json) => Some(Value::from_json_str(&json).map_err(error_to_jsvalue)?),
+            None => None,
+        };
+        let config = parse_config(config_json)?;
+
+        let prepared = analysis::prepare_policy_diff(
+            &program1.program,
+            &program2.program,
+            &data,
+            &entry_point,
+            desired.as_ref(),
+            &config,
+        )
+        .map_err(error_to_jsvalue)?;
+
+        Ok(AnalysisProblem { prepared })
+    }
+
+    /// Prepare a policy-subsumption check.
+    ///
+    /// Checks: for all inputs, if `old_program` produces `desired_output`
+    /// then `new_program` also produces `desired_output`.
+    ///
+    /// When the result is SAT, a counterexample was found and subsumption
+    /// does NOT hold.  When UNSAT, subsumption holds.
+    ///
+    /// * `old_program`, `new_program` — The two compiled RVM programs.
+    /// * `data_json` — JSON-encoded policy data (shared).
+    /// * `entry_point` — Entry point name (must exist in both programs).
+    /// * `desired_output_json` — The desired output value.
+    /// * `config_json` — Optional JSON `AnalysisConfig`.
+    #[wasm_bindgen(js_name = "preparePolicySubsumes")]
+    pub fn prepare_policy_subsumes(
+        old_program: &Program,
+        new_program: &Program,
+        data_json: String,
+        entry_point: String,
+        desired_output_json: String,
+        config_json: Option<String>,
+    ) -> Result<AnalysisProblem, JsValue> {
+        let data = Value::from_json_str(&data_json).map_err(error_to_jsvalue)?;
+        let desired = Value::from_json_str(&desired_output_json).map_err(error_to_jsvalue)?;
+        let config = parse_config(config_json)?;
+
+        let prepared = analysis::prepare_policy_subsumes(
+            &old_program.program,
+            &new_program.program,
+            &data,
+            &entry_point,
+            &desired,
+            &config,
+        )
+        .map_err(error_to_jsvalue)?;
+
+        Ok(AnalysisProblem { prepared })
     }
 }
 

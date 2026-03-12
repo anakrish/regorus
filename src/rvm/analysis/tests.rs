@@ -1,7 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Tests for the RVM-to-Z3 symbolic analysis engine.
+//! Tests for the RVM symbolic analysis engine.
+//!
+//! These tests require the `z3-analysis` feature for solving.
 
 #[cfg(test)]
 mod tests {
@@ -11,37 +13,39 @@ mod tests {
 
     use crate::rvm::analysis::*;
     use crate::value::Value;
+    use regorus_smt::SmtExpr;
 
-    /// Smoke test: create a Z3 context and solve a trivial boolean constraint.
+    /// Smoke test: the Z3 solver backend can solve a trivial boolean constraint.
     #[test]
     fn test_z3_smoke() {
-        let cfg = z3::Config::new();
-        let ctx = z3::Context::new(&cfg);
-        let solver = z3::Solver::new(&ctx);
+        use regorus_smt::{SmtProblem, SmtSort, SmtStatus};
 
-        let x = z3::ast::Bool::new_const(&ctx, "x");
-        solver.assert(&x);
+        let mut problem = SmtProblem::new();
+        let x_id = problem.declare_const("x", SmtSort::Bool);
+        // Assert x == true.
+        problem.assert(SmtExpr::Const(x_id));
 
-        assert_eq!(solver.check(), z3::SatResult::Sat);
-        let model = solver.get_model().unwrap();
-        let val = model.eval(&x, true).unwrap();
-        assert_eq!(val.as_bool(), Some(true));
+        let solution = crate::rvm::analysis::z3_solver::solve(&problem).unwrap();
+        let check = solution.first().unwrap();
+        assert_eq!(check.status, SmtStatus::Sat);
     }
 
     /// Test PathRegistry creation and variable access.
     #[test]
     fn test_path_registry() {
-        let cfg = z3::Config::new();
-        let ctx = z3::Context::new(&cfg);
-        let mut registry = PathRegistry::new(&ctx);
+        let mut registry = PathRegistry::new();
 
         // Create a string path variable.
         let _entry = registry.get_or_create("input.user.role", ValueSort::String, true, 0);
         assert_eq!(registry.len(), 1);
 
-        // Get the Z3 string variable.
-        let z3_str = registry.get_string("input.user.role");
-        assert_eq!(z3_str.to_string(), "input.user.role");
+        // Get the SMT string variable.
+        let smt_str = registry.get_string("input.user.role");
+        // smt_str should be a Const reference.
+        match smt_str {
+            SmtExpr::Const(_) => {} // ok
+            other => panic!("Expected Const, got: {:?}", other),
+        }
 
         // Creating again should reuse.
         let _entry2 = registry.get_or_create("input.user.role", ValueSort::String, true, 5);
@@ -51,25 +55,39 @@ mod tests {
     /// Test that model extraction produces the right JSON structure.
     #[test]
     fn test_model_extraction() {
-        let cfg = z3::Config::new();
-        let ctx = z3::Context::new(&cfg);
-        let solver = z3::Solver::new(&ctx);
+        use regorus_smt::{SmtProblem, SmtSort, SmtStatus};
 
-        let mut registry = PathRegistry::new(&ctx);
+        let mut registry = PathRegistry::new();
 
         // Create a path variable and constrain it to "admin".
         let _ = registry.get_or_create("input.user.role", ValueSort::String, true, 0);
         let role_var = registry.get_string("input.user.role");
-        let admin = z3::ast::String::from_str(&ctx, "admin").unwrap();
-        solver.assert(&z3::ast::Ast::_eq(&role_var, &admin));
-
-        // Force the path to be defined.
+        let admin = SmtExpr::StringLit("admin".into());
         let defined = registry.get("input.user.role").unwrap().defined.clone();
-        solver.assert(&defined);
 
-        assert_eq!(solver.check(), z3::SatResult::Sat);
-        let model = solver.get_model().unwrap();
-        let input = extract_input(&model, &registry);
+        // Build a SmtProblem manually.
+        let mut problem = SmtProblem::new();
+
+        // Declarations from the registry.
+        for decl in registry.declarations() {
+            problem.declarations.push(decl.clone());
+        }
+
+        // Assert: role_var == "admin" AND defined.
+        problem.assert(SmtExpr::Eq(Box::new(role_var), Box::new(admin)));
+        problem.assert(defined);
+
+        // Register extractions for model reconstruction.
+        let plan = crate::rvm::analysis::model_extract::register_extractions(
+            &mut problem,
+            &registry,
+        );
+
+        let solution = crate::rvm::analysis::z3_solver::solve(&problem).unwrap();
+        let check = solution.first().unwrap();
+        assert_eq!(check.status, SmtStatus::Sat);
+
+        let input = crate::rvm::analysis::model_extract::extract_input(check, &plan);
 
         // The result should be {"user": {"role": "admin"}}.
         assert!(input != Value::Undefined);
@@ -79,44 +97,20 @@ mod tests {
         assert_eq!(role, &Value::from("admin"));
     }
 
-    /// Test SymValue promotion helpers.
-    #[test]
-    fn test_symvalue_promotion() {
-        let cfg = z3::Config::new();
-        let ctx = z3::Context::new(&cfg);
-
-        // Concrete bool → Z3 Bool.
-        let sym = SymValue::Concrete(Value::Bool(true));
-        let z3_bool = sym.to_z3_bool(&ctx).unwrap();
-        assert_eq!(z3_bool.as_bool(), Some(true));
-
-        // Concrete number → Z3 Int.
-        let sym = SymValue::Concrete(Value::from(42i64));
-        let z3_int = sym.to_z3_int(&ctx).unwrap();
-        assert_eq!(z3_int.as_i64(), Some(42));
-
-        // Concrete string → Z3 String.
-        let sym = SymValue::Concrete(Value::from("hello"));
-        let _z3_str = sym.to_z3_string(&ctx).unwrap();
-    }
-
     /// Test Definedness AND combinator.
     #[test]
     fn test_definedness_and() {
-        let cfg = z3::Config::new();
-        let ctx = z3::Context::new(&cfg);
-
         // Defined AND Defined → Defined.
-        let r = Definedness::and(&ctx, &Definedness::Defined, &Definedness::Defined);
+        let r = Definedness::and(&Definedness::Defined, &Definedness::Defined);
         assert!(r.is_defined());
 
         // Undefined AND anything → Undefined.
-        let r = Definedness::and(&ctx, &Definedness::Undefined, &Definedness::Defined);
+        let r = Definedness::and(&Definedness::Undefined, &Definedness::Defined);
         assert!(r.is_undefined());
 
         // Defined AND Symbolic → Symbolic.
-        let b = z3::ast::Bool::new_const(&ctx, "b");
-        let r = Definedness::and(&ctx, &Definedness::Defined, &Definedness::Symbolic(b));
+        let b = SmtExpr::Const(99); // arbitrary const id
+        let r = Definedness::and(&Definedness::Defined, &Definedness::Symbolic(b));
         assert!(!r.is_defined() && !r.is_undefined()); // Symbolic
     }
 
@@ -1133,5 +1127,136 @@ mod tests {
                 panic!("Analysis failed: {}", e);
             }
         }
+    }
+
+    // ===================================================================
+    // Cedar: IAM Zero Trust (permit + forbid with context attrs)
+    // ===================================================================
+
+    #[cfg(feature = "cedar")]
+    #[test]
+    fn test_cedar_iam_zero_trust() {
+        use crate::languages::cedar::compiler as cedar_compiler;
+        use crate::languages::cedar::parser::Parser as CedarParser;
+        use crate::lexer::Source;
+        use crate::rvm::analysis::{generate_input, AnalysisConfig};
+
+        let cedar_policy = r#"
+permit(principal in User::"admins", action == Action::"login", resource == App::"portal")
+when { context.mfa == true && context.ip like "10.*" };
+
+forbid(principal in User::"admins", action == Action::"login", resource == App::"portal")
+when { context.suspended == true };
+"#;
+
+        let entities_json = r#"{
+  "User::alice": { "parents": ["User::admins"], "attrs": {} },
+  "User::admins": { "parents": [], "attrs": {} }
+}"#;
+
+        // Parse Cedar policy.
+        let source =
+            Source::from_contents("policy.cedar".to_string(), cedar_policy.to_string()).unwrap();
+        let mut parser = CedarParser::new(&source).unwrap();
+        let policies = parser.parse().unwrap();
+
+        // Compile to RVM program.
+        let program = cedar_compiler::compile_to_program(&policies).unwrap();
+
+        // Set entities as concrete input data.
+        let entities: Value = serde_json::from_str(entities_json).unwrap();
+        let mut config = AnalysisConfig::default();
+        config.concrete_input.insert("entities".to_string(), entities);
+
+        let data = Value::new_object();
+        let desired = Value::from(1_u64); // permit output = 1
+
+        let result =
+            generate_input(&program, &data, &desired, "cedar.authorize", &config).unwrap();
+
+        std::println!("\n=== test_cedar_iam_zero_trust ===");
+        std::println!("Satisfiable: {}", result.satisfiable);
+        if let Some(ref input) = result.input {
+            std::println!(
+                "Generated input:\n{}",
+                input
+                    .to_json_str()
+                    .unwrap_or_else(|_| alloc::format!("{:?}", input))
+            );
+        }
+        if !result.warnings.is_empty() {
+            std::println!("Warnings:");
+            for w in &result.warnings {
+                std::println!("  - {}", w);
+            }
+        }
+        assert!(
+            result.satisfiable,
+            "Expected SAT: should find an input that produces permit"
+        );
+    }
+
+    /// Cedar IAM test that mimics the web demo path: entities in data, not concrete_input.
+    #[cfg(feature = "cedar")]
+    #[test]
+    fn test_cedar_iam_zero_trust_webdemo_path() {
+        use crate::languages::cedar::compiler as cedar_compiler;
+        use crate::languages::cedar::parser::Parser as CedarParser;
+        use crate::lexer::Source;
+        use crate::rvm::analysis::{generate_input, AnalysisConfig};
+
+        let cedar_policy = r#"
+permit(principal in User::"admins", action == Action::"login", resource == App::"portal")
+when { context.mfa == true && context.ip like "10.*" };
+
+forbid(principal in User::"admins", action == Action::"login", resource == App::"portal")
+when { context.suspended == true };
+"#;
+
+        let entities_json = r#"{
+  "User::alice": { "parents": ["User::admins"], "attrs": {} },
+  "User::admins": { "parents": [], "attrs": {} }
+}"#;
+
+        // Parse Cedar policy.
+        let source =
+            Source::from_contents("policy.cedar".to_string(), cedar_policy.to_string()).unwrap();
+        let mut parser = CedarParser::new(&source).unwrap();
+        let policies = parser.parse().unwrap();
+
+        // Compile to RVM program.
+        let program = cedar_compiler::compile_to_program(&policies).unwrap();
+
+        // Web demo path: entities in data (NOT in concrete_input).
+        let entities: Value = serde_json::from_str(entities_json).unwrap();
+        let config = AnalysisConfig::default(); // No concrete_input!
+        let mut data = Value::new_object();
+        data.as_object_mut().unwrap().insert("entities".into(), entities);
+
+        let desired = Value::from(1_u64); // permit output = 1
+
+        let result =
+            generate_input(&program, &data, &desired, "cedar.authorize", &config).unwrap();
+
+        std::println!("\n=== test_cedar_iam_zero_trust_webdemo_path ===");
+        std::println!("Satisfiable: {}", result.satisfiable);
+        if let Some(ref input) = result.input {
+            std::println!(
+                "Generated input:\n{}",
+                input
+                    .to_json_str()
+                    .unwrap_or_else(|_| alloc::format!("{:?}", input))
+            );
+        }
+        if !result.warnings.is_empty() {
+            std::println!("Warnings:");
+            for w in &result.warnings {
+                std::println!("  - {}", w);
+            }
+        }
+        assert!(
+            result.satisfiable,
+            "Expected SAT: should find an input that produces permit (web demo path)"
+        );
     }
 }

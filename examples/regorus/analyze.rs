@@ -76,8 +76,11 @@ pub fn rego_analyze(
         (Some(v), false) => AnalysisGoal::ExpectedOutput(v),
         (None, true) => AnalysisGoal::CoverLines { cover, avoid },
         (None, false) => {
-            // No output, no lines — just check satisfiability.
-            AnalysisGoal::ExpectedOutput(regorus::Value::Bool(true))
+            // No output, no lines — find any input that triggers a
+            // non-default result.  This handles object-valued rules
+            // (e.g. `deny := {"result": true, ...}`) where comparing
+            // against `Bool(true)` would always be UNSAT.
+            AnalysisGoal::NonDefault
         }
     };
 

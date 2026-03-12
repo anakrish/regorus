@@ -1,107 +1,201 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Model-to-JSON extraction: reads a Z3 model and reconstructs a concrete
+//! Model-to-JSON extraction: reads an SMT solution and reconstructs a concrete
 //! `input` JSON document from the path variables in the registry.
 
+use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
+
+use regorus_smt::{SmtCheckResult, SmtValue};
 
 use crate::value::Value;
 
 use super::path_registry::PathRegistry;
 use super::types::ValueSort;
 
-/// Extract a concrete `input` JSON object from a Z3 model using the path registry.
+/// Extraction plan for one input path.
 ///
-/// Each path variable like `input.user.role` is evaluated in the model. If defined,
-/// its concrete value is placed into the output JSON tree. This is the key payoff
-/// of path-based encoding: extraction is a simple iteration over flat variables.
-pub fn extract_input<'ctx>(model: &z3::Model<'ctx>, registry: &PathRegistry<'ctx>) -> Value {
-    let mut result = Value::new_object();
+/// Built by [`build_extraction_plan`] before solving; indices refer to
+/// entries in [`SmtProblem::extractions`] / [`SmtCheckResult::values`].
+#[derive(Debug, Clone)]
+pub struct PathExtraction {
+    /// The input path suffix (e.g., `"user.role"`).
+    pub input_suffix: String,
+    /// The value sort for this path.
+    pub sort: ValueSort,
+    /// Index into `SmtCheckResult::values` for the `defined` boolean.
+    pub defined_idx: usize,
+    /// Index into `SmtCheckResult::values` for the path's value.
+    pub value_idx: usize,
+}
 
-    for (path, entry) in registry.iter() {
-        // Only extract input paths.
+/// Build an extraction plan from the path registry.
+///
+/// Call this *before* solving, in tandem with populating the
+/// [`SmtProblem::extractions`] vector.  Each call to
+/// [`SmtProblem::add_extraction`] returns an index; those indices
+/// are stored in the returned plan so that after solving we can read
+/// the matching values from [`SmtCheckResult::values`].
+///
+/// The caller is responsible for adding the actual extraction entries
+/// to the `SmtProblem`; this function only describes *what* to extract.
+#[allow(dead_code)]
+pub fn build_extraction_plan(registry: &PathRegistry) -> Vec<PathExtraction> {
+    let mut plan = Vec::new();
+    // The caller must add extractions in the same order.
+    // We iterate deterministically (sorted by path) so the plan is stable.
+    let mut paths: Vec<(&str, &super::path_registry::PathEntry)> = registry.iter().collect();
+    paths.sort_by_key(|(p, _)| *p);
+
+    let mut next_idx: usize = 0;
+    for (path, entry) in paths {
         let input_suffix = match path.strip_prefix("input.") {
             Some(s) => s,
             None => continue,
         };
 
-        // Check if the path is defined in the model.
-        if let Some(defined_val) = model.eval(&entry.defined, true) {
-            if let Some(false) = defined_val.as_bool() {
-                continue; // Path is absent from input.
-            }
+        let defined_idx = next_idx;
+        next_idx += 1;
+        let value_idx = next_idx;
+        next_idx += 1;
+
+        plan.push(PathExtraction {
+            input_suffix: input_suffix.to_string(),
+            sort: entry.sort,
+            defined_idx,
+            value_idx,
+        });
+    }
+    plan
+}
+
+/// Extract a concrete `input` JSON object from a solved SMT result
+/// using a pre-built extraction plan.
+///
+/// Each path variable like `input.user.role` has two extraction slots:
+/// a `defined` boolean and the value.  If defined is false the path is
+/// skipped.  Otherwise the concrete value is placed into the result tree.
+pub fn extract_input(result: &SmtCheckResult, plan: &[PathExtraction]) -> Value {
+    let mut root = Value::new_object();
+
+    for ext in plan {
+        // Check if the path is defined.
+        match result.values.get(ext.defined_idx) {
+            Some(SmtValue::Bool(false)) => continue, // absent
+            None => continue,                         // missing extraction
+            _ => {}                                   // defined (or unknown → try extracting)
         }
 
-        // Extract the concrete value based on the sort.
-        let concrete_value = extract_value_for_entry(model, entry);
-
+        let concrete_value = extract_value(result, ext);
         if concrete_value != Value::Undefined {
-            // Place the value into the result JSON tree.
-            let segments: Vec<&str> = input_suffix.split('.').collect();
-            set_nested(&mut result, &segments, concrete_value);
+            let segments: Vec<&str> = ext.input_suffix.split('.').collect();
+            set_nested(&mut root, &segments, concrete_value);
         }
     }
 
     // Post-process: clean up arrays by removing trailing null/empty elements
-    // that appear when Z3 creates witnesses beyond schema maxItems bounds.
-    clean_up_value(&mut result);
+    // that appear when the solver creates witnesses beyond schema bounds.
+    clean_up_value(&mut root);
 
-    result
+    root
 }
 
-/// Extract a concrete value from a Z3 model for a path entry.
-fn extract_value_for_entry<'ctx>(
-    model: &z3::Model<'ctx>,
-    entry: &super::path_registry::PathEntry<'ctx>,
-) -> Value {
-    match entry.sort {
-        ValueSort::Bool => {
-            if let Some(ref var) = entry.bool_var {
-                if let Some(val) = model.eval(var, true) {
-                    if let Some(b) = val.as_bool() {
-                        return Value::Bool(b);
-                    }
-                }
+/// Extract a concrete value from solver results for a single path.
+fn extract_value(result: &SmtCheckResult, ext: &PathExtraction) -> Value {
+    match result.values.get(ext.value_idx) {
+        Some(SmtValue::Bool(b)) => Value::Bool(*b),
+        Some(SmtValue::Int(i)) => Value::from(*i),
+        Some(SmtValue::Real(num, den)) => {
+            if *den != 0 {
+                Value::from(*num as f64 / *den as f64)
+            } else {
+                Value::Undefined
             }
         }
-        ValueSort::Int => {
-            if let Some(ref var) = entry.int_var {
-                if let Some(val) = model.eval(var, true) {
-                    if let Some(i) = val.as_i64() {
-                        return Value::from(i);
-                    }
-                }
-            }
+        Some(SmtValue::String(s)) => {
+            // Strip surrounding quotes if present (some solvers include them).
+            let unquoted = s.trim_matches('"');
+            Value::from(unquoted)
         }
-        ValueSort::Real => {
-            if let Some(ref var) = entry.real_var {
-                if let Some(val) = model.eval(var, true) {
-                    if let Some((num, den)) = val.as_real() {
-                        if den != 0 {
-                            return Value::from(num as f64 / den as f64);
-                        }
-                    }
-                }
-            }
+        Some(SmtValue::BitVec(v, _width)) => Value::from(*v),
+        Some(SmtValue::Undefined) | None => Value::Undefined,
+    }
+}
+
+/// Register extraction entries in an [`SmtProblem`] for every input path
+/// in the registry.  Returns the extraction plan needed by [`extract_input`].
+///
+/// For each input path, two extractions are registered:
+/// 1. The `defined` boolean (was this path present?).
+/// 2. The value variable (the concrete value if present).
+///
+/// Call this **after** translation & constraint collection but **before**
+/// solving.  The returned plan must be passed to [`extract_input`] together
+/// with the solver's [`SmtCheckResult`].
+pub fn register_extractions(
+    problem: &mut regorus_smt::SmtProblem,
+    registry: &PathRegistry,
+) -> Vec<PathExtraction> {
+    use alloc::format;
+    use regorus_smt::{SmtExpr, SmtSort};
+
+    let mut plan = Vec::new();
+    let mut paths: Vec<(&str, &super::path_registry::PathEntry)> = registry.iter().collect();
+    paths.sort_by_key(|(p, _)| *p);
+
+    for (path, entry) in paths {
+        let input_suffix = match path.strip_prefix("input.") {
+            Some(s) => s,
+            None => continue,
+        };
+
+        let sort = match entry.sort {
+            ValueSort::Bool => SmtSort::Bool,
+            ValueSort::Int => SmtSort::Int,
+            ValueSort::Real => SmtSort::Real,
+            ValueSort::String | ValueSort::Unknown => SmtSort::String,
+        };
+
+        // 1. defined boolean
+        let defined_idx = problem.extractions.len();
+        problem.add_extraction(
+            format!("defined_{}", path),
+            entry.defined.clone(),
+            SmtSort::Bool,
+            true,
+        );
+
+        // 2. value variable
+        let value_idx = problem.extractions.len();
+        let value_expr = match entry.sort {
+            ValueSort::Bool => entry.bool_var.clone(),
+            ValueSort::Int => entry.int_var.clone(),
+            ValueSort::Real => entry.real_var.clone(),
+            ValueSort::String | ValueSort::Unknown => entry.str_var.clone(),
+        };
+        if let Some(expr) = value_expr {
+            problem.add_extraction(path, expr, sort, true);
+        } else {
+            // No variable for this sort — add a dummy so indices stay aligned.
+            // This is a container path (object/array) created by the `required`
+            // keyword; it has no leaf value to extract. Skip adding it to the
+            // plan so extract_input won't produce a spurious `false` that
+            // overwrites the nested structure built from child paths.
+            problem.add_extraction(path, SmtExpr::False, SmtSort::Bool, true);
+            continue;
         }
-        ValueSort::String | ValueSort::Unknown => {
-            if let Some(ref var) = entry.str_var {
-                if let Some(val) = model.eval(var, true) {
-                    // Z3 string values: try to extract the concrete string.
-                    // The `to_string()` method on Z3 ast gives the S-expression
-                    // representation. For string constants, this is typically
-                    // `"value"` (with quotes). We strip the quotes.
-                    let s = val.to_string();
-                    let unquoted = s.trim_matches('"');
-                    return Value::from(unquoted);
-                }
-            }
-        }
+
+        plan.push(PathExtraction {
+            input_suffix: input_suffix.to_string(),
+            sort: entry.sort,
+            defined_idx,
+            value_idx,
+        });
     }
 
-    Value::Undefined
+    plan
 }
 
 /// Parse a segment like `"servers[2]"` into `("servers", Some(2))`,
@@ -174,7 +268,7 @@ fn set_nested(obj: &mut Value, segments: &[&str], value: Value) {
 }
 
 /// Recursively clean up a Value tree:
-/// - Remove `null` and junk elements from arrays (Z3 padding beyond schema bounds)
+/// - Remove `null` and junk elements from arrays (solver padding beyond schema bounds)
 /// - Remove objects that are empty or have only `null`/undefined fields
 /// - Recurse into arrays and objects
 fn clean_up_value(val: &mut Value) {
@@ -186,7 +280,7 @@ fn clean_up_value(val: &mut Value) {
                 clean_up_value(elem);
             }
             // Remove all null/junk elements (interior and trailing).
-            // Z3 may place unconstrained values at arbitrary indices.
+            // The solver may place unconstrained values at arbitrary indices.
             arr_mut.retain(|v| !is_junk(v));
         }
         Value::Object(map) => {
@@ -209,12 +303,13 @@ fn clean_up_value(val: &mut Value) {
     }
 }
 
-/// Returns true if a value is "junk" — produced by Z3 for unconstrained paths.
+/// Returns true if a value is "junk" — produced by the solver for unconstrained paths.
+/// Note: empty strings are NOT junk; the solver legitimately picks "" as a satisfying
+/// value (e.g. `input.role != "guest"` is satisfied by `role = ""`).
 fn is_junk(val: &Value) -> bool {
     match val {
         Value::Null => true,
         Value::Undefined => true,
-        Value::String(s) if s.is_empty() => true,
         Value::Object(map) => map.is_empty() || map.values().all(|v| is_junk(v)),
         Value::Array(arr) => arr.is_empty() || arr.iter().all(|v| is_junk(v)),
         _ => false,

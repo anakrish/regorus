@@ -151,6 +151,10 @@ mod query;
 pub mod registry;
 #[cfg(feature = "rvm")]
 pub mod rvm;
+
+/// Re-export `regorus_smt` types for downstream crates (e.g., WASM bindings).
+#[cfg(feature = "policy-analysis")]
+pub use regorus_smt;
 mod scheduler;
 #[cfg(feature = "azure_policy")]
 mod schema;

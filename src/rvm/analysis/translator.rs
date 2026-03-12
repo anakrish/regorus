@@ -11,14 +11,12 @@ use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec;
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use std::collections::{HashMap, HashSet};
 
-use z3::ast::{
-    Ast, Bool as Z3Bool, Int as Z3Int, Real as Z3Real, Regexp as Z3Regexp, String as Z3String,
-    BV as Z3BV,
-};
+use regorus_smt::{SmtExpr, SmtSort};
 
 use crate::rvm::instructions::{Instruction, LiteralOrRegister};
 use crate::rvm::program::{Program, RuleType};
@@ -32,18 +30,18 @@ use crate::builtins::azure_policy::helpers::{
 
 use super::path_registry::PathRegistry;
 use super::types::{
-    ComprehensionAccumulator, ComprehensionYieldEntry, Definedness, SymArrayElement, SymRegister,
-    SymSetElement, SymValue, ValueSort,
+    ComprehensionAccumulator, ComprehensionYieldEntry, Definedness, SymArrayElement,
+    SymObjectEntry, SymRegister, SymSetElement, SymValue, ValueSort,
 };
 use super::AnalysisConfig;
 
 /// Result of translating a block (sequence of instructions until termination).
 #[allow(dead_code)]
-pub struct BlockResult<'ctx> {
+pub struct BlockResult {
     /// The path condition at the end of the block (conjunction of all assertions).
-    pub path_condition: Z3Bool<'ctx>,
+    pub path_condition: SmtExpr,
     /// The value of the result register at the end (if applicable).
-    pub result: SymValue<'ctx>,
+    pub result: SymValue,
     /// Whether the block terminated normally (vs. assertion failure).
     pub succeeded: bool,
 }
@@ -60,13 +58,13 @@ pub struct BlockResult<'ctx> {
 /// (decision) this condition belongs to, so conditions within the
 /// same decision can be grouped and independently toggled.
 #[derive(Clone, Debug)]
-pub struct ConditionRecord<'ctx> {
+pub struct ConditionRecord {
     /// Program counter of the AssertCondition instruction.
     pub pc: usize,
     /// Path condition immediately before this assertion (full call-chain context).
-    pub pre_path_condition: Z3Bool<'ctx>,
+    pub pre_path_condition: SmtExpr,
     /// The individual condition being asserted (what gets ANDed into path_condition).
-    pub condition: Z3Bool<'ctx>,
+    pub condition: SmtExpr,
     /// Identifier for the rule body (decision) containing this condition.
     /// Format: "rule_index:def_index:body_pc" — for future MC/DC grouping.
     pub body_id: Option<String>,
@@ -74,27 +72,26 @@ pub struct ConditionRecord<'ctx> {
 
 /// The symbolic translator engine.
 #[allow(missing_debug_implementations)]
-pub struct Translator<'ctx, 'a> {
-    ctx: &'ctx z3::Context,
+pub struct Translator<'a> {
     program: &'a Program,
     data: &'a Value,
-    registry: &'a mut PathRegistry<'ctx>,
+    registry: &'a mut PathRegistry,
     config: &'a AnalysisConfig,
 
     /// Symbolic register file.
-    registers: Vec<SymRegister<'ctx>>,
+    registers: Vec<SymRegister>,
 
     /// Path condition: conjunction of all branch decisions taken.
-    pub path_condition: Z3Bool<'ctx>,
+    pub path_condition: SmtExpr,
 
     /// All emitted constraints.
-    pub constraints: Vec<Z3Bool<'ctx>>,
+    pub constraints: Vec<SmtExpr>,
 
     /// Current program counter.
     pc: usize,
 
     /// Path condition at each PC (for coverage targeting).
-    pc_path_conditions: HashMap<usize, Z3Bool<'ctx>>,
+    pc_path_conditions: HashMap<usize, SmtExpr>,
 
     /// Per-assertion condition records (for condition coverage).
     /// Each entry captures the individual condition at an AssertCondition PC,
@@ -102,19 +99,19 @@ pub struct Translator<'ctx, 'a> {
     /// This enables condition coverage: for each condition, generate inputs
     /// where the condition is true (normal line coverage) and false (reaching
     /// the assertion point but the condition fails).
-    pc_conditions: Vec<ConditionRecord<'ctx>>,
+    pc_conditions: Vec<ConditionRecord>,
 
     /// Accumulated caller path conditions (AND of outer path conditions
     /// at each `translate_call_rule` boundary). Used to contextualise
     /// the inner `pc_path_conditions` so that line-coverage constraints
     /// reflect the full call-chain reachability.
-    caller_path_condition: Z3Bool<'ctx>,
+    caller_path_condition: SmtExpr,
 
     /// Warnings about unmodeled features.
     pub warnings: Vec<String>,
 
     /// Rule call cache: rule_index → (result_value, result_defined, path_condition).
-    rule_cache: HashMap<u16, (SymValue<'ctx>, Definedness<'ctx>)>,
+    rule_cache: HashMap<u16, (SymValue, Definedness)>,
 
     /// Rules currently on the call stack (for true recursion detection).
     rule_call_stack: HashSet<u16>,
@@ -133,11 +130,11 @@ pub struct Translator<'ctx, 'a> {
     partial_set_main_value_reg: Option<u8>,
 
     /// Accumulated set element witnesses for the current partial-set rule.
-    partial_set_elements: Vec<SymSetElement<'ctx>>,
+    partial_set_elements: Vec<SymSetElement>,
 
     /// Stack of active comprehension accumulators.
     /// Pushed at ComprehensionBegin, popped after the body completes.
-    comprehension_stack: Vec<ComprehensionAccumulator<'ctx>>,
+    comprehension_stack: Vec<ComprehensionAccumulator>,
 
     /// Optional prefix prepended to all generated Z3 variable names.
     /// Used by diff/subsumption to prevent aliasing when two programs
@@ -145,13 +142,12 @@ pub struct Translator<'ctx, 'a> {
     prefix: String,
 }
 
-impl<'ctx, 'a> Translator<'ctx, 'a> {
+impl<'a> Translator<'a> {
     /// Create a new translator.
     pub fn new(
-        ctx: &'ctx z3::Context,
-        program: &'a Program,
+            program: &'a Program,
         data: &'a Value,
-        registry: &'a mut PathRegistry<'ctx>,
+        registry: &'a mut PathRegistry,
         config: &'a AnalysisConfig,
     ) -> Self {
         let num_regs = program
@@ -162,18 +158,17 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             .collect::<Vec<_>>();
 
         Self {
-            ctx,
             program,
             data,
             registry,
             config,
             registers,
-            path_condition: Z3Bool::from_bool(ctx, true),
+            path_condition: SmtExpr::True,
             constraints: Vec::new(),
             pc: 0,
             pc_path_conditions: HashMap::new(),
             pc_conditions: Vec::new(),
-            caller_path_condition: Z3Bool::from_bool(ctx, true),
+            caller_path_condition: SmtExpr::True,
             warnings: Vec::new(),
             rule_cache: HashMap::new(),
             rule_call_stack: HashSet::new(),
@@ -205,25 +200,44 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         }
     }
 
+    /// Allocate a fresh SMT constant via the path registry.
+    ///
+    /// All `new_const` calls go through here so that declarations are
+    /// centrally tracked for later SMT-LIB2 rendering or Z3 conversion.
+    ///
+    /// `name` is the human-readable variable name.
+    /// The sort is inferred from context; callers should ensure correctness.
+    fn fresh_const(&mut self, name: &str) -> SmtExpr {
+        // Default sort: String (most common for symbolic translation).
+        // We can refine this later if sort tracking is needed.
+        self.registry.alloc_const(name, SmtSort::String)
+    }
+
+    /// Allocate a fresh SMT constant with an explicit sort.
+    #[allow(dead_code)]
+    fn fresh_const_sort(&mut self, name: &str, sort: SmtSort) -> SmtExpr {
+        self.registry.alloc_const(name, sort)
+    }
+
     /// Take the accumulated PC → path-condition map (consumes it).
-    pub fn take_pc_path_conditions(&mut self) -> HashMap<usize, Z3Bool<'ctx>> {
+    pub fn take_pc_path_conditions(&mut self) -> HashMap<usize, SmtExpr> {
         core::mem::take(&mut self.pc_path_conditions)
     }
 
     /// Take the accumulated per-assertion condition records (consumes it).
-    pub fn take_pc_conditions(&mut self) -> Vec<ConditionRecord<'ctx>> {
+    pub fn take_pc_conditions(&mut self) -> Vec<ConditionRecord> {
         core::mem::take(&mut self.pc_conditions)
     }
 
     /// Translate starting from an entry point PC.
     /// Returns the symbolic result (value of register 0 at Halt).
-    pub fn translate_entry_point(&mut self, entry_pc: usize) -> anyhow::Result<SymValue<'ctx>> {
+    pub fn translate_entry_point(&mut self, entry_pc: usize) -> anyhow::Result<SymValue> {
         self.translate_block(entry_pc)
     }
 
     /// Translate a block of instructions starting at `start_pc`.
     /// Returns the result value when the block terminates (Halt/Return/RuleReturn).
-    fn translate_block(&mut self, start_pc: usize) -> anyhow::Result<SymValue<'ctx>> {
+    fn translate_block(&mut self, start_pc: usize) -> anyhow::Result<SymValue> {
         self.pc = start_pc;
 
         while self.pc < self.program.instructions.len() {
@@ -235,10 +249,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     // Record path condition AFTER the instruction executes so
                     // that AssertCondition effects are captured. This means
                     // "covering line L" requires that the assertion on L held.
-                    let full_pc_cond = Z3Bool::and(
-                        self.ctx,
-                        &[&self.caller_path_condition, &self.path_condition],
-                    );
+                    let full_pc_cond = SmtExpr::and2(self.caller_path_condition.clone(), self.path_condition.clone());
                     self.pc_path_conditions.insert(current_pc, full_pc_cond);
                     self.pc += 1;
                 }
@@ -262,7 +273,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
     fn translate_instruction(
         &mut self,
         instruction: Instruction,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         use Instruction::*;
 
         match instruction {
@@ -389,8 +400,8 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 // symbolic definedness on the result register.  Without this,
                 // the entry-point Return would return a concrete value like
                 // `true` while silently dropping the body constraint.
-                let def_cond = reg.defined.to_z3_bool(self.ctx);
-                self.path_condition = Z3Bool::and(self.ctx, &[&self.path_condition, &def_cond]);
+                let def_cond = reg.defined.to_z3_bool();
+                self.path_condition = SmtExpr::and2(self.path_condition.clone(), def_cond.clone());
                 Ok(InstructionAction::Return(reg.value))
             }
             Halt {} => {
@@ -437,6 +448,58 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                         }
                     }
                 }
+
+                // Symbolic key: build/extend a SymbolicObject if both key and
+                // value have source paths (typical for object rules iterating
+                // over symbolic input arrays).
+                if let (Some(key_path), Some(val_path)) =
+                    (&key_reg.source_path, &val_reg.source_path)
+                {
+                    let val_sort = self
+                        .registry
+                        .get_sort(val_path)
+                        .unwrap_or(ValueSort::Unknown);
+                    let entry = SymObjectEntry {
+                        key_path: key_path.clone(),
+                        value_path: val_path.clone(),
+                        value_sort: val_sort,
+                        condition: self.path_condition.clone(),
+                    };
+
+                    match &obj_reg.value {
+                        SymValue::SymbolicObject { entries } => {
+                            let mut new_entries = entries.clone();
+                            new_entries.push(entry);
+                            self.set_register_sym(
+                                obj,
+                                SymValue::SymbolicObject {
+                                    entries: new_entries,
+                                },
+                                Definedness::Defined,
+                                None,
+                            );
+                        }
+                        SymValue::Concrete(Value::Object(_))
+                        | SymValue::Concrete(Value::Undefined) => {
+                            self.set_register_sym(
+                                obj,
+                                SymValue::SymbolicObject {
+                                    entries: vec![entry],
+                                },
+                                Definedness::Defined,
+                                None,
+                            );
+                        }
+                        _ => {
+                            self.warnings.push(format!(
+                                "PC {}: ObjectSet with symbolic key on non-object — limited precision",
+                                self.pc
+                            ));
+                        }
+                    }
+                    return Ok(InstructionAction::Continue);
+                }
+
                 // Fallback: can't track symbolic key mutations.
                 self.warnings.push(format!(
                     "PC {}: ObjectSet with symbolic key/object — limited precision",
@@ -460,7 +523,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     }
                     // Symbolic value — convert to SymbolicArray so the
                     // element is properly tracked.
-                    let mut elements: Vec<SymArrayElement<'ctx>> = (**a)
+                    let mut elements: Vec<SymArrayElement> = (**a)
                         .iter()
                         .map(|v| SymArrayElement {
                             value: SymValue::Concrete(v.clone()),
@@ -510,8 +573,8 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     // The element condition must include the definedness of
                     // the value register.  E.g. `violation contains server.id`
                     // should only succeed when server.id is actually defined.
-                    let val_defined = self.registers[value as usize].defined.to_z3_bool(self.ctx);
-                    let cond = Z3Bool::and(self.ctx, &[&self.path_condition, &val_defined]);
+                    let val_defined = self.registers[value as usize].defined.to_z3_bool();
+                    let cond = SmtExpr::and2(self.path_condition.clone(), val_defined.clone());
 
                     let iter_info: Option<(String, ValueSort)> =
                         if let Some(vreg) = self.partial_set_main_value_reg {
@@ -707,7 +770,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     self.pc
                 ));
                 let name = self.pname(&format!("host_await_{}", self.pc));
-                let var = Z3String::new_const(self.ctx, name.as_str());
+                let var = self.fresh_const(name.as_str());
                 self.set_register_sym(dest, SymValue::Str(var), Definedness::Defined, None);
                 Ok(InstructionAction::Continue)
             }
@@ -724,7 +787,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         left: u8,
         right: u8,
         op: ArithOp,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         // Sort promotion: promote path placeholders to Int for arithmetic.
         self.promote_path_register_to_sort(left, ValueSort::Int);
         self.promote_path_register_to_sort(right, ValueSort::Int);
@@ -768,27 +831,27 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         }
 
         // At least one side is symbolic — promote both to Z3 Int.
-        let za = a.value.to_z3_int(self.ctx)?;
-        let zb = b.value.to_z3_int(self.ctx)?;
+        let za = a.value.to_z3_int()?;
+        let zb = b.value.to_z3_int()?;
 
         let result = match op {
-            ArithOp::Add => za + zb,
-            ArithOp::Sub => za - zb,
-            ArithOp::Mul => za * zb,
+            ArithOp::Add => SmtExpr::Add(vec![za, zb]),
+            ArithOp::Sub => SmtExpr::Sub(vec![za, zb]),
+            ArithOp::Mul => SmtExpr::Mul(vec![za, zb]),
             ArithOp::Div => {
                 // Guard against division by zero.
-                let zero = Z3Int::from_i64(self.ctx, 0);
-                self.constraints.push(zb._eq(&zero).not());
-                za / zb
+                let zero = SmtExpr::IntLit(0);
+                self.constraints.push(SmtExpr::not(SmtExpr::eq(zb.clone(), zero.clone())));
+                SmtExpr::Div(Box::new(za), Box::new(zb))
             }
             ArithOp::Mod => {
-                let zero = Z3Int::from_i64(self.ctx, 0);
-                self.constraints.push(zb._eq(&zero).not());
-                za.rem(&zb)
+                let zero = SmtExpr::IntLit(0);
+                self.constraints.push(SmtExpr::not(SmtExpr::eq(zb.clone(), zero.clone())));
+                SmtExpr::Rem(Box::new(za), Box::new(zb))
             }
         };
 
-        let defined = Definedness::and(self.ctx, &a.defined, &b.defined);
+        let defined = Definedness::and(&a.defined, &b.defined);
         self.set_register_sym(dest, SymValue::Int(result), defined, None);
         Ok(InstructionAction::Continue)
     }
@@ -803,7 +866,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         left: u8,
         right: u8,
         op: CmpOp,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         // Sort promotion: if one register is a path placeholder and the other
         // has a known sort, promote the path register to that sort.
         self.promote_path_registers(left, right);
@@ -838,7 +901,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
 
         // Determine the sort to compare in based on what we have.
         let result_bool = self.make_comparison(&a.value, &b.value, op)?;
-        let defined = Definedness::and(self.ctx, &a.defined, &b.defined);
+        let defined = Definedness::and(&a.defined, &b.defined);
         self.set_register_sym(dest, SymValue::Bool(result_bool), defined, None);
         Ok(InstructionAction::Continue)
     }
@@ -846,10 +909,10 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
     /// Create a Z3 comparison expression between two SymValues.
     fn make_comparison(
         &mut self,
-        a: &SymValue<'ctx>,
-        b: &SymValue<'ctx>,
+        a: &SymValue,
+        b: &SymValue,
         op: CmpOp,
-    ) -> anyhow::Result<Z3Bool<'ctx>> {
+    ) -> anyhow::Result<SmtExpr> {
         // Determine the common sort.
         let sort = match (a.sort(), b.sort()) {
             (s, ValueSort::Unknown) | (ValueSort::Unknown, s) => s,
@@ -865,44 +928,44 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
 
         match sort {
             ValueSort::Bool => {
-                let za = a.to_z3_bool(self.ctx)?;
-                let zb = b.to_z3_bool(self.ctx)?;
+                let za = a.to_z3_bool()?;
+                let zb = b.to_z3_bool()?;
                 match op {
-                    CmpOp::Eq => Ok(za._eq(&zb)),
-                    CmpOp::Ne => Ok(za._eq(&zb).not()),
+                    CmpOp::Eq => Ok(SmtExpr::eq(za.clone(), zb.clone())),
+                    CmpOp::Ne => Ok(SmtExpr::not(SmtExpr::eq(za.clone(), zb.clone()))),
                     _ => anyhow::bail!("Ordering comparison on booleans not supported"),
                 }
             }
             ValueSort::Int => {
-                let za = a.to_z3_int(self.ctx)?;
-                let zb = b.to_z3_int(self.ctx)?;
+                let za = a.to_z3_int()?;
+                let zb = b.to_z3_int()?;
                 Ok(match op {
-                    CmpOp::Eq => za._eq(&zb),
-                    CmpOp::Ne => za._eq(&zb).not(),
-                    CmpOp::Lt => za.lt(&zb),
-                    CmpOp::Le => za.le(&zb),
-                    CmpOp::Gt => za.gt(&zb),
-                    CmpOp::Ge => za.ge(&zb),
+                    CmpOp::Eq => SmtExpr::eq(za.clone(), zb.clone()),
+                    CmpOp::Ne => SmtExpr::not(SmtExpr::eq(za.clone(), zb.clone())),
+                    CmpOp::Lt => SmtExpr::lt(za.clone(), zb.clone()),
+                    CmpOp::Le => SmtExpr::le(za.clone(), zb.clone()),
+                    CmpOp::Gt => SmtExpr::gt(za.clone(), zb.clone()),
+                    CmpOp::Ge => SmtExpr::ge(za.clone(), zb.clone()),
                 })
             }
             ValueSort::Real => {
-                let za = a.to_z3_real(self.ctx)?;
-                let zb = b.to_z3_real(self.ctx)?;
+                let za = a.to_z3_real()?;
+                let zb = b.to_z3_real()?;
                 Ok(match op {
-                    CmpOp::Eq => za._eq(&zb),
-                    CmpOp::Ne => za._eq(&zb).not(),
-                    CmpOp::Lt => za.lt(&zb),
-                    CmpOp::Le => za.le(&zb),
-                    CmpOp::Gt => za.gt(&zb),
-                    CmpOp::Ge => za.ge(&zb),
+                    CmpOp::Eq => SmtExpr::eq(za.clone(), zb.clone()),
+                    CmpOp::Ne => SmtExpr::not(SmtExpr::eq(za.clone(), zb.clone())),
+                    CmpOp::Lt => SmtExpr::lt(za.clone(), zb.clone()),
+                    CmpOp::Le => SmtExpr::le(za.clone(), zb.clone()),
+                    CmpOp::Gt => SmtExpr::gt(za.clone(), zb.clone()),
+                    CmpOp::Ge => SmtExpr::ge(za.clone(), zb.clone()),
                 })
             }
             ValueSort::String => {
-                let za = a.to_z3_string(self.ctx)?;
-                let zb = b.to_z3_string(self.ctx)?;
+                let za = a.to_z3_string()?;
+                let zb = b.to_z3_string()?;
                 match op {
-                    CmpOp::Eq => Ok(za._eq(&zb)),
-                    CmpOp::Ne => Ok(za._eq(&zb).not()),
+                    CmpOp::Eq => Ok(SmtExpr::eq(za.clone(), zb.clone())),
+                    CmpOp::Ne => Ok(SmtExpr::not(SmtExpr::eq(za.clone(), zb.clone()))),
                     _ => {
                         // Z3 string ordering via str.< is possible, but complex.
                         // For now, use uninterpreted comparison.
@@ -911,17 +974,17 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                             self.pc
                         ));
                         let name = self.pname(&format!("str_cmp_{}_{}", self.pc, op as u8));
-                        Ok(Z3Bool::new_const(self.ctx, name.as_str()))
+                        Ok(self.fresh_const(name.as_str()))
                     }
                 }
             }
             ValueSort::Unknown => {
                 // Both unknown: default to string comparison.
-                let za = a.to_z3_string(self.ctx)?;
-                let zb = b.to_z3_string(self.ctx)?;
+                let za = a.to_z3_string()?;
+                let zb = b.to_z3_string()?;
                 match op {
-                    CmpOp::Eq => Ok(za._eq(&zb)),
-                    CmpOp::Ne => Ok(za._eq(&zb).not()),
+                    CmpOp::Eq => Ok(SmtExpr::eq(za.clone(), zb.clone())),
+                    CmpOp::Ne => Ok(SmtExpr::not(SmtExpr::eq(za.clone(), zb.clone()))),
                     _ => anyhow::bail!("Cannot order-compare unknown-sorted values"),
                 }
             }
@@ -937,7 +1000,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         dest: u8,
         left: u8,
         right: u8,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let a = self.get_register(left).clone();
         let b = self.get_register(right).clone();
 
@@ -951,10 +1014,10 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             return Ok(InstructionAction::Continue);
         }
 
-        let za = a.value.to_z3_bool(self.ctx)?;
-        let zb = b.value.to_z3_bool(self.ctx)?;
-        let result = Z3Bool::and(self.ctx, &[&za, &zb]);
-        let defined = Definedness::and(self.ctx, &a.defined, &b.defined);
+        let za = a.value.to_z3_bool()?;
+        let zb = b.value.to_z3_bool()?;
+        let result = SmtExpr::and2(za.clone(), zb.clone());
+        let defined = Definedness::and(&a.defined, &b.defined);
         self.set_register_sym(dest, SymValue::Bool(result), defined, None);
         Ok(InstructionAction::Continue)
     }
@@ -964,7 +1027,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         dest: u8,
         left: u8,
         right: u8,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let a = self.get_register(left).clone();
         let b = self.get_register(right).clone();
 
@@ -978,10 +1041,10 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             return Ok(InstructionAction::Continue);
         }
 
-        let za = a.value.to_z3_bool(self.ctx)?;
-        let zb = b.value.to_z3_bool(self.ctx)?;
-        let result = Z3Bool::or(self.ctx, &[&za, &zb]);
-        let defined = Definedness::and(self.ctx, &a.defined, &b.defined);
+        let za = a.value.to_z3_bool()?;
+        let zb = b.value.to_z3_bool()?;
+        let result = SmtExpr::or2(za.clone(), zb.clone());
+        let defined = Definedness::and(&a.defined, &b.defined);
         self.set_register_sym(dest, SymValue::Bool(result), defined, None);
         Ok(InstructionAction::Continue)
     }
@@ -990,7 +1053,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         &mut self,
         dest: u8,
         operand: u8,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         // Promote path registers to Bool sort (e.g., `not input.suspended`).
         self.promote_path_register_to_sort(operand, ValueSort::Bool);
 
@@ -1008,7 +1071,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 // For path registers with Bool sort: result = NOT(defined AND value)
                 match &a.value {
                     SymValue::Bool(val) => {
-                        let result = Z3Bool::and(self.ctx, &[def_bool, val]).not();
+                        let result = SmtExpr::not(SmtExpr::and2(def_bool.clone(), val.clone()));
                         self.set_register_sym(
                             dest,
                             SymValue::Bool(result),
@@ -1022,8 +1085,8 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                         self.set_register_concrete(dest, Value::Bool(true));
                     }
                     _ => {
-                        let val = a.value.to_z3_bool(self.ctx)?;
-                        let result = def_bool.ite(&val.not(), &Z3Bool::from_bool(self.ctx, true));
+                        let val = a.value.to_z3_bool()?;
+                        let result = SmtExpr::ite(def_bool.clone(), SmtExpr::not(val.clone()), SmtExpr::True);
                         self.set_register_sym(
                             dest,
                             SymValue::Bool(result),
@@ -1034,8 +1097,8 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 }
             }
             Definedness::Defined => {
-                let val = a.value.to_z3_bool(self.ctx)?;
-                self.set_register_sym(dest, SymValue::Bool(val.not()), Definedness::Defined, None);
+                let val = a.value.to_z3_bool()?;
+                self.set_register_sym(dest, SymValue::Bool(SmtExpr::not(val.clone())), Definedness::Defined, None);
             }
             Definedness::Undefined => unreachable!(), // handled above
         }
@@ -1049,7 +1112,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
     fn translate_assert_condition(
         &mut self,
         condition: u8,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let reg = self.get_register(condition).clone();
 
         // Path registers have SymValue::Concrete(Value::Undefined) as a
@@ -1059,15 +1122,12 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         if reg.source_path.is_some() {
             self.ensure_register_sort(condition, ValueSort::Bool)?;
             let reg = self.get_register(condition).clone();
-            let bool_val = reg.value.to_z3_bool(self.ctx)?;
-            let def = reg.defined.to_z3_bool(self.ctx);
-            let cond_z3 = Z3Bool::and(self.ctx, &[&def, &bool_val]);
+            let bool_val = reg.value.to_z3_bool()?;
+            let def = reg.defined.to_z3_bool();
+            let cond_z3 = SmtExpr::and2(def.clone(), bool_val.clone());
 
             // Record condition for condition-coverage analysis.
-            let pre_path = Z3Bool::and(
-                self.ctx,
-                &[&self.caller_path_condition, &self.path_condition],
-            );
+            let pre_path = SmtExpr::and2(self.caller_path_condition.clone(), self.path_condition.clone());
             self.pc_conditions.push(ConditionRecord {
                 pc: self.pc,
                 pre_path_condition: pre_path,
@@ -1075,7 +1135,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 body_id: None, // TODO: populate for MC/DC
             });
 
-            self.path_condition = Z3Bool::and(self.ctx, &[&self.path_condition, &cond_z3]);
+            self.path_condition = SmtExpr::and2(self.path_condition.clone(), cond_z3.clone());
             return Ok(InstructionAction::Continue);
         }
 
@@ -1084,32 +1144,32 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 // Gate concrete bool by definedness: a rule returning
                 // Concrete(true) with Symbolic definedness must still
                 // propagate the definedness constraint.
-                let val = Z3Bool::from_bool(self.ctx, *b);
+                let val = SmtExpr::bool_lit(*b);
                 match &reg.defined {
                     Definedness::Defined => val,
-                    Definedness::Undefined => Z3Bool::from_bool(self.ctx, false),
+                    Definedness::Undefined => SmtExpr::False,
                     Definedness::Symbolic(def) => {
                         if *b {
                             // assert(true) when symbolically defined → just require defined
                             def.clone()
                         } else {
                             // assert(false) → always fails
-                            Z3Bool::from_bool(self.ctx, false)
+                            SmtExpr::False
                         }
                     }
                 }
             }
-            SymValue::Concrete(Value::Undefined) => Z3Bool::from_bool(self.ctx, false),
+            SymValue::Concrete(Value::Undefined) => SmtExpr::False,
             SymValue::Concrete(_) => {
                 // Non-bool concrete values are truthy in Rego.
-                reg.defined.to_z3_bool(self.ctx)
+                reg.defined.to_z3_bool()
             }
             SymValue::Bool(b) => {
                 // Gate by definedness: defined AND value.
                 match &reg.defined {
                     Definedness::Defined => b.clone(),
-                    Definedness::Undefined => Z3Bool::from_bool(self.ctx, false),
-                    Definedness::Symbolic(def) => Z3Bool::and(self.ctx, &[def, b]),
+                    Definedness::Undefined => SmtExpr::False,
+                    Definedness::Symbolic(def) => SmtExpr::and2(def.clone(), b.clone()),
                 }
             }
             SymValue::ConditionalConcrete { .. } => {
@@ -1117,28 +1177,25 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 // gate by definedness.  Without this, rules like `applicable`
                 // that return ConditionalConcrete would be treated as
                 // unconditionally truthy.
-                match reg.value.to_z3_bool(self.ctx) {
+                match reg.value.to_z3_bool() {
                     Ok(b) => {
-                        let def = reg.defined.to_z3_bool(self.ctx);
-                        Z3Bool::and(self.ctx, &[&def, &b])
+                        let def = reg.defined.to_z3_bool();
+                        SmtExpr::and2(def.clone(), b.clone())
                     }
                     Err(_) => {
                         // Non-bool ConditionalConcrete — treat as truthy if defined.
-                        reg.defined.to_z3_bool(self.ctx)
+                        reg.defined.to_z3_bool()
                     }
                 }
             }
             _ => {
                 // Non-bool symbolic values: treat as truthy if defined.
-                reg.defined.to_z3_bool(self.ctx)
+                reg.defined.to_z3_bool()
             }
         };
 
         // Record condition for condition-coverage analysis.
-        let pre_path = Z3Bool::and(
-            self.ctx,
-            &[&self.caller_path_condition, &self.path_condition],
-        );
+        let pre_path = SmtExpr::and2(self.caller_path_condition.clone(), self.path_condition.clone());
         self.pc_conditions.push(ConditionRecord {
             pc: self.pc,
             pre_path_condition: pre_path,
@@ -1147,24 +1204,24 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         });
 
         // Conjoin to path condition.
-        self.path_condition = Z3Bool::and(self.ctx, &[&self.path_condition, &cond_z3]);
+        self.path_condition = SmtExpr::and2(self.path_condition.clone(), cond_z3.clone());
         Ok(InstructionAction::Continue)
     }
 
     fn translate_assert_not_undefined(
         &mut self,
         register: u8,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let reg = self.get_register(register).clone();
-        let def_z3 = reg.defined.to_z3_bool(self.ctx);
-        self.path_condition = Z3Bool::and(self.ctx, &[&self.path_condition, &def_z3]);
+        let def_z3 = reg.defined.to_z3_bool();
+        self.path_condition = SmtExpr::and2(self.path_condition.clone(), def_z3.clone());
         Ok(InstructionAction::Continue)
     }
 
     fn translate_return_undefined_if_not_true(
         &mut self,
         condition: u8,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let reg = self.get_register(condition).clone();
 
         if let SymValue::Concrete(v) = &reg.value {
@@ -1177,14 +1234,14 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         // Symbolic approximation: constrain this execution path to the
         // "condition is true" branch; the false branch would return Undefined.
         let is_true = self.policy_is_true_reg(condition)?;
-        self.path_condition = Z3Bool::and(self.ctx, &[&self.path_condition, &is_true]);
+        self.path_condition = SmtExpr::and2(self.path_condition.clone(), is_true.clone());
         Ok(InstructionAction::Continue)
     }
 
     fn translate_coalesce_undefined_to_null(
         &mut self,
         register: u8,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let reg = self.get_register(register).clone();
 
         // Path registers use Concrete(Undefined) as a placeholder whose sort
@@ -1214,7 +1271,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         left: u8,
         right: u8,
         negate: bool,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         self.promote_path_registers(left, right);
 
         let l = self.get_register(left).clone();
@@ -1249,8 +1306,8 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         let eq = self.make_comparison(&l.value, &r.value, CmpOp::Eq);
         if let Ok(eq_bool) = eq {
             let out = if negate {
-                let left_undef = l.defined.to_z3_bool(self.ctx).not();
-                Z3Bool::or(self.ctx, &[&left_undef, &eq_bool.not()])
+                let left_undef = SmtExpr::not(l.defined.to_z3_bool());
+                SmtExpr::or2(left_undef.clone(), SmtExpr::not(eq_bool.clone()))
             } else {
                 eq_bool
             };
@@ -1263,10 +1320,10 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let name = self.pname(&format!("policy_eq_{}", self.pc));
-        let var = Z3Bool::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         let out = if negate {
-            let left_undef = l.defined.to_z3_bool(self.ctx).not();
-            Z3Bool::or(self.ctx, &[&left_undef, &var.not()])
+            let left_undef = SmtExpr::not(l.defined.to_z3_bool());
+            SmtExpr::or2(left_undef.clone(), SmtExpr::not(var.clone()))
         } else {
             var
         };
@@ -1280,7 +1337,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         left: u8,
         right: u8,
         op: CmpOp,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let l = self.get_register(left).clone();
         let r = self.get_register(right).clone();
 
@@ -1317,7 +1374,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         left: u8,
         right: u8,
         mode: &str,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         self.promote_path_registers(left, right);
 
         let l = self.get_register(left).clone();
@@ -1429,7 +1486,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc, mode
         ));
         let name = self.pname(&format!("policy_{}_{}", mode, self.pc));
-        let var = Z3Bool::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(dest, SymValue::Bool(var), Definedness::Defined, None);
         Ok(InstructionAction::Continue)
     }
@@ -1441,7 +1498,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         right: u8,
         mode: &str,
         negate: bool,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let l = self.get_register(left).clone();
         let r = self.get_register(right).clone();
 
@@ -1479,10 +1536,10 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc, mode
         ));
         let name = self.pname(&format!("policy_{}_{}", mode, self.pc));
-        let var = Z3Bool::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         let out = if negate {
-            let left_undef = l.defined.to_z3_bool(self.ctx).not();
-            Z3Bool::or(self.ctx, &[&left_undef, &var.not()])
+            let left_undef = SmtExpr::not(l.defined.to_z3_bool());
+            SmtExpr::or2(left_undef.clone(), SmtExpr::not(var.clone()))
         } else {
             var
         };
@@ -1495,7 +1552,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         dest: u8,
         left: u8,
         right: u8,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let l = self.get_register(left).clone();
         let r = self.get_register(right).clone();
 
@@ -1516,8 +1573,8 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             _ => false,
         };
 
-        let left_defined = l.defined.to_z3_bool(self.ctx);
-        let eq = if expected { left_defined } else { left_defined.not() };
+        let left_defined = l.defined.to_z3_bool();
+        let eq = if expected { left_defined } else { SmtExpr::not(left_defined.clone()) };
         self.set_register_sym(dest, SymValue::Bool(eq), Definedness::Defined, None);
         Ok(InstructionAction::Continue)
     }
@@ -1526,13 +1583,13 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         &mut self,
         dest: u8,
         operand: u8,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let is_true = self.policy_is_true_reg(operand)?;
-        self.set_register_sym(dest, SymValue::Bool(is_true.not()), Definedness::Defined, None);
+        self.set_register_sym(dest, SymValue::Bool(SmtExpr::not(is_true.clone())), Definedness::Defined, None);
         Ok(InstructionAction::Continue)
     }
 
-    fn translate_allof_start(&mut self, result: u8) -> anyhow::Result<InstructionAction<'ctx>> {
+    fn translate_allof_start(&mut self, result: u8) -> anyhow::Result<InstructionAction> {
         // Logical allOf identity.
         self.set_register_concrete(result, Value::Bool(true));
         Ok(InstructionAction::Continue)
@@ -1542,15 +1599,15 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         &mut self,
         check: u8,
         result: u8,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let prev = self.policy_is_true_reg(result)?;
         let next = self.policy_is_true_reg(check)?;
-        let out = Z3Bool::and(self.ctx, &[&prev, &next]);
+        let out = SmtExpr::and2(prev.clone(), next.clone());
         self.set_register_sym(result, SymValue::Bool(out), Definedness::Defined, None);
         Ok(InstructionAction::Continue)
     }
 
-    fn translate_anyof_start(&mut self, result: u8) -> anyhow::Result<InstructionAction<'ctx>> {
+    fn translate_anyof_start(&mut self, result: u8) -> anyhow::Result<InstructionAction> {
         // Logical anyOf identity.
         self.set_register_concrete(result, Value::Bool(false));
         Ok(InstructionAction::Continue)
@@ -1560,39 +1617,36 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         &mut self,
         check: u8,
         result: u8,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let prev = self.policy_is_true_reg(result)?;
         let next = self.policy_is_true_reg(check)?;
-        let out = Z3Bool::or(self.ctx, &[&prev, &next]);
+        let out = SmtExpr::or2(prev.clone(), next.clone());
         self.set_register_sym(result, SymValue::Bool(out), Definedness::Defined, None);
         Ok(InstructionAction::Continue)
     }
 
-    fn policy_is_true_reg(&mut self, reg: u8) -> anyhow::Result<Z3Bool<'ctx>> {
+    fn policy_is_true_reg(&mut self, reg: u8) -> anyhow::Result<SmtExpr> {
         let value = self.get_register(reg).clone();
 
         if value.source_path.is_some() {
             self.ensure_register_sort(reg, ValueSort::Bool)?;
             let value = self.get_register(reg).clone();
-            let b = value.value.to_z3_bool(self.ctx)?;
-            let def = value.defined.to_z3_bool(self.ctx);
-            return Ok(Z3Bool::and(self.ctx, &[&def, &b]));
+            let b = value.value.to_z3_bool()?;
+            let def = value.defined.to_z3_bool();
+            return Ok(SmtExpr::and2(def.clone(), b.clone()));
         }
 
         match value.value {
             SymValue::Concrete(Value::Bool(b)) => {
-                let vb = Z3Bool::from_bool(self.ctx, b);
-                Ok(Z3Bool::and(
-                    self.ctx,
-                    &[&value.defined.to_z3_bool(self.ctx), &vb],
-                ))
+                let vb = SmtExpr::bool_lit(b);
+                Ok(SmtExpr::and2(value.defined.to_z3_bool(), vb.clone()))
             }
             SymValue::Bool(b) => match value.defined {
                 Definedness::Defined => Ok(b),
-                Definedness::Undefined => Ok(Z3Bool::from_bool(self.ctx, false)),
-                Definedness::Symbolic(def) => Ok(Z3Bool::and(self.ctx, &[&def, &b])),
+                Definedness::Undefined => Ok(SmtExpr::False),
+                Definedness::Symbolic(def) => Ok(SmtExpr::and2(def.clone(), b.clone())),
             },
-            _ => Ok(Z3Bool::from_bool(self.ctx, false)),
+            _ => Ok(SmtExpr::False),
         }
     }
 
@@ -1605,7 +1659,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         dest: u8,
         container: u8,
         key: u8,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let container_reg = self.get_register(container).clone();
         let key_reg = self.get_register(key).clone();
 
@@ -1631,7 +1685,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         if let (SymValue::ConditionalConcrete { branches, fallback }, SymValue::Concrete(key_val)) =
             (&container_reg.value, &key_reg.value)
         {
-            let new_branches: Vec<(Z3Bool<'ctx>, Value)> = branches
+            let new_branches: Vec<(SmtExpr, Value)> = branches
                 .iter()
                 .map(|(cond, val)| (cond.clone(), val[key_val].clone()))
                 .collect();
@@ -1644,10 +1698,10 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
 
             if all_bool {
                 let fb = matches!(&new_fallback, Value::Bool(true));
-                let mut result = Z3Bool::from_bool(self.ctx, fb);
+                let mut result = SmtExpr::bool_lit(fb);
                 for (cond, val) in new_branches.iter().rev() {
                     let b = matches!(val, Value::Bool(true));
-                    result = cond.ite(&Z3Bool::from_bool(self.ctx, b), &result);
+                    result = SmtExpr::ite(cond.clone(), SmtExpr::bool_lit(b), result);
                 }
                 self.set_register_sym(dest, SymValue::Bool(result), Definedness::Defined, None);
             } else {
@@ -1664,13 +1718,18 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             return Ok(InstructionAction::Continue);
         }
 
+        // SymbolicObject container: build an ITE chain over the entries.
+        if let SymValue::SymbolicObject { ref entries } = container_reg.value {
+            return self.translate_symbolic_object_lookup(dest, key, entries);
+        }
+
         // Dynamic index into symbolic container — limited precision.
         self.warnings.push(format!(
             "PC {}: Dynamic index into symbolic container — limited precision",
             self.pc
         ));
         let name = self.pname(&format!("dyn_idx_{}", self.pc));
-        let var = Z3String::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(InstructionAction::Continue)
     }
@@ -1680,7 +1739,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         dest: u8,
         container: u8,
         literal_idx: u16,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let key_val = self.program.literals[literal_idx as usize].clone();
         let container_reg = self.get_register(container).clone();
 
@@ -1700,7 +1759,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
 
         // ConditionalConcrete container → distribute the index across branches.
         if let SymValue::ConditionalConcrete { branches, fallback } = &container_reg.value {
-            let new_branches: Vec<(Z3Bool<'ctx>, Value)> = branches
+            let new_branches: Vec<(SmtExpr, Value)> = branches
                 .iter()
                 .map(|(cond, val)| (cond.clone(), val[&key_val].clone()))
                 .collect();
@@ -1715,10 +1774,10 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
 
             if all_bool {
                 let fb = matches!(&new_fallback, Value::Bool(true));
-                let mut result = Z3Bool::from_bool(self.ctx, fb);
+                let mut result = SmtExpr::bool_lit(fb);
                 for (cond, val) in new_branches.iter().rev() {
                     let b = matches!(val, Value::Bool(true));
-                    result = cond.ite(&Z3Bool::from_bool(self.ctx, b), &result);
+                    result = SmtExpr::ite(cond.clone(), SmtExpr::bool_lit(b), result);
                 }
                 self.set_register_sym(dest, SymValue::Bool(result), Definedness::Defined, None);
             } else {
@@ -1735,21 +1794,142 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             return Ok(InstructionAction::Continue);
         }
 
+        // SymbolicObject container with literal key: create a temporary
+        // register for the literal key and delegate to the ITE-chain lookup.
+        if let SymValue::SymbolicObject { ref entries } = container_reg.value {
+            // We need a temporary register to hold the literal key.
+            // Push it as a concrete String, do the lookup, then the result
+            // is in `dest`.  Reuse `dest` as a temp first.
+            let key_str = match &key_val {
+                Value::String(s) => s.to_string(),
+                other => format!("{:?}", other),
+            };
+            let z3_key = SmtExpr::StringLit(key_str.to_string());
+            self.set_register_sym(
+                dest,
+                SymValue::Str(z3_key),
+                Definedness::Defined,
+                None,
+            );
+            return self.translate_symbolic_object_lookup(dest, dest, entries);
+        }
+
         // Symbolic container with literal key — still limited.
         self.warnings.push(format!(
             "PC {}: IndexLiteral on symbolic non-path container",
             self.pc
         ));
         let name = self.pname(&format!("idx_lit_{}_{}", self.pc, literal_idx));
-        let var = Z3String::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(dest, SymValue::Str(var), Definedness::Defined, None);
+        Ok(InstructionAction::Continue)
+    }
+
+    /// Look up a key in a SymbolicObject by building a Z3 ITE chain.
+    ///
+    /// For each entry `(key_path, value_path, condition)` in the object,
+    /// checks `lookup_key == registry_string(key_path)` under `condition`.
+    /// Returns an ITE chain over the value variables, with definedness
+    /// tracking whether any entry matched.
+    fn translate_symbolic_object_lookup(
+        &mut self,
+        dest: u8,
+        key_reg_idx: u8,
+        entries: &[SymObjectEntry],
+    ) -> anyhow::Result<InstructionAction> {
+        // Ensure the lookup key is promoted to String.
+        self.promote_path_register_to_sort(key_reg_idx, ValueSort::String);
+        self.ensure_register_sort(key_reg_idx, ValueSort::String)?;
+        let lookup_key = self.get_register(key_reg_idx).value.to_z3_string()?;
+
+        // Determine the dominant value sort from entries.
+        let value_sort = entries
+            .iter()
+            .map(|e| {
+                self.registry
+                    .get_sort(&e.value_path)
+                    .unwrap_or(e.value_sort)
+            })
+            .find(|s| *s != ValueSort::Unknown)
+            .unwrap_or(ValueSort::Unknown);
+
+        match value_sort {
+            ValueSort::Bool => {
+                let mut result = SmtExpr::False;
+                let mut defined_conds = Vec::new();
+
+                for entry in entries.iter().rev() {
+                    let entry_key = self.registry.get_string(&entry.key_path);
+                    let entry_val = self.registry.get_bool(&entry.value_path);
+                    let entry_def = self
+                        .registry
+                        .get(&entry.value_path)
+                        .map(|e| e.defined.clone())
+                        .unwrap_or_else(|| SmtExpr::True);
+
+                    let matches_key = SmtExpr::eq(lookup_key.clone(), entry_key.clone());
+                    let active = SmtExpr::And(vec![entry.condition.clone(), matches_key.clone(), entry_def.clone()]);
+                    result = SmtExpr::ite(active.clone(), entry_val.clone(), result.clone());
+                    defined_conds.push(active);
+                }
+
+                let defined_refs: Vec<&SmtExpr> = defined_conds.iter().collect();
+                let is_defined = if defined_refs.is_empty() {
+                    SmtExpr::False
+                } else {
+                    SmtExpr::Or(defined_refs.into_iter().cloned().collect())
+                };
+
+                self.set_register_sym(
+                    dest,
+                    SymValue::Bool(result),
+                    Definedness::Symbolic(is_defined),
+                    None,
+                );
+            }
+            _ => {
+                // Default: treat as String (most general for Rego keys/values).
+                let mut result = SmtExpr::StringLit("".to_string());
+                let mut defined_conds = Vec::new();
+
+                for entry in entries.iter().rev() {
+                    let entry_key = self.registry.get_string(&entry.key_path);
+                    let entry_val = self.registry.get_string(&entry.value_path);
+                    let entry_def = self
+                        .registry
+                        .get(&entry.value_path)
+                        .map(|e| e.defined.clone())
+                        .unwrap_or_else(|| SmtExpr::True);
+
+                    let matches_key = SmtExpr::eq(lookup_key.clone(), entry_key.clone());
+                    let active = SmtExpr::And(vec![entry.condition.clone(), matches_key.clone(), entry_def.clone()]);
+                    result = SmtExpr::ite(active.clone(), entry_val.clone(), result.clone());
+                    defined_conds.push(active);
+                }
+
+                let defined_refs: Vec<&SmtExpr> = defined_conds.iter().collect();
+                let is_defined = if defined_refs.is_empty() {
+                    SmtExpr::False
+                } else {
+                    SmtExpr::Or(defined_refs.into_iter().cloned().collect())
+                };
+
+                self.set_register_sym(
+                    dest,
+                    SymValue::Str(result),
+                    Definedness::Symbolic(is_defined),
+                    None,
+                );
+            }
+        }
+
         Ok(InstructionAction::Continue)
     }
 
     fn translate_chained_index(
         &mut self,
         params_index: u16,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let params = self
             .program
             .instruction_data
@@ -1814,7 +1994,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                                 self.pc
                             ));
                             let name = self.pname(&format!("chain_idx_{}", self.pc));
-                            let var = Z3String::new_const(self.ctx, name.as_str());
+                            let var = self.fresh_const(name.as_str());
                             self.set_register_sym(
                                 params.dest,
                                 SymValue::Str(var),
@@ -1837,7 +2017,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let name = self.pname(&format!("chain_idx_{}", self.pc));
-        let var = Z3String::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(InstructionAction::Continue)
     }
@@ -1850,7 +2030,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         &mut self,
         dest: u8,
         rule_index: u16,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         self.translate_call_rule_inner(dest, rule_index, None)
     }
 
@@ -1858,8 +2038,8 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         &mut self,
         dest: u8,
         rule_index: u16,
-        function_args: Option<&[SymRegister<'ctx>]>,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+        function_args: Option<&[SymRegister]>,
+    ) -> anyhow::Result<InstructionAction> {
         // Check rule cache first.
         if let Some((cached_val, cached_def)) = self.rule_cache.get(&rule_index).cloned() {
             self.set_register_sym(dest, cached_val, cached_def, None);
@@ -1895,7 +2075,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         // Save current state.
         let saved_pc = self.pc;
         let saved_path_cond = self.path_condition.clone();
-        let saved_registers: Vec<SymRegister<'ctx>> = self.registers.clone();
+        let saved_registers: Vec<SymRegister> = self.registers.clone();
         let saved_caller_path_cond = self.caller_path_condition.clone();
         let saved_is_in_partial_set_body = self.is_in_partial_set_body;
         let saved_partial_set_main_value_reg = self.partial_set_main_value_reg;
@@ -1903,10 +2083,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
 
         // Push the current (outer) path condition into caller_path_condition
         // so that inner pc_path_conditions reflect the full call chain.
-        self.caller_path_condition = Z3Bool::and(
-            self.ctx,
-            &[&self.caller_path_condition, &self.path_condition],
-        );
+        self.caller_path_condition = SmtExpr::and2(self.caller_path_condition.clone(), self.path_condition.clone());
 
         self.rule_call_stack.insert(rule_index);
 
@@ -1939,7 +2116,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         }
 
         // Translate each definition's body.
-        let mut body_results: Vec<(Z3Bool<'ctx>, SymValue<'ctx>)> = Vec::new();
+        let mut body_results: Vec<(SmtExpr, SymValue)> = Vec::new();
         let is_partial_set = rule_info.rule_type == RuleType::PartialSet;
 
         // Set up partial set element tracking.
@@ -1953,11 +2130,11 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             // Track accumulated failure of previous bodies within this
             // definition — used for else-chain semantics where body[i+1]
             // only fires if body[0..=i] all failed.
-            let mut prev_bodies_failed = Z3Bool::from_bool(self.ctx, true);
+            let mut prev_bodies_failed = SmtExpr::True;
 
             for body_pc in bodies.iter() {
                 // Reset path condition for this body.
-                self.path_condition = Z3Bool::from_bool(self.ctx, true);
+                self.path_condition = SmtExpr::True;
 
                 // Re-initialize registers for this body attempt.
                 // For function calls, retain argument registers (0..num_retained).
@@ -2006,19 +2183,13 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     body_results.push((body_path_cond, result_value.value.clone()));
                     // Partial sets: all bodies run, no else-chain gating.
                 } else {
-                    let result_defined = result_value.defined.to_z3_bool(self.ctx);
+                    let result_defined = result_value.defined.to_z3_bool();
                     let body_succeeded =
-                        Z3Bool::and(self.ctx, &[&body_path_cond, &result_defined]);
+                        SmtExpr::and2(body_path_cond.clone(), result_defined.clone());
                     // Gate by failure of all previous bodies in this definition.
-                    let effective_cond = Z3Bool::and(
-                        self.ctx,
-                        &[&prev_bodies_failed, &body_succeeded],
-                    );
+                    let effective_cond = SmtExpr::and2(prev_bodies_failed.clone(), body_succeeded.clone());
                     // Update accumulated failure for next else-body.
-                    prev_bodies_failed = Z3Bool::and(
-                        self.ctx,
-                        &[&prev_bodies_failed, &body_succeeded.not()],
-                    );
+                    prev_bodies_failed = SmtExpr::and2(prev_bodies_failed.clone(), SmtExpr::not(body_succeeded.clone()));
                     body_results.push((effective_cond, result_value.value.clone()));
                 }
             }
@@ -2059,7 +2230,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 // Group elements by their key path (key_path).
                 // Elements with the same key produce the same set value,
                 // so they should contribute at most 1 to the cardinality.
-                let mut groups: HashMap<&str, Vec<&Z3Bool<'ctx>>> = HashMap::new();
+                let mut groups: HashMap<&str, Vec<&SmtExpr>> = HashMap::new();
                 for elem in &collected_partial_set_elements {
                     groups
                         .entry(&elem.key_path)
@@ -2067,19 +2238,19 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                         .push(&elem.condition);
                 }
 
-                let zero = Z3Int::from_i64(self.ctx, 0);
-                let one = Z3Int::from_i64(self.ctx, 1);
-                let mut sum = Z3Int::from_i64(self.ctx, 0);
-                let mut group_info: Vec<(&str, Z3Bool<'ctx>)> = Vec::new();
+                let zero = SmtExpr::IntLit(0);
+                let one = SmtExpr::IntLit(1);
+                let mut sum = SmtExpr::IntLit(0);
+                let mut group_info: Vec<(&str, SmtExpr)> = Vec::new();
                 for (key, conds) in &groups {
                     // This group contributes 1 if ANY element in it succeeded.
                     let any_succeeded = if conds.len() == 1 {
                         (*conds[0]).clone()
                     } else {
-                        Z3Bool::or(self.ctx, conds)
+                        SmtExpr::Or(conds.iter().map(|c| (*c).clone()).collect())
                     };
-                    let contrib = any_succeeded.ite(&one, &zero);
-                    sum = Z3Int::add(self.ctx, &[&sum, &contrib]);
+                    let contrib = SmtExpr::ite(any_succeeded.clone(), one.clone(), zero.clone());
+                    sum = SmtExpr::Add(vec![sum.clone(), contrib.clone()]);
                     group_info.push((key, any_succeeded));
                 }
 
@@ -2095,31 +2266,31 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                         let sort_i = self.registry.get_sort(path_i);
                         let sort_j = self.registry.get_sort(path_j);
                         // Only enforce distinctness for matching scalar sorts.
-                        let both_active = Z3Bool::and(self.ctx, &[cond_i, cond_j]);
+                        let both_active = SmtExpr::and2(cond_i.clone(), cond_j.clone());
                         match (sort_i, sort_j) {
                             (Some(ValueSort::String), Some(ValueSort::String)) => {
                                 let v_i = self.registry.get_string(path_i);
                                 let v_j = self.registry.get_string(path_j);
                                 self.constraints
-                                    .push(both_active.implies(&v_i._eq(&v_j).not()));
+                                    .push(SmtExpr::implies(both_active, SmtExpr::not(SmtExpr::eq(v_i.clone(), v_j.clone()))));
                             }
                             (Some(ValueSort::Int), Some(ValueSort::Int)) => {
                                 let v_i = self.registry.get_int(path_i);
                                 let v_j = self.registry.get_int(path_j);
                                 self.constraints
-                                    .push(both_active.implies(&v_i._eq(&v_j).not()));
+                                    .push(SmtExpr::implies(both_active, SmtExpr::not(SmtExpr::eq(v_i.clone(), v_j.clone()))));
                             }
                             (Some(ValueSort::Bool), Some(ValueSort::Bool)) => {
                                 let v_i = self.registry.get_bool(path_i);
                                 let v_j = self.registry.get_bool(path_j);
                                 self.constraints
-                                    .push(both_active.implies(&v_i._eq(&v_j).not()));
+                                    .push(SmtExpr::implies(both_active, SmtExpr::not(SmtExpr::eq(v_i.clone(), v_j.clone()))));
                             }
                             (Some(ValueSort::Real), Some(ValueSort::Real)) => {
                                 let v_i = self.registry.get_real(path_i);
                                 let v_j = self.registry.get_real(path_j);
                                 self.constraints
-                                    .push(both_active.implies(&v_i._eq(&v_j).not()));
+                                    .push(SmtExpr::implies(both_active, SmtExpr::not(SmtExpr::eq(v_i.clone(), v_j.clone()))));
                             }
                             _ => {
                                 // Unknown or mixed sorts — skip distinctness.
@@ -2136,22 +2307,22 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 ));
                 sum
             } else if body_results.is_empty() {
-                Z3Int::from_i64(self.ctx, 0)
+                SmtExpr::IntLit(0)
             } else {
                 // Fallback: body-level cardinality.
-                let zero = Z3Int::from_i64(self.ctx, 0);
-                let one = Z3Int::from_i64(self.ctx, 1);
-                let mut sum = Z3Int::from_i64(self.ctx, 0);
+                let zero = SmtExpr::IntLit(0);
+                let one = SmtExpr::IntLit(1);
+                let mut sum = SmtExpr::IntLit(0);
                 for (cond, _val) in &body_results {
-                    let contrib = cond.ite(&one, &zero);
-                    sum = Z3Int::add(self.ctx, &[&sum, &contrib]);
+                    let contrib = SmtExpr::ite(cond.clone(), one.clone(), zero.clone());
+                    sum = SmtExpr::Add(vec![sum.clone(), contrib.clone()]);
                 }
                 sum
             };
 
             // Cardinality is always >= 0 (and always defined for partial sets).
             self.constraints
-                .push(cardinality.ge(&Z3Int::from_i64(self.ctx, 0)));
+                .push(SmtExpr::ge(cardinality.clone(), SmtExpr::IntLit(0)));
 
             let result_value =
                 if collected_partial_set_elements.is_empty() {
@@ -2201,7 +2372,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 .all(|(_, v)| matches!(v, SymValue::Concrete(_)));
 
             if all_concrete {
-                let branches: Vec<(Z3Bool<'ctx>, Value)> = body_results
+                let branches: Vec<(SmtExpr, Value)> = body_results
                     .into_iter()
                     .map(|(cond, val)| {
                         let concrete = match val {
@@ -2211,9 +2382,9 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                         (cond, concrete)
                     })
                     .collect();
-                let cond_refs: Vec<&Z3Bool<'ctx>> =
+                let cond_refs: Vec<&SmtExpr> =
                     branches.iter().map(|(c, _)| c).collect();
-                let any_succeeded = Z3Bool::or(self.ctx, &cond_refs);
+                let any_succeeded = SmtExpr::Or(cond_refs.into_iter().cloned().collect());
                 (
                     SymValue::ConditionalConcrete {
                         branches,
@@ -2231,12 +2402,12 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     // All bodies produce Bool — build Z3 Bool ITE.
                     let mut iter = body_results.into_iter().rev();
                     let (last_cond, last_val) = iter.next().unwrap();
-                    let mut result = last_val.to_z3_bool(self.ctx)?;
+                    let mut result = last_val.to_z3_bool()?;
                     let mut any_cond = last_cond.clone();
                     for (cond, val) in iter {
-                        let branch_bool = val.to_z3_bool(self.ctx)?;
-                        result = cond.ite(&branch_bool, &result);
-                        any_cond = Z3Bool::or(self.ctx, &[&any_cond, &cond]);
+                        let branch_bool = val.to_z3_bool()?;
+                        result = SmtExpr::ite(cond.clone(), branch_bool.clone(), result.clone());
+                        any_cond = SmtExpr::or2(any_cond.clone(), cond.clone());
                     }
                     (SymValue::Bool(result), Definedness::Symbolic(any_cond))
                 } else {
@@ -2261,14 +2432,14 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     // If defined → use rule result; else → use default.
                     match (&final_value, &default_val) {
                         (SymValue::Bool(rule_bool), Value::Bool(def_b)) => {
-                            let def_z3 = Z3Bool::from_bool(self.ctx, *def_b);
-                            let result = def_bool.ite(rule_bool, &def_z3);
+                            let def_z3 = SmtExpr::bool_lit(*def_b);
+                            let result = SmtExpr::ite(def_bool.clone(), rule_bool.clone(), def_z3);
                             (SymValue::Bool(result), Definedness::Defined)
                         }
                         (SymValue::Concrete(Value::Bool(rule_b)), Value::Bool(def_b)) => {
-                            let rule_z3 = Z3Bool::from_bool(self.ctx, *rule_b);
-                            let def_z3 = Z3Bool::from_bool(self.ctx, *def_b);
-                            let result = def_bool.ite(&rule_z3, &def_z3);
+                            let rule_z3 = SmtExpr::bool_lit(*rule_b);
+                            let def_z3 = SmtExpr::bool_lit(*def_b);
+                            let result = SmtExpr::ite(def_bool.clone(), rule_z3.clone(), def_z3.clone());
                             (SymValue::Bool(result), Definedness::Defined)
                         }
                         (
@@ -2320,7 +2491,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         &mut self,
         result_reg: u8,
         _rule_index: u16,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         // RuleInit sets up the result register. In our model, initialize to Undefined.
         self.set_register_sym(
             result_reg,
@@ -2338,7 +2509,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
     fn translate_object_create(
         &mut self,
         params_index: u16,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let params = self
             .program
             .instruction_data
@@ -2446,7 +2617,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
     fn translate_array_create(
         &mut self,
         params_index: u16,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let params = self
             .program
             .instruction_data
@@ -2510,7 +2681,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
     fn translate_set_create(
         &mut self,
         params_index: u16,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let params = self
             .program
             .instruction_data
@@ -2562,7 +2733,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     } else {
                         r.value.sort()
                     };
-                    let cond = r.defined.to_z3_bool(self.ctx);
+                    let cond = r.defined.to_z3_bool();
                     sym_elements.push(SymSetElement {
                         condition: cond,
                         element_path: elem_path.clone(),
@@ -2571,12 +2742,12 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     });
                 }
 
-                let zero = Z3Int::from_i64(self.ctx, 0);
-                let one = Z3Int::from_i64(self.ctx, 1);
-                let mut sum = Z3Int::from_i64(self.ctx, 0);
+                let zero = SmtExpr::IntLit(0);
+                let one = SmtExpr::IntLit(1);
+                let mut sum = SmtExpr::IntLit(0);
                 for elem in &sym_elements {
-                    let contrib = elem.condition.ite(&one, &zero);
-                    sum = Z3Int::add(self.ctx, &[&sum, &contrib]);
+                    let contrib = SmtExpr::ite(elem.condition.clone(), one.clone(), zero.clone());
+                    sum = SmtExpr::Add(vec![sum.clone(), contrib.clone()]);
                 }
 
                 self.set_register_sym(
@@ -2598,14 +2769,14 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         dest: u8,
         collection: u8,
         value: u8,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let coll = self.get_register(collection).clone();
         let val = self.get_register(value).clone();
 
         // Combine operand definedness: if either is undefined, result is undefined.
         // This prevents false positives where Z3 sets an undefined path variable
         // to a value that happens to match collection elements.
-        let result_defined = Definedness::and(self.ctx, &coll.defined, &val.defined);
+        let result_defined = Definedness::and(&coll.defined, &val.defined);
 
         // Concrete case — but skip if either operand is a path placeholder
         // (Undefined with source_path), since those are symbolic values.
@@ -2644,24 +2815,24 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                             Value::String(s) => {
                                 let val_z3 = self.get_z3_for_contains_operand(&val, ValueSort::String)?;
                                 if let ContainsZ3Value::Str(val_str) = &val_z3 {
-                                    let elem_z3 = Z3String::from_str(self.ctx, s).unwrap();
-                                    disjuncts.push(val_str._eq(&elem_z3));
+                                    let elem_z3 = SmtExpr::StringLit(s.to_string());
+                                    disjuncts.push(SmtExpr::eq(val_str.clone(), elem_z3.clone()));
                                 }
                             }
                             Value::Number(n) => {
                                 if let Some(i) = n.as_i64() {
                                     let val_z3 = self.get_z3_for_contains_operand(&val, ValueSort::Int)?;
                                     if let ContainsZ3Value::Int(val_int) = &val_z3 {
-                                        let elem_z3 = Z3Int::from_i64(self.ctx, i);
-                                        disjuncts.push(val_int._eq(&elem_z3));
+                                        let elem_z3 = SmtExpr::IntLit(i);
+                                        disjuncts.push(SmtExpr::eq(val_int.clone(), elem_z3.clone()));
                                     }
                                 }
                             }
                             Value::Bool(b) => {
                                 let val_z3 = self.get_z3_for_contains_operand(&val, ValueSort::Bool)?;
                                 if let ContainsZ3Value::Bool(val_bool) = &val_z3 {
-                                    let elem_z3 = Z3Bool::from_bool(self.ctx, *b);
-                                    disjuncts.push(val_bool._eq(&elem_z3));
+                                    let elem_z3 = SmtExpr::bool_lit(*b);
+                                    disjuncts.push(SmtExpr::eq(val_bool.clone(), elem_z3.clone()));
                                 }
                             }
                             _ => {}
@@ -2669,10 +2840,10 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     }
 
                     let result = if disjuncts.is_empty() {
-                        Z3Bool::from_bool(self.ctx, false)
+                        SmtExpr::False
                     } else {
-                        let refs: Vec<&Z3Bool> = disjuncts.iter().collect();
-                        Z3Bool::or(self.ctx, &refs)
+                        let refs: Vec<&SmtExpr> = disjuncts.iter().collect();
+                        SmtExpr::Or(refs.into_iter().cloned().collect())
                     };
 
                     self.set_register_sym(dest, SymValue::Bool(result), result_defined.clone(), None);
@@ -2726,17 +2897,17 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                         .registry
                         .get(child_path.as_str())
                         .map(|e| e.defined.clone())
-                        .unwrap_or_else(|| Z3Bool::from_bool(self.ctx, false));
+                        .unwrap_or_else(|| SmtExpr::False);
 
                     let eq = self.build_path_equality(child_path, cmp_sort, &val_z3)?;
-                    disjuncts.push(Z3Bool::and(self.ctx, &[&child_defined, &eq]));
+                    disjuncts.push(SmtExpr::and2(child_defined.clone(), eq.clone()));
                 }
 
                 let result = if disjuncts.is_empty() {
-                    Z3Bool::from_bool(self.ctx, false)
+                    SmtExpr::False
                 } else {
-                    let refs: Vec<&Z3Bool> = disjuncts.iter().collect();
-                    Z3Bool::or(self.ctx, &refs)
+                    let refs: Vec<&SmtExpr> = disjuncts.iter().collect();
+                    SmtExpr::Or(refs.into_iter().cloned().collect())
                 };
 
                 self.set_register_sym(dest, SymValue::Bool(result), result_defined.clone(), None);
@@ -2765,14 +2936,14 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 let mut disjuncts = Vec::new();
                 for elem in &elements_clone {
                     let eq = self.build_path_equality(&elem.key_path, cmp_sort, &val_z3)?;
-                    disjuncts.push(Z3Bool::and(self.ctx, &[&elem.condition, &eq]));
+                    disjuncts.push(SmtExpr::and2(elem.condition.clone(), eq.clone()));
                 }
 
                 let result = if disjuncts.is_empty() {
-                    Z3Bool::from_bool(self.ctx, false)
+                    SmtExpr::False
                 } else {
-                    let refs: Vec<&Z3Bool> = disjuncts.iter().collect();
-                    Z3Bool::or(self.ctx, &refs)
+                    let refs: Vec<&SmtExpr> = disjuncts.iter().collect();
+                    SmtExpr::Or(refs.into_iter().cloned().collect())
                 };
 
                 self.set_register_sym(dest, SymValue::Bool(result), result_defined.clone(), None);
@@ -2803,24 +2974,24 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 for elem in &elements_clone {
                     if let Some(ref path) = elem.source_path {
                         let eq = self.build_path_equality(path, cmp_sort, &val_z3)?;
-                        let def = elem.defined.to_z3_bool(self.ctx);
-                        disjuncts.push(Z3Bool::and(self.ctx, &[&def, &eq]));
+                        let def = elem.defined.to_z3_bool();
+                        disjuncts.push(SmtExpr::and2(def.clone(), eq.clone()));
                     } else if let SymValue::Concrete(ref v) = elem.value {
                         // Concrete element: direct comparison.
                         let eq = match (&val_z3, v) {
                             (ContainsZ3Value::Str(z), Value::String(s)) => {
-                                let lit = Z3String::from_str(self.ctx, s).unwrap();
-                                z._eq(&lit)
+                                let lit = SmtExpr::StringLit(s.to_string());
+                                SmtExpr::eq(z.clone(), lit.clone())
                             }
                             (ContainsZ3Value::Int(z), Value::Number(n)) => {
                                 if let Some(i) = n.as_i64() {
-                                    z._eq(&Z3Int::from_i64(self.ctx, i))
+                                    SmtExpr::eq(z.clone(), SmtExpr::IntLit(i))
                                 } else {
                                     continue;
                                 }
                             }
                             (ContainsZ3Value::Bool(z), Value::Bool(b)) => {
-                                z._eq(&Z3Bool::from_bool(self.ctx, *b))
+                                SmtExpr::eq(z.clone(), SmtExpr::bool_lit(*b))
                             }
                             _ => continue,
                         };
@@ -2829,10 +3000,10 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 }
 
                 let result = if disjuncts.is_empty() {
-                    Z3Bool::from_bool(self.ctx, false)
+                    SmtExpr::False
                 } else {
-                    let refs: Vec<&Z3Bool> = disjuncts.iter().collect();
-                    Z3Bool::or(self.ctx, &refs)
+                    let refs: Vec<&SmtExpr> = disjuncts.iter().collect();
+                    SmtExpr::Or(refs.into_iter().cloned().collect())
                 };
 
                 self.set_register_sym(dest, SymValue::Bool(result), result_defined.clone(), None);
@@ -2846,7 +3017,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let name = self.pname(&format!("contains_{}", self.pc));
-        let var = Z3Bool::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(dest, SymValue::Bool(var), result_defined, None);
         Ok(InstructionAction::Continue)
     }
@@ -2854,9 +3025,9 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
     /// Get a Z3 expression for a Contains operand (the search value).
     fn get_z3_for_contains_operand(
         &mut self,
-        reg: &SymRegister<'ctx>,
+        reg: &SymRegister,
         sort: ValueSort,
-    ) -> anyhow::Result<ContainsZ3Value<'ctx>> {
+    ) -> anyhow::Result<ContainsZ3Value> {
         // If the register has a source_path, get the Z3 variable from the registry.
         if let Some(ref path) = reg.source_path {
             self.registry.refine_sort(path, sort);
@@ -2887,17 +3058,17 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         // Otherwise, extract from the symbolic value directly.
         match &reg.value {
             SymValue::Concrete(Value::String(s)) => Ok(ContainsZ3Value::Str(
-                z3::ast::String::from_str(self.ctx, s).unwrap(),
+                SmtExpr::StringLit(s.to_string()),
             )),
             SymValue::Concrete(Value::Bool(b)) => {
-                Ok(ContainsZ3Value::Bool(Z3Bool::from_bool(self.ctx, *b)))
+                Ok(ContainsZ3Value::Bool(SmtExpr::bool_lit(*b)))
             }
             SymValue::Concrete(Value::Number(n)) => {
                 if let Some(i) = n.as_i64() {
-                    Ok(ContainsZ3Value::Int(Z3Int::from_i64(self.ctx, i)))
+                    Ok(ContainsZ3Value::Int(SmtExpr::IntLit(i)))
                 } else if let Some(f) = n.as_f64() {
                     // Approximate as int
-                    Ok(ContainsZ3Value::Int(Z3Int::from_i64(self.ctx, f as i64)))
+                    Ok(ContainsZ3Value::Int(SmtExpr::IntLit(f as i64)))
                 } else {
                     anyhow::bail!("Cannot convert number {:?} to Z3 for Contains", n)
                 }
@@ -2909,8 +3080,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             _ => {
                 // Fallback: treat as unknown string
                 let name = self.pname(&format!("contains_val_{}", self.pc));
-                Ok(ContainsZ3Value::Str(z3::ast::String::new_const(
-                    self.ctx,
+                Ok(ContainsZ3Value::Str(self.fresh_const(
                     name.as_str(),
                 )))
             }
@@ -2922,25 +3092,25 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         &mut self,
         path: &str,
         sort: ValueSort,
-        val: &ContainsZ3Value<'ctx>,
-    ) -> anyhow::Result<Z3Bool<'ctx>> {
+        val: &ContainsZ3Value,
+    ) -> anyhow::Result<SmtExpr> {
         match (sort, val) {
             (ValueSort::String, ContainsZ3Value::Str(v))
             | (ValueSort::Unknown, ContainsZ3Value::Str(v)) => {
                 let child_var = self.registry.get_string(path);
-                Ok(child_var._eq(v))
+                Ok(SmtExpr::eq(child_var, v.clone()))
             }
             (ValueSort::Int, ContainsZ3Value::Int(v)) => {
                 let child_var = self.registry.get_int(path);
-                Ok(child_var._eq(v))
+                Ok(SmtExpr::eq(child_var, v.clone()))
             }
             (ValueSort::Bool, ContainsZ3Value::Bool(v)) => {
                 let child_var = self.registry.get_bool(path);
-                Ok(child_var._eq(v))
+                Ok(SmtExpr::eq(child_var, v.clone()))
             }
             (ValueSort::Real, ContainsZ3Value::Real(v)) => {
                 let child_var = self.registry.get_real(path);
-                Ok(child_var._eq(v))
+                Ok(SmtExpr::eq(child_var, v.clone()))
             }
             _ => {
                 // Mismatched sorts — default to string comparison.
@@ -2949,10 +3119,10 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     ContainsZ3Value::Str(s) => s.clone(),
                     _ => {
                         let name = format!("contains_cast_{}", path);
-                        z3::ast::String::new_const(self.ctx, name.as_str())
+                        self.fresh_const(name.as_str())
                     }
                 };
-                Ok(child_var._eq(&v_str))
+                Ok(SmtExpr::eq(child_var.clone(), v_str.clone()))
             }
         }
     }
@@ -2961,7 +3131,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         &mut self,
         dest: u8,
         collection: u8,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let coll = self.get_register(collection).clone();
 
         // SetCardinality → extract the symbolic Int directly.
@@ -3004,7 +3174,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
     fn translate_loop_start(
         &mut self,
         params_index: u16,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let params = self
             .program
             .instruction_data
@@ -3059,7 +3229,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 let loop_end = params.loop_end as usize;
                 let saved_path_cond = self.path_condition.clone();
 
-                let mut success_conditions: Vec<Z3Bool<'ctx>> = Vec::new();
+                let mut success_conditions: Vec<SmtExpr> = Vec::new();
 
                 for (key, value) in &elements {
                     // Set up iteration variables.
@@ -3083,18 +3253,18 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 let loop_result = match params.mode {
                     LoopMode::Any => {
                         // Any iteration succeeded → true.
-                        let refs: Vec<&Z3Bool> = success_conditions.iter().collect();
-                        Z3Bool::or(self.ctx, &refs)
+                        let refs: Vec<&SmtExpr> = success_conditions.iter().collect();
+                        SmtExpr::Or(refs.into_iter().cloned().collect())
                     }
                     LoopMode::Every => {
                         // All iterations succeeded → true.
-                        let refs: Vec<&Z3Bool> = success_conditions.iter().collect();
-                        Z3Bool::and(self.ctx, &refs)
+                        let refs: Vec<&SmtExpr> = success_conditions.iter().collect();
+                        SmtExpr::And(refs.into_iter().cloned().collect())
                     }
                     LoopMode::ForEach => {
                         // At least one succeeded → true.
-                        let refs: Vec<&Z3Bool> = success_conditions.iter().collect();
-                        Z3Bool::or(self.ctx, &refs)
+                        let refs: Vec<&SmtExpr> = success_conditions.iter().collect();
+                        SmtExpr::Or(refs.into_iter().cloned().collect())
                     }
                 };
 
@@ -3134,7 +3304,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 self.partial_set_main_value_reg = Some(params.value_reg);
             }
 
-            let mut success_conditions: Vec<Z3Bool<'ctx>> = Vec::new();
+            let mut success_conditions: Vec<SmtExpr> = Vec::new();
 
             for element in &elements {
                 // Create path registers for key and value pointing to element's path.
@@ -3152,7 +3322,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
 
                 // AND the element's condition into the path condition.
                 self.path_condition =
-                    Z3Bool::and(self.ctx, &[&saved_path_cond, &element.condition]);
+                    SmtExpr::and2(saved_path_cond.clone(), element.condition.clone());
 
                 // Translate the consumer loop body.
                 let saved_pc = self.pc;
@@ -3166,18 +3336,18 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             use crate::rvm::instructions::LoopMode;
             let loop_result = if success_conditions.is_empty() {
                 match params.mode {
-                    LoopMode::Every => Z3Bool::from_bool(self.ctx, true),
-                    _ => Z3Bool::from_bool(self.ctx, false),
+                    LoopMode::Every => SmtExpr::True,
+                    _ => SmtExpr::False,
                 }
             } else {
                 match params.mode {
                     LoopMode::Any | LoopMode::ForEach => {
-                        let refs: Vec<&Z3Bool> = success_conditions.iter().collect();
-                        Z3Bool::or(self.ctx, &refs)
+                        let refs: Vec<&SmtExpr> = success_conditions.iter().collect();
+                        SmtExpr::Or(refs.into_iter().cloned().collect())
                     }
                     LoopMode::Every => {
-                        let refs: Vec<&Z3Bool> = success_conditions.iter().collect();
-                        Z3Bool::and(self.ctx, &refs)
+                        let refs: Vec<&SmtExpr> = success_conditions.iter().collect();
+                        SmtExpr::And(refs.into_iter().cloned().collect())
                     }
                 }
             };
@@ -3188,7 +3358,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 elements.len()
             ));
 
-            self.path_condition = Z3Bool::and(self.ctx, &[&saved_path_cond, &loop_result]);
+            self.path_condition = SmtExpr::and2(saved_path_cond.clone(), loop_result.clone());
             self.set_register_sym(
                 params.result_reg,
                 SymValue::Bool(loop_result),
@@ -3215,7 +3385,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 self.partial_set_main_value_reg = Some(params.value_reg);
             }
 
-            let mut success_conditions: Vec<Z3Bool<'ctx>> = Vec::new();
+            let mut success_conditions: Vec<SmtExpr> = Vec::new();
 
             for (idx, element) in elements.iter().enumerate() {
                 if let Some(ref path) = element.source_path {
@@ -3239,8 +3409,8 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 }
 
                 // AND the element's definedness into the path condition.
-                let elem_def = element.defined.to_z3_bool(self.ctx);
-                self.path_condition = Z3Bool::and(self.ctx, &[&saved_path_cond, &elem_def]);
+                let elem_def = element.defined.to_z3_bool();
+                self.path_condition = SmtExpr::and2(saved_path_cond.clone(), elem_def.clone());
 
                 let saved_pc = self.pc;
                 let _result = self.translate_block(body_start);
@@ -3252,18 +3422,18 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             use crate::rvm::instructions::LoopMode;
             let loop_result = if success_conditions.is_empty() {
                 match params.mode {
-                    LoopMode::Every => Z3Bool::from_bool(self.ctx, true),
-                    _ => Z3Bool::from_bool(self.ctx, false),
+                    LoopMode::Every => SmtExpr::True,
+                    _ => SmtExpr::False,
                 }
             } else {
                 match params.mode {
                     LoopMode::Any | LoopMode::ForEach => {
-                        let refs: Vec<&Z3Bool> = success_conditions.iter().collect();
-                        Z3Bool::or(self.ctx, &refs)
+                        let refs: Vec<&SmtExpr> = success_conditions.iter().collect();
+                        SmtExpr::Or(refs.into_iter().cloned().collect())
                     }
                     LoopMode::Every => {
-                        let refs: Vec<&Z3Bool> = success_conditions.iter().collect();
-                        Z3Bool::and(self.ctx, &refs)
+                        let refs: Vec<&SmtExpr> = success_conditions.iter().collect();
+                        SmtExpr::And(refs.into_iter().cloned().collect())
                     }
                 }
             };
@@ -3274,7 +3444,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 elements.len()
             ));
 
-            self.path_condition = Z3Bool::and(self.ctx, &[&saved_path_cond, &loop_result]);
+            self.path_condition = SmtExpr::and2(saved_path_cond.clone(), loop_result.clone());
             self.set_register_sym(
                 params.result_reg,
                 SymValue::Bool(loop_result),
@@ -3302,7 +3472,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         let loop_end = params.loop_end as usize;
         let saved_path_cond = self.path_condition.clone();
 
-        let mut success_conditions: Vec<Z3Bool<'ctx>> = Vec::new();
+        let mut success_conditions: Vec<SmtExpr> = Vec::new();
 
         for wi in 0..num_witnesses {
             // Create a symbolic witness element.
@@ -3344,18 +3514,18 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         use crate::rvm::instructions::LoopMode;
         let loop_result = if success_conditions.is_empty() {
             match params.mode {
-                LoopMode::Every => Z3Bool::from_bool(self.ctx, true),
-                _ => Z3Bool::from_bool(self.ctx, false),
+                LoopMode::Every => SmtExpr::True,
+                _ => SmtExpr::False,
             }
         } else {
             match params.mode {
                 LoopMode::Any | LoopMode::ForEach => {
-                    let refs: Vec<&Z3Bool> = success_conditions.iter().collect();
-                    Z3Bool::or(self.ctx, &refs)
+                    let refs: Vec<&SmtExpr> = success_conditions.iter().collect();
+                    SmtExpr::Or(refs.into_iter().cloned().collect())
                 }
                 LoopMode::Every => {
-                    let refs: Vec<&Z3Bool> = success_conditions.iter().collect();
-                    Z3Bool::and(self.ctx, &refs)
+                    let refs: Vec<&SmtExpr> = success_conditions.iter().collect();
+                    SmtExpr::And(refs.into_iter().cloned().collect())
                 }
             }
         };
@@ -3377,7 +3547,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         // witnesses. Without this, the constraints from inside the loop body
         // (e.g., input.users[0] == "admin") would be lost — they'd exist only
         // in the loop_result Bool but never reach the solver's path condition.
-        self.path_condition = Z3Bool::and(self.ctx, &[&saved_path_cond, &loop_result]);
+        self.path_condition = SmtExpr::and2(saved_path_cond.clone(), loop_result.clone());
         self.set_register_sym(
             params.result_reg,
             SymValue::Bool(loop_result),
@@ -3394,7 +3564,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
     fn translate_comprehension(
         &mut self,
         params_index: u16,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         use crate::rvm::instructions::ComprehensionMode;
 
         let params = self
@@ -3461,7 +3631,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
     fn build_set_comprehension_result(
         &mut self,
         result_reg: u8,
-        acc: &ComprehensionAccumulator<'ctx>,
+        acc: &ComprehensionAccumulator,
     ) -> anyhow::Result<()> {
         if acc.yields.is_empty() {
             // Empty comprehension → empty set.
@@ -3513,12 +3683,12 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
 
         // Compute cardinality: count of elements whose condition is true.
         // For set semantics, group by key_path and count distinct groups.
-        let zero = Z3Int::from_i64(self.ctx, 0);
-        let one = Z3Int::from_i64(self.ctx, 1);
-        let mut sum = Z3Int::from_i64(self.ctx, 0);
+        let zero = SmtExpr::IntLit(0);
+        let one = SmtExpr::IntLit(1);
+        let mut sum = SmtExpr::IntLit(0);
         for elem in &elements {
-            let contrib = elem.condition.ite(&one, &zero);
-            sum = Z3Int::add(self.ctx, &[&sum, &contrib]);
+            let contrib = SmtExpr::ite(elem.condition.clone(), one.clone(), zero.clone());
+            sum = SmtExpr::Add(vec![sum.clone(), contrib.clone()]);
         }
 
         self.set_register_sym(
@@ -3537,7 +3707,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
     fn build_array_comprehension_result(
         &mut self,
         result_reg: u8,
-        acc: &ComprehensionAccumulator<'ctx>,
+        acc: &ComprehensionAccumulator,
     ) -> anyhow::Result<()> {
         if acc.yields.is_empty() {
             self.set_register_concrete(result_reg, Value::new_array());
@@ -3588,7 +3758,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
     fn build_object_comprehension_result(
         &mut self,
         result_reg: u8,
-        acc: &ComprehensionAccumulator<'ctx>,
+        acc: &ComprehensionAccumulator,
     ) -> anyhow::Result<()> {
         if acc.yields.is_empty() {
             self.set_register_concrete(
@@ -3647,12 +3817,12 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             });
         }
 
-        let zero = Z3Int::from_i64(self.ctx, 0);
-        let one = Z3Int::from_i64(self.ctx, 1);
-        let mut sum = Z3Int::from_i64(self.ctx, 0);
+        let zero = SmtExpr::IntLit(0);
+        let one = SmtExpr::IntLit(1);
+        let mut sum = SmtExpr::IntLit(0);
         for elem in &elements {
-            let contrib = elem.condition.ite(&one, &zero);
-            sum = Z3Int::add(self.ctx, &[&sum, &contrib]);
+            let contrib = SmtExpr::ite(elem.condition.clone(), one.clone(), zero.clone());
+            sum = SmtExpr::Add(vec![sum.clone(), contrib.clone()]);
         }
 
         self.set_register_sym(
@@ -3674,7 +3844,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
     fn translate_builtin_call(
         &mut self,
         params_index: u16,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let params = self
             .program
             .instruction_data
@@ -3729,10 +3899,10 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             // Azure Policy ARM-template function builtins (P0)
             // ---------------------------------------------------------------
             "azure.policy.fn.starts_with" => {
-                self.translate_builtin_string_bool(&params, builtin_name, |s, arg| arg.prefix(&s))?;
+                self.translate_builtin_string_bool(&params, builtin_name, |s, arg| SmtExpr::SeqPrefix(Box::new(arg), Box::new(s)))?;
             }
             "azure.policy.fn.ends_with" => {
-                self.translate_builtin_string_bool(&params, builtin_name, |s, arg| arg.suffix(&s))?;
+                self.translate_builtin_string_bool(&params, builtin_name, |s, arg| SmtExpr::SeqSuffix(Box::new(arg), Box::new(s)))?;
             }
             "azure.policy.fn.index_of" => {
                 self.translate_builtin_indexof(&params)?;
@@ -3799,21 +3969,21 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             // ---------------------------------------------------------------
             "startswith" => {
                 self.translate_builtin_string_bool(&params, builtin_name, |s, arg| {
-                    // Z3: arg.prefix(&s) checks if arg is a prefix of s
-                    // OPA: startswith(s, prefix) → prefix.prefix(&s)
-                    arg.prefix(&s)
+                    // Z3: SmtExpr::SeqPrefix(Box::new(arg), Box::new(s)) checks if arg is a prefix of s
+                    // OPA: startswith(s, prefix) → SmtExpr::SeqPrefix(Box::new(prefix), Box::new(s))
+                    SmtExpr::SeqPrefix(Box::new(arg), Box::new(s))
                 })?;
             }
             "endswith" => {
                 self.translate_builtin_string_bool(&params, builtin_name, |s, arg| {
-                    // OPA: endswith(s, suffix) → suffix.suffix(&s)
-                    arg.suffix(&s)
+                    // OPA: endswith(s, suffix) → SmtExpr::SeqSuffix(Box::new(suffix), Box::new(s))
+                    SmtExpr::SeqSuffix(Box::new(arg), Box::new(s))
                 })?;
             }
             "contains" => {
                 self.translate_builtin_string_bool(&params, builtin_name, |s, arg| {
-                    // OPA: contains(s, substr) → s.contains(&substr)
-                    s.contains(&arg)
+                    // OPA: contains(s, substr) → SmtExpr::SeqContains(Box::new(s), Box::new(substr))
+                    SmtExpr::SeqContains(Box::new(s), Box::new(arg))
                 })?;
             }
             "indexof" => {
@@ -3872,22 +4042,22 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             // bits.* — Z3 bitvector theory (64-bit)
             // ---------------------------------------------------------------
             "bits.and" => {
-                self.translate_builtin_bitwise_binop(&params, builtin_name, |a, b| a.bvand(&b))?;
+                self.translate_builtin_bitwise_binop(&params, builtin_name, |a, b| SmtExpr::BvAnd(Box::new(a), Box::new(b)))?;
             }
             "bits.or" => {
-                self.translate_builtin_bitwise_binop(&params, builtin_name, |a, b| a.bvor(&b))?;
+                self.translate_builtin_bitwise_binop(&params, builtin_name, |a, b| SmtExpr::BvOr(Box::new(a), Box::new(b)))?;
             }
             "bits.xor" => {
-                self.translate_builtin_bitwise_binop(&params, builtin_name, |a, b| a.bvxor(&b))?;
+                self.translate_builtin_bitwise_binop(&params, builtin_name, |a, b| SmtExpr::BvXor(Box::new(a), Box::new(b)))?;
             }
             "bits.negate" => {
-                self.translate_builtin_bitwise_unop(&params, builtin_name, |a| a.bvnot())?;
+                self.translate_builtin_bitwise_unop(&params, builtin_name, |a| SmtExpr::BvNot(Box::new(a)))?;
             }
             "bits.lsh" => {
-                self.translate_builtin_bitwise_binop(&params, builtin_name, |a, b| a.bvshl(&b))?;
+                self.translate_builtin_bitwise_binop(&params, builtin_name, |a, b| SmtExpr::BvShl(Box::new(a), Box::new(b)))?;
             }
             "bits.rsh" => {
-                self.translate_builtin_bitwise_binop(&params, builtin_name, |a, b| a.bvlshr(&b))?;
+                self.translate_builtin_bitwise_binop(&params, builtin_name, |a, b| SmtExpr::BvLShr(Box::new(a), Box::new(b)))?;
             }
 
             // ---------------------------------------------------------------
@@ -3934,7 +4104,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     builtin_name.replace('.', "_"),
                     self.pc
                 ));
-                let var = Z3Bool::new_const(self.ctx, name.as_str());
+                let var = self.fresh_const(name.as_str());
                 self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
             }
 
@@ -3954,7 +4124,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     builtin_name.replace('.', "_"),
                     self.pc
                 ));
-                let var = Z3Int::new_const(self.ctx, name.as_str());
+                let var = self.fresh_const(name.as_str());
                 self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
             }
 
@@ -3971,7 +4141,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     builtin_name.replace('.', "_"),
                     self.pc
                 ));
-                let var = Z3String::new_const(self.ctx, name.as_str());
+                let var = self.fresh_const(name.as_str());
                 self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
             }
         }
@@ -4016,15 +4186,15 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             if let SymValue::Concrete(Value::String(ref delim)) = delim_reg.value {
                 if let SymValue::SymbolicArray { ref elements } = list_reg.value {
                     let delim_str = delim.as_ref();
-                    let mut z3_parts: Vec<Z3String<'ctx>> = Vec::new();
+                    let mut z3_parts: Vec<SmtExpr> = Vec::new();
                     for (i, elem) in elements.iter().enumerate() {
                         if i > 0 && !delim_str.is_empty() {
-                            z3_parts.push(Z3String::from_str(self.ctx, delim_str).unwrap());
+                            z3_parts.push(SmtExpr::StringLit(delim_str.to_string()));
                         }
                         // Resolve element to Z3 string.
                         if let Some(ref path) = elem.source_path {
                             z3_parts.push(self.registry.get_string(path));
-                        } else if let Ok(z) = elem.value.to_z3_string(self.ctx) {
+                        } else if let Ok(z) = elem.value.to_z3_string() {
                             z3_parts.push(z);
                         } else {
                             // Can't resolve → fallback.
@@ -4041,7 +4211,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                             None,
                         );
                     } else {
-                        let result = self.z3_string_concat(&z3_parts);
+                        let result = SmtExpr::SeqConcat(z3_parts.to_vec());
                         self.set_register_sym(
                             params.dest,
                             SymValue::Str(result),
@@ -4066,7 +4236,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let name = self.pname(&format!("builtin_concat_{}", self.pc));
-        let var = Z3String::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(())
     }
@@ -4095,7 +4265,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc, op
         ));
         let name = self.pname(&format!("builtin_{}_{}", op, self.pc));
-        let var = Z3String::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(())
     }
@@ -4115,11 +4285,11 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             terms.push(self.policy_is_true_reg(params.args[index])?);
         }
 
-        let refs: Vec<&Z3Bool<'ctx>> = terms.iter().collect();
+        let refs: Vec<&SmtExpr> = terms.iter().collect();
         let out = if all_mode {
-            Z3Bool::and(self.ctx, &refs)
+            SmtExpr::And(refs.into_iter().cloned().collect())
         } else {
-            Z3Bool::or(self.ctx, &refs)
+            SmtExpr::Or(refs.into_iter().cloned().collect())
         };
 
         self.set_register_sym(params.dest, SymValue::Bool(out), Definedness::Defined, None);
@@ -4149,21 +4319,21 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         let left = self.get_register(when_true).clone();
         let right = self.get_register(when_false).clone();
 
-        if let (Ok(lb), Ok(rb)) = (left.value.to_z3_bool(self.ctx), right.value.to_z3_bool(self.ctx)) {
-            let out = cond_z3.ite(&lb, &rb);
+        if let (Ok(lb), Ok(rb)) = (left.value.to_z3_bool(), right.value.to_z3_bool()) {
+            let out = SmtExpr::ite(cond_z3.clone(), lb.clone(), rb.clone());
             self.set_register_sym(params.dest, SymValue::Bool(out), Definedness::Defined, None);
             return Ok(());
         }
-        if let (Ok(li), Ok(ri)) = (left.value.to_z3_int(self.ctx), right.value.to_z3_int(self.ctx)) {
-            let out = cond_z3.ite(&li, &ri);
+        if let (Ok(li), Ok(ri)) = (left.value.to_z3_int(), right.value.to_z3_int()) {
+            let out = SmtExpr::ite(cond_z3.clone(), li.clone(), ri.clone());
             self.set_register_sym(params.dest, SymValue::Int(out), Definedness::Defined, None);
             return Ok(());
         }
         if let (Ok(ls), Ok(rs)) = (
-            left.value.to_z3_string(self.ctx),
-            right.value.to_z3_string(self.ctx),
+            left.value.to_z3_string(),
+            right.value.to_z3_string(),
         ) {
-            let out = cond_z3.ite(&ls, &rs);
+            let out = SmtExpr::ite(cond_z3.clone(), ls.clone(), rs.clone());
             self.set_register_sym(params.dest, SymValue::Str(out), Definedness::Defined, None);
             return Ok(());
         }
@@ -4173,7 +4343,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let name = self.pname(&format!("builtin_azure_if_{}", self.pc));
-        let var = Z3String::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(())
     }
@@ -4222,7 +4392,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let name = self.pname(&format!("builtin_azure_resolve_field_{}", self.pc));
-        let var = Z3String::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(())
     }
@@ -4260,7 +4430,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let name = self.pname(&format!("builtin_azure_get_parameter_{}", self.pc));
-        let var = Z3String::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(())
     }
@@ -4281,7 +4451,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             }
         }
         let name = self.pname(&format!("builtin_last_indexof_{}", self.pc));
-        let var = Z3Int::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
         Ok(())
     }
@@ -4298,7 +4468,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             }
         }
         let name = self.pname(&format!("builtin_trim_{}", self.pc));
-        let var = Z3String::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(())
     }
@@ -4331,7 +4501,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             }
             _ => {}
         }
-        if let Ok(i) = arg.value.to_z3_int(self.ctx) {
+        if let Ok(i) = arg.value.to_z3_int() {
             self.set_register_sym(params.dest, SymValue::Int(i), arg.defined, None);
             return Ok(());
         }
@@ -4363,7 +4533,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             }
             _ => {}
         }
-        if let Ok(r) = arg.value.to_z3_real(self.ctx) {
+        if let Ok(r) = arg.value.to_z3_real() {
             self.set_register_sym(params.dest, SymValue::Real(r), arg.defined, None);
             return Ok(());
         }
@@ -4403,12 +4573,12 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             }
             _ => {}
         }
-        if let Ok(s) = arg.value.to_z3_string(self.ctx) {
+        if let Ok(s) = arg.value.to_z3_string() {
             self.set_register_sym(params.dest, SymValue::Str(s), arg.defined, None);
             return Ok(());
         }
         let name = self.pname(&format!("builtin_azure_string_{}", self.pc));
-        let var = Z3String::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(())
     }
@@ -4467,9 +4637,9 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         let a = self.resolve_arg_as_z3_int(params.args[0]);
         let b = self.resolve_arg_as_z3_int(params.args[1]);
         if let (Some(lhs), Some(rhs)) = (a, b) {
-            let zero = Z3Int::from_i64(self.ctx, 0);
-            self.constraints.push(rhs._eq(&zero).not());
-            let out = if modulo { lhs.rem(&rhs) } else { lhs / rhs };
+            let zero = SmtExpr::IntLit(0);
+            self.constraints.push(SmtExpr::not(SmtExpr::eq(rhs.clone(), zero.clone())));
+            let out = if modulo { SmtExpr::Rem(Box::new(lhs), Box::new(rhs)) } else { SmtExpr::Div(Box::new(lhs), Box::new(rhs)) };
             self.set_register_sym(params.dest, SymValue::Int(out), Definedness::Defined, None);
             return Ok(());
         }
@@ -4495,7 +4665,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 for item in items.iter() {
                     if let Value::Number(n) = item {
                         if let Some(i) = n.as_i64() {
-                            values.push(Z3Int::from_i64(self.ctx, i));
+                            values.push(SmtExpr::IntLit(i));
                         } else {
                             self.set_register_concrete(params.dest, Value::Undefined);
                             return Ok(());
@@ -4527,9 +4697,9 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         let mut cur = values[0].clone();
         for next in values.iter().skip(1) {
             cur = if min_mode {
-                cur.le(next).ite(&cur, next)
+                SmtExpr::ite(SmtExpr::le(cur.clone(), next.clone()), cur.clone(), next.clone())
             } else {
-                cur.ge(next).ite(&cur, next)
+                SmtExpr::ite(SmtExpr::ge(cur.clone(), next.clone()), cur.clone(), next.clone())
             };
         }
 
@@ -4580,7 +4750,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             return Ok(());
         }
         let name = self.pname(&format!("builtin_azure_empty_{}", self.pc));
-        let var = Z3Bool::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
         Ok(())
     }
@@ -4636,7 +4806,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             if first_mode { "first" } else { "last" },
             self.pc
         ));
-        let var = Z3String::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(())
     }
@@ -4683,8 +4853,8 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             }
 
             // Symbolic string → Z3 str.len via z3-sys FFI.
-            if let Ok(z3_str) = arg.value.to_z3_string(self.ctx) {
-                let str_len = self.z3_string_length(&z3_str);
+            if let Ok(z3_str) = arg.value.to_z3_string() {
+                let str_len = SmtExpr::SeqLength(Box::new(z3_str.clone()));
                 self.set_register_sym(
                     params.dest,
                     SymValue::Int(str_len),
@@ -4699,7 +4869,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 let sort = self.registry.get_sort(path);
                 if sort == Some(ValueSort::String) {
                     let z3_str = self.registry.get_string(path);
-                    let str_len = self.z3_string_length(&z3_str);
+                    let str_len = SmtExpr::SeqLength(Box::new(z3_str.clone()));
                     self.set_register_sym(
                         params.dest,
                         SymValue::Int(str_len),
@@ -4716,19 +4886,19 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let name = self.pname(&format!("builtin_count_{}", self.pc));
-        let var = Z3Int::new_const(self.ctx, name.as_str());
-        let zero = Z3Int::from_i64(self.ctx, 0);
-        self.constraints.push(var.ge(&zero));
+        let var = self.fresh_const(name.as_str());
+        let zero = SmtExpr::IntLit(0);
+        self.constraints.push(SmtExpr::ge(var.clone(), zero.clone()));
         self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
         Ok(())
     }
 
     /// Resolve a builtin argument to a Z3 String, handling concrete values,
     /// symbolic strings, and path-placeholder registers.
-    fn resolve_arg_as_z3_string(&mut self, reg: u8) -> Option<Z3String<'ctx>> {
+    fn resolve_arg_as_z3_string(&mut self, reg: u8) -> Option<SmtExpr> {
         let r = self.get_register(reg).clone();
         // Direct Z3 string or concrete string.
-        if let Ok(s) = r.value.to_z3_string(self.ctx) {
+        if let Ok(s) = r.value.to_z3_string() {
             return Some(s);
         }
         // Path placeholder → look up in registry.
@@ -4745,9 +4915,9 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
 
     /// Resolve a builtin argument to a Z3 Int, handling concrete values,
     /// symbolic ints, and path-placeholder registers.
-    fn resolve_arg_as_z3_int(&mut self, reg: u8) -> Option<Z3Int<'ctx>> {
+    fn resolve_arg_as_z3_int(&mut self, reg: u8) -> Option<SmtExpr> {
         let r = self.get_register(reg).clone();
-        if let Ok(i) = r.value.to_z3_int(self.ctx) {
+        if let Ok(i) = r.value.to_z3_int() {
             return Some(i);
         }
         if let Some(path) = &r.source_path {
@@ -4768,7 +4938,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         &mut self,
         params: &crate::rvm::instructions::BuiltinCallParams,
         name: &str,
-        f: impl FnOnce(Z3String<'ctx>, Z3String<'ctx>) -> Z3Bool<'ctx>,
+        f: impl FnOnce(SmtExpr, SmtExpr) -> SmtExpr,
     ) -> anyhow::Result<()> {
         if params.arg_count() >= 2 {
             // Try concrete evaluation first.
@@ -4807,7 +4977,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc, name
         ));
         let vname = self.pname(&format!("builtin_{}_{}", name, self.pc));
-        let var = Z3Bool::new_const(self.ctx, vname.as_str());
+        let var = self.fresh_const(vname.as_str());
         self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
         Ok(())
     }
@@ -4833,8 +5003,8 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             let z0 = self.resolve_arg_as_z3_string(params.args[0]);
             let z1 = self.resolve_arg_as_z3_string(params.args[1]);
             if let (Some(s0), Some(s1)) = (z0, z1) {
-                let zero = Z3Int::from_i64(self.ctx, 0);
-                let result = self.z3_string_indexof(&s0, &s1, &zero);
+                let zero = SmtExpr::IntLit(0);
+                let result = SmtExpr::SeqIndex(Box::new(s0.clone()), Box::new(s1.clone()), Box::new(zero.clone()));
                 self.set_register_sym(
                     params.dest,
                     SymValue::Int(result),
@@ -4850,7 +5020,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let name = self.pname(&format!("builtin_indexof_{}", self.pc));
-        let var = Z3Int::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
         Ok(())
     }
@@ -4881,7 +5051,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             let z1 = self.resolve_arg_as_z3_string(params.args[1]);
             let z2 = self.resolve_arg_as_z3_string(params.args[2]);
             if let (Some(s0), Some(s1), Some(s2)) = (z0, z1, z2) {
-                let result = self.z3_string_replace(&s0, &s1, &s2);
+                let result = SmtExpr::SeqReplace(Box::new(s0.clone()), Box::new(s1.clone()), Box::new(s2.clone()));
                 self.set_register_sym(
                     params.dest,
                     SymValue::Str(result),
@@ -4897,7 +5067,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let name = self.pname(&format!("builtin_replace_{}", self.pc));
-        let var = Z3String::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(())
     }
@@ -4940,12 +5110,14 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             if let (Some(s0), Some(i_offset), Some(i_length)) = (z0, z1, z2) {
                 // For negative length, use str.len(s) - offset as the length.
                 // We use ite: if length < 0 then str.len(s) - offset else length
-                let zero = Z3Int::from_i64(self.ctx, 0);
-                let str_len = self.z3_string_length(&s0);
-                let effective_len = i_length
-                    .lt(&zero)
-                    .ite(&Z3Int::sub(self.ctx, &[&str_len, &i_offset]), &i_length);
-                let result = self.z3_string_extract(&s0, &i_offset, &effective_len);
+                let zero = SmtExpr::IntLit(0);
+                let str_len = SmtExpr::SeqLength(Box::new(s0.clone()));
+                let effective_len = SmtExpr::ite(
+                    SmtExpr::lt(i_length.clone(), zero),
+                    SmtExpr::Sub(vec![str_len.clone(), i_offset.clone()]),
+                    i_length.clone(),
+                );
+                let result = SmtExpr::SeqExtract(Box::new(s0.clone()), Box::new(i_offset.clone()), Box::new(effective_len.clone()));
                 self.set_register_sym(
                     params.dest,
                     SymValue::Str(result),
@@ -4961,7 +5133,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let name = self.pname(&format!("builtin_substring_{}", self.pc));
-        let var = Z3String::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(())
     }
@@ -4986,13 +5158,13 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             let z0 = self.resolve_arg_as_z3_string(params.args[0]);
             let z1 = self.resolve_arg_as_z3_string(params.args[1]);
             if let (Some(s0), Some(prefix)) = (z0, z1) {
-                let has_prefix = prefix.prefix(&s0);
-                let s_len = self.z3_string_length(&s0);
-                let p_len = self.z3_string_length(&prefix);
-                let remaining_len = Z3Int::sub(self.ctx, &[&s_len, &p_len]);
-                let trimmed = self.z3_string_extract(&s0, &p_len, &remaining_len);
+                let has_prefix = SmtExpr::SeqPrefix(Box::new(prefix.clone()), Box::new(s0.clone()));
+                let s_len = SmtExpr::SeqLength(Box::new(s0.clone()));
+                let p_len = SmtExpr::SeqLength(Box::new(prefix.clone()));
+                let remaining_len = SmtExpr::Sub(vec![s_len.clone(), p_len.clone()]);
+                let trimmed = SmtExpr::SeqExtract(Box::new(s0.clone()), Box::new(p_len.clone()), Box::new(remaining_len.clone()));
                 // ite(startswith(s, prefix), substr(s, len(prefix), ...), s)
-                let result = has_prefix.ite(&trimmed, &s0);
+                let result = SmtExpr::ite(has_prefix.clone(), trimmed.clone(), s0.clone());
                 self.set_register_sym(
                     params.dest,
                     SymValue::Str(result),
@@ -5007,7 +5179,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let name = self.pname(&format!("builtin_trim_prefix_{}", self.pc));
-        let var = Z3String::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(())
     }
@@ -5032,13 +5204,13 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             let z0 = self.resolve_arg_as_z3_string(params.args[0]);
             let z1 = self.resolve_arg_as_z3_string(params.args[1]);
             if let (Some(s0), Some(suffix)) = (z0, z1) {
-                let has_suffix = suffix.suffix(&s0);
-                let s_len = self.z3_string_length(&s0);
-                let sfx_len = self.z3_string_length(&suffix);
-                let prefix_len = Z3Int::sub(self.ctx, &[&s_len, &sfx_len]);
-                let zero = Z3Int::from_i64(self.ctx, 0);
-                let trimmed = self.z3_string_extract(&s0, &zero, &prefix_len);
-                let result = has_suffix.ite(&trimmed, &s0);
+                let has_suffix = SmtExpr::SeqSuffix(Box::new(suffix.clone()), Box::new(s0.clone()));
+                let s_len = SmtExpr::SeqLength(Box::new(s0.clone()));
+                let sfx_len = SmtExpr::SeqLength(Box::new(suffix.clone()));
+                let prefix_len = SmtExpr::Sub(vec![s_len.clone(), sfx_len.clone()]);
+                let zero = SmtExpr::IntLit(0);
+                let trimmed = SmtExpr::SeqExtract(Box::new(s0.clone()), Box::new(zero.clone()), Box::new(prefix_len.clone()));
+                let result = SmtExpr::ite(has_suffix.clone(), trimmed.clone(), s0.clone());
                 self.set_register_sym(
                     params.dest,
                     SymValue::Str(result),
@@ -5053,7 +5225,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let name = self.pname(&format!("builtin_trim_suffix_{}", self.pc));
-        let var = Z3String::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(())
     }
@@ -5089,7 +5261,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 self.pc
             ));
             let name = self.pname(&format!("fetch_{}", self.pc));
-            let var = Z3String::new_const(self.ctx, name.as_str());
+            let var = self.fresh_const(name.as_str());
             self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         }
         Ok(())
@@ -5117,7 +5289,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 // Collect the argument values from the array register.
                 // Handles concrete arrays, SymbolicArrays (from ArrayCreate
                 // with symbolic elements), and path-backed elements.
-                let arg_values: Option<Vec<SymValue<'ctx>>> = match &args_reg.value {
+                let arg_values: Option<Vec<SymValue>> = match &args_reg.value {
                     SymValue::Concrete(Value::Array(items)) => {
                         // Each element is concrete — wrap as SymValue::Concrete.
                         Some(items.iter().map(|v| SymValue::Concrete(v.clone())).collect())
@@ -5191,7 +5363,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let name = self.pname(&format!("builtin_sprintf_{}", self.pc));
-        let var = Z3String::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(())
     }
@@ -5201,9 +5373,9 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
     fn sprintf_build_z3(
         &self,
         fmt: &str,
-        args: &[SymValue<'ctx>],
-    ) -> Option<Z3String<'ctx>> {
-        let mut segments: Vec<Z3String<'ctx>> = Vec::new();
+        args: &[SymValue],
+    ) -> Option<SmtExpr> {
+        let mut segments: Vec<SmtExpr> = Vec::new();
         let mut literal = String::new();
         let mut chars = fmt.chars().peekable();
         let mut arg_idx = 0usize;
@@ -5223,7 +5395,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 _ => {
                     // Flush the accumulated literal segment.
                     if !literal.is_empty() {
-                        segments.push(Z3String::from_str(self.ctx, &literal).unwrap());
+                        segments.push(SmtExpr::StringLit(literal.to_string()));
                         literal.clear();
                     }
 
@@ -5271,14 +5443,14 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                             match arg {
                                 SymValue::Concrete(Value::String(s)) => {
                                     segments
-                                        .push(Z3String::from_str(self.ctx, s.as_ref()).unwrap());
+                                        .push(SmtExpr::StringLit(s.as_ref().to_string()));
                                 }
                                 SymValue::Str(z) => {
                                     segments.push(z.clone());
                                 }
                                 _ => {
                                     // Try to resolve as z3 string.
-                                    if let Ok(z) = arg.to_z3_string(self.ctx) {
+                                    if let Ok(z) = arg.to_z3_string() {
                                         segments.push(z);
                                     } else {
                                         return None;
@@ -5292,18 +5464,18 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                                 SymValue::Concrete(Value::Number(n)) => {
                                     if let Some(i) = n.as_i64() {
                                         segments.push(
-                                            Z3String::from_str(self.ctx, &i.to_string()).unwrap(),
+                                            SmtExpr::StringLit(i.to_string().to_string()),
                                         );
                                     } else {
                                         return None;
                                     }
                                 }
                                 SymValue::Int(z) => {
-                                    segments.push(self.z3_int_to_string(z));
+                                    segments.push(SmtExpr::IntToStr(Box::new(z.clone())));
                                 }
                                 _ => {
-                                    if let Ok(z) = arg.to_z3_int(self.ctx) {
-                                        segments.push(self.z3_int_to_string(&z));
+                                    if let Ok(z) = arg.to_z3_int() {
+                                        segments.push(SmtExpr::IntToStr(Box::new(z.clone())));
                                     } else {
                                         return None;
                                     }
@@ -5315,16 +5487,16 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                             match arg {
                                 SymValue::Concrete(Value::String(s)) => {
                                     segments
-                                        .push(Z3String::from_str(self.ctx, s.as_ref()).unwrap());
+                                        .push(SmtExpr::StringLit(s.as_ref().to_string()));
                                 }
                                 SymValue::Concrete(Value::Number(n)) => {
                                     if let Some(i) = n.as_i64() {
                                         segments.push(
-                                            Z3String::from_str(self.ctx, &i.to_string()).unwrap(),
+                                            SmtExpr::StringLit(i.to_string().to_string()),
                                         );
                                     } else if let Some(f) = n.as_f64() {
                                         segments.push(
-                                            Z3String::from_str(self.ctx, &f.to_string()).unwrap(),
+                                            SmtExpr::StringLit(f.to_string().to_string()),
                                         );
                                     } else {
                                         return None;
@@ -5332,20 +5504,20 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                                 }
                                 SymValue::Concrete(Value::Bool(b)) => {
                                     segments.push(
-                                        Z3String::from_str(self.ctx, &b.to_string()).unwrap(),
+                                        SmtExpr::StringLit(b.to_string().to_string()),
                                     );
                                 }
                                 SymValue::Str(z) => {
                                     segments.push(z.clone());
                                 }
                                 SymValue::Int(z) => {
-                                    segments.push(self.z3_int_to_string(z));
+                                    segments.push(SmtExpr::IntToStr(Box::new(z.clone())));
                                 }
                                 _ => {
-                                    if let Ok(z) = arg.to_z3_string(self.ctx) {
+                                    if let Ok(z) = arg.to_z3_string() {
                                         segments.push(z);
-                                    } else if let Ok(z) = arg.to_z3_int(self.ctx) {
-                                        segments.push(self.z3_int_to_string(&z));
+                                    } else if let Ok(z) = arg.to_z3_int() {
+                                        segments.push(SmtExpr::IntToStr(Box::new(z.clone())));
                                     } else {
                                         return None;
                                     }
@@ -5361,16 +5533,16 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
 
         // Flush trailing literal.
         if !literal.is_empty() {
-            segments.push(Z3String::from_str(self.ctx, &literal).unwrap());
+            segments.push(SmtExpr::StringLit(literal.to_string()));
         }
 
         // Build result.
         if segments.is_empty() {
-            Some(Z3String::from_str(self.ctx, "").unwrap())
+            Some(SmtExpr::StringLit("".to_string()))
         } else if segments.len() == 1 {
             Some(segments.into_iter().next().unwrap())
         } else {
-            Some(self.z3_string_concat(&segments))
+            Some(SmtExpr::SeqConcat(segments.to_vec()))
         }
     }
 
@@ -5390,9 +5562,9 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             }
 
             if let Some(z) = self.resolve_arg_as_z3_int(params.args[0]) {
-                let zero = Z3Int::from_i64(self.ctx, 0);
-                let neg = z.unary_minus();
-                let result = z.ge(&zero).ite(&z, &neg);
+                let zero = SmtExpr::IntLit(0);
+                let neg = SmtExpr::Neg(Box::new(z.clone()));
+                let result = SmtExpr::ite(SmtExpr::ge(z.clone(), zero.clone()), z, neg);
                 self.set_register_sym(
                     params.dest,
                     SymValue::Int(result),
@@ -5408,9 +5580,9 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let name = self.pname(&format!("builtin_abs_{}", self.pc));
-        let var = Z3Int::new_const(self.ctx, name.as_str());
-        let zero = Z3Int::from_i64(self.ctx, 0);
-        self.constraints.push(var.ge(&zero));
+        let var = self.fresh_const(name.as_str());
+        let zero = SmtExpr::IntLit(0);
+        self.constraints.push(SmtExpr::ge(var.clone(), zero.clone()));
         self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
         Ok(())
     }
@@ -5462,7 +5634,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc, name
         ));
         let vname = self.pname(&format!("builtin_{}_{}", name, self.pc));
-        let var = Z3Bool::new_const(self.ctx, vname.as_str());
+        let var = self.fresh_const(vname.as_str());
         self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
         Ok(())
     }
@@ -5510,7 +5682,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let name = self.pname(&format!("builtin_is_number_{}", self.pc));
-        let var = Z3Bool::new_const(self.ctx, name.as_str());
+        let var = self.fresh_const(name.as_str());
         self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
         Ok(())
     }
@@ -5568,7 +5740,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc, name
         ));
         let vname = self.pname(&format!("builtin_{}_{}", name, self.pc));
-        let var = Z3Bool::new_const(self.ctx, vname.as_str());
+        let var = self.fresh_const(vname.as_str());
         self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
         Ok(())
     }
@@ -5579,7 +5751,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         &mut self,
         params: &crate::rvm::instructions::BuiltinCallParams,
         name: &str,
-        op: impl FnOnce(Z3BV<'ctx>, Z3BV<'ctx>) -> Z3BV<'ctx>,
+        op: impl FnOnce(SmtExpr, SmtExpr) -> SmtExpr,
     ) -> anyhow::Result<()> {
         if params.arg_count() >= 2 {
             // Concrete evaluation.
@@ -5605,10 +5777,10 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             let z0 = self.resolve_arg_as_z3_int(params.args[0]);
             let z1 = self.resolve_arg_as_z3_int(params.args[1]);
             if let (Some(i0), Some(i1)) = (z0, z1) {
-                let bv0 = Z3BV::from_int(&i0, 64);
-                let bv1 = Z3BV::from_int(&i1, 64);
+                let bv0 = SmtExpr::Int2Bv(Box::new(i0.clone()), 64);
+                let bv1 = SmtExpr::Int2Bv(Box::new(i1.clone()), 64);
                 let bv_result = op(bv0, bv1);
-                let int_result = bv_result.to_int(true); // signed
+                let int_result = SmtExpr::Bv2Int(Box::new(bv_result.clone()), true); // signed
                 self.set_register_sym(
                     params.dest,
                     SymValue::Int(int_result),
@@ -5624,7 +5796,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc, name
         ));
         let vname = self.pname(&format!("builtin_{}_{}", name.replace('.', "_"), self.pc));
-        let var = Z3Int::new_const(self.ctx, vname.as_str());
+        let var = self.fresh_const(vname.as_str());
         self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
         Ok(())
     }
@@ -5634,7 +5806,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         &mut self,
         params: &crate::rvm::instructions::BuiltinCallParams,
         name: &str,
-        op: impl FnOnce(Z3BV<'ctx>) -> Z3BV<'ctx>,
+        op: impl FnOnce(SmtExpr) -> SmtExpr,
     ) -> anyhow::Result<()> {
         if params.arg_count() >= 1 {
             // Concrete evaluation.
@@ -5647,9 +5819,9 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             }
 
             if let Some(z) = self.resolve_arg_as_z3_int(params.args[0]) {
-                let bv = Z3BV::from_int(&z, 64);
+                let bv = SmtExpr::Int2Bv(Box::new(z.clone()), 64);
                 let bv_result = op(bv);
-                let int_result = bv_result.to_int(true);
+                let int_result = SmtExpr::Bv2Int(Box::new(bv_result.clone()), true);
                 self.set_register_sym(
                     params.dest,
                     SymValue::Int(int_result),
@@ -5664,7 +5836,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc, name
         ));
         let vname = self.pname(&format!("builtin_{}_{}", name.replace('.', "_"), self.pc));
-        let var = Z3Int::new_const(self.ctx, vname.as_str());
+        let var = self.fresh_const(vname.as_str());
         self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
         Ok(())
     }
@@ -5707,16 +5879,16 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             }
 
             // Z3 Bool → ite(bool, 1, 0).
-            if let Ok(z_bool) = a0.value.to_z3_bool(self.ctx) {
-                let one = Z3Int::from_i64(self.ctx, 1);
-                let zero = Z3Int::from_i64(self.ctx, 0);
-                let result = z_bool.ite(&one, &zero);
+            if let Ok(z_bool) = a0.value.to_z3_bool() {
+                let one = SmtExpr::IntLit(1);
+                let zero = SmtExpr::IntLit(0);
+                let result = SmtExpr::ite(z_bool.clone(), one.clone(), zero.clone());
                 self.set_register_sym(params.dest, SymValue::Int(result), a0_defined.clone(), None);
                 return Ok(());
             }
 
             // Z3 Int — pass through.
-            if let Ok(z_int) = a0.value.to_z3_int(self.ctx) {
+            if let Ok(z_int) = a0.value.to_z3_int() {
                 self.set_register_sym(params.dest, SymValue::Int(z_int), a0_defined.clone(), None);
                 return Ok(());
             }
@@ -5727,7 +5899,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let vname = self.pname(&format!("builtin_to_number_{}", self.pc));
-        let var = Z3Int::new_const(self.ctx, vname.as_str());
+        let var = self.fresh_const(vname.as_str());
         self.set_register_sym(params.dest, SymValue::Int(var), Definedness::Defined, None);
         Ok(())
     }
@@ -5767,8 +5939,8 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
 
             if let Some(pattern) = pattern_concrete {
                 if let Some(input_z3) = self.resolve_arg_as_z3_string(params.args[0]) {
-                    let re = cedar_pattern_to_z3_regexp(self.ctx, pattern.as_ref());
-                    let result = input_z3.regex_matches(&re);
+                    let re = cedar_pattern_to_z3_regexp(pattern.as_ref());
+                    let result = SmtExpr::SeqInRe(Box::new(input_z3), Box::new(re));
                     self.set_register_sym(params.dest, SymValue::Bool(result), a0_defined, None);
                     return Ok(());
                 }
@@ -5783,7 +5955,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let vname = self.pname(&format!("builtin_cedar_like_{}", self.pc));
-        let var = Z3Bool::new_const(self.ctx, vname.as_str());
+        let var = self.fresh_const(vname.as_str());
         self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
         Ok(())
     }
@@ -5826,8 +5998,8 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             if let SymValue::Concrete(Value::String(type_name)) = &a1.value {
                 if let Some(entity_z3) = self.resolve_arg_as_z3_string(params.args[0]) {
                     let prefix = format!("{}::", type_name.as_ref());
-                    let prefix_z3 = Z3String::from_str(self.ctx, &prefix).unwrap();
-                    let result = prefix_z3.prefix(&entity_z3);
+                    let prefix_z3 = SmtExpr::StringLit(prefix.to_string());
+                    let result = SmtExpr::SeqPrefix(Box::new(prefix_z3), Box::new(entity_z3));
                     self.set_register_sym(params.dest, SymValue::Bool(result), a0_defined, None);
                     return Ok(());
                 }
@@ -5839,7 +6011,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let vname = self.pname(&format!("builtin_cedar_is_{}", self.pc));
-        let var = Z3Bool::new_const(self.ctx, vname.as_str());
+        let var = self.fresh_const_sort(vname.as_str(), regorus_smt::SmtSort::Bool);
         self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
         Ok(())
     }
@@ -5898,13 +6070,13 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                         // No entity can satisfy this — always false.
                         self.set_register_concrete(params.dest, Value::Bool(false));
                     } else {
-                        let mut disjuncts: Vec<Z3Bool<'ctx>> = Vec::new();
+                        let mut disjuncts: Vec<SmtExpr> = Vec::new();
                         for key in &matching_keys {
-                            let key_z3 = Z3String::from_str(self.ctx, key).unwrap();
-                            disjuncts.push(entity_z3._eq(&key_z3));
+                            let key_z3 = SmtExpr::StringLit(key.to_string());
+                            disjuncts.push(SmtExpr::eq(entity_z3.clone(), key_z3.clone()));
                         }
-                        let refs: Vec<&Z3Bool<'ctx>> = disjuncts.iter().collect();
-                        let result = Z3Bool::or(self.ctx, &refs);
+                        let refs: Vec<&SmtExpr> = disjuncts.iter().collect();
+                        let result = SmtExpr::Or(refs.into_iter().cloned().collect());
                         self.set_register_sym(
                             params.dest,
                             SymValue::Bool(result),
@@ -5922,7 +6094,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let vname = self.pname(&format!("builtin_cedar_in_{}", self.pc));
-        let var = Z3Bool::new_const(self.ctx, vname.as_str());
+        let var = self.fresh_const_sort(vname.as_str(), regorus_smt::SmtSort::Bool);
         self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
         Ok(())
     }
@@ -5984,13 +6156,13 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     if all_matching.is_empty() {
                         self.set_register_concrete(params.dest, Value::Bool(false));
                     } else {
-                        let mut disjuncts: Vec<Z3Bool<'ctx>> = Vec::new();
+                        let mut disjuncts: Vec<SmtExpr> = Vec::new();
                         for key in &all_matching {
-                            let key_z3 = Z3String::from_str(self.ctx, key).unwrap();
-                            disjuncts.push(entity_z3._eq(&key_z3));
+                            let key_z3 = SmtExpr::StringLit(key.to_string());
+                            disjuncts.push(SmtExpr::eq(entity_z3.clone(), key_z3.clone()));
                         }
-                        let refs: Vec<&Z3Bool<'ctx>> = disjuncts.iter().collect();
-                        let result = Z3Bool::or(self.ctx, &refs);
+                        let refs: Vec<&SmtExpr> = disjuncts.iter().collect();
+                        let result = SmtExpr::Or(refs.into_iter().cloned().collect());
                         self.set_register_sym(
                             params.dest,
                             SymValue::Bool(result),
@@ -6008,7 +6180,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let vname = self.pname(&format!("builtin_cedar_in_set_{}", self.pc));
-        let var = Z3Bool::new_const(self.ctx, vname.as_str());
+        let var = self.fresh_const_sort(vname.as_str(), regorus_smt::SmtSort::Bool);
         self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
         Ok(())
     }
@@ -6060,13 +6232,13 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                     if matching_keys.is_empty() {
                         self.set_register_concrete(params.dest, Value::Bool(false));
                     } else {
-                        let mut disjuncts: Vec<Z3Bool<'ctx>> = Vec::new();
+                        let mut disjuncts: Vec<SmtExpr> = Vec::new();
                         for key in &matching_keys {
-                            let key_z3 = Z3String::from_str(self.ctx, key).unwrap();
-                            disjuncts.push(entity_z3._eq(&key_z3));
+                            let key_z3 = SmtExpr::StringLit(key.to_string());
+                            disjuncts.push(SmtExpr::eq(entity_z3.clone(), key_z3.clone()));
                         }
-                        let refs: Vec<&Z3Bool<'ctx>> = disjuncts.iter().collect();
-                        let result = Z3Bool::or(self.ctx, &refs);
+                        let refs: Vec<&SmtExpr> = disjuncts.iter().collect();
+                        let result = SmtExpr::Or(refs.into_iter().cloned().collect());
                         self.set_register_sym(
                             params.dest,
                             SymValue::Bool(result),
@@ -6084,7 +6256,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let vname = self.pname(&format!("builtin_cedar_has_{}", self.pc));
-        let var = Z3Bool::new_const(self.ctx, vname.as_str());
+        let var = self.fresh_const_sort(vname.as_str(), regorus_smt::SmtSort::Bool);
         self.set_register_sym(params.dest, SymValue::Bool(var), Definedness::Defined, None);
         Ok(())
     }
@@ -6113,7 +6285,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 _ => None,
             };
 
-            if let (Some(entities), Some(attr)) = (entities, attr) {
+            if let (Some(entities), Some(ref attr)) = (entities, &attr) {
                 // Entity truly concrete?
                 let entity_concrete = match &a0.value {
                     SymValue::Concrete(v)
@@ -6140,17 +6312,17 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                         match first_val {
                             Value::String(_) => {
                                 // Build ITE chain of string values.
-                                let default = Z3String::from_str(self.ctx, "").unwrap();
+                                let default = SmtExpr::StringLit("".to_string());
                                 let mut result = default;
                                 for (key, val) in attr_map.iter().rev() {
-                                    let key_z3 = Z3String::from_str(self.ctx, key).unwrap();
-                                    let cond = entity_z3._eq(&key_z3);
+                                    let key_z3 = SmtExpr::StringLit(key.to_string());
+                                    let cond = SmtExpr::eq(entity_z3.clone(), key_z3.clone());
                                     let val_str = match val {
                                         Value::String(s) => s.as_ref().to_string(),
                                         _ => format!("{}", val),
                                     };
-                                    let val_z3 = Z3String::from_str(self.ctx, &val_str).unwrap();
-                                    result = cond.ite(&val_z3, &result);
+                                    let val_z3 = SmtExpr::StringLit(val_str.to_string());
+                                    result = SmtExpr::ite(cond.clone(), val_z3.clone(), result.clone());
                                 }
                                 self.set_register_sym(
                                     params.dest,
@@ -6166,33 +6338,34 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                                     self.set_register_concrete(params.dest, attr_map[0].1.clone());
                                     return Ok(());
                                 }
-                                // Multiple complex values — fall through to unconstrained.
+                                // Multiple complex values — fall through to sub-path.
                             }
                             _ => {
-                                // Other scalar types — fall through.
+                                // Other scalar types — fall through to sub-path.
                             }
                         }
                     }
                 }
+            }
 
-                // If entity is a path placeholder pointing to a context-like
-                // object, treat it as a symbolic object where attr access
-                // creates a sub-path. E.g., input.context accessing "ip"
-                // → input.context.ip (symbolic string).
-                if let Some(path) = &a0.source_path {
-                    let sub_path = format!("{}.{}", path, attr.as_ref());
-                    let _entry =
-                        self.registry
-                            .get_or_create(&sub_path, ValueSort::Unknown, true, self.pc);
-                    let defined = self.registry.get(&sub_path).unwrap().defined.clone();
-                    self.set_register_sym(
-                        params.dest,
-                        SymValue::Concrete(Value::Undefined),
-                        Definedness::Symbolic(defined),
-                        Some(sub_path),
-                    );
-                    return Ok(());
-                }
+            // If entity is a path placeholder pointing to a context-like
+            // object, treat it as a symbolic object where attr access
+            // creates a sub-path. E.g., input.context accessing "ip"
+            // → input.context.ip (symbolic value with deferred sort).
+            // This works regardless of whether entities are concrete.
+            if let (Some(path), Some(attr)) = (&a0.source_path, &attr) {
+                let sub_path = format!("{}.{}", path, attr.as_ref());
+                let _entry =
+                    self.registry
+                        .get_or_create(&sub_path, ValueSort::Unknown, true, self.pc);
+                let defined = self.registry.get(&sub_path).unwrap().defined.clone();
+                self.set_register_sym(
+                    params.dest,
+                    SymValue::Concrete(Value::Undefined),
+                    Definedness::Symbolic(defined),
+                    Some(sub_path),
+                );
+                return Ok(());
             }
         }
 
@@ -6203,110 +6376,9 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.pc
         ));
         let vname = self.pname(&format!("builtin_cedar_attr_{}", self.pc));
-        let var = Z3String::new_const(self.ctx, vname.as_str());
+        let var = self.fresh_const(vname.as_str());
         self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
         Ok(())
-    }
-
-    // ===================================================================
-    // Z3 string theory FFI helpers
-    // ===================================================================
-
-    /// Z3 `str.len(s)` — returns a Z3 Int representing the length of a Z3 String.
-    fn z3_string_length(&self, s: &Z3String<'ctx>) -> Z3Int<'ctx> {
-        #[allow(unsafe_code)]
-        unsafe {
-            let ctx_ptr: *const z3::Context = self.ctx;
-            let raw_ctx: z3_sys::Z3_context = *(ctx_ptr as *const z3_sys::Z3_context);
-            let len_ast = z3_sys::Z3_mk_seq_length(raw_ctx, s.get_z3_ast());
-            Z3Int::wrap(self.ctx, len_ast)
-        }
-    }
-
-    /// Z3 `str.indexof(s, substr, offset)` — returns Int (-1 if not found).
-    fn z3_string_indexof(
-        &self,
-        s: &Z3String<'ctx>,
-        substr: &Z3String<'ctx>,
-        offset: &Z3Int<'ctx>,
-    ) -> Z3Int<'ctx> {
-        #[allow(unsafe_code)]
-        unsafe {
-            let ctx_ptr: *const z3::Context = self.ctx;
-            let raw_ctx: z3_sys::Z3_context = *(ctx_ptr as *const z3_sys::Z3_context);
-            let ast = z3_sys::Z3_mk_seq_index(
-                raw_ctx,
-                s.get_z3_ast(),
-                substr.get_z3_ast(),
-                offset.get_z3_ast(),
-            );
-            Z3Int::wrap(self.ctx, ast)
-        }
-    }
-
-    /// Z3 `str.replace(s, src, dst)` — replaces first occurrence.
-    fn z3_string_replace(
-        &self,
-        s: &Z3String<'ctx>,
-        src: &Z3String<'ctx>,
-        dst: &Z3String<'ctx>,
-    ) -> Z3String<'ctx> {
-        #[allow(unsafe_code)]
-        unsafe {
-            let ctx_ptr: *const z3::Context = self.ctx;
-            let raw_ctx: z3_sys::Z3_context = *(ctx_ptr as *const z3_sys::Z3_context);
-            let ast = z3_sys::Z3_mk_seq_replace(
-                raw_ctx,
-                s.get_z3_ast(),
-                src.get_z3_ast(),
-                dst.get_z3_ast(),
-            );
-            Z3String::wrap(self.ctx, ast)
-        }
-    }
-
-    /// Z3 `str.substr(s, offset, length)` — extracts a substring.
-    fn z3_string_extract(
-        &self,
-        s: &Z3String<'ctx>,
-        offset: &Z3Int<'ctx>,
-        length: &Z3Int<'ctx>,
-    ) -> Z3String<'ctx> {
-        #[allow(unsafe_code)]
-        unsafe {
-            let ctx_ptr: *const z3::Context = self.ctx;
-            let raw_ctx: z3_sys::Z3_context = *(ctx_ptr as *const z3_sys::Z3_context);
-            let ast = z3_sys::Z3_mk_seq_extract(
-                raw_ctx,
-                s.get_z3_ast(),
-                offset.get_z3_ast(),
-                length.get_z3_ast(),
-            );
-            Z3String::wrap(self.ctx, ast)
-        }
-    }
-
-    /// Z3 `str.++` — concatenate multiple strings.
-    fn z3_string_concat(&self, parts: &[Z3String<'ctx>]) -> Z3String<'ctx> {
-        #[allow(unsafe_code)]
-        unsafe {
-            let ctx_ptr: *const z3::Context = self.ctx;
-            let raw_ctx: z3_sys::Z3_context = *(ctx_ptr as *const z3_sys::Z3_context);
-            let asts: Vec<z3_sys::Z3_ast> = parts.iter().map(|p| p.get_z3_ast()).collect();
-            let ast = z3_sys::Z3_mk_seq_concat(raw_ctx, asts.len() as u32, asts.as_ptr());
-            Z3String::wrap(self.ctx, ast)
-        }
-    }
-
-    /// Z3 `str.from_int` — convert an integer to its decimal string representation.
-    fn z3_int_to_string(&self, i: &Z3Int<'ctx>) -> Z3String<'ctx> {
-        #[allow(unsafe_code)]
-        unsafe {
-            let ctx_ptr: *const z3::Context = self.ctx;
-            let raw_ctx: z3_sys::Z3_context = *(ctx_ptr as *const z3_sys::Z3_context);
-            let ast = z3_sys::Z3_mk_int_to_str(raw_ctx, i.get_z3_ast());
-            Z3String::wrap(self.ctx, ast)
-        }
     }
 
     // -----------------------------------------------------------------------
@@ -6316,7 +6388,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
     fn translate_function_call(
         &mut self,
         params_index: u16,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let params = self
             .program
             .instruction_data
@@ -6325,7 +6397,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             .clone();
 
         // Collect argument values from caller's registers before the register window swap.
-        let arg_values: Vec<SymRegister<'ctx>> = params
+        let arg_values: Vec<SymRegister> = params
             .arg_registers()
             .iter()
             .map(|&reg| self.get_register(reg).clone())
@@ -6341,7 +6413,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
     fn translate_virtual_data_lookup(
         &mut self,
         params_index: u16,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         let params = self
             .program
             .instruction_data
@@ -6374,7 +6446,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             self.warnings
                 .push(format!("PC {}: VDDL with symbolic path component", self.pc));
             let name = self.pname(&format!("vddl_{}", self.pc));
-            let var = Z3String::new_const(self.ctx, name.as_str());
+            let var = self.fresh_const(name.as_str());
             self.set_register_sym(params.dest, SymValue::Str(var), Definedness::Defined, None);
             return Ok(InstructionAction::Continue);
         }
@@ -6419,7 +6491,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
     // Register helpers
     // -----------------------------------------------------------------------
 
-    fn get_register(&self, reg: u8) -> &SymRegister<'ctx> {
+    fn get_register(&self, reg: u8) -> &SymRegister {
         &self.registers[reg as usize]
     }
 
@@ -6434,8 +6506,8 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
     fn set_register_sym(
         &mut self,
         reg: u8,
-        value: SymValue<'ctx>,
-        defined: Definedness<'ctx>,
+        value: SymValue,
+        defined: Definedness,
         source_path: Option<String>,
     ) {
         let idx = reg as usize;
@@ -6455,7 +6527,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         dest: u8,
         path: &str,
         sort: ValueSort,
-    ) -> anyhow::Result<InstructionAction<'ctx>> {
+    ) -> anyhow::Result<InstructionAction> {
         // Check if this path has a concrete value injected via config.
         // For example, `input.entities` in Cedar analysis should be concrete.
         if let Some(suffix) = path.strip_prefix("input.") {
@@ -6568,9 +6640,9 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
 // Internal enums
 // ---------------------------------------------------------------------------
 
-enum InstructionAction<'ctx> {
+enum InstructionAction {
     Continue,
-    Return(SymValue<'ctx>),
+    Return(SymValue),
     Jump(usize),
 }
 
@@ -6595,11 +6667,11 @@ enum CmpOp {
 
 /// Typed Z3 value for Contains equality comparisons.
 #[derive(Clone)]
-enum ContainsZ3Value<'ctx> {
-    Bool(Z3Bool<'ctx>),
-    Int(Z3Int<'ctx>),
-    Real(Z3Real<'ctx>),
-    Str(z3::ast::String<'ctx>),
+enum ContainsZ3Value {
+    Bool(SmtExpr),
+    Int(SmtExpr),
+    Real(SmtExpr),
+    Str(SmtExpr),
 }
 
 // ---------------------------------------------------------------------------
@@ -6625,22 +6697,22 @@ fn value_to_path_segment(v: &Value) -> String {
 /// The pattern uses `*` to match zero or more arbitrary characters.
 /// We split on `*`, create `Regexp::literal` for each literal segment,
 /// and `Regexp::full` (Σ*) for each `*`, then concatenate.
-fn cedar_pattern_to_z3_regexp<'ctx>(ctx: &'ctx z3::Context, pattern: &str) -> Z3Regexp<'ctx> {
+fn cedar_pattern_to_z3_regexp( pattern: &str) -> SmtExpr {
     let segments: Vec<&str> = pattern.split('*').collect();
 
     if segments.len() == 1 {
         // No wildcards — exact literal match.
-        return Z3Regexp::literal(ctx, pattern);
+        return SmtExpr::SeqToRe(Box::new(SmtExpr::StringLit(pattern.to_string())));
     }
 
-    let mut parts: Vec<Z3Regexp<'ctx>> = Vec::new();
+    let mut parts: Vec<SmtExpr> = Vec::new();
     for (i, seg) in segments.iter().enumerate() {
         if !seg.is_empty() {
-            parts.push(Z3Regexp::literal(ctx, seg));
+            parts.push(SmtExpr::SeqToRe(Box::new(SmtExpr::StringLit(seg.to_string()))));
         }
         // Between segments (i.e. where each `*` was), insert Σ*.
         if i < segments.len() - 1 {
-            parts.push(Z3Regexp::full(ctx));
+            parts.push(SmtExpr::ReFull(SmtSort::String));
         }
     }
 
@@ -6648,8 +6720,8 @@ fn cedar_pattern_to_z3_regexp<'ctx>(ctx: &'ctx z3::Context, pattern: &str) -> Z3
         return parts.into_iter().next().unwrap();
     }
 
-    let refs: Vec<&Z3Regexp<'ctx>> = parts.iter().collect();
-    Z3Regexp::concat(ctx, &refs)
+    let refs: Vec<&SmtExpr> = parts.iter().collect();
+    SmtExpr::ReConcat(refs.into_iter().cloned().collect())
 }
 
 /// Cedar wildcard match (concrete evaluation, mirrors `builtins/cedar.rs`).

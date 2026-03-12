@@ -9,7 +9,7 @@ pub mod program;
 pub mod tests;
 pub mod vm;
 
-#[cfg(feature = "z3-analysis")]
+#[cfg(feature = "policy-analysis")]
 pub mod analysis;
 
 pub use instructions::Instruction;

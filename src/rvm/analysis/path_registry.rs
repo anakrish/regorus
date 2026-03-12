@@ -1,10 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Path registry — maps access paths (e.g., `input.user.role`) to Z3 variables.
+//! Path registry — maps access paths (e.g., `input.user.role`) to SMT variables.
 //!
 //! The path-based encoding is the central design choice: every access into `input`
-//! (or symbolic `data`) discovered during translation gets a flat Z3 variable named
+//! (or symbolic `data`) discovered during translation gets a flat SMT variable named
 //! by its access path. This makes model-to-JSON extraction trivial.
 
 use alloc::format;
@@ -15,15 +15,27 @@ use alloc::vec::Vec;
 
 use std::collections::HashMap;
 
-use z3::ast::{Bool as Z3Bool, Int as Z3Int, Real as Z3Real, String as Z3String};
+use regorus_smt::{SmtDecl, SmtExpr, SmtSort};
 
 use super::types::ValueSort;
 
+/// Map a `ValueSort` to the corresponding SMT sort.
+#[allow(dead_code)]
+fn value_sort_to_smt(sort: ValueSort) -> SmtSort {
+    match sort {
+        ValueSort::Bool => SmtSort::Bool,
+        ValueSort::Int => SmtSort::Int,
+        ValueSort::Real => SmtSort::Real,
+        ValueSort::String => SmtSort::String,
+        ValueSort::Unknown => SmtSort::String, // default
+    }
+}
+
 /// A single path entry in the registry.
 #[derive(Debug, Clone)]
-pub struct PathEntry<'ctx> {
-    /// The Z3 boolean controlling whether this path is defined (present in input).
-    pub defined: Z3Bool<'ctx>,
+pub struct PathEntry {
+    /// The SMT boolean controlling whether this path is defined (present in input).
+    pub defined: SmtExpr,
     /// The inferred sort for this path's value.
     pub sort: ValueSort,
     /// Whether all access components were literal (fully static path).
@@ -31,30 +43,43 @@ pub struct PathEntry<'ctx> {
     /// Instruction PCs that access this path (for coverage mapping).
     pub access_pcs: Vec<usize>,
 
-    // The actual Z3 variable. We store one per sort and create on demand.
-    pub(crate) bool_var: Option<Z3Bool<'ctx>>,
-    pub(crate) int_var: Option<Z3Int<'ctx>>,
-    pub(crate) real_var: Option<Z3Real<'ctx>>,
-    pub(crate) str_var: Option<Z3String<'ctx>>,
+    // The actual SMT variable (SmtExpr::Const(id)). One per sort, created on demand.
+    pub(crate) bool_var: Option<SmtExpr>,
+    pub(crate) int_var: Option<SmtExpr>,
+    pub(crate) real_var: Option<SmtExpr>,
+    pub(crate) str_var: Option<SmtExpr>,
 }
 
 /// Registry of all discovered access paths into `input` (and symbolic `data`).
 #[allow(missing_debug_implementations)]
-pub struct PathRegistry<'ctx> {
-    ctx: &'ctx z3::Context,
-    paths: HashMap<String, PathEntry<'ctx>>,
-    /// Counter for generating unique variable names when paths collide.
+pub struct PathRegistry {
+    paths: HashMap<String, PathEntry>,
+    /// Counter for generating unique variable IDs.
     next_id: u32,
+    /// All SMT constant declarations created by this registry.
+    declarations: Vec<SmtDecl>,
 }
 
-impl<'ctx> PathRegistry<'ctx> {
+impl PathRegistry {
     /// Create a new empty registry.
-    pub fn new(ctx: &'ctx z3::Context) -> Self {
+    pub fn new() -> Self {
         Self {
-            ctx,
             paths: HashMap::new(),
             next_id: 0,
+            declarations: Vec::new(),
         }
+    }
+
+    /// Allocate a fresh SMT constant, returning its `SmtExpr::Const(id)`.
+    pub(crate) fn alloc_const(&mut self, name: &str, sort: SmtSort) -> SmtExpr {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.declarations.push(SmtDecl::Const {
+            id,
+            name: name.into(),
+            sort,
+        });
+        SmtExpr::Const(id)
     }
 
     /// Get or create a path entry. If the path already exists, its sort may be
@@ -65,86 +90,123 @@ impl<'ctx> PathRegistry<'ctx> {
         sort: ValueSort,
         is_static: bool,
         pc: usize,
-    ) -> &mut PathEntry<'ctx> {
-        let ctx = self.ctx;
-        let next_id = &mut self.next_id;
-        self.paths
-            .entry(path.to_string())
-            .and_modify(|entry| {
-                entry.access_pcs.push(pc);
-                // Refine sort if currently Unknown
-                if entry.sort == ValueSort::Unknown && sort != ValueSort::Unknown {
-                    entry.sort = sort;
-                }
-            })
-            .or_insert_with(|| {
-                *next_id += 1;
-                let defined_name = format!("defined_{}", path);
-                let defined = Z3Bool::new_const(ctx, defined_name.as_str());
-                PathEntry {
-                    defined,
-                    sort,
-                    is_static,
-                    access_pcs: vec![pc],
-                    bool_var: None,
-                    int_var: None,
-                    real_var: None,
-                    str_var: None,
-                }
-            })
+    ) -> &mut PathEntry {
+        if self.paths.contains_key(path) {
+            let entry = self.paths.get_mut(path).unwrap();
+            entry.access_pcs.push(pc);
+            if entry.sort == ValueSort::Unknown && sort != ValueSort::Unknown {
+                entry.sort = sort;
+            }
+            return entry;
+        }
+
+        // Create new entry with a fresh `defined` boolean.
+        let defined_name = format!("defined_{}", path);
+        let defined = self.alloc_const(&defined_name, SmtSort::Bool);
+
+        self.paths.insert(
+            path.to_string(),
+            PathEntry {
+                defined,
+                sort,
+                is_static,
+                access_pcs: vec![pc],
+                bool_var: None,
+                int_var: None,
+                real_var: None,
+                str_var: None,
+            },
+        );
+        self.paths.get_mut(path).unwrap()
     }
 
-    /// Get the Z3 Bool variable for a path, creating it if needed.
-    pub fn get_bool(&mut self, path: &str) -> Z3Bool<'ctx> {
+    /// Check if any sort-specific variable already exists for this path.
+    fn has_any_var(&self, path: &str) -> bool {
+        if let Some(entry) = self.paths.get(path) {
+            entry.bool_var.is_some()
+                || entry.int_var.is_some()
+                || entry.real_var.is_some()
+                || entry.str_var.is_some()
+        } else {
+            false
+        }
+    }
+
+    /// Get the SMT Bool variable for a path, creating it if needed.
+    ///
+    /// If a variable of a different sort already exists for this path,
+    /// the new declaration uses a sort-disambiguated name (`path$Bool`)
+    /// to avoid duplicate-name errors in SMT-LIB2 text rendering.
+    pub fn get_bool(&mut self, path: &str) -> SmtExpr {
         self.get_or_create(path, ValueSort::Bool, true, 0);
-        let ctx = self.ctx;
-        let entry = self.paths.get_mut(path).unwrap();
-        if entry.bool_var.is_none() {
-            entry.bool_var = Some(Z3Bool::new_const(ctx, path));
+        if let Some(var) = &self.paths.get(path).unwrap().bool_var {
+            return var.clone();
         }
-        entry.bool_var.clone().unwrap()
+        let name = if self.has_any_var(path) {
+            format!("{}$Bool", path)
+        } else {
+            path.to_string()
+        };
+        let var = self.alloc_const(&name, SmtSort::Bool);
+        self.paths.get_mut(path).unwrap().bool_var = Some(var.clone());
+        var
     }
 
-    /// Get the Z3 Int variable for a path, creating it if needed.
-    pub fn get_int(&mut self, path: &str) -> Z3Int<'ctx> {
+    /// Get the SMT Int variable for a path, creating it if needed.
+    pub fn get_int(&mut self, path: &str) -> SmtExpr {
         self.get_or_create(path, ValueSort::Int, true, 0);
-        let ctx = self.ctx;
-        let entry = self.paths.get_mut(path).unwrap();
-        if entry.int_var.is_none() {
-            entry.int_var = Some(Z3Int::new_const(ctx, path));
+        if let Some(var) = &self.paths.get(path).unwrap().int_var {
+            return var.clone();
         }
-        entry.int_var.clone().unwrap()
+        let name = if self.has_any_var(path) {
+            format!("{}$Int", path)
+        } else {
+            path.to_string()
+        };
+        let var = self.alloc_const(&name, SmtSort::Int);
+        self.paths.get_mut(path).unwrap().int_var = Some(var.clone());
+        var
     }
 
-    /// Get the Z3 Real variable for a path, creating it if needed.
-    pub fn get_real(&mut self, path: &str) -> Z3Real<'ctx> {
+    /// Get the SMT Real variable for a path, creating it if needed.
+    pub fn get_real(&mut self, path: &str) -> SmtExpr {
         self.get_or_create(path, ValueSort::Real, true, 0);
-        let ctx = self.ctx;
-        let entry = self.paths.get_mut(path).unwrap();
-        if entry.real_var.is_none() {
-            entry.real_var = Some(Z3Real::new_const(ctx, path));
+        if let Some(var) = &self.paths.get(path).unwrap().real_var {
+            return var.clone();
         }
-        entry.real_var.clone().unwrap()
+        let name = if self.has_any_var(path) {
+            format!("{}$Real", path)
+        } else {
+            path.to_string()
+        };
+        let var = self.alloc_const(&name, SmtSort::Real);
+        self.paths.get_mut(path).unwrap().real_var = Some(var.clone());
+        var
     }
 
-    /// Get the Z3 String variable for a path, creating it if needed.
-    pub fn get_string(&mut self, path: &str) -> Z3String<'ctx> {
+    /// Get the SMT String variable for a path, creating it if needed.
+    pub fn get_string(&mut self, path: &str) -> SmtExpr {
         self.get_or_create(path, ValueSort::String, true, 0);
-        let ctx = self.ctx;
-        let entry = self.paths.get_mut(path).unwrap();
-        if entry.str_var.is_none() {
-            entry.str_var = Some(Z3String::new_const(ctx, path));
+        if let Some(var) = &self.paths.get(path).unwrap().str_var {
+            return var.clone();
         }
-        entry.str_var.clone().unwrap()
+        let name = if self.has_any_var(path) {
+            format!("{}$String", path)
+        } else {
+            path.to_string()
+        };
+        let var = self.alloc_const(&name, SmtSort::String);
+        self.paths.get_mut(path).unwrap().str_var = Some(var.clone());
+        var
     }
 
     /// Get a path entry by name (immutable).
-    pub fn get(&self, path: &str) -> Option<&PathEntry<'ctx>> {
+    pub fn get(&self, path: &str) -> Option<&PathEntry> {
         self.paths.get(path)
     }
 
     /// Iterate over all registered paths.
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &PathEntry<'ctx>)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &PathEntry)> {
         self.paths.iter().map(|(k, v)| (k.as_str(), v))
     }
 
@@ -158,7 +220,12 @@ impl<'ctx> PathRegistry<'ctx> {
         self.paths.is_empty()
     }
 
-    /// Update the sort of a path and ensure the corresponding Z3 variable exists.
+    /// All SMT declarations created by this registry.
+    pub fn declarations(&self) -> &[SmtDecl] {
+        &self.declarations
+    }
+
+    /// Update the sort of a path and ensure the corresponding SMT variable exists.
     pub fn refine_sort(&mut self, path: &str, sort: ValueSort) {
         if let Some(entry) = self.paths.get_mut(path) {
             if entry.sort == ValueSort::Unknown {
@@ -194,7 +261,6 @@ impl<'ctx> PathRegistry<'ctx> {
                 // Seed sorts for indices 0..max_elements using the types
                 // observed in the example array elements.
                 for idx in 0..max_elements {
-                    // Pick the element from the example (cycle if fewer).
                     if arr.is_empty() {
                         break;
                     }
@@ -204,7 +270,7 @@ impl<'ctx> PathRegistry<'ctx> {
                 }
             }
             Value::Bool(_) => {
-                // Seed the sort AND create the Z3 variable so it's available
+                // Seed the sort AND create the SMT variable so it's available
                 // for both constraint generation and model extraction.
                 self.get_bool(prefix);
             }
@@ -229,13 +295,13 @@ impl<'ctx> PathRegistry<'ctx> {
         self.paths.get(path).map(|e| e.sort)
     }
 
-    /// Get a Z3 variable for a path with the given sort, creating if needed.
+    /// Get an SMT variable for a path with the given sort, creating if needed.
     /// Returns `None` if the path doesn't exist.
     pub fn get_var_for_sort(
         &mut self,
         path: &str,
         sort: ValueSort,
-    ) -> Option<super::types::SymValue<'ctx>> {
+    ) -> Option<super::types::SymValue> {
         use super::types::SymValue;
 
         // Ensure the entry exists

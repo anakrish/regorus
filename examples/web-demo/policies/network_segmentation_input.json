@@ -1,0 +1,17 @@
+{
+    "services": [
+        {"name": "frontend", "zone_id": "z1", "handles_pii": false},
+        {"name": "payment", "zone_id": "z2", "handles_pii": true}
+    ],
+    "zones": [
+        {"id": "z1", "dmz": true},
+        {"id": "z2", "dmz": false}
+    ],
+    "connections": [
+        {"source": "frontend", "target": "payment", "encrypted": true},
+        {"source": "payment", "target": "userdb", "encrypted": true}
+    ],
+    "databases": [
+        {"name": "userdb", "internal": true}
+    ]
+}

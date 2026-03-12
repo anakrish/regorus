@@ -1,0 +1,8 @@
+{
+  "User::alice": { "parents": ["Team::trading-desk"], "attrs": { "clearance": "L1" } },
+  "User::bob": { "parents": ["Team::senior-traders"], "attrs": { "clearance": "L3" } },
+  "User::carol": { "parents": ["Role::compliance"], "attrs": {} },
+  "Team::trading-desk": { "parents": [], "attrs": {} },
+  "Team::senior-traders": { "parents": ["Team::trading-desk"], "attrs": {} },
+  "Role::compliance": { "parents": [], "attrs": {} }
+}

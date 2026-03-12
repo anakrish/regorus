@@ -1,0 +1,14 @@
+{
+    "containers": [
+        {"name": "web", "privileged": false, "host_id": "h1", "volume_ids": ["v1"]},
+        {"name": "api", "privileged": false, "host_id": "h2", "volume_ids": ["v2"]}
+    ],
+    "hosts": [
+        {"id": "h1", "public": true},
+        {"id": "h2", "public": false}
+    ],
+    "volumes": [
+        {"id": "v1", "encrypted": true},
+        {"id": "v2", "encrypted": false}
+    ]
+}

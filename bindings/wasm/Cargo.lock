@@ -928,6 +928,7 @@ dependencies = [
  "parking_lot",
  "rand",
  "regex",
+ "regorus-smt",
  "semver",
  "serde",
  "serde_json",
@@ -936,6 +937,15 @@ dependencies = [
  "thiserror",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "regorus-smt"
+version = "0.1.0"
+dependencies = [
+ "itoa",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

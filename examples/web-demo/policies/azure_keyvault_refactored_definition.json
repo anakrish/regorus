@@ -1,0 +1,70 @@
+{
+  "properties": {
+    "displayName": "Key Vault – enterprise hardening baseline (refactored)",
+    "policyType": "Custom",
+    "mode": "Indexed",
+    "description": "Full De Morgan structural inversion of the original baseline.  Instead of 'deny if ANY violation group fires' (anyOf → allOf/anyOf), this says 'deny unless ALL compliance groups pass' (not → allOf → anyOf/allOf).  Every operator at every level is inverted: anyOf↔allOf, equals↔notEquals, false↔true.  The access-control group uses material implication (premium → RBAC) expressed as anyOf(sku ≠ premium, rbac = true) — equivalent to allOf(sku = premium, rbac = false) in the original.  With 6 fields, 3 nesting levels, and 6 inverted conditions, manual equivalence review is impractical.  Z3 proves it.",
+    "parameters": {
+      "effect": {
+        "type": "String",
+        "allowedValues": ["deny", "audit", "disabled"],
+        "defaultValue": "deny"
+      }
+    },
+    "policyRule": {
+      "if": {
+        "allOf": [
+          {
+            "field": "type",
+            "equals": "Microsoft.KeyVault/vaults"
+          },
+          {
+            "not": {
+              "allOf": [
+                {
+                  "anyOf": [
+                    {
+                      "field": "Microsoft.KeyVault/vaults/publicNetworkAccess",
+                      "equals": "Disabled"
+                    },
+                    {
+                      "field": "Microsoft.KeyVault/vaults/networkAcls.defaultAction",
+                      "equals": "Deny"
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "field": "Microsoft.KeyVault/vaults/enableSoftDelete",
+                      "equals": true
+                    },
+                    {
+                      "field": "Microsoft.KeyVault/vaults/enablePurgeProtection",
+                      "equals": true
+                    }
+                  ]
+                },
+                {
+                  "anyOf": [
+                    {
+                      "field": "Microsoft.KeyVault/vaults/sku.name",
+                      "notEquals": "premium"
+                    },
+                    {
+                      "field": "Microsoft.KeyVault/vaults/enableRbacAuthorization",
+                      "equals": true
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "then": {
+        "effect": "[parameters('effect')]"
+      }
+    }
+  }
+}

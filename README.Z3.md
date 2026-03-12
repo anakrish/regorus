@@ -55,7 +55,6 @@ request** — principal, action, resource, and context fields — that satisfies
 |---|---|---|
 | **Rust** | stable (1.70+) | [rustup.rs](https://rustup.rs) |
 | **Z3** | 4.12+ | See below |
-| **libclang** | (for bindgen) | Bundled with Xcode / LLVM |
 
 ### Installing Z3
 
@@ -100,9 +99,9 @@ The examples below use a bare `regorus` command.  To make that available,
 ### macOS (Homebrew Z3)
 
 ```bash
-BINDGEN_EXTRA_CLANG_ARGS="-I/opt/homebrew/include" \
-LIBRARY_PATH="/opt/homebrew/lib" \
-cargo install --example regorus --features z3-analysis,cedar --path .
+Z3_SYS_Z3_HEADER=/opt/homebrew/include/z3.h \
+LIBRARY_PATH=/opt/homebrew/lib \
+cargo install --example regorus --features z3-analysis,cedar,azure_policy --path .
 ```
 
 ### Linux (system Z3)
@@ -114,8 +113,8 @@ cargo install --example regorus --features z3-analysis,cedar --path .
 If Z3 is installed in a non-standard location, set:
 
 ```bash
-BINDGEN_EXTRA_CLANG_ARGS="-I/path/to/z3/include" \
-LIBRARY_PATH="/path/to/z3/lib" \
+Z3_SYS_Z3_HEADER=/path/to/z3/include/z3.h \
+LIBRARY_PATH=/path/to/z3/lib \
 cargo install --example regorus --features z3-analysis --path .
 ```
 
@@ -126,8 +125,8 @@ cargo install --example regorus --features z3-analysis --path .
 
 ```bash
 # macOS
-BINDGEN_EXTRA_CLANG_ARGS="-I/opt/homebrew/include" \
-LIBRARY_PATH="/opt/homebrew/lib" \
+Z3_SYS_Z3_HEADER=/opt/homebrew/include/z3.h \
+LIBRARY_PATH=/opt/homebrew/lib \
 cargo test --features z3-analysis,cedar
 
 # Linux
@@ -147,7 +146,7 @@ and the `z3-solver` pip package.
 
 | | Rust (`regorus analyze`) | Python (`tools/z3analyze`) |
 |---|---|---|
-| **Build** | Requires Z3 C library + bindgen | `pip install z3-solver` |
+| **Build** | Requires Z3 C library | `pip install z3-solver` |
 | **Workflow** | Single command | Two steps: compile → analyze |
 | **Cedar** | ✅ | ✅ |
 | **SMT dump** | `--dump-smt FILE` | `--dump-smt` (stdout) |

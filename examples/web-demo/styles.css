@@ -134,6 +134,8 @@ header p { color: var(--text-dim); font-size: 0.95rem; margin-top: 0.3rem; }
 .btn-run:hover { filter: brightness(1.15); }
 .btn-run:disabled { opacity: 0.5; cursor: not-allowed; filter: none; }
 .btn-run.running { background: var(--warn); border-color: var(--warn); }
+.btn-smt { background: transparent; color: var(--magenta); border-color: var(--magenta); font-size: 0.78rem; padding: 0.3em 0.8em; }
+.btn-smt:hover { background: var(--magenta); color: #fff; }
 
 .status-text { font-size: 0.82rem; color: var(--text-dim); }
 .status-text.success { color: var(--accent2); }
@@ -142,6 +144,10 @@ header p { color: var(--text-dim); font-size: 0.95rem; margin-top: 0.3rem; }
 /* ── Output ─────────────────────────────────────────── */
 .demo-output { display: none; border-top: 1px solid var(--border); }
 .demo-output.visible { display: block; }
+
+/* ── SMT Viewer (per-step, hidden by default) ────── */
+.smt-viewer { border-top: 1px solid var(--magenta); }
+.smt-viewer .output-body { overflow: auto; }
 
 .output-toolbar {
   display: flex; align-items: center; gap: 0.6rem;

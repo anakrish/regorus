@@ -40,7 +40,7 @@ export async function initApp() {
   // Load WASM modules
   try {
     statusEl.textContent = 'Loading regorus WASM module…';
-    const regorusModule = await import('/regorusjs.js');
+    const regorusModule = await import('./regorusjs.js');
     await regorusModule.default();
     wasm = regorusModule;
 
@@ -97,6 +97,7 @@ function buildUI(DEMOS, OVERVIEW_CARDS, TAG_CLASSES, LANG_BADGE) {
   window.runAll = runAll;
   window.copyOutput = copyOutput;
   window.toggleOutput = toggleOutput;
+  window.toggleSmt = toggleSmt;
   window.togglePolicyViewer = togglePolicyViewer;
   window.switchPolicyView = switchPolicyView;
 }
@@ -157,6 +158,7 @@ function buildActPanel(demo, actNum, LANG_BADGE) {
       <div class="demo-cmd"><span class="cmd-label">CLI equivalent</span><code><span class="prompt">$ </span>${escapeHtml(cmdStr)}</code></div>
       <div class="demo-actions">
         <button class="btn btn-run" id="btn-${stepId}" onclick="runStep('${demo.id}', ${si})">▶ Run</button>
+        <button class="btn btn-smt" id="btn-smt-${stepId}" onclick="toggleSmt('${stepId}')">Show SMT</button>
         <span class="status-text" id="status-${stepId}"></span>
       </div>
       <div class="demo-output" id="output-${stepId}">
@@ -166,6 +168,14 @@ function buildActPanel(demo, actNum, LANG_BADGE) {
           <button class="btn-sm" onclick="toggleOutput('${stepId}')">Collapse</button>
         </div>
         <div class="output-body"><pre id="pre-${stepId}"></pre></div>
+      </div>
+      <div class="smt-viewer" id="smt-${stepId}" style="display:none">
+        <div class="output-toolbar">
+          <span class="label" style="color:var(--magenta)">SMT-LIB Encoding</span>
+          <button class="btn-sm" onclick="copyOutput('smt-${stepId}')">Copy</button>
+          <button class="btn-sm" onclick="toggleSmt('${stepId}')">Hide</button>
+        </div>
+        <div class="output-body" style="max-height:400px"><pre id="pre-smt-${stepId}"></pre></div>
       </div>
       ${step.postFetch ? buildPostFetchAreas(stepId, step.postFetch) : ''}
       ${step.insight ? `<div class="insight" id="insight-${stepId}" style="display:none">➤ ${escapeHtml(step.insight)}</div>` : ''}
@@ -479,16 +489,19 @@ async function runStep(actId, stepIdx) {
 
     if (step.op === 'analyze' || step.op === 'smt-dump') {
       output = await executeAnalyze(step);
+      smtText = output._smtText || null;
       if (step.op === 'smt-dump') {
-        smtText = output._smtText;
         modelText = output._modelText;
       }
     } else if (step.op === 'diff') {
       output = await executeDiff(step);
+      smtText = output._smtText || null;
     } else if (step.op === 'subsumes') {
       output = await executeSubsumes(step);
+      smtText = output._smtText || null;
     } else if (step.op === 'gen-tests') {
       output = await executeGenTests(step);
+      smtText = output._smtText || null;
     } else {
       throw new Error(`Unknown operation: ${step.op}`);
     }
@@ -502,6 +515,16 @@ async function runStep(actId, stepIdx) {
     status.textContent = `✓ Done in ${elapsed}s`;
     status.className = 'status-text success';
     if (insightEl) insightEl.style.display = 'block';
+
+    // Always populate the per-step SMT viewer (hidden until toggled)
+    if (smtText) {
+      const smtDiv = document.getElementById(`smt-${stepId}`);
+      const smtPre = document.getElementById(`pre-smt-${stepId}`);
+      if (smtDiv && smtPre) {
+        smtPre.innerHTML = highlightSMT(smtText);
+        // Keep hidden — user can toggle via the Show SMT button
+      }
+    }
 
     // Show SMT / model for smt-dump
     if (step.postFetch && smtText != null) {
@@ -567,7 +590,6 @@ async function executeAnalyze(step) {
   const outputText = formatAnalysisResult(result, warnings);
 
   if (step.op === 'smt-dump') {
-    // Also capture SMT text and model for display
     return {
       _displayText: outputText,
       _smtText: smtText,
@@ -575,7 +597,7 @@ async function executeAnalyze(step) {
     };
   }
 
-  return outputText;
+  return { _displayText: outputText, _smtText: smtText };
 }
 
 // ── Diff ────────────────────────────────────────────────
@@ -598,7 +620,7 @@ async function executeDiff(step) {
   const resultJson = problem.interpretSolution(solutionJson);
   const result = JSON.parse(resultJson);
 
-  return formatDiffResult(result, warnings);
+  return { _displayText: formatDiffResult(result, warnings), _smtText: smtText };
 }
 
 // ── Subsumes ────────────────────────────────────────────
@@ -621,7 +643,7 @@ async function executeSubsumes(step) {
   const resultJson = problem.interpretSolution(solutionJson);
   const result = JSON.parse(resultJson);
 
-  return formatSubsumesResult(result, warnings);
+  return { _displayText: formatSubsumesResult(result, warnings), _smtText: smtText };
 }
 
 // ── Gen-Tests ───────────────────────────────────────────
@@ -648,6 +670,7 @@ async function executeGenTests(step) {
   );
 
   const testCases = [];
+  const smtTexts = [];
   let iteration = 0;
   while (true) {
     const problem = suite.nextProblem();
@@ -655,6 +678,7 @@ async function executeGenTests(step) {
     iteration++;
 
     const smtText = problem.smtLib2();
+    smtTexts.push(smtText);
     const numExtractions = countExtractions(smtText);
     const solutionJson = await solveSmtLib2(smtText, numExtractions);
     const tcJson = suite.recordSolution(solutionJson);
@@ -666,7 +690,9 @@ async function executeGenTests(step) {
 
   const resultJson = suite.getResult();
   const result = JSON.parse(resultJson);
-  return formatGenTestsResult(result, testCases, sourceCache);
+  // Collect all SMT texts from iterations
+  const allSmt = smtTexts.join('\n\n;; --- next problem ---\n\n');
+  return { _displayText: formatGenTestsResult(result, testCases, sourceCache), _smtText: allSmt || null };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -893,7 +919,8 @@ async function runAll(actId) {
 function copyOutput(stepId) {
   const pre = document.getElementById(`pre-${stepId}`);
   navigator.clipboard.writeText(pre.textContent).then(() => {
-    const btn = pre.closest('.demo-output').querySelector('.btn-sm');
+    const container = pre.closest('.demo-output') || pre.closest('.smt-viewer') || pre.closest('.postfetch-area');
+    const btn = container.querySelector('.btn-sm');
     const orig = btn.textContent;
     btn.textContent = 'Copied!';
     setTimeout(() => btn.textContent = orig, 1200);
@@ -903,4 +930,14 @@ function copyOutput(stepId) {
 function toggleOutput(stepId) {
   const outputDiv = document.getElementById(`output-${stepId}`);
   outputDiv.classList.toggle('visible');
+}
+
+function toggleSmt(stepId) {
+  const smtDiv = document.getElementById(`smt-${stepId}`);
+  if (!smtDiv) return;
+  const visible = smtDiv.style.display !== 'none';
+  smtDiv.style.display = visible ? 'none' : 'block';
+  smtDiv.classList.toggle('visible', !visible);
+  const btn = document.getElementById(`btn-smt-${stepId}`);
+  if (btn) btn.textContent = visible ? 'Show SMT' : 'Hide SMT';
 }

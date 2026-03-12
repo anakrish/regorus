@@ -121,9 +121,9 @@ impl RegoVM {
         self.pc = target;
         let instructions = &program.instructions;
         let num_instructions = instructions.len();
+        self.memory_check()?;
         let mut stride_counter: u32 = 0;
         while self.pc < num_instructions {
-            self.memory_check()?;
             if self.executed_instructions >= self.max_instructions {
                 return Err(VmError::InstructionLimitExceeded {
                     limit: self.max_instructions,
@@ -135,6 +135,7 @@ impl RegoVM {
             stride_counter = stride_counter.saturating_add(1);
             if stride_counter >= Self::CHECK_STRIDE {
                 stride_counter = 0;
+                self.memory_check()?;
                 self.execution_timer_tick(Self::CHECK_STRIDE)?;
             }
 
@@ -307,10 +308,10 @@ impl RegoVM {
         let instructions = &program.instructions;
         let num_instructions = instructions.len();
         let has_breakpoints = !self.breakpoints.is_empty();
+        self.memory_check()?;
         let mut stride_counter: u32 = 0;
 
         while !self.execution_stack.is_empty() {
-            self.memory_check()?;
             if self.executed_instructions >= self.max_instructions {
                 self.execution_state = ExecutionState::Error {
                     error: VmError::InstructionLimitExceeded {
@@ -330,6 +331,7 @@ impl RegoVM {
             stride_counter = stride_counter.saturating_add(1);
             if stride_counter >= Self::CHECK_STRIDE {
                 stride_counter = 0;
+                self.memory_check()?;
                 self.execution_timer_tick(Self::CHECK_STRIDE)?;
             }
 

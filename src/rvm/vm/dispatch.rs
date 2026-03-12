@@ -27,8 +27,6 @@ impl RegoVM {
         program: &Program,
         instruction: Instruction,
     ) -> Result<InstructionOutcome> {
-        self.memory_check()?;
-
         use Instruction::*;
         match instruction {
             // ── Load & Move ──────────────────────────────────────────

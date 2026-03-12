@@ -4,7 +4,6 @@
 
 use alloc::collections::BTreeSet;
 
-use crate::number::Number;
 use crate::value::Value;
 
 use super::errors::{Result, VmError};
@@ -55,7 +54,7 @@ impl RegoVM {
     pub(super) fn div_values(&self, a: &Value, b: &Value) -> Result<Value> {
         match (a, b) {
             (Value::Number(x), Value::Number(y)) => {
-                if *y == Number::from(0_u64) {
+                if y.is_zero() {
                     if self.strict_builtin_errors {
                         return Err(VmError::InvalidDivision {
                             left: a.clone(),
@@ -80,7 +79,7 @@ impl RegoVM {
     pub(super) fn mod_values(&self, a: &Value, b: &Value) -> Result<Value> {
         match (a, b) {
             (Value::Number(x), Value::Number(y)) => {
-                if *y == Number::from(0_u64) {
+                if y.is_zero() {
                     if self.strict_builtin_errors {
                         return Err(VmError::InvalidModulo {
                             left: a.clone(),

@@ -18,6 +18,13 @@ export const DEMOS = [
     overview: true,
   },
 
+  // ── Playground (always last in tab bar) ───────────────
+  {
+    id: "playground", title: "Playground",
+    subtitle: "Paste your own policy and analyze it with Z3.",
+    playground: true,
+  },
+
   // ── 1: Rego Input Synthesis ──────────────────────────
   {
     id: "synthesis", title: "Input Synthesis", lang: "rego",
@@ -556,6 +563,7 @@ export const OVERVIEW_CARDS = [
   { num: "Demo 8", title: "Bug Detection", desc: "Catch allOf\u2194anyOf bug in Key Vault refactoring.", tags: ["azure", "diff"], tabId: "bugdetect" },
   { num: "Demo 9", title: "Production Policy", desc: "Verbatim AGS governance with fetch() as symbolic input.", tags: ["rego", "fetch"], tabId: "production" },
   { num: "Demo 10", title: "Under the Hood: SMT", desc: "See the actual SMT-LIB encoding and Z3 model.", tags: ["smt"], tabId: "smt" },
+  { num: "🔬", title: "Playground", desc: "Paste your own policy and run Z3 analysis interactively.", tags: ["rego", "cedar", "azure"], tabId: "playground" },
 ];
 
 export const TAG_CLASSES = { rego: "tag-rego", azure: "tag-azure", cedar: "tag-cedar", diff: "tag-diff", proof: "tag-proof", gen: "tag-gen", fetch: "tag-fetch", smt: "tag-smt" };

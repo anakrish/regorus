@@ -68,7 +68,9 @@ function buildUI(DEMOS, OVERVIEW_CARDS, TAG_CLASSES, LANG_BADGE) {
     const btn = document.createElement('button');
     btn.className = 'tab-btn' + (di === 0 ? ' active' : '');
     btn.dataset.tab = demo.id;
-    if (di > 0) {
+    if (demo.playground) {
+      btn.innerHTML = `<span class="tab-num">🔬</span>Playground`;
+    } else if (di > 0) {
       const langCls = LANG_BADGE[demo.lang] || '';
       btn.innerHTML = `<span class="tab-num">${di}</span>${langCls ? `<span class="lang-badge ${langCls}">${demo.lang}</span>` : ''}${demo.title}`;
     } else {
@@ -82,6 +84,8 @@ function buildUI(DEMOS, OVERVIEW_CARDS, TAG_CLASSES, LANG_BADGE) {
     panel.id = `panel-${demo.id}`;
     panel.innerHTML = demo.overview
       ? buildOverview(demo, OVERVIEW_CARDS, TAG_CLASSES)
+      : demo.playground
+      ? buildPlayground()
       : buildActPanel(demo, di, LANG_BADGE);
     tabPanels.appendChild(panel);
   });
@@ -100,11 +104,16 @@ function buildUI(DEMOS, OVERVIEW_CARDS, TAG_CLASSES, LANG_BADGE) {
   window.toggleSmt = toggleSmt;
   window.togglePolicyViewer = togglePolicyViewer;
   window.switchPolicyView = switchPolicyView;
+  window.pgRun = pgRun;
+  window.pgToggleSmt = pgToggleSmt;
+  window.pgTogglePanel = pgTogglePanel;
+  window.pgClearEditor = pgClearEditor;
 }
 
 function switchTab(tabId) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tabId));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `panel-${tabId}`));
+  if (tabId === 'playground') ensurePlaygroundInit();
 }
 
 // ── Overview ────────────────────────────────────────────
@@ -940,4 +949,697 @@ function toggleSmt(stepId) {
   smtDiv.classList.toggle('visible', !visible);
   const btn = document.getElementById(`btn-smt-${stepId}`);
   if (btn) btn.textContent = visible ? 'Show SMT' : 'Hide SMT';
+}
+
+// ═══════════════════════════════════════════════════════════
+//  PLAYGROUND
+// ═══════════════════════════════════════════════════════════
+
+const PG_SAMPLES = {
+  rego: {
+    policy1: `package access_control
+
+default allow := false
+
+# Managers can access anything at any time
+allow if {
+    input.user.role == "manager"
+}
+
+# Regular employees: business hours only
+allow if {
+    input.user.role == "employee"
+    input.request.hour >= 9
+    input.request.hour < 17
+}
+
+# Interns: non-sensitive resources, business hours only
+allow if {
+    input.user.role == "intern"
+    input.resource.sensitivity != "high"
+    input.request.hour >= 9
+    input.request.hour < 17
+}`,
+    policy2: `package access_control
+
+default allow := false
+
+# Bug fix: suspended users are always denied
+allow if {
+    not input.user.suspended
+    input.user.role == "manager"
+}
+
+allow if {
+    not input.user.suspended
+    input.user.role == "employee"
+    input.request.hour >= 9
+    input.request.hour < 17
+}
+
+allow if {
+    not input.user.suspended
+    input.user.role == "intern"
+    input.resource.sensitivity != "high"
+    input.request.hour >= 9
+    input.request.hour < 17
+}`,
+    entrypoint: 'data.access_control.allow',
+    schema: JSON.stringify({
+      type: "object",
+      properties: {
+        user: {
+          type: "object",
+          properties: {
+            role: { type: "string", enum: ["manager", "employee", "intern"] },
+            suspended: { type: "boolean" }
+          }
+        },
+        resource: {
+          type: "object",
+          properties: {
+            sensitivity: { type: "string", enum: ["high", "low", "public"] }
+          }
+        },
+        request: {
+          type: "object",
+          properties: {
+            hour: { type: "integer", minimum: 0, maximum: 23 }
+          }
+        }
+      }
+    }, null, 2),
+  },
+  cedar: {
+    policy1: `// Doctors can view patient records during business hours
+permit(
+  principal in Role::"doctor",
+  action == Action::"view",
+  resource in ResourceType::"patient_record"
+) when {
+  context.hour >= 8 && context.hour < 18 &&
+  context.device_trusted == true
+};
+
+// Nurses can view non-VIP records during business hours
+permit(
+  principal in Role::"nurse",
+  action == Action::"view",
+  resource in ResourceType::"patient_record"
+) when {
+  context.hour >= 8 && context.hour < 18 &&
+  resource.vip == false
+};
+
+// Nobody can delete patient records
+forbid(
+  principal,
+  action == Action::"delete",
+  resource in ResourceType::"patient_record"
+);`,
+    policy2: '',
+    entrypoint: 'cedar.authorize',
+    entities: JSON.stringify([
+      { uid: { type: "Role", id: "doctor" }, parents: [{ type: "Role", id: "staff" }], attrs: {} },
+      { uid: { type: "Role", id: "nurse" }, parents: [{ type: "Role", id: "staff" }], attrs: {} },
+      { uid: { type: "Role", id: "staff" }, parents: [], attrs: {} },
+      { uid: { type: "ResourceType", id: "patient_record" }, parents: [], attrs: {} },
+    ], null, 2),
+    schema: '',
+  },
+  azure: {
+    policy1: JSON.stringify({
+      properties: {
+        displayName: "Require HTTPS for Storage Accounts",
+        policyType: "Custom",
+        mode: "All",
+        parameters: {},
+        policyRule: {
+          if: {
+            allOf: [
+              { field: "type", equals: "Microsoft.Storage/storageAccounts" },
+              {
+                anyOf: [
+                  { field: "Microsoft.Storage/storageAccounts/supportsHttpsTrafficOnly", notEquals: "true" },
+                  { field: "Microsoft.Storage/storageAccounts/minimumTlsVersion", notEquals: "TLS1_2" }
+                ]
+              }
+            ]
+          },
+          then: { effect: "deny" }
+        }
+      }
+    }, null, 2),
+    policy2: '',
+    entrypoint: 'main',
+    schema: JSON.stringify({
+      type: "object",
+      properties: {
+        type: { type: "string" },
+        properties: {
+          type: "object",
+          properties: {
+            supportsHttpsTrafficOnly: { type: "string", enum: ["true", "false"] },
+            minimumTlsVersion: { type: "string", enum: ["TLS1_0", "TLS1_1", "TLS1_2"] }
+          }
+        }
+      }
+    }, null, 2),
+  },
+};
+
+function buildPlayground() {
+  return `<div class="act-header">
+    <h2>🔬 Playground</h2>
+    <div class="subtitle">Paste your own policy and analyze it with Z3. Supports Rego, Cedar, and Azure Policy.</div>
+  </div>
+
+  <!-- Compact toolbar: language + entrypoint + target -->
+  <div class="pg-toolbar">
+    <div class="pg-lang-radio" id="pg-lang">
+      <label class="pg-radio active"><input type="radio" name="pg-lang" value="rego" checked> Rego</label>
+      <label class="pg-radio"><input type="radio" name="pg-lang" value="cedar"> Cedar</label>
+      <label class="pg-radio"><input type="radio" name="pg-lang" value="azure"> Azure Policy</label>
+    </div>
+    <div class="pg-toolbar-sep"></div>
+    <label class="pg-toolbar-label">Entry</label>
+    <input id="pg-entrypoint" class="pg-toolbar-input pg-toolbar-ep" type="text" value="data.policy.allow" placeholder="data.package.rule" spellcheck="false">
+    <label class="pg-toolbar-label">→</label>
+    <div class="pg-target-row">
+      <label class="pg-radio active"><input type="radio" name="pg-target" value="false" checked> false</label>
+      <label class="pg-radio"><input type="radio" name="pg-target" value="true"> true</label>
+      <label class="pg-radio"><input type="radio" name="pg-target" value="custom"> custom:</label>
+      <input id="pg-target-custom" class="pg-toolbar-input pg-toolbar-custom" type="text" placeholder='"deny"' spellcheck="false" disabled>
+    </div>
+    <div class="pg-toolbar-sep"></div>
+    <label class="pg-toolbar-label">Loops</label>
+    <input id="pg-max-loops" class="pg-toolbar-input pg-toolbar-loops" type="number" value="3" min="1" max="5">
+  </div>
+
+  <!-- Side-by-side: left = editors, right = result -->
+  <div class="pg-split">
+
+    <!-- LEFT PANE: editors + config + actions -->
+    <div class="pg-left">
+      <div class="pg-section">
+        <div class="pg-section-header">
+          Policy 1
+          <button class="btn-sm pg-clear-btn" onclick="pgClearEditor('pg-policy1')">Clear</button>
+        </div>
+        <div class="pg-editor-wrap">
+          <pre class="pg-highlight" id="pg-hl-policy1" aria-hidden="true"></pre>
+          <textarea id="pg-policy1" class="pg-editor pg-editor-overlay" spellcheck="false" placeholder="Paste your policy here…"></textarea>
+        </div>
+      </div>
+
+      <div class="pg-section">
+        <button class="pg-collapse-toggle" id="pg-p2-toggle" onclick="pgTogglePanel('pg-p2-panel', 'pg-p2-toggle')">
+          ▸ Policy 2 <span class="pg-hint">(for Diff / Subsumes)</span>
+        </button>
+        <div id="pg-p2-panel" class="pg-collapsible">
+          <div class="pg-editor-wrap">
+            <pre class="pg-highlight" id="pg-hl-policy2" aria-hidden="true"></pre>
+            <textarea id="pg-policy2" class="pg-editor pg-editor-overlay" spellcheck="false" placeholder="Paste second policy…"></textarea>
+          </div>
+        </div>
+      </div>
+
+      <div class="pg-section">
+        <button class="pg-collapse-toggle" id="pg-extra-toggle" onclick="pgTogglePanel('pg-extra-panel', 'pg-extra-toggle')">
+          ▸ Schema &amp; Input <span class="pg-hint">(optional)</span>
+        </button>
+        <div id="pg-extra-panel" class="pg-collapsible">
+          <div class="pg-config-grid">
+            <div class="pg-field pg-field-wide">
+              <label for="pg-schema">Input Schema (JSON)</label>
+              <div class="pg-editor-wrap pg-editor-wrap-sm">
+                <pre class="pg-highlight" id="pg-hl-schema" aria-hidden="true"></pre>
+                <textarea id="pg-schema" class="pg-editor pg-editor-sm pg-editor-overlay" spellcheck="false" placeholder='{"type":"object","properties":{...}}'></textarea>
+              </div>
+            </div>
+
+            <div class="pg-field pg-field-wide" id="pg-entities-field" style="display:none">
+              <label for="pg-entities">Entities (Cedar JSON)</label>
+              <div class="pg-editor-wrap pg-editor-wrap-sm">
+                <pre class="pg-highlight" id="pg-hl-entities" aria-hidden="true"></pre>
+                <textarea id="pg-entities" class="pg-editor pg-editor-sm pg-editor-overlay" spellcheck="false" placeholder='[{"uid":{...},...}]'></textarea>
+              </div>
+            </div>
+            <div class="pg-field pg-field-wide" id="pg-aliases-field" style="display:none">
+              <label for="pg-aliases">Azure Policy Aliases (JSON)</label>
+              <div class="pg-editor-wrap pg-editor-wrap-sm">
+                <pre class="pg-highlight" id="pg-hl-aliases" aria-hidden="true"></pre>
+                <textarea id="pg-aliases" class="pg-editor pg-editor-sm pg-editor-overlay" spellcheck="false" placeholder='{"Microsoft.Storage/...":...}'></textarea>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pg-action-bar">
+        <button class="btn btn-run pg-btn" id="pg-btn-analyze" onclick="pgRun('analyze')">▶ Analyze</button>
+        <button class="btn btn-run pg-btn" id="pg-btn-diff" onclick="pgRun('diff')">▶ Diff</button>
+        <button class="btn btn-run pg-btn" id="pg-btn-subsumes" onclick="pgRun('subsumes')">▶ Subsumes</button>
+        <button class="btn btn-run pg-btn" id="pg-btn-gentests" onclick="pgRun('gen-tests')">▶ Gen Tests</button>
+        <span class="status-text" id="pg-status"></span>
+      </div>
+    </div>
+
+    <!-- RIGHT PANE: result + SMT -->
+    <div class="pg-right">
+      <div class="pg-section-header">Result</div>
+      <div class="pg-result-area">
+        <div class="demo-output pg-result-output" id="output-pg-result">
+          <div class="output-toolbar">
+            <span class="label">Output</span>
+            <button class="btn-sm" onclick="copyOutput('pg-result')">Copy</button>
+          </div>
+          <div class="output-body"><pre id="pre-pg-result" class="pg-result-pre"></pre></div>
+        </div>
+        <div class="pg-result-placeholder" id="pg-result-placeholder">
+          <div class="pg-placeholder-icon">⚡</div>
+          <div>Click <strong>Analyze</strong> to synthesize an input,<br>
+          <strong>Diff</strong> to compare two policies, or<br>
+          <strong>Gen Tests</strong> for coverage.</div>
+        </div>
+      </div>
+      <div class="pg-smt-bar">
+        <button class="btn btn-smt" id="pg-btn-smt" onclick="pgToggleSmt()">Show SMT</button>
+      </div>
+      <div class="smt-viewer" id="smt-pg" style="display:none">
+        <div class="output-toolbar">
+          <span class="label" style="color:var(--magenta)">SMT-LIB Encoding</span>
+          <button class="btn-sm" onclick="copyOutput('smt-pg-content')">Copy</button>
+          <button class="btn-sm" onclick="pgToggleSmt()">Hide</button>
+        </div>
+        <div class="output-body" style="max-height:400px"><pre id="pre-smt-pg-content"></pre></div>
+      </div>
+    </div>
+
+  </div>`;
+}
+
+// ── Playground initialization (called once panel is built) ──
+
+// Map textarea ids → highlight pre ids
+const PG_HL_MAP = {
+  'pg-policy1':      { hl: 'pg-hl-policy1',      langFn: 'policy' },
+  'pg-policy2':      { hl: 'pg-hl-policy2',      langFn: 'policy' },
+  'pg-schema':       { hl: 'pg-hl-schema',       langFn: 'json' },
+  'pg-entities':     { hl: 'pg-hl-entities',      langFn: 'json' },
+  'pg-aliases':      { hl: 'pg-hl-aliases',       langFn: 'json' },
+};
+
+function pgGetHighlighter(langFnKey) {
+  if (langFnKey === 'json') return highlightJsonLine;
+  const lang = document.querySelector('input[name="pg-lang"]:checked')?.value || 'rego';
+  if (lang === 'cedar') return highlightCedar;
+  if (lang === 'azure') return highlightJsonLine;
+  return highlightRego;
+}
+
+function pgSyncHighlight(textareaId) {
+  const ta = document.getElementById(textareaId);
+  const info = PG_HL_MAP[textareaId];
+  if (!ta || !info) return;
+  const pre = document.getElementById(info.hl);
+  if (!pre) return;
+  const fn = pgGetHighlighter(info.langFn);
+  const text = ta.value;
+  if (!text) {
+    pre.innerHTML = '';
+    return;
+  }
+  const lines = text.split('\n');
+  // Highlight each line; add trailing newline so pre height matches textarea
+  pre.innerHTML = lines.map(l => fn(l)).join('\n') + '\n';
+}
+
+function pgSyncScroll(textareaId) {
+  const ta = document.getElementById(textareaId);
+  const info = PG_HL_MAP[textareaId];
+  if (!ta || !info) return;
+  const pre = document.getElementById(info.hl);
+  if (!pre) return;
+  pre.scrollTop = ta.scrollTop;
+  pre.scrollLeft = ta.scrollLeft;
+}
+
+function pgSyncAllHighlights() {
+  for (const id of Object.keys(PG_HL_MAP)) {
+    pgSyncHighlight(id);
+  }
+}
+
+function pgClearEditor(textareaId) {
+  const ta = document.getElementById(textareaId);
+  if (ta) ta.value = '';
+  pgSyncHighlight(textareaId);
+}
+
+function initPlaygroundListeners() {
+  // Language radio → show/hide Cedar entities / Azure aliases fields
+  const langRadios = document.querySelectorAll('input[name="pg-lang"]');
+  langRadios.forEach(r => r.addEventListener('change', () => {
+    const lang = document.querySelector('input[name="pg-lang"]:checked').value;
+    document.getElementById('pg-entities-field').style.display = lang === 'cedar' ? '' : 'none';
+    document.getElementById('pg-aliases-field').style.display = lang === 'azure' ? '' : 'none';
+    // Update entrypoint hint
+    const ep = document.getElementById('pg-entrypoint');
+    if (lang === 'cedar') ep.placeholder = 'cedar.authorize';
+    else if (lang === 'azure') ep.placeholder = 'main';
+    else ep.placeholder = 'data.package.rule';
+    // Style active radio
+    document.querySelectorAll('#pg-lang .pg-radio').forEach(l => l.classList.toggle('active', l.querySelector('input').checked));
+    // Load sample for the selected language
+    pgLoadSample(lang);
+  }));
+
+  // Target output radio → enable/disable custom field
+  const targetRadios = document.querySelectorAll('input[name="pg-target"]');
+  targetRadios.forEach(r => r.addEventListener('change', () => {
+    const val = document.querySelector('input[name="pg-target"]:checked').value;
+    document.getElementById('pg-target-custom').disabled = val !== 'custom';
+    document.querySelectorAll('.pg-target-row .pg-radio').forEach(l => l.classList.toggle('active', l.querySelector('input').checked));
+  }));
+
+  // Auto-detect package name from policy text to pre-fill entrypoint
+  const p1 = document.getElementById('pg-policy1');
+  let debounce = null;
+  p1.addEventListener('input', () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(() => {
+      const text = p1.value;
+      const m = text.match(/^\s*package\s+([\w.]+)/m);
+      if (m) {
+        const ep = document.getElementById('pg-entrypoint');
+        if (ep.dataset.autoFilled) {
+          ep.value = `data.${m[1]}.allow`;
+        }
+      }
+    }, 400);
+  });
+
+  // Load the Rego sample on first init
+  pgLoadSample('rego');
+
+  // Wire up highlighting sync on all editor textareas
+  for (const id of Object.keys(PG_HL_MAP)) {
+    const ta = document.getElementById(id);
+    if (!ta) continue;
+    ta.addEventListener('input', () => pgSyncHighlight(id));
+    ta.addEventListener('scroll', () => pgSyncScroll(id));
+  }
+
+  // Initial highlight sync
+  pgSyncAllHighlights();
+}
+
+function pgLoadSample(lang) {
+  const sample = PG_SAMPLES[lang];
+  if (!sample) return;
+  document.getElementById('pg-policy1').value = sample.policy1;
+  document.getElementById('pg-policy2').value = sample.policy2 || '';
+  const ep = document.getElementById('pg-entrypoint');
+  ep.value = sample.entrypoint;
+  ep.dataset.autoFilled = '1';
+
+  // Optional inputs
+  document.getElementById('pg-schema').value = sample.schema || '';
+  document.getElementById('pg-entities').value = sample.entities || '';
+  document.getElementById('pg-aliases').value = sample.aliases || '';
+
+  // Set target output to false for rego, 1 for cedar, "deny" for azure
+  if (lang === 'cedar') {
+    // Select "true" radio (maps to 1 internally)
+    document.querySelector('input[name="pg-target"][value="true"]').checked = true;
+  } else if (lang === 'azure') {
+    document.querySelector('input[name="pg-target"][value="custom"]').checked = true;
+    const customField = document.getElementById('pg-target-custom');
+    customField.disabled = false;
+    customField.value = '"deny"';
+  } else {
+    document.querySelector('input[name="pg-target"][value="false"]').checked = true;
+    document.getElementById('pg-target-custom').disabled = true;
+  }
+  // Update radio active styles
+  document.querySelectorAll('.pg-target-row .pg-radio').forEach(l => l.classList.toggle('active', l.querySelector('input').checked));
+
+  // Show/hide optional panels if sample has content
+  const extraPanel = document.getElementById('pg-extra-panel');
+  const extraToggle = document.getElementById('pg-extra-toggle');
+  if (sample.schema || sample.entities) {
+    extraPanel.classList.add('open');
+    extraToggle.classList.add('open');
+    extraToggle.textContent = '▾ Optional inputs';
+  }
+
+  // Clear previous results
+  document.getElementById('output-pg-result').classList.remove('visible');
+  const smtDiv = document.getElementById('smt-pg');
+  if (smtDiv) smtDiv.style.display = 'none';
+
+  // Re-sync all highlighting for the new language/content
+  pgSyncAllHighlights();
+}
+
+let playgroundInitialized = false;
+
+function ensurePlaygroundInit() {
+  if (playgroundInitialized) return;
+  if (!document.getElementById('pg-policy1')) return;
+  playgroundInitialized = true;
+  initPlaygroundListeners();
+}
+
+// ── Playground execution ────────────────────────────────
+async function pgRun(op) {
+  ensurePlaygroundInit();
+  const status = document.getElementById('pg-status');
+  const resultDiv = document.getElementById('output-pg-result');
+  const resultPre = document.getElementById('pre-pg-result');
+
+  // Gather inputs
+  const lang = document.querySelector('input[name="pg-lang"]:checked').value;
+  const policy1 = document.getElementById('pg-policy1').value.trim();
+  const policy2 = document.getElementById('pg-policy2').value.trim();
+  const entryPoint = document.getElementById('pg-entrypoint').value.trim();
+  const maxLoops = parseInt(document.getElementById('pg-max-loops').value) || 3;
+
+  const targetRadio = document.querySelector('input[name="pg-target"]:checked').value;
+  let desiredOutput;
+  if (targetRadio === 'custom') {
+    desiredOutput = document.getElementById('pg-target-custom').value.trim() || null;
+  } else {
+    desiredOutput = targetRadio;
+  }
+
+  // For cedar with output 1/0
+  if (lang === 'cedar' && (desiredOutput === 'true' || desiredOutput === null)) {
+    desiredOutput = '1';
+  } else if (lang === 'cedar' && desiredOutput === 'false') {
+    desiredOutput = '0';
+  }
+  // Azure policy output is typically "deny" or "audit"
+  if (lang === 'azure' && desiredOutput === 'false') {
+    desiredOutput = '"deny"';
+  } else if (lang === 'azure' && desiredOutput === 'true') {
+    desiredOutput = '"audit"';
+  }
+
+  const schemaText = document.getElementById('pg-schema').value.trim();
+  const entitiesText = document.getElementById('pg-entities').value.trim();
+  const aliasesText = document.getElementById('pg-aliases').value.trim();
+
+  // Validation
+  if (!policy1) { status.textContent = '✗ Policy 1 is empty'; status.className = 'status-text error'; return; }
+  if (!entryPoint) { status.textContent = '✗ Entrypoint is empty'; status.className = 'status-text error'; return; }
+  if ((op === 'diff' || op === 'subsumes') && !policy2) {
+    status.textContent = `✗ Policy 2 is required for ${op}`;
+    status.className = 'status-text error';
+    return;
+  }
+  if (!wasm) { status.textContent = '✗ WASM not loaded yet'; status.className = 'status-text error'; return; }
+
+  // Disable buttons, show running state
+  const allBtns = document.querySelectorAll('.pg-btn');
+  allBtns.forEach(b => { b.disabled = true; });
+  const activeBtn = document.getElementById(`pg-btn-${op === 'gen-tests' ? 'gentests' : op}`);
+  activeBtn.classList.add('running');
+  activeBtn.innerHTML = '<span class="spinner"></span> Running…';
+  status.textContent = '';
+  status.className = 'status-text';
+  resultDiv.classList.remove('visible');
+
+  const t0 = performance.now();
+
+  try {
+    // Build compile spec
+    const compileSpec = pgBuildCompileSpec(lang, policy1, aliasesText);
+    const config = pgBuildConfig(maxLoops, schemaText);
+
+    let output;
+    if (op === 'analyze') {
+      const program = await pgCompile(compileSpec, entryPoint, entitiesText);
+      const configJson = await pgBuildConfigJson(config, program);
+      const hasLines = false;
+      const goal = desiredOutput ? 'expected' : 'non-default';
+      const problem = wasm.prepareForGoal(program, '{}', entryPoint, goal, desiredOutput || undefined, configJson);
+      const smtText = problem.smtLib2();
+      const warnings = problem.warnings();
+      const numExtractions = countExtractions(smtText);
+      const solutionJson = await solveSmtLib2(smtText, numExtractions);
+      const resultJson = problem.interpretSolution(solutionJson);
+      const result = JSON.parse(resultJson);
+      output = { _displayText: formatAnalysisResult(result, warnings), _smtText: smtText };
+
+    } else if (op === 'diff') {
+      const compileSpec2 = pgBuildCompileSpec(lang, policy2, aliasesText);
+      const program1 = await pgCompile(compileSpec, entryPoint, entitiesText);
+      const program2 = await pgCompile(compileSpec2, entryPoint, entitiesText);
+      const configJson = await pgBuildConfigJson(config, program1);
+      const problem = wasm.preparePolicyDiff(program1, program2, '{}', entryPoint, desiredOutput || null, configJson);
+      const smtText = problem.smtLib2();
+      const warnings = problem.warnings();
+      const numExtractions = countExtractions(smtText);
+      const solutionJson = await solveSmtLib2(smtText, numExtractions);
+      const resultJson = problem.interpretSolution(solutionJson);
+      const result = JSON.parse(resultJson);
+      output = { _displayText: formatDiffResult(result, warnings), _smtText: smtText };
+
+    } else if (op === 'subsumes') {
+      const compileSpec2 = pgBuildCompileSpec(lang, policy2, aliasesText);
+      const oldProgram = await pgCompile(compileSpec, entryPoint, entitiesText);
+      const newProgram = await pgCompile(compileSpec2, entryPoint, entitiesText);
+      const configJson = await pgBuildConfigJson(config, oldProgram);
+      const problem = wasm.preparePolicySubsumes(oldProgram, newProgram, '{}', entryPoint, desiredOutput || undefined, configJson);
+      const smtText = problem.smtLib2();
+      const warnings = problem.warnings();
+      const numExtractions = countExtractions(smtText);
+      const solutionJson = await solveSmtLib2(smtText, numExtractions);
+      const resultJson = problem.interpretSolution(solutionJson);
+      const result = JSON.parse(resultJson);
+      output = { _displayText: formatSubsumesResult(result, warnings), _smtText: smtText };
+
+    } else if (op === 'gen-tests') {
+      const program = await pgCompile(compileSpec, entryPoint, entitiesText);
+      const configJson = await pgBuildConfigJson(config, program);
+      const suite = wasm.prepareTestSuite(program, '{}', desiredOutput || null, entryPoint, configJson, 10, false);
+      const testCases = [];
+      const smtTexts = [];
+      while (true) {
+        const problem = suite.nextProblem();
+        if (!problem) break;
+        const smtText = problem.smtLib2();
+        smtTexts.push(smtText);
+        const numExtractions = countExtractions(smtText);
+        const solutionJson = await solveSmtLib2(smtText, numExtractions);
+        const tcJson = suite.recordSolution(solutionJson);
+        const tc = JSON.parse(tcJson);
+        if (tc.satisfiable) testCases.push(tc);
+      }
+      const resultJson = suite.getResult();
+      const result = JSON.parse(resultJson);
+      const allSmt = smtTexts.join('\n\n;; --- next problem ---\n\n');
+      output = { _displayText: formatGenTestsResult(result, testCases, {}), _smtText: allSmt || null };
+    }
+
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+    const outputText = output._displayText || JSON.stringify(output, null, 2);
+    resultPre.innerHTML = highlightOutput(outputText);
+    resultDiv.classList.add('visible');
+    const ph = document.getElementById('pg-result-placeholder');
+    if (ph) ph.style.display = 'none';
+    status.textContent = `✓ Done in ${elapsed}s`;
+    status.className = 'status-text success';
+
+    // Populate SMT viewer
+    if (output._smtText) {
+      document.getElementById('pre-smt-pg-content').innerHTML = highlightSMT(output._smtText);
+    }
+
+  } catch (err) {
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+    resultPre.innerHTML = escapeHtml(`Error: ${err.message}\n\n${err.stack || ''}`);
+    resultDiv.classList.add('visible');
+    const ph2 = document.getElementById('pg-result-placeholder');
+    if (ph2) ph2.style.display = 'none';
+    status.textContent = `✗ Error (${elapsed}s)`;
+    status.className = 'status-text error';
+    console.error('Playground error:', err);
+  }
+
+  // Re-enable buttons
+  allBtns.forEach(b => { b.disabled = false; });
+  const labels = { analyze: '▶ Analyze', diff: '▶ Diff', subsumes: '▶ Subsumes', 'gen-tests': '▶ Gen Tests' };
+  activeBtn.classList.remove('running');
+  activeBtn.innerHTML = labels[op];
+}
+
+function pgBuildCompileSpec(lang, policyText, aliasesText) {
+  if (lang === 'rego') {
+    return { type: 'rego', text: policyText };
+  } else if (lang === 'cedar') {
+    return { type: 'cedar', text: policyText };
+  } else if (lang === 'azure') {
+    return { type: 'azure', text: policyText, aliasesText };
+  }
+  throw new Error(`Unknown language: ${lang}`);
+}
+
+async function pgCompile(spec, entryPoint, entitiesText) {
+  if (spec.type === 'rego') {
+    const modules = [{ id: 'playground.rego', content: spec.text }];
+    return wasm.Program.compileFromModules('{}', JSON.stringify(modules), JSON.stringify([entryPoint]));
+  } else if (spec.type === 'cedar') {
+    const policies = [{ id: 'playground.cedar', content: spec.text }];
+    const program = wasm.Program.compileCedarPolicies(JSON.stringify(policies));
+    if (entitiesText) {
+      program._entitiesFile = null;
+      program._entitiesJson = entitiesText;
+    }
+    return program;
+  } else if (spec.type === 'azure') {
+    return wasm.Program.compileAzurePolicyDefinition(spec.text, spec.aliasesText || null);
+  }
+  throw new Error(`Unknown compile type: ${spec.type}`);
+}
+
+function pgBuildConfig(maxLoops, schemaText) {
+  return { maxLoops, schemaText };
+}
+
+async function pgBuildConfigJson(config, program) {
+  const cfg = {};
+  if (config.maxLoops) cfg.max_loop_depth = config.maxLoops;
+  if (config.schemaText) {
+    cfg.input_schema = JSON.parse(config.schemaText);
+  }
+  if (program && program._entitiesJson) {
+    cfg.concrete_input = { entities: JSON.parse(program._entitiesJson) };
+  } else if (program && program._entitiesFile) {
+    const content = await fetchText(program._entitiesFile);
+    cfg.concrete_input = { entities: JSON.parse(content) };
+  }
+  return JSON.stringify(cfg);
+}
+
+function pgToggleSmt() {
+  const smtDiv = document.getElementById('smt-pg');
+  if (!smtDiv) return;
+  const visible = smtDiv.style.display !== 'none';
+  smtDiv.style.display = visible ? 'none' : 'block';
+  smtDiv.classList.toggle('visible', !visible);
+  const btn = document.getElementById('pg-btn-smt');
+  if (btn) btn.textContent = visible ? 'Show SMT' : 'Hide SMT';
+}
+
+function pgTogglePanel(panelId, toggleId) {
+  const panel = document.getElementById(panelId);
+  const toggle = document.getElementById(toggleId);
+  const isOpen = panel.classList.toggle('open');
+  toggle.classList.toggle('open', isOpen);
+  // Flip the arrow character at the start
+  const text = toggle.textContent;
+  toggle.innerHTML = toggle.innerHTML.replace(/^[▸▾]/, isOpen ? '▾' : '▸');
 }

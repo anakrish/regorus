@@ -333,4 +333,313 @@ header p { color: var(--text-dim); font-size: 0.95rem; margin-top: 0.3rem; }
   header h1 { font-size: 1.2rem; }
   .tab-btn { font-size: 0.72rem; padding: 0.5rem 0.6rem; }
   .pv-side-by-side { grid-template-columns: 1fr; }
+  .pg-config-grid { grid-template-columns: 1fr; }
+}
+
+/* ═══════════════════════════════════════════════════════
+   PLAYGROUND
+   ═══════════════════════════════════════════════════════ */
+
+/* Compact toolbar above the split */
+.pg-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.8rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 0.8rem;
+  flex-wrap: wrap;
+}
+.pg-toolbar-sep {
+  width: 1px;
+  height: 1.4rem;
+  background: var(--border);
+  margin: 0 0.2rem;
+}
+.pg-toolbar-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.pg-toolbar-input {
+  padding: 0.3rem 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--text);
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.pg-toolbar-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.pg-toolbar-input:disabled {
+  opacity: 0.4;
+}
+.pg-toolbar-ep { width: 16rem; }
+.pg-toolbar-custom { width: 5rem; }
+.pg-toolbar-loops { width: 3.5rem; }
+
+/* Side-by-side split */
+.pg-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+.pg-left, .pg-right {
+  min-width: 0; /* prevent grid blowout */
+}
+
+/* Right pane sticks to top on scroll */
+.pg-right {
+  position: sticky;
+  top: 0.5rem;
+  max-height: calc(100vh - 8rem);
+  display: flex;
+  flex-direction: column;
+}
+.pg-result-area {
+  flex: 1;
+  min-height: 200px;
+  position: relative;
+}
+.pg-result-output {
+  /* override demo-output hidden default */
+}
+.pg-result-output.visible .output-body {
+  max-height: none;
+}
+.pg-result-pre {
+  max-height: calc(100vh - 18rem);
+  overflow: auto;
+}
+.pg-result-placeholder {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.8rem;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  text-align: center;
+  background: var(--bg-code);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 2rem;
+}
+.pg-placeholder-icon {
+  font-size: 2rem;
+  opacity: 0.3;
+}
+.pg-smt-bar {
+  padding: 0.4rem 0;
+}
+
+/* Action bar pinned at bottom of left pane */
+.pg-action-bar {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 0.6rem 0.8rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-top: 0.3rem;
+}
+
+/* Sections & headers */
+.pg-section {
+  margin-bottom: 0.8rem;
+}
+.pg-section-header {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  margin-bottom: 0.4rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.pg-clear-btn {
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+/* Language radio group */
+.pg-lang-radio {
+  display: flex;
+  gap: 0.4rem;
+}
+.pg-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  padding: 0.35em 0.8em;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  background: var(--bg-card);
+  color: var(--text);
+  transition: all 0.15s;
+}
+.pg-radio.active {
+  border-color: var(--accent);
+  background: rgba(9,105,218,0.06);
+  color: var(--accent);
+  font-weight: 500;
+}
+.pg-radio input[type="radio"] {
+  display: none;
+}
+
+/* Policy editor: textarea overlay on highlighted pre */
+.pg-editor-wrap {
+  position: relative;
+}
+.pg-editor-wrap-sm .pg-editor {
+  min-height: 80px;
+}
+.pg-editor-wrap-sm .pg-highlight {
+  min-height: 80px;
+}
+.pg-highlight {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  margin: 0;
+  padding: 0.7rem 1rem;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  pointer-events: none;
+  tab-size: 2;
+  box-sizing: border-box;
+}
+.pg-editor {
+  width: 100%;
+  min-height: 180px;
+  padding: 0.7rem 1rem;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  resize: vertical;
+  tab-size: 2;
+  box-sizing: border-box;
+}
+.pg-editor-overlay {
+  position: relative;
+  z-index: 1;
+  color: transparent;
+  caret-color: var(--text);
+}
+.pg-editor-overlay::selection {
+  background: rgba(9,105,218,0.2);
+  color: transparent;
+}
+.pg-editor:focus {
+  outline: none;
+}
+.pg-editor-wrap:focus-within .pg-highlight {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(9,105,218,0.15);
+}
+.pg-editor::placeholder {
+  color: var(--text-dim);
+  opacity: 0.6;
+}
+.pg-editor-sm {
+  min-height: 80px;
+}
+
+/* Collapsible panels */
+.pg-collapse-toggle {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.4rem 0;
+  background: none;
+  border: none;
+  font-size: 0.82rem;
+  color: var(--accent);
+  cursor: pointer;
+  font-family: inherit;
+}
+.pg-collapse-toggle .pg-hint {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+.pg-collapsible {
+  display: none;
+  padding-top: 0.3rem;
+}
+.pg-collapsible.open {
+  display: block;
+}
+
+/* Configuration grid */
+.pg-config-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.6rem;
+}
+.pg-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.pg-field label {
+  font-size: 0.72rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-dim);
+}
+.pg-field-wide {
+  grid-column: 1 / -1;
+}
+
+/* Target output row */
+.pg-target-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* Action buttons */
+.pg-btn {
+  min-width: auto;
+  padding: 0.4em 0.9em;
+  font-size: 0.82rem;
+}
+
+/* Responsive: collapse to single column on narrow */
+@media (max-width: 960px) {
+  .pg-split { grid-template-columns: 1fr; }
+  .pg-right { position: static; max-height: none; }
+  .pg-toolbar { flex-wrap: wrap; }
+  .pg-toolbar-ep { width: 10rem; }
 }

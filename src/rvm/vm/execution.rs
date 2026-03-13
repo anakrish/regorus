@@ -80,9 +80,10 @@ impl RegoVM {
 
                 #[cfg(feature = "explanations")]
                 {
-                    self.last_entrypoint_rule_type =
-                        self.explanation_rule_type_for_entry_point(entry_point_pc);
-                    self.last_explanation_result = None;
+                    self.causality.set_last_entrypoint_rule_type(
+                        self.explanation_rule_type_for_entry_point(entry_point_pc),
+                    );
+                    self.causality.set_last_explanation_result(None);
                 }
 
                 self.validate_vm_state()?;
@@ -97,7 +98,8 @@ impl RegoVM {
                 let result = self.jump_to(entry_point_pc_u32)?;
                 #[cfg(feature = "explanations")]
                 {
-                    self.last_explanation_result = Some(result.clone());
+                    self.causality
+                        .set_last_explanation_result(Some(result.clone()));
                 }
                 Ok(result)
             }
@@ -107,16 +109,18 @@ impl RegoVM {
 
                 #[cfg(feature = "explanations")]
                 {
-                    self.last_entrypoint_rule_type =
-                        self.explanation_rule_type_for_entry_point(entry_point_pc);
-                    self.last_explanation_result = None;
+                    self.causality.set_last_entrypoint_rule_type(
+                        self.explanation_rule_type_for_entry_point(entry_point_pc),
+                    );
+                    self.causality.set_last_explanation_result(None);
                 }
 
                 self.validate_vm_state()?;
                 let result = self.execute_suspendable_entry(entry_point_pc)?;
                 #[cfg(feature = "explanations")]
                 {
-                    self.last_explanation_result = Some(result.clone());
+                    self.causality
+                        .set_last_explanation_result(Some(result.clone()));
                 }
                 Ok(result)
             }
@@ -148,9 +152,10 @@ impl RegoVM {
 
                 #[cfg(feature = "explanations")]
                 {
-                    self.last_entrypoint_rule_type =
-                        self.explanation_rule_type_for_entry_point(entry_point_pc);
-                    self.last_explanation_result = None;
+                    self.causality.set_last_entrypoint_rule_type(
+                        self.explanation_rule_type_for_entry_point(entry_point_pc),
+                    );
+                    self.causality.set_last_explanation_result(None);
                 }
 
                 self.validate_vm_state()?;
@@ -165,7 +170,8 @@ impl RegoVM {
                 let result = self.jump_to(entry_point_pc_u32)?;
                 #[cfg(feature = "explanations")]
                 {
-                    self.last_explanation_result = Some(result.clone());
+                    self.causality
+                        .set_last_explanation_result(Some(result.clone()));
                 }
                 Ok(result)
             }
@@ -175,16 +181,18 @@ impl RegoVM {
 
                 #[cfg(feature = "explanations")]
                 {
-                    self.last_entrypoint_rule_type =
-                        self.explanation_rule_type_for_entry_point(entry_point_pc);
-                    self.last_explanation_result = None;
+                    self.causality.set_last_entrypoint_rule_type(
+                        self.explanation_rule_type_for_entry_point(entry_point_pc),
+                    );
+                    self.causality.set_last_explanation_result(None);
                 }
 
                 self.validate_vm_state()?;
                 let result = self.execute_suspendable_entry(entry_point_pc)?;
                 #[cfg(feature = "explanations")]
                 {
-                    self.last_explanation_result = Some(result.clone());
+                    self.causality
+                        .set_last_explanation_result(Some(result.clone()));
                 }
                 Ok(result)
             }

@@ -22,7 +22,7 @@ impl RegoVM {
         rule_definitions: &[Vec<u32>],
         rule_info: &RuleInfo,
         function_call_params: Option<&FunctionCallParams>,
-    ) -> Result<(Value, bool)> {
+    ) -> Result<(Value, bool, Option<crate::Rc<str>>)> {
         let mut first_successful_result: Option<Value> = None;
         let mut rule_failed_due_to_inconsistency = false;
         let is_function_call = rule_info.function_info.is_some();
@@ -48,8 +48,22 @@ impl RegoVM {
             },
         };
 
+        // Capture argument provenance before swapping registers.
+        #[cfg(feature = "explanations")]
+        let arg_provenance: Vec<Option<crate::Rc<str>>> =
+            function_call_params.map_or_else(Vec::new, |params| {
+                params
+                    .arg_registers()
+                    .iter()
+                    .map(|&arg| self.provenance.get(arg).cloned())
+                    .collect()
+            });
+
         let mut previous_registers = Vec::default();
         mem::swap(&mut previous_registers, &mut self.registers);
+
+        #[cfg(feature = "explanations")]
+        let previous_provenance = self.provenance.take_paths();
 
         let mut previous_loop_stack = Vec::default();
         mem::swap(&mut previous_loop_stack, &mut self.loop_stack);
@@ -61,7 +75,19 @@ impl RegoVM {
         );
 
         self.register_stack.push(previous_registers);
+        #[cfg(feature = "explanations")]
+        self.provenance_stack.push(previous_provenance);
         self.registers = register_window;
+        #[cfg(feature = "explanations")]
+        {
+            self.provenance.resize(self.registers.len());
+            // Propagate argument provenance into callee: reg 0 = result (None),
+            // regs 1..N = args with their caller-side provenance.
+            for (i, prov) in arg_provenance.into_iter().enumerate() {
+                let callee_reg = u8::try_from(i.saturating_add(1)).unwrap_or(u8::MAX);
+                self.provenance.set_path(callee_reg, prov);
+            }
+        }
 
         'outer: for (def_idx, definition_bodies) in rule_definitions.iter().enumerate() {
             for (body_entry_point_idx, body_entry_point) in definition_bodies.iter().enumerate() {
@@ -73,6 +99,9 @@ impl RegoVM {
                 self.registers
                     .resize(num_retained_registers, Value::Undefined);
                 self.registers.resize(num_registers, Value::Undefined);
+
+                #[cfg(feature = "explanations")]
+                self.provenance.resize(num_registers);
 
                 if let Some(destructuring_entry_point) =
                     rule_info.destructuring_blocks.get(def_idx).and_then(|x| *x)
@@ -123,18 +152,35 @@ impl RegoVM {
             self.get_register(result_reg)?.clone()
         };
 
+        #[cfg(feature = "explanations")]
+        let return_provenance = self.provenance.get(result_reg).cloned();
+
         if let Some(restored_registers) = self.register_stack.pop() {
             let mut current_register_window = Vec::default();
             mem::swap(&mut current_register_window, &mut self.registers);
             self.return_register_window(current_register_window);
 
             self.registers = restored_registers;
+
+            #[cfg(feature = "explanations")]
+            if let Some(restored_provenance) = self.provenance_stack.pop() {
+                self.provenance.restore_paths(restored_provenance);
+            }
         }
 
         self.loop_stack = previous_loop_stack;
         self.comprehension_stack = previous_comprehension_stack;
 
-        Ok((final_result, rule_failed_due_to_inconsistency))
+        Ok((final_result, rule_failed_due_to_inconsistency, {
+            #[cfg(feature = "explanations")]
+            {
+                return_provenance
+            }
+            #[cfg(not(feature = "explanations"))]
+            {
+                None
+            }
+        }))
     }
 
     pub(super) fn execute_call_rule_common(
@@ -212,11 +258,25 @@ impl RegoVM {
             current_definition_index: 0,
             current_body_index: 0,
             #[cfg(feature = "explanations")]
-            block_record_start: self.block_records.len(),
+            finalized_block_start: self.causality.finalized_block_len(),
         });
 
-        let (final_result, rule_failed_due_to_inconsistency) = self
+        // Only suppress emissions for truly nested calls — not the
+        // entry-point's first CallRule invocation.
+        #[cfg(feature = "explanations")]
+        let is_nested_call = self.call_rule_stack.len() > 1;
+        #[cfg(feature = "explanations")]
+        if is_nested_call {
+            self.causality.increment_call_depth();
+        }
+
+        let (final_result, rule_failed_due_to_inconsistency, return_provenance) = self
             .execute_rule_definitions_common(&rule_definitions, &rule_info, function_call_params)?;
+
+        #[cfg(feature = "explanations")]
+        if is_nested_call {
+            self.causality.decrement_call_depth();
+        }
 
         self.set_register(dest, Value::Undefined)?;
 
@@ -226,11 +286,12 @@ impl RegoVM {
             .ok_or(VmError::CallRuleStackUnderflow { pc: self.pc })?;
         #[cfg(feature = "explanations")]
         {
-            self.last_rule_block_records = self
-                .block_records
-                .get(call_context.block_record_start..)
+            let all_indices = self.causality.finalized_block_indices();
+            let indices = all_indices
+                .get(call_context.finalized_block_start..)
                 .unwrap_or(&[])
                 .to_vec();
+            self.causality.set_last_rule_block_indices(indices);
         }
         self.pc = call_context.return_pc;
 
@@ -241,14 +302,20 @@ impl RegoVM {
         };
 
         self.set_register(dest, result_from_rule.clone())?;
+        #[cfg(feature = "explanations")]
+        self.provenance.set_path(dest, return_provenance);
 
         if self.get_register(dest)? == &Value::Undefined && !rule_failed_due_to_inconsistency {
             match call_context.rule_type {
                 RuleType::PartialSet => {
                     self.set_register(dest, Value::new_set())?;
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(dest);
                 }
                 RuleType::PartialObject => {
                     self.set_register(dest, Value::new_object())?;
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(dest);
                 }
                 RuleType::Complete => {
                     if let Some(rule_metadata) = self
@@ -359,6 +426,8 @@ impl RegoVM {
                 let new_len =
                     self.checked_add_one(dest_index, "register capacity for destination")?;
                 self.registers.resize(new_len, Value::Undefined);
+                #[cfg(feature = "explanations")]
+                self.provenance.resize(new_len);
             }
             self.set_register(dest, result)?;
             return Ok(());
@@ -387,9 +456,31 @@ impl RegoVM {
             }
         }
 
+        // Capture argument provenance before swapping registers.
+        #[cfg(feature = "explanations")]
+        let arg_provenance: Vec<Option<crate::Rc<str>>> =
+            function_call_params.map_or_else(Vec::new, |params| {
+                params
+                    .arg_registers()
+                    .iter()
+                    .map(|&arg| self.provenance.get(arg).cloned())
+                    .collect()
+            });
+
         let mut saved_registers = Vec::default();
         mem::swap(&mut saved_registers, &mut self.registers);
         self.registers = register_window;
+
+        #[cfg(feature = "explanations")]
+        let saved_provenance = self.provenance.take_paths();
+        #[cfg(feature = "explanations")]
+        {
+            self.provenance.resize(self.registers.len());
+            for (i, prov) in arg_provenance.into_iter().enumerate() {
+                let callee_reg = u8::try_from(i.saturating_add(1)).unwrap_or(u8::MAX);
+                self.provenance.set_path(callee_reg, prov);
+            }
+        }
 
         let mut saved_loop_stack = Vec::default();
         mem::swap(&mut saved_loop_stack, &mut self.loop_stack);
@@ -412,7 +503,7 @@ impl RegoVM {
             current_definition_index: 0,
             current_body_index: 0,
             #[cfg(feature = "explanations")]
-            block_record_start: self.block_records.len(),
+            finalized_block_start: self.causality.finalized_block_len(),
         });
 
         let mut frame_data = RuleFrameData {
@@ -434,6 +525,8 @@ impl RegoVM {
             saved_registers,
             saved_loop_stack,
             saved_comprehension_stack,
+            #[cfg(feature = "explanations")]
+            saved_provenance,
         };
 
         let initial_pc = self
@@ -520,6 +613,8 @@ impl RegoVM {
                     .resize(frame_data.num_retained_registers, Value::Undefined);
                 self.registers
                     .resize(frame_data.num_registers, Value::Undefined);
+                #[cfg(feature = "explanations")]
+                self.provenance.resize(frame_data.num_registers);
 
                 if let Some(destructuring_entry_point) = rule_info
                     .destructuring_blocks
@@ -635,6 +730,9 @@ impl RegoVM {
     }
 
     pub(super) fn finalize_rule_frame_data(&mut self, frame_data: RuleFrameData) -> Result<Value> {
+        #[cfg(feature = "explanations")]
+        let saved_provenance = frame_data.saved_provenance;
+
         let RuleFrameData {
             return_pc,
             dest_reg,
@@ -673,6 +771,9 @@ impl RegoVM {
                 .unwrap_or(Value::Undefined)
         };
 
+        #[cfg(feature = "explanations")]
+        let return_provenance = self.provenance.get(result_reg).cloned();
+
         let mut current_window = Vec::default();
         mem::swap(&mut current_window, &mut self.registers);
         self.return_register_window(current_window);
@@ -680,11 +781,16 @@ impl RegoVM {
         self.loop_stack = saved_loop_stack;
         self.comprehension_stack = saved_comprehension_stack;
 
+        #[cfg(feature = "explanations")]
+        self.provenance.restore_paths(saved_provenance);
+
         let mut parent_registers = saved_registers;
         let dest_idx = usize::from(dest_reg);
         if parent_registers.len() <= dest_idx {
             let new_len = self.checked_add_one(dest_idx, "parent register capacity")?;
             parent_registers.resize(new_len, Value::Undefined);
+            #[cfg(feature = "explanations")]
+            self.provenance.resize(new_len);
         }
 
         {
@@ -776,6 +882,8 @@ impl RegoVM {
         }
 
         self.registers = parent_registers;
+        #[cfg(feature = "explanations")]
+        self.provenance.set_path(dest_reg, return_provenance);
 
         let call_context = self
             .call_rule_stack
@@ -787,11 +895,13 @@ impl RegoVM {
 
         #[cfg(feature = "explanations")]
         {
-            self.last_rule_block_records = self
-                .block_records
-                .get(call_context.block_record_start..)
+            let indices = self
+                .causality
+                .finalized_block_indices()
+                .get(call_context.finalized_block_start..)
                 .unwrap_or(&[])
                 .to_vec();
+            self.causality.set_last_rule_block_indices(indices);
         }
 
         self.pc = return_pc;

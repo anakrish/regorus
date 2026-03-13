@@ -9,22 +9,17 @@ use alloc::vec::Vec;
 
 #[cfg(feature = "explanations")]
 #[derive(Debug, Clone, Default)]
-pub(super) struct LoopExplanationRecordSet {
-    pub(super) passing: Option<Vec<crate::ExplanationRecord>>,
-    pub(super) failing: Option<Vec<crate::ExplanationRecord>>,
-}
-
-#[cfg(feature = "explanations")]
-#[derive(Debug, Clone, Default)]
 pub(super) struct WitnessState {
     pub(super) sample_key: Option<Value>,
     pub(super) sample_value: Option<Value>,
     pub(super) yield_count: u32,
-    pub(super) passing_iteration: Option<crate::explanations::RawConditionIterationWitness>,
-    pub(super) failing_iteration: Option<crate::explanations::RawConditionIterationWitness>,
-    pub(super) block_record_start: usize,
-    pub(super) passing_records: Option<Vec<crate::ExplanationRecord>>,
-    pub(super) failing_records: Option<Vec<crate::ExplanationRecord>>,
+    pub(super) passing_iteration: Option<crate::causality::RawIterationSnapshot>,
+    pub(super) failing_iteration: Option<crate::causality::RawIterationSnapshot>,
+    pub(super) finalized_block_start: usize,
+    /// Event indices from a passing iteration.
+    pub(super) passing_event_indices: Option<Vec<u32>>,
+    /// Event indices from a failing iteration.
+    pub(super) failing_event_indices: Option<Vec<u32>>,
 }
 
 /// Loop execution context for managing iteration state
@@ -42,6 +37,8 @@ pub struct LoopContext {
     pub success_count: usize,
     pub total_iterations: usize,
     pub current_iteration_failed: bool, // Track if current iteration had condition failures
+    #[cfg(feature = "explanations")]
+    pub(super) collection_provenance: Option<crate::Rc<str>>,
     #[cfg(feature = "explanations")]
     pub(super) witness: WitnessState,
 }
@@ -96,7 +93,7 @@ pub struct CallRuleContext {
     pub current_definition_index: usize,
     pub current_body_index: usize,
     #[cfg(feature = "explanations")]
-    pub block_record_start: usize,
+    pub finalized_block_start: usize,
 }
 
 /// Context for tracking active comprehensions

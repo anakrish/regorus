@@ -37,18 +37,10 @@ impl RegoVM {
 
         #[cfg(feature = "explanations")]
         {
-            self.block_records.clear();
-            self.current_block_records.clear();
-            self.last_rule_block_records.clear();
-            self.loop_witnesses.clear();
-            self.loop_records.clear();
-            self.comprehension_witnesses.clear();
-            self.last_entrypoint_rule_type = None;
-            self.last_explanation_result = None;
-            self.explanations = self
-                .explanation_settings
-                .enabled
-                .then(alloc::collections::BTreeMap::new);
+            self.causality.clear();
+            if self.explanation_settings.enabled {
+                self.causality.set_enabled(true);
+            }
         }
     }
 
@@ -63,6 +55,9 @@ impl RegoVM {
         while let Some(registers) = self.register_stack.pop() {
             self.return_register_window(registers);
         }
+
+        #[cfg(feature = "explanations")]
+        self.provenance_stack.clear();
     }
 
     /// Get a register window from the pool or create a new one

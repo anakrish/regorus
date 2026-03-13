@@ -153,6 +153,10 @@ fn explanations_to_json(
     serde_json::to_string_pretty(&output).map_err(error_to_jsvalue)
 }
 
+fn causality_report_to_json(report: regorus::CausalityReport) -> Result<String, JsValue> {
+    serde_json::to_string_pretty(&report).map_err(error_to_jsvalue)
+}
+
 impl Default for Engine {
     fn default() -> Self {
         Self::new()
@@ -284,6 +288,12 @@ impl Engine {
     /// Take the explanations captured by the most recent evaluation as pretty JSON.
     pub fn takeExplanations(&mut self) -> Result<String, JsValue> {
         explanations_to_json(self.engine.take_explanations())
+    }
+
+    /// Take the causality report captured by the most recent evaluation as pretty JSON.
+    /// The report includes per-emission binding summaries with evaluation indices.
+    pub fn takeCausalityReport(&mut self) -> Result<String, JsValue> {
+        causality_report_to_json(self.engine.take_causality_report())
     }
 
     /// Gather output from print statements instead of emiting to stderr.
@@ -483,6 +493,12 @@ impl Rvm {
     /// Take the explanations captured by the most recent evaluation as pretty JSON.
     pub fn takeExplanations(&mut self) -> Result<String, JsValue> {
         explanations_to_json(self.vm.take_explanations())
+    }
+
+    /// Take the causality report captured by the most recent evaluation as pretty JSON.
+    /// The report includes per-emission binding summaries with evaluation indices.
+    pub fn takeCausalityReport(&mut self) -> Result<String, JsValue> {
+        causality_report_to_json(self.vm.take_causality_report())
     }
 
     /// Resume execution with an optional JSON value.

@@ -432,6 +432,11 @@ impl Interpreter {
         crate::explanations::normalize_explanations(self.explanations.take().unwrap_or_default())
     }
 
+    #[cfg(feature = "explanations")]
+    pub fn take_causality_report(&mut self) -> crate::causality::CausalityReport {
+        self.take_explanations().into()
+    }
+
     pub fn set_strict_builtin_errors(&mut self, b: bool) {
         self.compiled_policy_mut().strict_builtin_errors = b;
     }

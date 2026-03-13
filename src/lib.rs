@@ -119,6 +119,8 @@ mimalloc::assign_global!();
 
 mod ast;
 mod builtins;
+#[cfg(feature = "explanations")]
+mod causality;
 mod compile;
 mod compiled_policy;
 mod compiler;
@@ -163,16 +165,17 @@ pub use {
     target::Target,
 };
 
-pub use compile::{compile_policy_with_entrypoint, PolicyModule};
-pub use compiled_policy::CompiledPolicy;
-pub use engine::Engine;
 #[cfg(feature = "explanations")]
-pub use explanations::{
-    ConditionEvaluation, ConditionEvaluationKind, ConditionEvaluationWitness,
-    ConditionIterationWitness, ConditionOperator, ExplanationBinding, ExplanationConditionMode,
+pub use causality::{
+    AnnotatedValue, BindingExplanation, CausalityReport, ConditionEvaluation,
+    ConditionEvaluationKind, ConditionEvaluationWitness, ConditionIterationWitness,
+    ConditionOperator, EmissionExplanation, ExplanationBinding, ExplanationConditionMode,
     ExplanationOutcome, ExplanationRecord, ExplanationSettings, ExplanationValueMode,
     RuleWithExplanations, SourceLocation,
 };
+pub use compile::{compile_policy_with_entrypoint, PolicyModule};
+pub use compiled_policy::CompiledPolicy;
+pub use engine::Engine;
 pub use lexer::Source;
 pub use policy_info::PolicyInfo;
 pub use utils::limits::LimitError;

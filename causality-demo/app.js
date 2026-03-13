@@ -14,7 +14,6 @@ const nav = document.querySelector("#example-nav");
 const heroTitle = document.querySelector("#hero-title");
 const heroSummary = document.querySelector("#hero-summary");
 const heroResult = document.querySelector("#hero-result");
-const heroEngine = document.querySelector("#hero-engine");
 const heroFocus = document.querySelector("#hero-focus");
 const featureStrip = document.querySelector("#feature-strip");
 const conditionList = document.querySelector("#condition-list");
@@ -31,7 +30,6 @@ const requestTabs = document.querySelector("#request-tabs");
 const requestContent = document.querySelector("#request-content");
 const requestHeading = document.querySelector("#request-heading");
 const entryPoint = document.querySelector("#entry-point");
-const engineSelect = document.querySelector("#engine-select");
 const valueMode = document.querySelector("#value-mode");
 const conditionMode = document.querySelector("#condition-mode");
 const policyEditor = createCodeEditor(policyContent, { language: "rego" });
@@ -51,7 +49,6 @@ function currentScenario() {
 function ensureScenarioDraft(scenario) {
   if (!state.scenarioDrafts[scenario.id]) {
     state.scenarioDrafts[scenario.id] = {
-      engine: scenario.engine,
       policy: scenario.policy,
       input: scenario.input,
       data: scenario.data
@@ -101,14 +98,6 @@ function syncPolicyDraft() {
   const scenario = currentScenario();
   const draft = ensureScenarioDraft(scenario);
   draft.policy = policyContent.value;
-}
-
-function syncEngineDraft() {
-  const scenario = currentScenario();
-  const draft = ensureScenarioDraft(scenario);
-  draft.engine = engineSelect.value;
-  heroEngine.textContent = draft.engine;
-  policyLabel.textContent = draft.engine;
 }
 
 function syncRequestDraft() {
@@ -178,12 +167,10 @@ function renderScenario() {
   heroTitle.textContent = scenario.title;
   heroSummary.textContent = scenario.summary;
   heroResult.textContent = state.lastRun?.resultSummary || "pending";
-  heroEngine.textContent = draft.engine;
   heroFocus.textContent = scenario.focus;
   policyEditor.setValue(draft.policy);
-  policyLabel.textContent = draft.engine;
+  policyLabel.textContent = "rvm";
   entryPoint.textContent = scenario.query;
-  engineSelect.value = draft.engine;
   valueMode.textContent = scenario.whyFullValues ? "full" : "redacted";
   conditionMode.textContent = scenario.whyAllConditions ? "all contributing" : "primary only";
   analysisStatus.textContent = state.lastRun ? "completed" : "ready";
@@ -210,7 +197,7 @@ async function runCurrentScenario() {
   try {
     state.lastRun = await evaluateScenario({
       ...scenario,
-      engine: draft.engine,
+      engine: "rvm",
       policy: draft.policy,
       input: draft.input,
       data: draft.data
@@ -232,7 +219,6 @@ async function runCurrentScenario() {
 
 policyContent.addEventListener("input", syncPolicyDraft);
 requestContent.addEventListener("input", syncRequestDraft);
-engineSelect.addEventListener("change", syncEngineDraft);
 runAnalysis.addEventListener("click", runCurrentScenario);
 
 async function bootstrap() {

@@ -5,10 +5,6 @@ use crate::rvm::instructions::{Instruction, LiteralOrRegister};
 use crate::rvm::program::Program;
 use crate::value::Value;
 use alloc::collections::BTreeSet;
-#[cfg(feature = "explanations")]
-use alloc::string::ToString as _;
-#[cfg(feature = "explanations")]
-use alloc::vec;
 use alloc::vec::Vec;
 use core::mem;
 
@@ -47,88 +43,158 @@ impl RegoVM {
         }
     }
 
+    /// Check whether the instruction immediately before `self.pc` is a
+    /// `CallRule` (or `Not` wrapping a `CallRule`) whose dest matches
+    /// `condition`, i.e. the assert is checking the result of a nested rule.
+    /// If so, return true so the caller can inline the nested rule's block
+    /// indices into the current block.
     #[cfg(feature = "explanations")]
-    fn nested_rule_explanation_records_for_assert(
+    fn is_nested_rule_condition(
         &self,
         condition: u8,
         outcome: crate::explanations::ExplanationOutcome,
-    ) -> Option<Vec<crate::ExplanationRecord>> {
-        let expected_outcome = match *self.program.instructions.get(self.pc.checked_sub(1)?)? {
-            Instruction::CallRule { dest, .. } if dest == condition => outcome,
-            Instruction::Not { dest, operand } if dest == condition => {
-                match *self.program.instructions.get(self.pc.checked_sub(2)?)? {
-                    Instruction::CallRule {
-                        dest: nested_dest, ..
-                    } if nested_dest == operand => Self::invert_explanation_outcome(outcome),
-                    _ => return None,
-                }
-            }
-            _ => return None,
+    ) -> bool {
+        let Some(prev_pc) = self.pc.checked_sub(1) else {
+            return false;
         };
-
-        let nested_record = self.last_rule_block_records.last()?.clone();
-        if nested_record.outcome != expected_outcome {
-            return None;
-        }
-
-        if self.capture_all_contributing_conditions() {
-            Some(self.last_rule_block_records.clone())
-        } else {
-            Some(vec![nested_record])
+        let Some(prev_instr) = self.program.instructions.get(prev_pc) else {
+            return false;
+        };
+        match *prev_instr {
+            Instruction::CallRule { dest, .. } if dest == condition => {
+                // Nested rule outcome must match
+                if let Some(last_idx) = self.causality.last_rule_block_indices().last() {
+                    if let Some(event) = self
+                        .causality
+                        .events_ref()
+                        .get(usize::try_from(*last_idx).unwrap_or(usize::MAX))
+                    {
+                        let event_passed = matches!(
+                            event.kind,
+                            crate::causality::CausalEventKind::Condition { passed: true, .. }
+                        );
+                        let expected_passed =
+                            outcome == crate::explanations::ExplanationOutcome::Success;
+                        return event_passed == expected_passed;
+                    }
+                }
+                false
+            }
+            Instruction::Not { dest, operand } if dest == condition => {
+                // Check for Not(CallRule)
+                if let Some(prev2_pc) = self.pc.checked_sub(2) {
+                    if let Some(&Instruction::CallRule {
+                        dest: nested_dest, ..
+                    }) = self.program.instructions.get(prev2_pc)
+                    {
+                        if nested_dest == operand {
+                            let inverted = Self::invert_explanation_outcome(outcome);
+                            if let Some(last_idx) = self.causality.last_rule_block_indices().last()
+                            {
+                                if let Some(event) = self
+                                    .causality
+                                    .events_ref()
+                                    .get(usize::try_from(*last_idx).unwrap_or(usize::MAX))
+                                {
+                                    let event_passed = matches!(
+                                        event.kind,
+                                        crate::causality::CausalEventKind::Condition {
+                                            passed: true,
+                                            ..
+                                        }
+                                    );
+                                    let expected_passed = inverted
+                                        == crate::explanations::ExplanationOutcome::Success;
+                                    return event_passed == expected_passed;
+                                }
+                            }
+                        }
+                    }
+                }
+                false
+            }
+            _ => false,
         }
     }
 
+    /// Build a `RawConditionSnapshot` from an `InstructionConditionProbe`.
+    /// Values are captured as indices into the capture's value table (Rc-bump).
     #[cfg(feature = "explanations")]
-    fn resolve_condition_probe(
-        &self,
+    fn snapshot_condition_probe(
+        &mut self,
         probe: &crate::rvm::program::InstructionConditionProbe,
-    ) -> Option<crate::ConditionEvaluation> {
-        let raw = match *probe {
+    ) -> Option<crate::causality::RawConditionSnapshot> {
+        use crate::causality::{RawConditionSnapshot, RawWitnessSnapshot};
+
+        let snapshot = match *probe {
             crate::rvm::program::InstructionConditionProbe::Comparison {
                 operator,
                 actual_register,
                 expected_register,
                 ref actual_hint,
                 ref expected_hint,
-            } => crate::explanations::RawConditionEvaluation {
-                kind: crate::ConditionEvaluationKind::Comparison,
-                operator: Some(operator),
-                actual_value: Some(self.get_register(actual_register).ok()?.clone()),
-                actual_hint: actual_hint.clone(),
-                expected_value: Some(self.get_register(expected_register).ok()?.clone()),
-                expected_hint: expected_hint.clone(),
-                witness: None,
-            },
+            } => {
+                let actual_val = self.get_register(actual_register).ok()?.clone();
+                let expected_val = self.get_register(expected_register).ok()?.clone();
+                let actual_idx = self.causality.snapshot_value(&actual_val);
+                let expected_idx = self.causality.snapshot_value(&expected_val);
+                RawConditionSnapshot {
+                    kind: crate::ConditionEvaluationKind::Comparison,
+                    operator: Some(operator),
+                    actual: Some(actual_idx),
+                    actual_hint: actual_hint.clone(),
+                    actual_path: self.provenance.get(actual_register).cloned(),
+                    expected: Some(expected_idx),
+                    expected_hint: expected_hint.clone(),
+                    expected_path: self.provenance.get(expected_register).cloned(),
+                    witness: None,
+                }
+            }
             crate::rvm::program::InstructionConditionProbe::Membership {
                 operator,
                 actual_register,
                 expected_register,
                 ref actual_hint,
                 ref expected_hint,
-            } => crate::explanations::RawConditionEvaluation {
-                kind: crate::ConditionEvaluationKind::Membership,
-                operator: Some(operator),
-                actual_value: Some(self.get_register(actual_register).ok()?.clone()),
-                actual_hint: actual_hint.clone(),
-                expected_value: expected_register
-                    .and_then(|register| self.get_register(register).ok().cloned()),
-                expected_hint: expected_hint.clone(),
-                witness: None,
-            },
+            } => {
+                let actual_val = self.get_register(actual_register).ok()?.clone();
+                let actual_idx = self.causality.snapshot_value(&actual_val);
+                let expected_idx = expected_register.and_then(|reg| {
+                    let val = self.get_register(reg).ok()?.clone();
+                    Some(self.causality.snapshot_value(&val))
+                });
+                let expected_path =
+                    expected_register.and_then(|reg| self.provenance.get(reg).cloned());
+                RawConditionSnapshot {
+                    kind: crate::ConditionEvaluationKind::Membership,
+                    operator: Some(operator),
+                    actual: Some(actual_idx),
+                    actual_hint: actual_hint.clone(),
+                    actual_path: self.provenance.get(actual_register).cloned(),
+                    expected: expected_idx,
+                    expected_hint: expected_hint.clone(),
+                    expected_path,
+                    witness: None,
+                }
+            }
             crate::rvm::program::InstructionConditionProbe::Truthiness { register, ref hint } => {
                 let value = self.get_register(register).ok()?.clone();
-                crate::explanations::RawConditionEvaluation {
+                let operator = match value {
+                    Value::Bool(false) | Value::Null | Value::Undefined => {
+                        crate::ConditionOperator::Falsy
+                    }
+                    _ => crate::ConditionOperator::Truthy,
+                };
+                let actual_idx = self.causality.snapshot_value(&value);
+                RawConditionSnapshot {
                     kind: crate::ConditionEvaluationKind::Truthiness,
-                    operator: Some(match value {
-                        Value::Bool(false) | Value::Null | Value::Undefined => {
-                            crate::ConditionOperator::Falsy
-                        }
-                        _ => crate::ConditionOperator::Truthy,
-                    }),
-                    actual_value: Some(value),
+                    operator: Some(operator),
+                    actual: Some(actual_idx),
                     actual_hint: hint.clone(),
-                    expected_value: None,
+                    actual_path: self.provenance.get(register).cloned(),
+                    expected: None,
                     expected_hint: None,
+                    expected_path: None,
                     witness: None,
                 }
             }
@@ -138,26 +204,40 @@ impl RegoVM {
                 expected_register,
                 ref actual_hint,
                 ref expected_hint,
-            } => crate::explanations::RawConditionEvaluation {
-                kind: crate::ConditionEvaluationKind::Builtin,
-                operator: Some(operator),
-                actual_value: Some(self.get_register(actual_register).ok()?.clone()),
-                actual_hint: actual_hint.clone(),
-                expected_value: expected_register
-                    .and_then(|register| self.get_register(register).ok().cloned()),
-                expected_hint: expected_hint.clone(),
-                witness: None,
-            },
+            } => {
+                let actual_val = self.get_register(actual_register).ok()?.clone();
+                let actual_idx = self.causality.snapshot_value(&actual_val);
+                let expected_idx = expected_register.and_then(|reg| {
+                    let val = self.get_register(reg).ok()?.clone();
+                    Some(self.causality.snapshot_value(&val))
+                });
+                let expected_path =
+                    expected_register.and_then(|reg| self.provenance.get(reg).cloned());
+                RawConditionSnapshot {
+                    kind: crate::ConditionEvaluationKind::Builtin,
+                    operator: Some(operator),
+                    actual: Some(actual_idx),
+                    actual_hint: actual_hint.clone(),
+                    actual_path: self.provenance.get(actual_register).cloned(),
+                    expected: expected_idx,
+                    expected_hint: expected_hint.clone(),
+                    expected_path,
+                    witness: None,
+                }
+            }
             crate::rvm::program::InstructionConditionProbe::Loop {
                 result_register,
                 operator,
                 ref condition_texts,
             } => {
-                let mut witness = self.loop_witnesses.get(&result_register).cloned();
-                if let Some(ref mut witness) = witness {
-                    witness.condition_texts = condition_texts.clone();
+                let actual_val = self.get_register(result_register).ok()?.clone();
+                let mut witness = self.causality.loop_witness(result_register).cloned();
+                let actual_idx = self.causality.snapshot_value(&actual_val);
+                if let Some(ref mut w) = witness {
+                    w.condition_texts = condition_texts.clone();
                 } else if !condition_texts.is_empty() {
-                    witness = Some(crate::explanations::RawConditionEvaluationWitness {
+                    witness = Some(RawWitnessSnapshot {
+                        collection_path: None,
                         iteration_count: None,
                         success_count: None,
                         yield_count: None,
@@ -170,96 +250,51 @@ impl RegoVM {
                         failing_iteration: None,
                     });
                 }
-
-                crate::explanations::RawConditionEvaluation {
+                let collection_path = witness.as_ref().and_then(|w| w.collection_path.clone());
+                RawConditionSnapshot {
                     kind: crate::ConditionEvaluationKind::Quantifier,
                     operator,
-                    actual_value: Some(self.get_register(result_register).ok()?.clone()),
+                    actual: Some(actual_idx),
                     actual_hint: None,
-                    expected_value: None,
+                    actual_path: collection_path,
+                    expected: None,
                     expected_hint: None,
+                    expected_path: None,
                     witness,
                 }
             }
             crate::rvm::program::InstructionConditionProbe::Comprehension { result_register } => {
-                crate::explanations::RawConditionEvaluation {
+                let actual_val = self.get_register(result_register).ok()?.clone();
+                let comp_witness = self
+                    .causality
+                    .comprehension_witness(result_register)
+                    .cloned();
+                let actual_idx = self.causality.snapshot_value(&actual_val);
+                RawConditionSnapshot {
                     kind: crate::ConditionEvaluationKind::Comprehension,
                     operator: None,
-                    actual_value: Some(self.get_register(result_register).ok()?.clone()),
+                    actual: Some(actual_idx),
                     actual_hint: None,
-                    expected_value: None,
+                    actual_path: None,
+                    expected: None,
                     expected_hint: None,
-                    witness: self.comprehension_witnesses.get(&result_register).cloned(),
+                    expected_path: None,
+                    witness: comp_witness,
                 }
             }
         };
 
-        Some(raw.sanitize(&self.explanation_settings))
+        Some(snapshot)
     }
 
-    #[cfg(feature = "explanations")]
-    fn make_current_instruction_record(
-        &self,
-        metadata: crate::rvm::program::InstructionExplanationInfo,
-        outcome: crate::explanations::ExplanationOutcome,
-    ) -> crate::ExplanationRecord {
-        let evaluation = metadata
-            .probe
-            .as_ref()
-            .and_then(|probe| self.resolve_condition_probe(probe));
-
-        let location = self
-            .program
-            .instruction_spans
-            .get(self.pc)
-            .and_then(|span| span.as_ref())
-            .map(|span| crate::SourceLocation {
-                file: span
-                    .get_source_name(&self.program.sources)
-                    .unwrap_or_default()
-                    .to_string()
-                    .into(),
-                row: u32::try_from(span.line).unwrap_or(u32::MAX),
-                col: u32::try_from(span.column).unwrap_or(u32::MAX),
-            })
-            .unwrap_or(crate::SourceLocation {
-                file: "".into(),
-                row: 0,
-                col: 0,
-            });
-
-        let bindings = metadata
-            .bindings
-            .into_iter()
-            .filter_map(|binding| {
-                self.get_register(binding.register)
-                    .ok()
-                    .filter(|value| **value != Value::Undefined)
-                    .map(|value| {
-                        crate::explanations::sanitize_explanation_binding(
-                            &binding.name,
-                            value,
-                            &self.explanation_settings,
-                        )
-                    })
-            })
-            .collect::<Vec<_>>();
-
-        crate::ExplanationRecord {
-            outcome,
-            location,
-            text: metadata.text.into(),
-            evaluation,
-            bindings,
-        }
-    }
-
+    /// Record a condition evaluation event into the causality capture.
+    /// This replaces `record_current_instruction_condition` with thin event recording.
     #[cfg(feature = "explanations")]
     fn record_current_instruction_condition(
         &mut self,
         outcome: crate::explanations::ExplanationOutcome,
     ) -> Result<()> {
-        if self.explanations.is_none() {
+        if !self.causality.is_enabled() {
             return Ok(());
         }
 
@@ -274,88 +309,140 @@ impl RegoVM {
             None => return Ok(()),
         };
 
+        let passed = outcome == crate::explanations::ExplanationOutcome::Success;
+        let pc = u32::try_from(self.pc).unwrap_or(u32::MAX);
+
+        // Handle loop probes: inline loop event ranges
         if let Some(result_register) = metadata.probe.as_ref().and_then(|probe| match probe {
             &crate::rvm::program::InstructionConditionProbe::Loop {
                 result_register, ..
             } => Some(result_register),
             _ => None,
         }) {
-            let mut records = self
-                .loop_records
-                .get(&result_register)
-                .map(|record_set| match outcome {
-                    crate::explanations::ExplanationOutcome::Success => {
-                        record_set.passing.clone().unwrap_or_default()
-                    }
-                    crate::explanations::ExplanationOutcome::Failure => record_set
-                        .failing
-                        .clone()
-                        .or_else(|| record_set.passing.clone())
-                        .unwrap_or_default(),
-                })
-                .unwrap_or_default();
-            records.push(self.make_current_instruction_record(metadata, outcome));
-            self.current_block_records = records;
+            // Get loop event ranges for passing/failing iterations
+            let loop_indices: Vec<u32> = self
+                .causality
+                .loop_event_range_indices(result_register, passed);
+
+            // Snapshot bindings and condition probe.
+            // Pass an empty binding list: the quantifier condition represents the
+            // loop as a whole.  Per-iteration bindings are already captured in
+            // the individual iteration condition events, and snapshotting here
+            // would record the *last* iteration's register values, which would
+            // overwrite the correct per-iteration bindings in the output.
+            let (bindings_start, bindings_end) =
+                self.causality
+                    .snapshot_bindings(&[], &self.registers, &self.provenance);
+            let snapshot = metadata
+                .probe
+                .as_ref()
+                .and_then(|probe| self.snapshot_condition_probe(probe));
+
+            let event_idx = self.causality.record_condition(
+                pc,
+                passed,
+                None,
+                None,
+                bindings_start,
+                bindings_end,
+                snapshot,
+            );
+
+            // Build the block: loop iteration records + this condition
+            let mut block_indices = loop_indices;
+            block_indices.push(event_idx);
+            self.causality
+                .replace_current_block_conditions(block_indices);
+
+            // Attach the quantifier to every emission produced during this loop.
+            let loop_emission_keys = self.causality.pop_loop_emission_scope();
+            if !loop_emission_keys.is_empty() {
+                self.causality
+                    .append_condition_to_emissions(event_idx, &loop_emission_keys);
+                // Clear the current block to prevent the quantifier from leaking
+                // into a later unrelated emission (e.g. via a Move instruction).
+                self.causality.replace_current_block_conditions(Vec::new());
+            }
+
             return Ok(());
         }
 
+        // Handle nested rule calls
         if let Some(&Instruction::AssertCondition { condition }) =
             self.program.instructions.get(self.pc)
         {
-            if let Some(nested_records) =
-                self.nested_rule_explanation_records_for_assert(condition, outcome)
-            {
+            if self.is_nested_rule_condition(condition, outcome) {
+                let nested_indices = self.causality.take_last_rule_block_indices();
                 if self.capture_all_contributing_conditions() {
-                    self.current_block_records.extend(nested_records);
+                    // Keep existing + add nested
+                    for idx in &nested_indices {
+                        self.causality.push_current_block_condition(*idx);
+                    }
                 } else {
-                    self.current_block_records = nested_records;
+                    self.causality
+                        .replace_current_block_conditions(nested_indices);
                 }
                 return Ok(());
             }
         }
 
-        let record = self.make_current_instruction_record(metadata, outcome);
+        // Normal condition: snapshot values and bindings, record event
+        let (bindings_start, bindings_end) =
+            self.causality
+                .snapshot_bindings(&metadata.bindings, &self.registers, &self.provenance);
+        let snapshot = metadata
+            .probe
+            .as_ref()
+            .and_then(|probe| self.snapshot_condition_probe(probe));
+
+        // Snapshot actual/expected from the probe for the event
+        let (actual_idx, expected_idx) = snapshot
+            .as_ref()
+            .map(|s| (s.actual, s.expected))
+            .unwrap_or((None, None));
+
+        let event_idx = self.causality.record_condition(
+            pc,
+            passed,
+            actual_idx,
+            expected_idx,
+            bindings_start,
+            bindings_end,
+            snapshot,
+        );
+
+        // If a recent CallRule left block indices (e.g. count(violation) == 0
+        // wraps a CallRule result through a BuiltinCall), inline those conditions
+        // so the helper rule's explanations flow into this block.
+        let nested_indices = self.causality.take_last_rule_block_indices();
 
         if self.capture_all_contributing_conditions() {
-            self.current_block_records.push(record);
+            for idx in &nested_indices {
+                self.causality.push_current_block_condition(*idx);
+            }
+            self.causality.push_current_block_condition(event_idx);
         } else {
-            self.current_block_records.clear();
-            self.current_block_records.push(record);
+            let mut block = nested_indices;
+            block.push(event_idx);
+            self.causality.replace_current_block_conditions(block);
         }
 
         Ok(())
     }
 
     #[cfg(feature = "explanations")]
-    pub(super) fn finalize_current_block_records(&mut self) -> Vec<crate::ExplanationRecord> {
-        if self.current_block_records.is_empty() {
-            return Vec::new();
-        }
-
-        let records = mem::take(&mut self.current_block_records);
-        self.block_records.extend(records.iter().cloned());
-        records
+    pub(super) fn finalize_current_block(&mut self) -> Vec<u32> {
+        self.causality.finalize_current_block()
     }
 
     #[cfg(feature = "explanations")]
     pub(super) fn snapshot_latest_block(&mut self, explanation_key: Value) {
-        let latest_block = self.finalize_current_block_records();
-        if !latest_block.is_empty() {
-            if let Some(explanations) = self.explanations.as_mut() {
-                explanations
-                    .entry(explanation_key)
-                    .or_default()
-                    .extend(latest_block);
-            }
-        }
+        self.causality.snapshot_latest_block(explanation_key);
     }
 
     #[cfg(feature = "explanations")]
     pub(super) fn snapshot_all_blocks(&mut self, explanation_key: Value) {
-        let _ = self.finalize_current_block_records();
-        if let Some(explanations) = self.explanations.as_mut() {
-            explanations.insert(explanation_key, self.block_records.clone());
-        }
+        self.causality.snapshot_all_blocks(explanation_key);
     }
 
     pub(super) fn execute_instruction(
@@ -377,6 +464,8 @@ impl RegoVM {
             Load { dest, literal_idx } => {
                 if let Some(value) = program.literals.get(usize::from(literal_idx)) {
                     self.set_register(dest, value.clone())?;
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(dest);
                     Ok(InstructionOutcome::Continue)
                 } else {
                     Err(VmError::LiteralIndexOutOfBounds {
@@ -387,31 +476,45 @@ impl RegoVM {
             }
             LoadTrue { dest } => {
                 self.set_register(dest, Value::Bool(true))?;
+                #[cfg(feature = "explanations")]
+                self.provenance.clear_reg(dest);
                 Ok(InstructionOutcome::Continue)
             }
             LoadFalse { dest } => {
                 self.set_register(dest, Value::Bool(false))?;
+                #[cfg(feature = "explanations")]
+                self.provenance.clear_reg(dest);
                 Ok(InstructionOutcome::Continue)
             }
             LoadNull { dest } => {
                 self.set_register(dest, Value::Null)?;
+                #[cfg(feature = "explanations")]
+                self.provenance.clear_reg(dest);
                 Ok(InstructionOutcome::Continue)
             }
             LoadBool { dest, value } => {
                 self.set_register(dest, Value::Bool(value))?;
+                #[cfg(feature = "explanations")]
+                self.provenance.clear_reg(dest);
                 Ok(InstructionOutcome::Continue)
             }
             LoadData { dest } => {
                 self.set_register(dest, self.data.clone())?;
+                #[cfg(feature = "explanations")]
+                self.provenance.set_root(dest, "data");
                 Ok(InstructionOutcome::Continue)
             }
             LoadInput { dest } => {
                 self.set_register(dest, self.input.clone())?;
+                #[cfg(feature = "explanations")]
+                self.provenance.set_root(dest, "input");
                 Ok(InstructionOutcome::Continue)
             }
             Move { dest, src } => {
                 let value = self.get_register(src)?.clone();
                 self.set_register(dest, value)?;
+                #[cfg(feature = "explanations")]
+                self.provenance.copy(dest, src);
                 #[cfg(feature = "explanations")]
                 self.snapshot_latest_block(self.get_register(dest)?.clone());
                 Ok(InstructionOutcome::Continue)
@@ -433,11 +536,15 @@ impl RegoVM {
 
                 if a == &Value::Undefined || b == &Value::Undefined {
                     self.set_register(dest, Value::Undefined)?;
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(dest);
                     return Ok(InstructionOutcome::Continue);
                 }
 
                 let result = self.add_values(a, b)?;
                 self.set_register(dest, result)?;
+                #[cfg(feature = "explanations")]
+                self.provenance.clear_reg(dest);
                 Ok(InstructionOutcome::Continue)
             }
             Sub { dest, left, right } => {
@@ -446,11 +553,15 @@ impl RegoVM {
 
                 if a == &Value::Undefined || b == &Value::Undefined {
                     self.set_register(dest, Value::Undefined)?;
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(dest);
                     return Ok(InstructionOutcome::Continue);
                 }
 
                 let result = self.sub_values(a, b)?;
                 self.set_register(dest, result)?;
+                #[cfg(feature = "explanations")]
+                self.provenance.clear_reg(dest);
                 Ok(InstructionOutcome::Continue)
             }
             Mul { dest, left, right } => {
@@ -459,11 +570,15 @@ impl RegoVM {
 
                 if a == &Value::Undefined || b == &Value::Undefined {
                     self.set_register(dest, Value::Undefined)?;
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(dest);
                     return Ok(InstructionOutcome::Continue);
                 }
 
                 let result = self.mul_values(a, b)?;
                 self.set_register(dest, result)?;
+                #[cfg(feature = "explanations")]
+                self.provenance.clear_reg(dest);
                 Ok(InstructionOutcome::Continue)
             }
             Div { dest, left, right } => {
@@ -472,11 +587,15 @@ impl RegoVM {
 
                 if a == &Value::Undefined || b == &Value::Undefined {
                     self.set_register(dest, Value::Undefined)?;
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(dest);
                     return Ok(InstructionOutcome::Continue);
                 }
 
                 let result = self.div_values(a, b)?;
                 self.set_register(dest, result)?;
+                #[cfg(feature = "explanations")]
+                self.provenance.clear_reg(dest);
                 Ok(InstructionOutcome::Continue)
             }
             Mod { dest, left, right } => {
@@ -485,11 +604,15 @@ impl RegoVM {
 
                 if a == &Value::Undefined || b == &Value::Undefined {
                     self.set_register(dest, Value::Undefined)?;
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(dest);
                     return Ok(InstructionOutcome::Continue);
                 }
 
                 let result = self.mod_values(a, b)?;
                 self.set_register(dest, result)?;
+                #[cfg(feature = "explanations")]
+                self.provenance.clear_reg(dest);
                 Ok(InstructionOutcome::Continue)
             }
             other => self.execute_comparison_instruction(program, other),
@@ -509,10 +632,14 @@ impl RegoVM {
 
                 if a == &Value::Undefined || b == &Value::Undefined {
                     self.set_register(dest, Value::Undefined)?;
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(dest);
                     return Ok(InstructionOutcome::Continue);
                 }
 
                 self.set_register(dest, Value::Bool(a == b))?;
+                #[cfg(feature = "explanations")]
+                self.provenance.clear_reg(dest);
                 Ok(InstructionOutcome::Continue)
             }
             Ne { dest, left, right } => {
@@ -521,10 +648,14 @@ impl RegoVM {
 
                 if a == &Value::Undefined || b == &Value::Undefined {
                     self.set_register(dest, Value::Undefined)?;
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(dest);
                     return Ok(InstructionOutcome::Continue);
                 }
 
                 self.set_register(dest, Value::Bool(a != b))?;
+                #[cfg(feature = "explanations")]
+                self.provenance.clear_reg(dest);
                 Ok(InstructionOutcome::Continue)
             }
             Lt { dest, left, right } => {
@@ -533,6 +664,8 @@ impl RegoVM {
 
                 if a == &Value::Undefined || b == &Value::Undefined {
                     self.set_register(dest, Value::Undefined)?;
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(dest);
                     return Ok(InstructionOutcome::Continue);
                 }
 
@@ -546,6 +679,8 @@ impl RegoVM {
                 }
 
                 self.set_register(dest, Value::Bool(a < b))?;
+                #[cfg(feature = "explanations")]
+                self.provenance.clear_reg(dest);
                 Ok(InstructionOutcome::Continue)
             }
             Le { dest, left, right } => {
@@ -554,6 +689,8 @@ impl RegoVM {
 
                 if a == &Value::Undefined || b == &Value::Undefined {
                     self.set_register(dest, Value::Undefined)?;
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(dest);
                     return Ok(InstructionOutcome::Continue);
                 }
 
@@ -567,6 +704,8 @@ impl RegoVM {
                 }
 
                 self.set_register(dest, Value::Bool(a <= b))?;
+                #[cfg(feature = "explanations")]
+                self.provenance.clear_reg(dest);
                 Ok(InstructionOutcome::Continue)
             }
             Gt { dest, left, right } => {
@@ -575,6 +714,8 @@ impl RegoVM {
 
                 if a == &Value::Undefined || b == &Value::Undefined {
                     self.set_register(dest, Value::Undefined)?;
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(dest);
                     return Ok(InstructionOutcome::Continue);
                 }
 
@@ -588,6 +729,8 @@ impl RegoVM {
                 }
 
                 self.set_register(dest, Value::Bool(a > b))?;
+                #[cfg(feature = "explanations")]
+                self.provenance.clear_reg(dest);
                 Ok(InstructionOutcome::Continue)
             }
             Ge { dest, left, right } => {
@@ -596,6 +739,8 @@ impl RegoVM {
 
                 if a == &Value::Undefined || b == &Value::Undefined {
                     self.set_register(dest, Value::Undefined)?;
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(dest);
                     return Ok(InstructionOutcome::Continue);
                 }
 
@@ -609,6 +754,8 @@ impl RegoVM {
                 }
 
                 self.set_register(dest, Value::Bool(a >= b))?;
+                #[cfg(feature = "explanations")]
+                self.provenance.clear_reg(dest);
                 Ok(InstructionOutcome::Continue)
             }
             And { dest, left, right } => {
@@ -617,12 +764,16 @@ impl RegoVM {
 
                 if left_value == &Value::Undefined || right_value == &Value::Undefined {
                     self.set_register(dest, Value::Undefined)?;
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(dest);
                     return Ok(InstructionOutcome::Continue);
                 }
 
                 match (self.to_bool(left_value), self.to_bool(right_value)) {
                     (Some(a), Some(b)) => {
                         self.set_register(dest, Value::Bool(a && b))?;
+                        #[cfg(feature = "explanations")]
+                        self.provenance.clear_reg(dest);
                         Ok(InstructionOutcome::Continue)
                     }
                     _ => Err(VmError::ArithmeticError {
@@ -639,12 +790,16 @@ impl RegoVM {
 
                 if left_value == &Value::Undefined || right_value == &Value::Undefined {
                     self.set_register(dest, Value::Undefined)?;
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(dest);
                     return Ok(InstructionOutcome::Continue);
                 }
 
                 match (self.to_bool(left_value), self.to_bool(right_value)) {
                     (Some(a), Some(b)) => {
                         self.set_register(dest, Value::Bool(a || b))?;
+                        #[cfg(feature = "explanations")]
+                        self.provenance.clear_reg(dest);
                         Ok(InstructionOutcome::Continue)
                     }
                     _ => Err(VmError::ArithmeticError {
@@ -663,11 +818,15 @@ impl RegoVM {
                     // When the operand evaluates to undefined we should treat it as
                     // a successful negation instead of propagating undefined.
                     self.set_register(dest, Value::Bool(true))?;
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(dest);
                     return Ok(InstructionOutcome::Continue);
                 }
 
                 if let Some(value) = self.to_bool(operand_value) {
                     self.set_register(dest, Value::Bool(!value))?;
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(dest);
                     Ok(InstructionOutcome::Continue)
                 } else {
                     Err(VmError::ArithmeticError {
@@ -696,7 +855,7 @@ impl RegoVM {
 
                 #[cfg(feature = "explanations")]
                 if !condition_result {
-                    let _ = self.finalize_current_block_records();
+                    let _ = self.finalize_current_block();
                 }
 
                 self.handle_condition(condition_result)?;
@@ -715,7 +874,7 @@ impl RegoVM {
 
                 #[cfg(feature = "explanations")]
                 if is_undefined {
-                    let _ = self.finalize_current_block_records();
+                    let _ = self.finalize_current_block();
                 }
                 self.handle_condition(!is_undefined)?;
                 Ok(InstructionOutcome::Continue)
@@ -746,6 +905,8 @@ impl RegoVM {
                     ExecutionMode::RunToCompletion => {
                         let response = self.next_host_await_response(&identifier, dest)?;
                         self.set_register(dest, response)?;
+                        #[cfg(feature = "explanations")]
+                        self.provenance.clear_reg(dest);
                         Ok(InstructionOutcome::Continue)
                     }
                     ExecutionMode::Suspendable => Ok(InstructionOutcome::Suspend {
@@ -903,6 +1064,8 @@ impl RegoVM {
 
                     self.set_register(params.dest, obj_value)?;
                 }
+                #[cfg(feature = "explanations")]
+                self.provenance.clear_reg(params.dest);
                 Ok(InstructionOutcome::Continue)
             }
             Index {
@@ -913,7 +1076,11 @@ impl RegoVM {
                 let key_value = self.get_register(key)?;
                 let container_value = self.get_register(container)?;
                 let result = container_value[key_value].clone();
+                #[cfg(feature = "explanations")]
+                let key_clone = key_value.clone();
                 self.set_register(dest, result)?;
+                #[cfg(feature = "explanations")]
+                self.provenance.append_index(dest, container, &key_clone);
                 Ok(InstructionOutcome::Continue)
             }
             IndexLiteral {
@@ -926,6 +1093,15 @@ impl RegoVM {
                 if let Some(key_value) = program.literals.get(usize::from(literal_idx)) {
                     let result = container_value[key_value].clone();
                     self.set_register(dest, result)?;
+                    #[cfg(feature = "explanations")]
+                    {
+                        if let Ok(field) = key_value.as_string() {
+                            self.provenance
+                                .append_field(dest, container, field.as_ref());
+                        } else {
+                            self.provenance.append_index(dest, container, key_value);
+                        }
+                    }
                     Ok(InstructionOutcome::Continue)
                 } else {
                     Err(VmError::LiteralIndexOutOfBounds {
@@ -937,6 +1113,8 @@ impl RegoVM {
             ArrayNew { dest } => {
                 let empty_array = Value::Array(crate::Rc::new(Vec::new()));
                 self.set_register(dest, empty_array)?;
+                #[cfg(feature = "explanations")]
+                self.provenance.clear_reg(dest);
                 Ok(InstructionOutcome::Continue)
             }
             ArrayPush { arr, value } => {
@@ -983,6 +1161,8 @@ impl RegoVM {
                         let array_value = Value::Array(crate::Rc::new(elements));
                         self.set_register(params.dest, array_value)?;
                     }
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(params.dest);
                     Ok(InstructionOutcome::Continue)
                 } else {
                     Err(VmError::InvalidArrayCreateParams {
@@ -995,6 +1175,8 @@ impl RegoVM {
             SetNew { dest } => {
                 let empty_set = Value::Set(crate::Rc::new(BTreeSet::new()));
                 self.set_register(dest, empty_set)?;
+                #[cfg(feature = "explanations")]
+                self.provenance.clear_reg(dest);
                 Ok(InstructionOutcome::Continue)
             }
             SetAdd { set, value } => {
@@ -1039,6 +1221,8 @@ impl RegoVM {
                         let set_value = Value::Set(crate::Rc::new(set));
                         self.set_register(params.dest, set_value)?;
                     }
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(params.dest);
                     Ok(InstructionOutcome::Continue)
                 } else {
                     Err(VmError::InvalidSetCreateParams {
@@ -1071,6 +1255,8 @@ impl RegoVM {
                 };
 
                 self.set_register(dest, result)?;
+                #[cfg(feature = "explanations")]
+                self.provenance.clear_reg(dest);
                 Ok(InstructionOutcome::Continue)
             }
             Count { dest, collection } => {
@@ -1084,6 +1270,8 @@ impl RegoVM {
                 };
 
                 self.set_register(dest, result)?;
+                #[cfg(feature = "explanations")]
+                self.provenance.clear_reg(dest);
                 Ok(InstructionOutcome::Continue)
             }
             other => self.execute_loop_instruction(program, other),
@@ -1154,6 +1342,10 @@ impl RegoVM {
 
                 let mut current_value = self.get_register(params.root)?.clone();
 
+                #[cfg(feature = "explanations")]
+                // Start provenance from root, then extend per component
+                self.provenance.copy(params.dest, params.root);
+
                 for component in &params.path_components {
                     let key_value = match *component {
                         LiteralOrRegister::Literal(idx) => program
@@ -1168,6 +1360,17 @@ impl RegoVM {
                     };
 
                     current_value = current_value[&key_value].clone();
+
+                    #[cfg(feature = "explanations")]
+                    {
+                        if let Ok(field) = key_value.as_string() {
+                            self.provenance
+                                .append_field(params.dest, params.dest, field.as_ref());
+                        } else {
+                            self.provenance
+                                .append_index(params.dest, params.dest, &key_value);
+                        }
+                    }
 
                     if current_value == Value::Undefined {
                         break;

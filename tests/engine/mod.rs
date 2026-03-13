@@ -610,12 +610,15 @@ fn rvm_execute_with_explanations_prefers_predicate_conditions() -> Result<()> {
         .get(&Value::from("service frontend uses http"))
         .ok_or_else(|| anyhow::anyhow!("missing explanation record"))?;
 
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].outcome, ExplanationOutcome::Success);
-    assert!(records[0]
-        .text
+    // PrimaryOnly mode: comparison condition + loop quantifier context
+    assert_eq!(records.len(), 2);
+    assert!(records
+        .iter()
+        .any(|r| r.text.as_ref().starts_with("svc.protocol == \"http")));
+    assert!(records.iter().any(|r| r
+        .evaluation
         .as_ref()
-        .starts_with("svc.protocol == \"http"));
+        .is_some_and(|e| e.kind == ConditionEvaluationKind::Quantifier)));
 
     Ok(())
 }
@@ -985,12 +988,18 @@ fn rvm_execute_with_explanations_tracks_all_contributing_conditions() -> Result<
         .get(&Value::from("service dns uses privileged port 53"))
         .ok_or_else(|| anyhow::anyhow!("missing explanation record"))?;
 
-    assert_eq!(records.len(), 2);
-    assert!(records[0].text.as_ref().starts_with("svc.port < 1024"));
-    assert!(records[1]
-        .text
+    // comparison + builtin + quantifier
+    assert_eq!(records.len(), 3);
+    assert!(records
+        .iter()
+        .any(|r| r.text.as_ref().starts_with("svc.port < 1024")));
+    assert!(records
+        .iter()
+        .any(|r| r.text.as_ref().starts_with("startswith(svc.name, \"dn\")")));
+    assert!(records.iter().any(|r| r
+        .evaluation
         .as_ref()
-        .starts_with("startswith(svc.name, \"dn\")"));
+        .is_some_and(|e| e.kind == ConditionEvaluationKind::Quantifier)));
 
     Ok(())
 }

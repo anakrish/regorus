@@ -789,6 +789,13 @@ impl Engine {
         self.interpreter.take_explanations()
     }
 
+    #[cfg(feature = "explanations")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "explanations")))]
+    /// Take a structured causality report from the most recent evaluation.
+    pub fn take_causality_report(&mut self) -> crate::causality::CausalityReport {
+        self.interpreter.take_causality_report()
+    }
+
     /// Evaluate a Rego query.
     ///
     /// ```

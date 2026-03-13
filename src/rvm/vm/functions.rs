@@ -48,9 +48,11 @@ impl RegoVM {
                 pc: self.pc,
                 available: self.program.instruction_data.builtin_call_params.len(),
             })?;
-        let builtin_info = self.program.get_builtin_info(params.builtin_index).ok_or(
+        let dest = params.dest;
+        let builtin_index = params.builtin_index;
+        let builtin_info = self.program.get_builtin_info(builtin_index).ok_or(
             VmError::InvalidBuiltinInfoIndex {
-                index: params.builtin_index,
+                index: builtin_index,
                 pc: self.pc,
                 available: self.program.builtin_info_table.len(),
             },
@@ -72,13 +74,17 @@ impl RegoVM {
             });
         }
 
+        let builtin_name = builtin_info.name.clone();
+
         if args.iter().any(|a| a == &Value::Undefined) {
-            self.set_register(params.dest, Value::Undefined)?;
+            self.set_register(dest, Value::Undefined)?;
+            #[cfg(feature = "explanations")]
+            self.provenance.clear_reg(dest);
             self.memory_check()?;
             return Ok(());
         }
 
-        if let Some(builtin_fcn) = self.program.get_resolved_builtin(params.builtin_index) {
+        if let Some(builtin_fcn) = self.program.get_resolved_builtin(builtin_index) {
             let dummy_source = crate::lexer::Source::from_contents("arg".into(), String::new())?;
             let dummy_span = crate::lexer::Span {
                 source: dummy_source,
@@ -98,10 +104,12 @@ impl RegoVM {
                 dummy_exprs.push(crate::ast::Ref::new(dummy_expr));
             }
 
-            let cache_name = builtins::must_cache(builtin_info.name.as_str());
+            let cache_name = builtins::must_cache(builtin_name.as_str());
             if let Some(name) = cache_name {
                 if let Some(value) = self.builtins_cache.get(&(name, args.clone())) {
-                    self.set_register(params.dest, value.clone())?;
+                    self.set_register(dest, value.clone())?;
+                    #[cfg(feature = "explanations")]
+                    self.provenance.clear_reg(dest);
                     return Ok(());
                 }
             }
@@ -115,10 +123,13 @@ impl RegoVM {
                 };
 
             if result == Value::Undefined {
-                self.set_register(params.dest, Value::Undefined)?;
+                self.set_register(dest, Value::Undefined)?;
             } else {
-                self.set_register(params.dest, result.clone())?;
+                self.set_register(dest, result.clone())?;
             }
+
+            #[cfg(feature = "explanations")]
+            self.provenance.clear_reg(dest);
 
             if let Some(name) = cache_name {
                 self.builtins_cache.insert((name, args), result);
@@ -127,7 +138,7 @@ impl RegoVM {
             self.memory_check()?;
         } else {
             return Err(VmError::BuiltinNotResolved {
-                name: builtin_info.name.clone(),
+                name: builtin_name,
                 pc: self.pc,
             });
         }

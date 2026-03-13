@@ -119,6 +119,7 @@ fn rego_eval(
     #[cfg(feature = "explanations")] why_bindings: bool,
     #[cfg(feature = "explanations")] why_full_values: bool,
     #[cfg(feature = "explanations")] why_all_conditions: bool,
+    #[cfg(feature = "explanations")] why_report: bool,
     #[cfg(feature = "coverage")] coverage: bool,
     v0: bool,
 ) -> Result<()> {
@@ -213,6 +214,8 @@ fn rego_eval(
 
     #[cfg(feature = "explanations")]
     let mut deferred_explanations = None;
+    #[cfg(feature = "explanations")]
+    let mut deferred_report: Option<regorus::CausalityReport> = None;
 
     let results = match engine {
         EvalEngine::Interpreter => {
@@ -281,7 +284,11 @@ fn rego_eval(
 
                 #[cfg(feature = "explanations")]
                 if why_enabled {
-                    deferred_explanations = Some(vm.take_explanations());
+                    if why_report {
+                        deferred_report = Some(vm.take_causality_report());
+                    } else {
+                        deferred_explanations = Some(vm.take_explanations());
+                    }
                 }
 
                 single_value_query_results(query.clone(), value)
@@ -293,14 +300,28 @@ fn rego_eval(
 
     #[cfg(feature = "explanations")]
     if why_enabled {
-        match engine {
-            EvalEngine::Interpreter => {
-                let explanations = policy_engine.take_explanations();
-                print_reasons(explanations, why_bindings)?;
-            }
-            EvalEngine::Rvm => {
-                if let Some(explanations) = deferred_explanations.take() {
+        if why_report {
+            let report = match engine {
+                EvalEngine::Interpreter => policy_engine.take_causality_report(),
+                EvalEngine::Rvm => {
+                    deferred_report
+                        .take()
+                        .unwrap_or_else(|| regorus::CausalityReport {
+                            emissions: Vec::new(),
+                        })
+                }
+            };
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else {
+            match engine {
+                EvalEngine::Interpreter => {
+                    let explanations = policy_engine.take_explanations();
                     print_reasons(explanations, why_bindings)?;
+                }
+                EvalEngine::Rvm => {
+                    if let Some(explanations) = deferred_explanations.take() {
+                        print_reasons(explanations, why_bindings)?;
+                    }
                 }
             }
         }
@@ -452,6 +473,11 @@ enum RegorusCommand {
         #[arg(long = "why-all-conditions")]
         why_all_conditions: bool,
 
+        /// Output a structured CausalityReport instead of flat reasons.
+        #[cfg(feature = "explanations")]
+        #[arg(long = "why-report", requires = "why")]
+        why_report: bool,
+
         /// Display coverage information
         #[cfg(feature = "coverage")]
         #[arg(long, short)]
@@ -512,6 +538,8 @@ fn main() -> Result<()> {
             why_full_values,
             #[cfg(feature = "explanations")]
             why_all_conditions,
+            #[cfg(feature = "explanations")]
+            why_report,
             #[cfg(feature = "coverage")]
             coverage,
             v0,
@@ -531,6 +559,8 @@ fn main() -> Result<()> {
             why_full_values,
             #[cfg(feature = "explanations")]
             why_all_conditions,
+            #[cfg(feature = "explanations")]
+            why_report,
             #[cfg(feature = "coverage")]
             coverage,
             v0,

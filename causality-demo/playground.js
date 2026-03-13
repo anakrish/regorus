@@ -31,7 +31,6 @@ const requestText = document.querySelector("#request-text");
 const requestTabs = document.querySelector("#playground-request-tabs");
 const requestHeading = document.querySelector("#playground-request-heading");
 const queryText = document.querySelector("#query-text");
-const engineSelect = document.querySelector("#engine-select");
 const whyBindings = document.querySelector("#flag-why-bindings");
 const whyFullValues = document.querySelector("#flag-why-full-values");
 const whyAllConditions = document.querySelector("#flag-why-all-conditions");
@@ -93,7 +92,7 @@ async function runPlayground() {
       data: requestState.data,
       input: requestState.input,
       query: queryText.value,
-      engine: engineSelect.value,
+      engine: "rvm",
       whyBindings: whyBindings.checked,
       whyFullValues: whyFullValues.checked,
       whyAllConditions: whyAllConditions.checked
@@ -122,7 +121,6 @@ loadSampleButton.addEventListener("click", () => {
   requestState.activeTab = "input";
   renderRequestTabs();
   queryText.value = "data.demo.allow";
-  engineSelect.value = "interpreter";
   whyBindings.checked = false;
   whyFullValues.checked = false;
   whyAllConditions.checked = true;

@@ -19,8 +19,6 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::time::Duration;
 
-#[cfg(feature = "explanations")]
-use super::context::LoopExplanationRecordSet;
 use super::context::{CallRuleContext, ComprehensionContext, LoopContext};
 use super::errors::{Result, VmError};
 use super::execution_model::{
@@ -61,6 +59,10 @@ pub struct RegoVM {
 
     /// Register stack for isolated register spaces during rule calls
     pub(super) register_stack: Vec<Vec<Value>>,
+
+    #[cfg(feature = "explanations")]
+    /// Provenance stack: saved provenance paths during rule calls (parallel to register_stack).
+    pub(super) provenance_stack: Vec<Vec<Option<crate::Rc<str>>>>,
 
     /// Comprehension execution stack for tracking active comprehensions
     /// Note: Comprehensions can be nested within each other, forming a proper nesting hierarchy.
@@ -124,35 +126,17 @@ pub struct RegoVM {
     pub(super) execution_timer_elapsed_at_suspend: Option<Duration>,
 
     #[cfg(feature = "explanations")]
-    /// Explanation records collected during the current execution.
-    pub(super) explanations: Option<BTreeMap<Value, Vec<crate::ExplanationRecord>>>,
+    /// Causality capture: append-only event log replacing the old per-condition
+    /// record construction.  Materialization is deferred to `take_explanations()`.
+    pub(super) causality: crate::causality::CausalityCapture,
 
     #[cfg(feature = "explanations")]
-    /// Finalized block summaries collected during the current execution.
-    pub(super) block_records: Vec<crate::ExplanationRecord>,
-
-    #[cfg(feature = "explanations")]
-    /// Pending conditions for the currently executing block.
-    pub(super) current_block_records: Vec<crate::ExplanationRecord>,
-
-    #[cfg(feature = "explanations")]
-    /// Finalized block summaries produced by the most recent nested rule call.
-    pub(super) last_rule_block_records: Vec<crate::ExplanationRecord>,
+    /// Tracks data-path provenance for each register value.
+    pub(super) provenance: crate::causality::ProvenanceTracker,
 
     #[cfg(feature = "explanations")]
     /// Runtime settings for explanation capture.
     pub(super) explanation_settings: crate::ExplanationSettings,
-    #[cfg(feature = "explanations")]
-    pub(super) loop_witnesses: BTreeMap<u8, crate::explanations::RawConditionEvaluationWitness>,
-    #[cfg(feature = "explanations")]
-    pub(super) loop_records: BTreeMap<u8, LoopExplanationRecordSet>,
-    #[cfg(feature = "explanations")]
-    pub(super) comprehension_witnesses:
-        BTreeMap<u8, crate::explanations::RawConditionEvaluationWitness>,
-    #[cfg(feature = "explanations")]
-    pub(super) last_entrypoint_rule_type: Option<crate::rvm::program::RuleType>,
-    #[cfg(feature = "explanations")]
-    pub(super) last_explanation_result: Option<Value>,
 }
 
 impl Default for RegoVM {
@@ -177,6 +161,8 @@ impl RegoVM {
             loop_stack: Vec::new(),
             call_rule_stack: Vec::new(),
             register_stack: Vec::new(),
+            #[cfg(feature = "explanations")]
+            provenance_stack: Vec::new(),
             comprehension_stack: Vec::new(),
             base_register_count: 2, // Default to 2 registers for basic operations
             register_window_pool: Vec::new(), // Initialize register window pool
@@ -197,25 +183,11 @@ impl RegoVM {
             execution_timer: ExecutionTimer::new(fallback_timer),
             execution_timer_elapsed_at_suspend: None,
             #[cfg(feature = "explanations")]
-            explanations: None,
+            causality: crate::causality::CausalityCapture::new(),
             #[cfg(feature = "explanations")]
-            block_records: Vec::new(),
-            #[cfg(feature = "explanations")]
-            current_block_records: Vec::new(),
-            #[cfg(feature = "explanations")]
-            last_rule_block_records: Vec::new(),
+            provenance: crate::causality::ProvenanceTracker::new(),
             #[cfg(feature = "explanations")]
             explanation_settings: crate::ExplanationSettings::default(),
-            #[cfg(feature = "explanations")]
-            loop_witnesses: BTreeMap::new(),
-            #[cfg(feature = "explanations")]
-            loop_records: BTreeMap::new(),
-            #[cfg(feature = "explanations")]
-            comprehension_witnesses: BTreeMap::new(),
-            #[cfg(feature = "explanations")]
-            last_entrypoint_rule_type: None,
-            #[cfg(feature = "explanations")]
-            last_explanation_result: None,
         }
     }
 
@@ -240,6 +212,9 @@ impl RegoVM {
         // Resize registers to match program requirements
         self.registers.clear();
         self.registers.resize(dispatch_size, Value::Undefined);
+
+        #[cfg(feature = "explanations")]
+        self.provenance.resize(dispatch_size);
 
         // Initialize rule cache
         self.rule_cache = vec![(false, Value::Undefined); program.rule_infos.len()];
@@ -289,35 +264,20 @@ impl RegoVM {
     #[cfg(feature = "explanations")]
     pub fn set_explanation_settings(&mut self, settings: crate::ExplanationSettings) {
         self.explanation_settings = settings;
-        self.explanations = self.explanation_settings.enabled.then(BTreeMap::new);
-        self.block_records.clear();
-        self.current_block_records.clear();
-        self.last_rule_block_records.clear();
-        self.loop_witnesses.clear();
-        self.loop_records.clear();
-        self.comprehension_witnesses.clear();
-        self.last_entrypoint_rule_type = None;
-        self.last_explanation_result = None;
+        self.causality
+            .set_enabled(self.explanation_settings.enabled);
     }
 
     #[cfg(feature = "explanations")]
     pub fn take_explanations(&mut self) -> BTreeMap<Value, Vec<crate::ExplanationRecord>> {
-        let explanations = crate::explanations::normalize_explanations(
-            self.explanations.take().unwrap_or_default(),
-        );
+        self.causality
+            .materialize(&self.explanation_settings, &self.program)
+    }
 
-        if matches!(
-            self.last_entrypoint_rule_type,
-            Some(crate::rvm::program::RuleType::Complete)
-        ) {
-            if let Some(result) = self.last_explanation_result.as_ref() {
-                crate::explanations::filter_explanations_for_complete_rule(explanations, result)
-            } else {
-                explanations
-            }
-        } else {
-            explanations
-        }
+    #[cfg(feature = "explanations")]
+    pub fn take_causality_report(&mut self) -> crate::causality::CausalityReport {
+        self.causality
+            .materialize_report(&self.explanation_settings, &self.program)
     }
 
     /// Get the number of entry points available

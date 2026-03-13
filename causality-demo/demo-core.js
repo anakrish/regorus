@@ -1,4 +1,4 @@
-import init, { Engine, Rvm } from "./pkg/regorusjs.js";
+import init, { Rvm } from "./pkg/regorusjs.js";
 
 let runtimePromise;
 
@@ -37,22 +37,34 @@ function summarizeEvaluation(evaluation) {
   const meta = [];
   const checks = [];
   if (evaluation.operator) {
-    meta.push(`operator: ${evaluation.operator}`);
+    meta.push({ text: `operator: ${evaluation.operator}` });
   }
   if (Object.prototype.hasOwnProperty.call(evaluation, "actual_value")) {
-    meta.push(`actual: ${JSON.stringify(evaluation.actual_value)}`);
+    meta.push({
+      text: `actual: ${JSON.stringify(evaluation.actual_value)}`,
+      provenance: evaluation.actual_path ? `← ${evaluation.actual_path}` : null
+    });
   }
   if (Object.prototype.hasOwnProperty.call(evaluation, "expected_value")) {
-    meta.push(`expected: ${JSON.stringify(evaluation.expected_value)}`);
+    meta.push({
+      text: `expected: ${JSON.stringify(evaluation.expected_value)}`,
+      provenance: evaluation.expected_path ? `← ${evaluation.expected_path}` : null
+    });
+  }
+  if (evaluation.witness?.collection_path) {
+    meta.push({
+      text: "collection:",
+      provenance: evaluation.witness.collection_path
+    });
   }
   if (evaluation.witness?.iteration_count != null) {
-    meta.push(`${evaluation.witness.iteration_count} iterations`);
+    meta.push({ text: `${evaluation.witness.iteration_count} iterations` });
   }
   if (evaluation.witness?.success_count != null) {
-    meta.push(`${evaluation.witness.success_count} successes`);
+    meta.push({ text: `${evaluation.witness.success_count} successes` });
   }
   if (evaluation.witness?.yield_count != null) {
-    meta.push(`${evaluation.witness.yield_count} yielded values`);
+    meta.push({ text: `${evaluation.witness.yield_count} yielded values` });
   }
   if (evaluation.witness?.condition_texts?.length) {
     checks.push(...evaluation.witness.condition_texts);
@@ -66,16 +78,50 @@ function summarizeWitness(witness) {
   }
 
   const details = [];
-  if (witness.passing_iteration?.sample_value !== undefined) {
-    details.push(`passing sample: ${JSON.stringify(witness.passing_iteration.sample_value)}`);
-  }
-  if (witness.failing_iteration?.sample_value !== undefined) {
-    details.push(`failing sample: ${JSON.stringify(witness.failing_iteration.sample_value)}`);
-  }
-  if (witness.sample_value !== undefined && !details.length) {
-    details.push(`sample: ${JSON.stringify(witness.sample_value)}`);
+  if (witness.sample_value !== undefined
+      && !witness.passing_iteration?.sample_value
+      && !witness.failing_iteration?.sample_value) {
+    details.push({ text: `sample: ${JSON.stringify(witness.sample_value)}` });
   }
   return details;
+}
+
+function buildIterationSamples(witness) {
+  if (!witness) return null;
+  const passing = witness.passing_iteration;
+  const failing = witness.failing_iteration;
+  if (!passing && !failing) return null;
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "iteration-samples";
+
+  [{ data: passing, label: "Passing iteration", cls: "sample-passing" },
+   { data: failing, label: "Failing iteration", cls: "sample-failing" }]
+    .forEach(({ data, label, cls }) => {
+      if (!data) return;
+      const details = document.createElement("details");
+      details.className = `iteration-sample ${cls}`;
+      const summary = document.createElement("summary");
+      summary.className = "sample-summary";
+      const tag = document.createElement("span");
+      tag.className = "sample-tag";
+      tag.textContent = label;
+      summary.appendChild(tag);
+      if (data.sample_key != null) {
+        const key = document.createElement("span");
+        key.className = "sample-key";
+        key.textContent = `key = ${JSON.stringify(data.sample_key)}`;
+        summary.appendChild(key);
+      }
+      details.appendChild(summary);
+      const pre = document.createElement("pre");
+      pre.className = "sample-json";
+      pre.textContent = JSON.stringify(data.sample_value, null, 2);
+      details.appendChild(pre);
+      wrapper.appendChild(details);
+    });
+
+  return wrapper.children.length ? wrapper : null;
 }
 
 export function renderConditionCards(container, reasons) {
@@ -128,7 +174,15 @@ export function renderConditionCards(container, reasons) {
       [...evaluationSummary.meta, ...summarizeWitness(condition.evaluation?.witness)].forEach((entry) => {
         const chip = document.createElement("span");
         chip.className = "meta-chip";
-        chip.textContent = entry;
+        const label = document.createElement("span");
+        label.textContent = entry.text;
+        chip.appendChild(label);
+        if (entry.provenance) {
+          const prov = document.createElement("span");
+          prov.className = "meta-provenance";
+          prov.textContent = ` ${entry.provenance}`;
+          chip.appendChild(prov);
+        }
         meta.appendChild(chip);
       });
 
@@ -167,7 +221,16 @@ export function renderConditionCards(container, reasons) {
         condition.bindings.forEach((binding) => {
           const item = document.createElement("li");
           item.className = "condition-detail-item binding-item";
-          item.textContent = `${binding.name} = ${JSON.stringify(binding.value)}`;
+          const assign = document.createElement("span");
+          assign.className = "binding-assign";
+          assign.textContent = `${binding.name} = ${JSON.stringify(binding.value)}`;
+          item.appendChild(assign);
+          if (binding.source_path) {
+            const prov = document.createElement("span");
+            prov.className = "binding-provenance";
+            prov.textContent = `← ${binding.source_path}`;
+            item.appendChild(prov);
+          }
           list.appendChild(item);
         });
         bindings.appendChild(label);
@@ -185,6 +248,12 @@ export function renderConditionCards(container, reasons) {
       if (bindings) {
         item.appendChild(bindings);
       }
+
+      const samples = buildIterationSamples(condition.evaluation?.witness);
+      if (samples) {
+        item.appendChild(samples);
+      }
+
       list.appendChild(item);
     });
 
@@ -215,24 +284,6 @@ function summarizeValue(value) {
   return JSON.stringify(value);
 }
 
-async function evaluateInterpreter(options) {
-  const engine = new Engine();
-  engine.addPolicy("demo.rego", options.policy);
-  engine.addDataJson(parseJsonText("Data", options.data));
-  engine.setInputJson(parseJsonText("Input", options.input));
-
-  const mode = explanationMode(options);
-  engine.setExplanationOptions(mode.enabled, mode.valueMode, mode.conditionMode);
-
-  const result = JSON.parse(engine.evalQuery(options.query));
-  const why = JSON.parse(engine.takeExplanations());
-  return {
-    result,
-    why,
-    resultSummary: summarizeQueryResults(result)
-  };
-}
-
 async function evaluateRvm(options) {
   const vm = new Rvm();
   const mode = explanationMode(options);
@@ -256,9 +307,7 @@ async function evaluateRvm(options) {
 export async function evaluatePolicy(options) {
   await initRuntime();
   const started = performance.now();
-  const payload = options.engine === "rvm"
-    ? await evaluateRvm(options)
-    : await evaluateInterpreter(options);
+  const payload = await evaluateRvm(options);
 
   return {
     ...payload,

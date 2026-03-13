@@ -279,6 +279,9 @@ impl RegoVM {
             }
         }
 
+        #[cfg(feature = "explanations")]
+        self.provenance.clear_reg(params.dest);
+
         Ok(())
     }
 

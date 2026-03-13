@@ -1,0 +1,59 @@
+{
+  "request": {
+    "kind": {
+      "kind": "Pod"
+    },
+    "object": {
+      "metadata": {
+        "name": "web-app",
+        "namespace": "production"
+      },
+      "spec": {
+        "containers": [
+          {
+            "name": "frontend",
+            "image": "mycompany.azurecr.io/frontend:v2.1",
+            "resources": {
+              "limits": {
+                "cpu": "500m",
+                "memory": "256Mi"
+              }
+            },
+            "securityContext": {
+              "privileged": false,
+              "runAsUser": 1000
+            }
+          },
+          {
+            "name": "sidecar-debug",
+            "image": "ghcr.io/debug-tools:latest",
+            "resources": {
+              "limits": {
+                "cpu": "200m",
+                "memory": "128Mi"
+              }
+            },
+            "securityContext": {
+              "privileged": true,
+              "runAsUser": 1000
+            }
+          },
+          {
+            "name": "log-agent",
+            "image": "mycompany.azurecr.io/log-agent:v1.0",
+            "resources": {
+              "limits": {
+                "cpu": "100m",
+                "memory": "64Mi"
+              }
+            },
+            "securityContext": {
+              "privileged": false,
+              "runAsUser": 1000
+            }
+          }
+        ]
+      }
+    }
+  }
+}

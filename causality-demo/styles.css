@@ -447,6 +447,11 @@ a {
   padding: 5px 10px;
 }
 
+.meta-provenance {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .condition-bindings {
   margin-top: 12px;
 }
@@ -482,6 +487,75 @@ a {
 
 .binding-item {
   font-family: "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.binding-provenance {
+  font-size: 0.82rem;
+  color: var(--accent);
+  opacity: 0.85;
+  white-space: nowrap;
+}
+
+/* ── Iteration sample blocks ── */
+.iteration-samples {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(49, 55, 45, 0.08);
+  display: grid;
+  gap: 8px;
+}
+
+.iteration-sample {
+  border-radius: var(--radius-sm, 6px);
+  overflow: hidden;
+}
+
+.sample-summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 0.82rem;
+  user-select: none;
+  border-radius: var(--radius-sm, 6px);
+}
+
+.sample-passing .sample-summary {
+  background: rgba(90, 140, 80, 0.10);
+  color: #3d6635;
+}
+
+.sample-failing .sample-summary {
+  background: rgba(180, 80, 60, 0.10);
+  color: #8b3a2a;
+}
+
+.sample-tag {
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.sample-key {
+  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  opacity: 0.7;
+  font-size: 0.78rem;
+}
+
+.sample-json {
+  margin: 0;
+  padding: 10px 14px;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  background: rgba(49, 55, 45, 0.04);
+  max-height: 240px;
+  overflow: auto;
+  border-radius: 0 0 var(--radius-sm, 6px) var(--radius-sm, 6px);
 }
 
 .command-block,

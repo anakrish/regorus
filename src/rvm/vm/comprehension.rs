@@ -653,21 +653,34 @@ impl RegoVM {
                 #[cfg(not(feature = "explanations"))]
                 let _ = &context;
                 #[cfg(feature = "explanations")]
-                self.comprehension_witnesses.insert(
-                    context.result_reg,
-                    crate::explanations::RawConditionEvaluationWitness {
-                        iteration_count: None,
-                        success_count: None,
-                        yield_count: Some(context.witness.yield_count),
-                        condition_texts: Vec::new(),
-                        sample_key: context.witness.sample_key,
-                        sample_key_hint: None,
-                        sample_value: context.witness.sample_value,
-                        sample_value_hint: None,
-                        passing_iteration: None,
-                        failing_iteration: None,
-                    },
-                );
+                {
+                    let sample_key = context
+                        .witness
+                        .sample_key
+                        .as_ref()
+                        .map(|v| self.causality.snapshot_value(v));
+                    let sample_value = context
+                        .witness
+                        .sample_value
+                        .as_ref()
+                        .map(|v| self.causality.snapshot_value(v));
+                    self.causality.insert_comprehension_witness(
+                        context.result_reg,
+                        crate::causality::RawWitnessSnapshot {
+                            collection_path: None,
+                            iteration_count: None,
+                            success_count: None,
+                            yield_count: Some(context.witness.yield_count),
+                            condition_texts: Vec::new(),
+                            sample_key,
+                            sample_key_hint: None,
+                            sample_value,
+                            sample_value_hint: None,
+                            passing_iteration: None,
+                            failing_iteration: None,
+                        },
+                    );
+                }
                 Ok(())
             },
         )
@@ -702,21 +715,34 @@ impl RegoVM {
                     context,
                 } => {
                     #[cfg(feature = "explanations")]
-                    self.comprehension_witnesses.insert(
-                        context.result_reg,
-                        crate::explanations::RawConditionEvaluationWitness {
-                            iteration_count: None,
-                            success_count: None,
-                            yield_count: Some(context.witness.yield_count),
-                            condition_texts: Vec::new(),
-                            sample_key: context.witness.sample_key.clone(),
-                            sample_key_hint: None,
-                            sample_value: context.witness.sample_value.clone(),
-                            sample_value_hint: None,
-                            passing_iteration: None,
-                            failing_iteration: None,
-                        },
-                    );
+                    {
+                        let sample_key = context
+                            .witness
+                            .sample_key
+                            .as_ref()
+                            .map(|v| self.causality.snapshot_value(v));
+                        let sample_value = context
+                            .witness
+                            .sample_value
+                            .as_ref()
+                            .map(|v| self.causality.snapshot_value(v));
+                        self.causality.insert_comprehension_witness(
+                            context.result_reg,
+                            crate::causality::RawWitnessSnapshot {
+                                collection_path: None,
+                                iteration_count: None,
+                                success_count: None,
+                                yield_count: Some(context.witness.yield_count),
+                                condition_texts: Vec::new(),
+                                sample_key,
+                                sample_key_hint: None,
+                                sample_value,
+                                sample_value_hint: None,
+                                passing_iteration: None,
+                                failing_iteration: None,
+                            },
+                        );
+                    }
                     let raw_target = context.resume_pc;
                     let resume_pc = if raw_target <= self.pc {
                         self.pc.saturating_add(1)

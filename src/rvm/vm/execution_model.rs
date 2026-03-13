@@ -80,6 +80,8 @@ pub(super) struct RuleFrameData {
     pub(super) saved_registers: Vec<Value>,
     pub(super) saved_loop_stack: Vec<LoopContext>,
     pub(super) saved_comprehension_stack: Vec<ComprehensionContext>,
+    #[cfg(feature = "explanations")]
+    pub(super) saved_provenance: Vec<Option<crate::Rc<str>>>,
 }
 
 /// Explicit execution stack replacing the Rust call stack

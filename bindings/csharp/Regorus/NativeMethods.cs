@@ -347,6 +347,20 @@ namespace Regorus.Internal
         internal static extern RegorusResult regorus_engine_clear_coverage_data(RegorusEngine* engine);
 
         /// <summary>
+        /// Set explanation settings for causality tracking.
+        /// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.set_explanation_settings
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_engine_set_explanation_settings", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_engine_set_explanation_settings(RegorusEngine* engine, [MarshalAs(UnmanagedType.U1)] bool enabled, byte value_mode, byte condition_mode);
+
+        /// <summary>
+        /// Take the causality report from the most recent evaluation as JSON.
+        /// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.take_causality_report
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_engine_take_causality_report", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_engine_take_causality_report(RegorusEngine* engine);
+
+        /// <summary>
         /// Whether to gather output of print statements.
         /// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.set_gather_prints
         /// </summary>

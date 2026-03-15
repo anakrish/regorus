@@ -81,3 +81,53 @@ else
     Console.WriteLine("Success.");
 }
 
+// ── Causality / Explanation demo ──────────────────────────────────────
+Console.WriteLine();
+Console.WriteLine("=== Causality Demo ===");
+
+var causalEngine = new Regorus.Engine();
+causalEngine.AddPolicy("authz.rego", @"
+package authz
+
+default allow = false
+
+allow if {
+    input.role == ""admin""
+}
+
+allow if {
+    input.role == ""editor""
+    input.action == ""read""
+}
+");
+
+// Enable explanation capture with full (unredacted) values.
+causalEngine.SetExplanationSettings(
+    true,
+    Regorus.ExplanationValueMode.Full,
+    Regorus.ExplanationConditionMode.AllContributing);
+
+// Evaluate with an admin role.
+causalEngine.SetInputJson("""{"role": "admin"}""");
+causalEngine.EvalRule("data.authz.allow");
+
+var report = causalEngine.TakeCausalityReport();
+Console.WriteLine("Causality report (admin):");
+Console.WriteLine(report);
+
+// Evaluate with an editor doing a read.
+causalEngine.SetInputJson("""{"role": "editor", "action": "read"}""");
+causalEngine.EvalRule("data.authz.allow");
+
+report = causalEngine.TakeCausalityReport();
+Console.WriteLine("Causality report (editor+read):");
+Console.WriteLine(report);
+
+// Evaluate a denied case.
+causalEngine.SetInputJson("""{"role": "viewer"}""");
+causalEngine.EvalRule("data.authz.allow");
+
+report = causalEngine.TakeCausalityReport();
+Console.WriteLine("Causality report (viewer - denied):");
+Console.WriteLine(report);
+

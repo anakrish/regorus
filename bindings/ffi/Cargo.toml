@@ -36,6 +36,7 @@ default = [
 	"regorus/arc",
 	"regorus/full-opa",
 	"contention_checks",
+	"explanations",
 ]
 ast = ["regorus/ast"]
 azure_policy = ["regorus/azure_policy"]
@@ -45,6 +46,7 @@ allocator-memory-limits = ["regorus/allocator-memory-limits"]
 contention_checks = ["parking_lot"]
 rvm = ["regorus/rvm"]
 rbac = ["regorus/azure-rbac"]
+explanations = ["regorus/explanations"]
 custom_allocator = []
 
 [build-dependencies]

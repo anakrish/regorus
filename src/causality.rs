@@ -165,25 +165,130 @@ pub struct ConditionEvaluationWitness {
 }
 
 /// Structured evaluation details for a condition.
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+///
+/// For [`ConditionEvaluationKind::Membership`] the first pair of value/path
+/// fields serializes as `value` / `value_path` and the second as
+/// `collection` / `collection_path`, since "actual vs expected" is
+/// meaningless for set-membership checks.  All other kinds keep the
+/// `actual_value` / `expected_value` names.
+#[derive(Debug, Clone, Deserialize, Eq, PartialEq)]
 pub struct ConditionEvaluation {
     pub kind: ConditionEvaluationKind,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub operator: Option<ConditionOperator>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub actual_value: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_value: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub actual_path: Option<Rc<str>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_path: Option<Rc<str>>,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default)]
     pub actual_value_redacted: bool,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default)]
     pub expected_value_redacted: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub witness: Option<ConditionEvaluationWitness>,
+}
+
+impl Serialize for ConditionEvaluation {
+    #[allow(clippy::arithmetic_side_effects, clippy::trait_duplication_in_bounds)]
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap as _;
+        // Count non-None fields to size the map.
+        let mut len = 1; // kind
+        if self.operator.is_some() {
+            len += 1;
+        }
+        if self.actual_value.is_some() {
+            len += 1;
+        }
+        if self.expected_value.is_some() {
+            len += 1;
+        }
+        if self.actual_path.is_some() {
+            len += 1;
+        }
+        if self.expected_path.is_some() {
+            len += 1;
+        }
+        if self.actual_value_redacted {
+            len += 1;
+        }
+        if self.expected_value_redacted {
+            len += 1;
+        }
+        if self.witness.is_some() {
+            len += 1;
+        }
+
+        let is_membership = self.kind == ConditionEvaluationKind::Membership;
+
+        let mut map = serializer.serialize_map(Some(len))?;
+        map.serialize_entry("kind", &self.kind)?;
+        if let Some(ref op) = self.operator {
+            map.serialize_entry("operator", op)?;
+        }
+        if let Some(ref v) = self.actual_value {
+            map.serialize_entry(
+                if is_membership {
+                    "value"
+                } else {
+                    "actual_value"
+                },
+                v,
+            )?;
+        }
+        if let Some(ref v) = self.expected_value {
+            map.serialize_entry(
+                if is_membership {
+                    "collection"
+                } else {
+                    "expected_value"
+                },
+                v,
+            )?;
+        }
+        if let Some(ref p) = self.actual_path {
+            map.serialize_entry(
+                if is_membership {
+                    "value_path"
+                } else {
+                    "actual_path"
+                },
+                p,
+            )?;
+        }
+        if let Some(ref p) = self.expected_path {
+            map.serialize_entry(
+                if is_membership {
+                    "collection_path"
+                } else {
+                    "expected_path"
+                },
+                p,
+            )?;
+        }
+        if self.actual_value_redacted {
+            map.serialize_entry(
+                if is_membership {
+                    "value_redacted"
+                } else {
+                    "actual_value_redacted"
+                },
+                &true,
+            )?;
+        }
+        if self.expected_value_redacted {
+            map.serialize_entry(
+                if is_membership {
+                    "collection_redacted"
+                } else {
+                    "expected_value_redacted"
+                },
+                &true,
+            )?;
+        }
+        if let Some(ref w) = self.witness {
+            map.serialize_entry("witness", w)?;
+        }
+        map.end()
+    }
 }
 
 /// One explanation record for a produced rule result.

@@ -528,6 +528,75 @@ pub extern "C" fn regorus_engine_clear_coverage_data(engine: *mut RegorusEngine)
     })
 }
 
+/// Set explanation settings.
+///
+/// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.set_explanation_settings
+///
+/// * `enabled`: Whether to enable explanation capture.
+/// * `value_mode`: 0 = Redacted, 1 = Full.
+/// * `condition_mode`: 0 = PrimaryOnly, 1 = AllContributing.
+#[no_mangle]
+#[cfg(feature = "explanations")]
+pub extern "C" fn regorus_engine_set_explanation_settings(
+    engine: *mut RegorusEngine,
+    enabled: bool,
+    value_mode: u8,
+    condition_mode: u8,
+) -> RegorusResult {
+    with_unwind_guard(|| {
+        to_regorus_result(|| -> Result<()> {
+            let engine = to_ref(engine)?;
+            let mut guard = engine.try_write()?;
+            let vm = match value_mode {
+                0 => regorus::ExplanationValueMode::Redacted,
+                1 => regorus::ExplanationValueMode::Full,
+                _ => {
+                    return Err(anyhow!(
+                        "invalid value_mode; expected 0 (Redacted) or 1 (Full)"
+                    ))
+                }
+            };
+            let cm = match condition_mode {
+                0 => regorus::ExplanationConditionMode::PrimaryOnly,
+                1 => regorus::ExplanationConditionMode::AllContributing,
+                _ => {
+                    return Err(anyhow!(
+                        "invalid condition_mode; expected 0 (PrimaryOnly) or 1 (AllContributing)"
+                    ))
+                }
+            };
+            guard.set_explanation_settings(regorus::ExplanationSettings {
+                enabled,
+                value_mode: vm,
+                condition_mode: cm,
+            });
+            Ok(())
+        }())
+    })
+}
+
+/// Take the causality report from the most recent evaluation as JSON.
+///
+/// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.take_causality_report
+#[no_mangle]
+#[cfg(feature = "explanations")]
+pub extern "C" fn regorus_engine_take_causality_report(
+    engine: *mut RegorusEngine,
+) -> RegorusResult {
+    with_unwind_guard(|| {
+        let output = || -> Result<String> {
+            let engine = to_ref(engine)?;
+            let mut guard = engine.try_write()?;
+            let report = guard.take_causality_report();
+            Ok(serde_json::to_string_pretty(&report)?)
+        }();
+        match output {
+            Ok(out) => RegorusResult::ok_string(out),
+            Err(e) => to_regorus_result(Err(e)),
+        }
+    })
+}
+
 /// Whether to gather output of print statements.
 ///
 /// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.set_gather_prints

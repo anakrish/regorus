@@ -259,26 +259,21 @@ impl RegoVM {
         };
 
         let result_reg = comprehension_context.result_reg;
-        let current_result = self.get_register(result_reg)?.clone();
-        let mode = comprehension_context.mode.clone();
+        // Take ownership so Rc refcount stays at 1 and make_mut mutates in-place.
+        let mut current_result = self.take_register(result_reg)?;
 
-        let updated_result = match (mode, current_result) {
-            (ComprehensionMode::Set, Value::Set(set)) => {
-                let mut new_set = set.as_ref().clone();
-                new_set.insert(value_to_add);
-                Value::Set(crate::Rc::new(new_set))
+        match (&comprehension_context.mode, &mut current_result) {
+            (&ComprehensionMode::Set, &mut Value::Set(ref mut set)) => {
+                crate::Rc::make_mut(set).insert(value_to_add);
             }
-            (ComprehensionMode::Array, Value::Array(arr)) => {
-                let mut new_arr = arr.as_ref().to_vec();
-                new_arr.push(value_to_add);
-                Value::Array(crate::Rc::new(new_arr))
+            (&ComprehensionMode::Array, &mut Value::Array(ref mut arr)) => {
+                crate::Rc::make_mut(arr).push(value_to_add);
             }
-            (ComprehensionMode::Object, Value::Object(obj)) => {
-                if let Some(ref key) = key_value {
-                    let mut new_obj = obj.as_ref().clone();
-                    new_obj.insert(key.clone(), value_to_add);
-                    Value::Object(crate::Rc::new(new_obj))
+            (&ComprehensionMode::Object, &mut Value::Object(ref mut obj)) => {
+                if let Some(key) = key_value.clone() {
+                    crate::Rc::make_mut(obj).insert(key, value_to_add);
                 } else {
+                    self.set_register(result_reg, current_result)?;
                     self.comprehension_stack.push(comprehension_context);
                     return Err(VmError::InvalidIteration {
                         value: Value::String(Arc::from("Object comprehension requires key")),
@@ -287,15 +282,17 @@ impl RegoVM {
                 }
             }
             (_mode, other) => {
+                let offending = core::mem::replace(other, Value::Undefined);
+                self.set_register(result_reg, current_result)?;
                 self.comprehension_stack.push(comprehension_context);
                 return Err(VmError::InvalidIteration {
-                    value: other,
+                    value: offending,
                     pc: self.pc,
                 });
             }
-        };
+        }
 
-        self.set_register(result_reg, updated_result)?;
+        self.set_register(result_reg, current_result)?;
 
         #[cfg(feature = "explanations")]
         {
@@ -372,7 +369,6 @@ impl RegoVM {
         let (
             value_to_add,
             key_value,
-            current_result,
             mode,
             result_reg_idx,
             key_reg_idx,
@@ -399,7 +395,6 @@ impl RegoVM {
                 };
 
                 let result_reg_idx = context.result_reg;
-                let current_result = self.get_register(result_reg_idx)?.clone();
                 let mode = context.mode.clone();
                 let iteration_key = self.get_register(context.key_reg)?.clone();
                 let iteration_value = self.get_register(context.value_reg)?.clone();
@@ -407,7 +402,6 @@ impl RegoVM {
                 (
                     value_to_add,
                     key_value,
-                    current_result,
                     mode,
                     result_reg_idx,
                     context.key_reg,
@@ -423,23 +417,21 @@ impl RegoVM {
             }
         };
 
-        let updated_result = match (mode, current_result) {
-            (ComprehensionMode::Set, Value::Set(set)) => {
-                let mut new_set = set.as_ref().clone();
-                new_set.insert(value_to_add);
-                Value::Set(crate::Rc::new(new_set))
+        // Take ownership so Rc refcount stays at 1 and make_mut mutates in-place.
+        let mut current_result = self.take_register(result_reg_idx)?;
+
+        match (&mode, &mut current_result) {
+            (&ComprehensionMode::Set, &mut Value::Set(ref mut set)) => {
+                crate::Rc::make_mut(set).insert(value_to_add);
             }
-            (ComprehensionMode::Array, Value::Array(arr)) => {
-                let mut new_arr = arr.as_ref().to_vec();
-                new_arr.push(value_to_add);
-                Value::Array(crate::Rc::new(new_arr))
+            (&ComprehensionMode::Array, &mut Value::Array(ref mut arr)) => {
+                crate::Rc::make_mut(arr).push(value_to_add);
             }
-            (ComprehensionMode::Object, Value::Object(obj)) => {
+            (&ComprehensionMode::Object, &mut Value::Object(ref mut obj)) => {
                 if let Some(ref key) = key_value {
-                    let mut new_obj = obj.as_ref().clone();
-                    new_obj.insert(key.clone(), value_to_add);
-                    Value::Object(crate::Rc::new(new_obj))
+                    crate::Rc::make_mut(obj).insert(key.clone(), value_to_add);
                 } else {
+                    self.set_register(result_reg_idx, current_result)?;
                     return Err(VmError::InvalidIteration {
                         value: Value::String(Arc::from("Object comprehension requires key")),
                         pc: self.pc,
@@ -447,12 +439,14 @@ impl RegoVM {
                 }
             }
             (_mode, other) => {
+                let offending = core::mem::replace(other, Value::Undefined);
+                self.set_register(result_reg_idx, current_result)?;
                 return Err(VmError::InvalidIteration {
-                    value: other,
+                    value: offending,
                     pc: self.pc,
                 });
             }
-        };
+        }
 
         let (iteration_state_snapshot, body_start, comprehension_end) = {
             let frame = self.execution_stack.get_mut(comprehension_index).ok_or(
@@ -504,7 +498,7 @@ impl RegoVM {
             }
         };
 
-        self.set_register(result_reg_idx, updated_result)?;
+        self.set_register(result_reg_idx, current_result)?;
 
         #[cfg(feature = "explanations")]
         {

@@ -2,8 +2,6 @@
 // Licensed under the MIT License.
 use crate::builtins;
 use crate::value::Value;
-use alloc::string::String;
-use alloc::vec::Vec;
 
 use super::errors::{Result, VmError};
 use super::execution_model::ExecutionMode;
@@ -58,7 +56,8 @@ impl RegoVM {
             },
         )?;
 
-        let mut args = Vec::new();
+        let mut args = core::mem::take(&mut self.cached_builtin_args);
+        args.clear();
         for &arg_reg in params.arg_registers().iter() {
             let arg_value = self.get_register(arg_reg)?.clone();
             args.push(arg_value);
@@ -67,6 +66,7 @@ impl RegoVM {
         let expected_args = builtin_info.num_args;
         let actual_args = args.len();
         if u16::try_from(actual_args).unwrap_or(u16::MAX) != expected_args {
+            self.cached_builtin_args = args;
             return Err(VmError::BuiltinArgumentMismatch {
                 expected: expected_args,
                 actual: actual_args,
@@ -77,6 +77,7 @@ impl RegoVM {
         let builtin_name = builtin_info.name.clone();
 
         if args.iter().any(|a| a == &Value::Undefined) {
+            self.cached_builtin_args = args;
             self.set_register(dest, Value::Undefined)?;
             #[cfg(feature = "explanations")]
             self.provenance.clear_reg(dest);
@@ -84,65 +85,73 @@ impl RegoVM {
             return Ok(());
         }
 
-        if let Some(builtin_fcn) = self.program.get_resolved_builtin(builtin_index) {
-            let dummy_source = crate::lexer::Source::from_contents("arg".into(), String::new())?;
-            let dummy_span = crate::lexer::Span {
-                source: dummy_source,
-                line: 1,
-                col: 1,
-                start: 0,
-                end: 3,
-            };
-
-            let mut dummy_exprs: Vec<crate::ast::Ref<crate::ast::Expr>> = Vec::new();
-            for _ in 0..args.len() {
-                let dummy_expr = crate::ast::Expr::Null {
-                    span: dummy_span.clone(),
-                    value: Value::Null,
-                    eidx: 0,
-                };
-                dummy_exprs.push(crate::ast::Ref::new(dummy_expr));
+        let builtin_fcn = match self.program.get_resolved_builtin(builtin_index) {
+            Some(fcn) => fcn.0,
+            None => {
+                self.cached_builtin_args = args;
+                return Err(VmError::BuiltinNotResolved {
+                    name: builtin_name,
+                    pc: self.pc,
+                });
             }
+        };
+        let cache_name = builtins::must_cache(builtin_name.as_str());
 
-            let cache_name = builtins::must_cache(builtin_name.as_str());
-            if let Some(name) = cache_name {
-                if let Some(value) = self.builtins_cache.get(&(name, args.clone())) {
-                    self.set_register(dest, value.clone())?;
-                    #[cfg(feature = "explanations")]
-                    self.provenance.clear_reg(dest);
-                    self.memory_check()?;
-                    return Ok(());
+        self.ensure_dummy_exprs(args.len())?;
+        let dummy_span = self.get_dummy_span()?.clone();
+        let dummy_exprs = core::mem::take(&mut self.dummy_exprs);
+
+        if let Some(name) = cache_name {
+            if let Some(entries) = self.builtins_cache.get(name) {
+                for entry in entries {
+                    if entry.0.as_slice() == args.as_slice() {
+                        let cached = entry.1.clone();
+                        self.dummy_exprs = dummy_exprs;
+                        self.cached_builtin_args = args;
+                        self.set_register(dest, cached)?;
+                        #[cfg(feature = "explanations")]
+                        self.provenance.clear_reg(dest);
+                        self.memory_check()?;
+                        return Ok(());
+                    }
                 }
             }
-
-            let result =
-                match (builtin_fcn.0)(&dummy_span, &dummy_exprs, &args, self.strict_builtin_errors)
-                {
-                    Ok(value) => value,
-                    Err(_) if !self.strict_builtin_errors => Value::Undefined,
-                    Err(err) => return Err(err.into()),
-                };
-
-            if result == Value::Undefined {
-                self.set_register(dest, Value::Undefined)?;
-            } else {
-                self.set_register(dest, result.clone())?;
-            }
-
-            #[cfg(feature = "explanations")]
-            self.provenance.clear_reg(dest);
-
-            if let Some(name) = cache_name {
-                self.builtins_cache.insert((name, args), result);
-            }
-
-            self.memory_check()?;
-        } else {
-            return Err(VmError::BuiltinNotResolved {
-                name: builtin_name,
-                pc: self.pc,
-            });
         }
+
+        let result = match builtin_fcn(
+            &dummy_span,
+            dummy_exprs.get(..args.len()).unwrap_or(&[]),
+            &args,
+            self.strict_builtin_errors,
+        ) {
+            Ok(value) => value,
+            Err(_) if !self.strict_builtin_errors => Value::Undefined,
+            Err(err) => {
+                self.dummy_exprs = dummy_exprs;
+                self.cached_builtin_args = args;
+                return Err(err.into());
+            }
+        };
+
+        self.dummy_exprs = dummy_exprs;
+
+        #[cfg(feature = "explanations")]
+        self.provenance.clear_reg(dest);
+
+        if let Some(name) = cache_name {
+            let cache_args = core::mem::take(&mut args);
+            self.cached_builtin_args = args;
+            self.builtins_cache
+                .entry(name)
+                .or_default()
+                .push((cache_args, result.clone()));
+            self.set_register(dest, result)?;
+        } else {
+            self.cached_builtin_args = args;
+            self.set_register(dest, result)?;
+        }
+
+        self.memory_check()?;
 
         Ok(())
     }

@@ -907,6 +907,12 @@ impl CausalityCapture {
         self.loop_witnesses.get(&result_reg)
     }
 
+    /// Get any loop witness (last inserted, i.e. highest register key).
+    /// Used by comprehension end to adopt the inner loop's iteration data.
+    pub fn last_loop_witness(&self) -> Option<&RawWitnessSnapshot> {
+        self.loop_witnesses.values().next_back()
+    }
+
     /// Insert a comprehension witness.
     pub fn insert_comprehension_witness(&mut self, result_reg: u8, witness: RawWitnessSnapshot) {
         self.comprehension_witnesses.insert(result_reg, witness);

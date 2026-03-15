@@ -13,6 +13,7 @@ pub(super) struct WitnessState {
     pub(super) sample_key: Option<Value>,
     pub(super) sample_value: Option<Value>,
     pub(super) yield_count: u32,
+    pub(super) iteration_count: u32,
     pub(super) passing_iteration: Option<crate::causality::RawIterationSnapshot>,
     pub(super) failing_iteration: Option<crate::causality::RawIterationSnapshot>,
     pub(super) finalized_block_start: usize,

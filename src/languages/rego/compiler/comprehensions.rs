@@ -51,6 +51,18 @@ impl<'a> Compiler<'a> {
         self.pop_context();
 
         self.emit_instruction(Instruction::ComprehensionEnd {}, span);
+
+        #[cfg(feature = "explanations")]
+        self.attach_explanation_probe_to_last_instruction(
+            span.text(),
+            Some(
+                crate::rvm::program::InstructionConditionProbe::Comprehension {
+                    result_register: result_reg,
+                    condition_texts: Self::collect_loop_condition_texts(query),
+                },
+            ),
+        );
+
         let comprehension_end = self.program.instructions.len() as u16;
 
         self.program

@@ -48,6 +48,7 @@ pub enum InstructionConditionProbe {
     },
     Comprehension {
         result_register: u8,
+        condition_texts: Vec<String>,
     },
 }
 

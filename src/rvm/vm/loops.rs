@@ -42,7 +42,7 @@ enum LoopAction {
 impl RegoVM {
     /// Build a `RawIterationSnapshot` from the current loop iteration registers.
     #[cfg(feature = "explanations")]
-    fn make_loop_iteration_snapshot(
+    pub(super) fn make_loop_iteration_snapshot(
         &mut self,
         key_reg: u8,
         value_reg: u8,
@@ -92,7 +92,7 @@ impl RegoVM {
     /// Returns the finalized condition event indices for this iteration,
     /// and truncates the finalized block indices back to the start.
     #[cfg(feature = "explanations")]
-    fn capture_iteration_event_indices(
+    pub(super) fn capture_iteration_event_indices(
         &mut self,
         finalized_block_start: usize,
     ) -> alloc::vec::Vec<u32> {

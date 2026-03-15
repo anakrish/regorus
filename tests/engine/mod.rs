@@ -1475,6 +1475,106 @@ fn rvm_execute_with_explanations_captures_every_and_comprehension_witnesses() ->
 
 #[cfg(all(feature = "explanations", feature = "rvm"))]
 #[test]
+fn rvm_comprehension_witness_inlined_into_downstream_condition() -> Result<()> {
+    let modules = vec![PolicyModule {
+        id: "test.rego".into(),
+        content: r#"
+        package test
+        import rego.v1
+
+        violations contains msg if {
+            some item in input.items
+            item.type == "A"
+            matches := [m |
+                some m in input.items
+                m.type == "B"
+                m.id == item.id
+            ]
+            count(matches) != 1
+            msg := sprintf("item %s has no match", [item.name])
+        }
+        "#
+        .into(),
+    }];
+
+    let compiled = compile_policy_with_entrypoint(
+        Value::new_object(),
+        &modules,
+        "data.test.violations".into(),
+    )?;
+    let program = languages::rego::compiler::Compiler::compile_from_policy(
+        &compiled,
+        &["data.test.violations"],
+    )?;
+
+    let mut vm = rvm::RegoVM::new_with_policy(compiled);
+    vm.load_program(program);
+    vm.set_explanation_settings(ExplanationSettings {
+        enabled: true,
+        value_mode: ExplanationValueMode::Redacted,
+        condition_mode: ExplanationConditionMode::AllContributing,
+    });
+    vm.set_input(Value::from_json_str(
+        r#"{"items":[
+            {"type":"A","id":"1","name":"alpha"},
+            {"type":"C","id":"2","name":"gamma"}
+        ]}"#,
+    )?);
+
+    let _ = vm.execute_entry_point_by_name("data.test.violations")?;
+    let reasons = vm.take_explanations();
+    let records = reasons
+        .get(&Value::from("item alpha has no match"))
+        .ok_or_else(|| anyhow::anyhow!("missing explanation for 'item alpha has no match'"))?;
+
+    // Should have at least: item.type == "A", the comprehension, and count(matches) != 1
+    eprintln!("Records count: {}", records.len());
+    for (i, record) in records.iter().enumerate() {
+        eprintln!(
+            "Record {}: text={:?} kind={:?}",
+            i,
+            record.text,
+            record.evaluation.as_ref().map(|e| &e.kind)
+        );
+    }
+
+    // The comprehension should appear as a condition
+    let comp_record = records.iter().find(|r| {
+        r.evaluation
+            .as_ref()
+            .is_some_and(|e| e.kind == ConditionEvaluationKind::Comprehension)
+    });
+    assert!(
+        comp_record.is_some(),
+        "Expected a Comprehension condition record, got records: {:?}",
+        records
+            .iter()
+            .map(|r| (&r.text, r.evaluation.as_ref().map(|e| &e.kind)))
+            .collect::<Vec<_>>()
+    );
+
+    let comp_eval = comp_record.unwrap().evaluation.as_ref().unwrap();
+    // The comprehension should have a witness with iteration_count and failing_iteration
+    let witness = comp_eval
+        .witness
+        .as_ref()
+        .expect("missing comprehension witness");
+    assert_eq!(witness.yield_count, Some(0));
+    assert_eq!(witness.iteration_count, Some(2));
+    assert!(
+        witness.failing_iteration.is_some(),
+        "expected failing_iteration in comprehension witness"
+    );
+    assert!(
+        !witness.condition_texts.is_empty(),
+        "expected condition_texts in comprehension witness"
+    );
+
+    Ok(())
+}
+
+#[cfg(all(feature = "explanations", feature = "rvm"))]
+#[test]
 fn rvm_execute_with_explanations_summarizes_some_in_loop() -> Result<()> {
     let modules = vec![PolicyModule {
         id: "test.rego".into(),

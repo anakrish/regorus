@@ -263,13 +263,36 @@ impl RegoVM {
                     witness,
                 }
             }
-            crate::rvm::program::InstructionConditionProbe::Comprehension { result_register } => {
+            crate::rvm::program::InstructionConditionProbe::Comprehension {
+                result_register,
+                ref condition_texts,
+            } => {
                 let actual_val = self.get_register(result_register).ok()?.clone();
-                let comp_witness = self
+                let mut comp_witness = self
                     .causality
                     .comprehension_witness(result_register)
                     .cloned();
                 let actual_idx = self.causality.snapshot_value(&actual_val);
+                // Inject condition_texts from the compile-time probe.
+                if let Some(ref mut w) = comp_witness {
+                    if w.condition_texts.is_empty() && !condition_texts.is_empty() {
+                        w.condition_texts = condition_texts.clone();
+                    }
+                } else if !condition_texts.is_empty() {
+                    comp_witness = Some(RawWitnessSnapshot {
+                        collection_path: None,
+                        iteration_count: None,
+                        success_count: None,
+                        yield_count: None,
+                        condition_texts: condition_texts.clone(),
+                        sample_key: None,
+                        sample_key_hint: None,
+                        sample_value: None,
+                        sample_value_hint: None,
+                        passing_iteration: None,
+                        failing_iteration: None,
+                    });
+                }
                 RawConditionSnapshot {
                     kind: crate::ConditionEvaluationKind::Comprehension,
                     operator: None,
@@ -365,6 +388,51 @@ impl RegoVM {
             }
 
             return Ok(());
+        }
+
+        // Handle comprehension end probes: record event and store index for
+        // the next condition to inline.  Only applies to ComprehensionEnd
+        // instructions; AssertCondition with a comprehension probe follows
+        // the normal condition path below.
+        if matches!(
+            self.program.instructions.get(self.pc),
+            Some(Instruction::ComprehensionEnd {})
+        ) {
+            if let Some(_result_register) = metadata.probe.as_ref().and_then(|probe| match probe {
+                &crate::rvm::program::InstructionConditionProbe::Comprehension {
+                    result_register,
+                    ..
+                } => Some(result_register),
+                _ => None,
+            }) {
+                let (bindings_start, bindings_end) =
+                    self.causality
+                        .snapshot_bindings(&[], &self.registers, &self.provenance);
+                let snapshot = metadata
+                    .probe
+                    .as_ref()
+                    .and_then(|probe| self.snapshot_condition_probe(probe));
+                let (actual_idx, expected_idx) = snapshot
+                    .as_ref()
+                    .map(|s| (s.actual, s.expected))
+                    .unwrap_or((None, None));
+
+                let event_idx = self.causality.record_condition(
+                    pc,
+                    passed,
+                    actual_idx,
+                    expected_idx,
+                    bindings_start,
+                    bindings_end,
+                    snapshot,
+                );
+
+                // Store as last-rule-block so the next condition inlines it.
+                let mut indices = self.causality.take_last_rule_block_indices();
+                indices.push(event_idx);
+                self.causality.set_last_rule_block_indices(indices);
+                return Ok(());
+            }
         }
 
         // Handle nested rule calls

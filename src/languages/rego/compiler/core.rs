@@ -394,7 +394,10 @@ impl<'a> Compiler<'a> {
                 Expr::ArrayCompr { .. } | Expr::SetCompr { .. } | Expr::ObjectCompr { .. }
             ) =>
             {
-                Some(InstructionConditionProbe::Comprehension { result_register })
+                Some(InstructionConditionProbe::Comprehension {
+                    result_register,
+                    condition_texts: alloc::vec::Vec::new(),
+                })
             }
             Some(Instruction::Eq { dest, left, right }) if dest == result_register => {
                 let Expr::BoolExpr {

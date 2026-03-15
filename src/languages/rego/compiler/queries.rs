@@ -43,7 +43,7 @@ impl<'a> Compiler<'a> {
     }
 
     #[cfg(feature = "explanations")]
-    fn collect_loop_condition_texts(query: &Query) -> Vec<String> {
+    pub(super) fn collect_loop_condition_texts(query: &Query) -> Vec<String> {
         let stmts = query.stmts.iter().collect::<Vec<_>>();
         Self::collect_loop_condition_texts_from_stmts(&stmts)
     }

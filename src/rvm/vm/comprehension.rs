@@ -101,7 +101,10 @@ impl RegoVM {
             iteration_state,
             resume_pc,
             #[cfg(feature = "explanations")]
-            witness: Default::default(),
+            witness: super::context::WitnessState {
+                finalized_block_start: self.causality.finalized_block_len(),
+                ..Default::default()
+            },
         };
 
         if auto_iterate {
@@ -192,7 +195,10 @@ impl RegoVM {
             iteration_state,
             resume_pc,
             #[cfg(feature = "explanations")]
-            witness: Default::default(),
+            witness: super::context::WitnessState {
+                finalized_block_start: self.causality.finalized_block_len(),
+                ..Default::default()
+            },
         };
 
         let next_pc = if auto_iterate {
@@ -298,10 +304,33 @@ impl RegoVM {
         {
             comprehension_context.witness.yield_count =
                 comprehension_context.witness.yield_count.saturating_add(1);
+            comprehension_context.witness.iteration_count = comprehension_context
+                .witness
+                .iteration_count
+                .saturating_add(1);
             if comprehension_context.witness.sample_value.is_none() {
                 comprehension_context.witness.sample_key = key_value.clone();
                 comprehension_context.witness.sample_value =
                     Some(self.get_register(value_reg)?.clone());
+            }
+            // Capture passing iteration snapshot (first success only).
+            if comprehension_context.witness.passing_iteration.is_none() {
+                comprehension_context.witness.passing_iteration =
+                    Some(self.make_loop_iteration_snapshot(
+                        comprehension_context.key_reg,
+                        comprehension_context.value_reg,
+                    )?);
+                let indices = self.capture_iteration_event_indices(
+                    comprehension_context.witness.finalized_block_start,
+                );
+                if !indices.is_empty() {
+                    comprehension_context.witness.passing_event_indices = Some(indices);
+                }
+            } else {
+                // Still finalize the block to keep finalized_block_start consistent.
+                let _ = self.capture_iteration_event_indices(
+                    comprehension_context.witness.finalized_block_start,
+                );
             }
         }
 
@@ -503,15 +532,48 @@ impl RegoVM {
         #[cfg(feature = "explanations")]
         {
             let sample_value = self.get_register(value_reg_idx)?.clone();
+
+            // Read witness state from context before taking &mut self for snapshots.
+            let (finalized_block_start, needs_passing) = {
+                let frame = self.execution_stack.get(comprehension_index);
+                frame.map_or((0, false), |frame| {
+                    if let FrameKind::Comprehension { ref context, .. } = frame.kind {
+                        (
+                            context.witness.finalized_block_start,
+                            context.witness.passing_iteration.is_none(),
+                        )
+                    } else {
+                        (0, false)
+                    }
+                })
+            };
+
+            // Capture passing iteration snapshot before writing to context.
+            let passing_snapshot = if needs_passing {
+                Some(self.make_loop_iteration_snapshot(key_reg_idx, value_reg_idx)?)
+            } else {
+                None
+            };
+            let iteration_event_indices =
+                self.capture_iteration_event_indices(finalized_block_start);
+
             if let Some(frame) = self.execution_stack.get_mut(comprehension_index) {
                 if let FrameKind::Comprehension {
                     ref mut context, ..
                 } = frame.kind
                 {
                     context.witness.yield_count = context.witness.yield_count.saturating_add(1);
+                    context.witness.iteration_count =
+                        context.witness.iteration_count.saturating_add(1);
                     if context.witness.sample_value.is_none() {
                         context.witness.sample_key = key_value.clone();
                         context.witness.sample_value = Some(sample_value);
+                    }
+                    if let Some(snapshot) = passing_snapshot {
+                        context.witness.passing_iteration = Some(snapshot);
+                        if !iteration_event_indices.is_empty() {
+                            context.witness.passing_event_indices = Some(iteration_event_indices);
+                        }
                     }
                 }
             }
@@ -579,6 +641,16 @@ impl RegoVM {
         Ok(false)
     }
 
+    /// Record the comprehension's outcome as a condition event and store its
+    /// index so the next condition can inline it (analogous to nested rule blocks).
+    #[cfg(feature = "explanations")]
+    fn record_comprehension_end_condition(&mut self, _result_reg: u8) -> Result<()> {
+        self.record_current_instruction_condition(
+            crate::explanations::ExplanationOutcome::Success,
+        )?;
+        Ok(())
+    }
+
     fn advance_comprehension_after_failure(
         &mut self,
         context: &mut ComprehensionContext,
@@ -589,6 +661,27 @@ impl RegoVM {
                 context.key_reg,
                 context.value_reg,
             )?;
+
+            // Capture the failing iteration snapshot (first failure only).
+            #[cfg(feature = "explanations")]
+            {
+                context.witness.iteration_count = context.witness.iteration_count.saturating_add(1);
+                if context.witness.failing_iteration.is_none() {
+                    context.witness.failing_iteration = Some(
+                        self.make_loop_iteration_snapshot(context.key_reg, context.value_reg)?,
+                    );
+                    let indices =
+                        self.capture_iteration_event_indices(context.witness.finalized_block_start);
+                    if !indices.is_empty() {
+                        context.witness.failing_event_indices = Some(indices);
+                    }
+                } else {
+                    // Still finalize the block to keep finalized_block_start consistent.
+                    let _ =
+                        self.capture_iteration_event_indices(context.witness.finalized_block_start);
+                }
+            }
+
             iter_state.advance();
             let has_next =
                 self.setup_next_iteration(iter_state, context.key_reg, context.value_reg)?;
@@ -636,48 +729,70 @@ impl RegoVM {
     }
 
     fn execute_comprehension_end_run_to_completion(&mut self) -> Result<()> {
-        self.comprehension_stack.pop().map_or_else(
-            || {
-                Err(VmError::InvalidIteration {
-                    value: Value::String(Arc::from("No active comprehension context")),
-                    pc: self.pc,
-                })
-            },
-            |context| {
-                #[cfg(not(feature = "explanations"))]
-                let _ = &context;
-                #[cfg(feature = "explanations")]
-                {
-                    let sample_key = context
-                        .witness
-                        .sample_key
-                        .as_ref()
-                        .map(|v| self.causality.snapshot_value(v));
-                    let sample_value = context
-                        .witness
-                        .sample_value
-                        .as_ref()
-                        .map(|v| self.causality.snapshot_value(v));
-                    self.causality.insert_comprehension_witness(
-                        context.result_reg,
-                        crate::causality::RawWitnessSnapshot {
-                            collection_path: None,
-                            iteration_count: None,
-                            success_count: None,
-                            yield_count: Some(context.witness.yield_count),
-                            condition_texts: Vec::new(),
-                            sample_key,
-                            sample_key_hint: None,
-                            sample_value,
-                            sample_value_hint: None,
-                            passing_iteration: None,
-                            failing_iteration: None,
+        let context = self
+            .comprehension_stack
+            .pop()
+            .ok_or(VmError::InvalidIteration {
+                value: Value::String(Arc::from("No active comprehension context")),
+                pc: self.pc,
+            })?;
+        #[cfg(not(feature = "explanations"))]
+        let _ = &context;
+        #[cfg(feature = "explanations")]
+        {
+            let sample_key = context
+                .witness
+                .sample_key
+                .as_ref()
+                .map(|v| self.causality.snapshot_value(v));
+            let sample_value = context
+                .witness
+                .sample_value
+                .as_ref()
+                .map(|v| self.causality.snapshot_value(v));
+
+            // If the comprehension didn't iterate on its own (non-auto-iterate),
+            // adopt iteration data from the inner loop that ran inside the body.
+            let (iteration_count, success_count, passing_iteration, failing_iteration) =
+                if context.witness.iteration_count == 0 {
+                    self.causality.last_loop_witness().map_or(
+                        (Some(0), Some(0), None, None),
+                        |inner| {
+                            (
+                                inner.iteration_count,
+                                inner.success_count,
+                                inner.passing_iteration.clone(),
+                                inner.failing_iteration.clone(),
+                            )
                         },
-                    );
-                }
-                Ok(())
-            },
-        )
+                    )
+                } else {
+                    (
+                        Some(context.witness.iteration_count),
+                        Some(context.witness.yield_count),
+                        context.witness.passing_iteration.clone(),
+                        context.witness.failing_iteration.clone(),
+                    )
+                };
+
+            let witness = crate::causality::RawWitnessSnapshot {
+                collection_path: None,
+                iteration_count,
+                success_count,
+                yield_count: Some(context.witness.yield_count),
+                condition_texts: Vec::new(),
+                sample_key,
+                sample_key_hint: None,
+                sample_value,
+                sample_value_hint: None,
+                passing_iteration,
+                failing_iteration,
+            };
+            self.causality
+                .insert_comprehension_witness(context.result_reg, witness);
+            self.record_comprehension_end_condition(context.result_reg)?;
+        }
+        Ok(())
     }
 
     fn execute_comprehension_end_suspendable(&mut self) -> Result<()> {
@@ -720,22 +835,47 @@ impl RegoVM {
                             .sample_value
                             .as_ref()
                             .map(|v| self.causality.snapshot_value(v));
-                        self.causality.insert_comprehension_witness(
-                            context.result_reg,
-                            crate::causality::RawWitnessSnapshot {
-                                collection_path: None,
-                                iteration_count: None,
-                                success_count: None,
-                                yield_count: Some(context.witness.yield_count),
-                                condition_texts: Vec::new(),
-                                sample_key,
-                                sample_key_hint: None,
-                                sample_value,
-                                sample_value_hint: None,
-                                passing_iteration: None,
-                                failing_iteration: None,
-                            },
-                        );
+
+                        // Adopt inner loop iteration data when comprehension
+                        // didn't iterate itself.
+                        let (iteration_count, success_count, passing_iteration, failing_iteration) =
+                            if context.witness.iteration_count == 0 {
+                                self.causality.last_loop_witness().map_or(
+                                    (Some(0), Some(0), None, None),
+                                    |inner| {
+                                        (
+                                            inner.iteration_count,
+                                            inner.success_count,
+                                            inner.passing_iteration.clone(),
+                                            inner.failing_iteration.clone(),
+                                        )
+                                    },
+                                )
+                            } else {
+                                (
+                                    Some(context.witness.iteration_count),
+                                    Some(context.witness.yield_count),
+                                    context.witness.passing_iteration.clone(),
+                                    context.witness.failing_iteration.clone(),
+                                )
+                            };
+
+                        let witness = crate::causality::RawWitnessSnapshot {
+                            collection_path: None,
+                            iteration_count,
+                            success_count,
+                            yield_count: Some(context.witness.yield_count),
+                            condition_texts: Vec::new(),
+                            sample_key,
+                            sample_key_hint: None,
+                            sample_value,
+                            sample_value_hint: None,
+                            passing_iteration,
+                            failing_iteration,
+                        };
+                        self.causality
+                            .insert_comprehension_witness(context.result_reg, witness);
+                        self.record_comprehension_end_condition(context.result_reg)?;
                     }
                     let raw_target = context.resume_pc;
                     let resume_pc = if raw_target <= self.pc {

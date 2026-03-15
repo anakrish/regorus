@@ -1,3 +1,5 @@
+package examples.explanations
+
 package k8s
 import rego.v1
 

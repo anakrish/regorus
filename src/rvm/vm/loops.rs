@@ -193,6 +193,22 @@ impl RegoVM {
         }
     }
 
+    /// Record the loop's final outcome into the causality capture.
+    /// Must be called while `self.pc` still points at the `LoopNext` instruction
+    /// so that the explanation probe attached to it is found.
+    #[cfg(feature = "explanations")]
+    fn record_loop_end_explanation(&mut self, loop_result_is_true: bool) -> Result<()> {
+        self.record_current_instruction_condition(if loop_result_is_true {
+            crate::explanations::ExplanationOutcome::Success
+        } else {
+            crate::explanations::ExplanationOutcome::Failure
+        })?;
+        if !loop_result_is_true {
+            let _ = self.finalize_current_block();
+        }
+        Ok(())
+    }
+
     pub(super) fn execute_loop_start(&mut self, mode: &LoopMode, params: LoopParams) -> Result<()> {
         match self.execution_mode {
             ExecutionMode::RunToCompletion => {
@@ -406,6 +422,8 @@ impl RegoVM {
                         &loop_ctx.witness,
                         loop_ctx.collection_provenance.clone(),
                     );
+                    #[cfg(feature = "explanations")]
+                    self.record_loop_end_explanation(true)?;
                     self.set_register(loop_ctx.result_reg, Value::Bool(true))?;
                     self.pc = usize::from(loop_end_local.saturating_sub(1));
                     return Ok(());
@@ -420,6 +438,8 @@ impl RegoVM {
                         &loop_ctx.witness,
                         loop_ctx.collection_provenance.clone(),
                     );
+                    #[cfg(feature = "explanations")]
+                    self.record_loop_end_explanation(false)?;
                     self.set_register(loop_ctx.result_reg, Value::Bool(false))?;
                     self.pc = usize::from(loop_end_local.saturating_sub(1));
                     return Ok(());
@@ -480,6 +500,15 @@ impl RegoVM {
                     &loop_ctx.witness,
                     loop_ctx.collection_provenance.clone(),
                 );
+
+                #[cfg(feature = "explanations")]
+                {
+                    let is_success = match final_result {
+                        Value::Bool(b) => b,
+                        _ => true,
+                    };
+                    self.record_loop_end_explanation(is_success)?;
+                }
 
                 self.set_register(loop_ctx.result_reg, final_result)?;
 
@@ -753,6 +782,8 @@ impl RegoVM {
                         coll_prov,
                     );
                 }
+                #[cfg(feature = "explanations")]
+                self.record_loop_end_explanation(true)?;
                 self.set_register(result_reg, Value::Bool(true))?;
                 let completed_frame = self
                     .execution_stack
@@ -790,6 +821,8 @@ impl RegoVM {
                         coll_prov,
                     );
                 }
+                #[cfg(feature = "explanations")]
+                self.record_loop_end_explanation(false)?;
                 self.set_register(result_reg, Value::Bool(false))?;
                 let completed_frame = self
                     .execution_stack
@@ -921,6 +954,15 @@ impl RegoVM {
                         );
                     }
 
+                    #[cfg(feature = "explanations")]
+                    {
+                        let is_success = match final_result {
+                            Value::Bool(b) => b,
+                            _ => true,
+                        };
+                        self.record_loop_end_explanation(is_success)?;
+                    }
+
                     self.set_register(result_reg, final_result)?;
 
                     let completed_frame = self
@@ -961,6 +1003,13 @@ impl RegoVM {
             &super::context::WitnessState::default(),
             self.provenance.get(collection_reg).cloned(),
         );
+
+        // Pop the emission scope that was pushed in execute_loop_start.
+        // For non-empty loops this happens inside record_loop_end_explanation
+        // (via record_current_instruction_condition), but empty collections
+        // never reach LoopNext.
+        #[cfg(feature = "explanations")]
+        let _ = self.causality.pop_loop_emission_scope();
 
         self.set_register(result_reg, result)?;
         self.pc = usize::from(loop_end).saturating_sub(1);
@@ -1176,6 +1225,9 @@ impl RegoVM {
                         );
                     }
 
+                    // For Every, the AssertCondition instruction at loop_end
+                    // handles emission scope popping and explanation recording
+                    // when it executes after the dispatch increment.
                     self.loop_stack.pop();
                     self.pc = usize::from(loop_end.saturating_sub(1));
                     self.set_register(result_reg, Value::Bool(false))?;
@@ -1363,6 +1415,9 @@ impl RegoVM {
                             coll_prov,
                         );
                     }
+                    // For Every, the AssertCondition instruction at loop_end
+                    // handles emission scope popping and explanation recording
+                    // via the normal dispatch path.
                     let completed_frame = self
                         .execution_stack
                         .pop()

@@ -290,7 +290,7 @@ impl RegoVM {
     /// Record a condition evaluation event into the causality capture.
     /// This replaces `record_current_instruction_condition` with thin event recording.
     #[cfg(feature = "explanations")]
-    fn record_current_instruction_condition(
+    pub(super) fn record_current_instruction_condition(
         &mut self,
         outcome: crate::explanations::ExplanationOutcome,
     ) -> Result<()> {

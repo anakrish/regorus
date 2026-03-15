@@ -110,6 +110,7 @@ impl RegoVM {
                     self.set_register(dest, value.clone())?;
                     #[cfg(feature = "explanations")]
                     self.provenance.clear_reg(dest);
+                    self.memory_check()?;
                     return Ok(());
                 }
             }

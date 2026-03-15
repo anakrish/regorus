@@ -180,6 +180,10 @@ impl<'a> Compiler<'a> {
             span,
         );
 
+        // The every quantifier needs its own AssertCondition because it is the
+        // semantic mechanism that propagates an "every failed" result to the
+        // enclosing rule body.  ForEach/Any loops do not need this because their
+        // result_reg is consumed by a separate assertion downstream.
         let quantifier_assert_pc = self.program.instructions.len() as u16;
 
         self.emit_instruction(
@@ -302,15 +306,6 @@ impl<'a> Compiler<'a> {
             collection.span(),
         );
 
-        let loop_assert_pc = self.program.instructions.len() as u16;
-
-        self.emit_instruction(
-            Instruction::AssertCondition {
-                condition: result_reg,
-            },
-            collection.span(),
-        );
-
         #[cfg(feature = "explanations")]
         self.attach_explanation_probe_to_last_instruction(
             loop_expr
@@ -324,21 +319,21 @@ impl<'a> Compiler<'a> {
             }),
         );
 
-        let _loop_end = self.program.instructions.len() as u16;
+        let loop_end = self.program.instructions.len() as u16;
 
         self.program
             .update_loop_params(loop_params_index, |params| {
                 params.body_start = body_start;
-                params.loop_end = loop_assert_pc;
+                params.loop_end = loop_end;
             });
 
-        let loop_next_idx = self.program.instructions.len() - 2;
+        let loop_next_idx = self.program.instructions.len() - 1;
         if let Instruction::LoopNext {
             loop_end: ref mut end,
             ..
         } = &mut self.program.instructions[loop_next_idx]
         {
-            *end = loop_assert_pc;
+            *end = loop_end;
         }
 
         Ok(())
@@ -475,15 +470,6 @@ impl<'a> Compiler<'a> {
             collection.span(),
         );
 
-        let loop_assert_pc = self.program.instructions.len() as u16;
-
-        self.emit_instruction(
-            Instruction::AssertCondition {
-                condition: result_reg,
-            },
-            &stmt.span,
-        );
-
         #[cfg(feature = "explanations")]
         self.attach_explanation_probe_to_last_instruction(
             stmt.span.text(),
@@ -494,21 +480,21 @@ impl<'a> Compiler<'a> {
             }),
         );
 
-        let _loop_end = self.program.instructions.len() as u16;
+        let loop_end = self.program.instructions.len() as u16;
 
         self.program
             .update_loop_params(loop_params_index, |params| {
                 params.body_start = body_start;
-                params.loop_end = loop_assert_pc;
+                params.loop_end = loop_end;
             });
 
-        let loop_next_idx = self.program.instructions.len() - 2;
+        let loop_next_idx = self.program.instructions.len() - 1;
         if let Instruction::LoopNext {
             loop_end: ref mut end,
             ..
         } = &mut self.program.instructions[loop_next_idx]
         {
-            *end = loop_assert_pc;
+            *end = loop_end;
         }
 
         Ok(result_reg)

@@ -270,13 +270,18 @@ impl RegoVM {
             self.causality.increment_call_depth();
         }
 
-        let (final_result, rule_failed_due_to_inconsistency, return_provenance) = self
-            .execute_rule_definitions_common(&rule_definitions, &rule_info, function_call_params)?;
+        let rule_exec_result = self.execute_rule_definitions_common(
+            &rule_definitions,
+            &rule_info,
+            function_call_params,
+        );
 
         #[cfg(feature = "explanations")]
         if is_nested_call {
             self.causality.decrement_call_depth();
         }
+
+        let (final_result, rule_failed_due_to_inconsistency, return_provenance) = rule_exec_result?;
 
         self.set_register(dest, Value::Undefined)?;
 
@@ -505,6 +510,12 @@ impl RegoVM {
             #[cfg(feature = "explanations")]
             finalized_block_start: self.causality.finalized_block_len(),
         });
+
+        // Suppress emissions for nested calls in suspendable mode.
+        #[cfg(feature = "explanations")]
+        if self.call_rule_stack.len() > 1 {
+            self.causality.increment_call_depth();
+        }
 
         let mut frame_data = RuleFrameData {
             return_pc: self.pc,
@@ -884,6 +895,13 @@ impl RegoVM {
         self.registers = parent_registers;
         #[cfg(feature = "explanations")]
         self.provenance.set_path(dest_reg, return_provenance);
+
+        // Decrement call_depth before popping — must mirror the increment
+        // in execute_call_rule_suspendable.
+        #[cfg(feature = "explanations")]
+        if self.call_rule_stack.len() > 1 {
+            self.causality.decrement_call_depth();
+        }
 
         let call_context = self
             .call_rule_stack

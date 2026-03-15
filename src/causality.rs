@@ -802,10 +802,11 @@ impl CausalityCapture {
 
     /// Snapshot the latest (current) block's conditions to an emission key.
     ///
-    /// When inside a nested rule/function call (`call_depth > 0`), the block
-    /// is still finalized (so `last_rule_block_indices` can capture the
-    /// condition events) but no emission entry is created — the conditions
-    /// will be inlined into the caller's block instead.
+    /// Finalize the current condition block and create an emission entry for
+    /// the given key. Unlike `snapshot_all_blocks`, this does NOT suppress
+    /// emissions at `call_depth > 0` because intermediate results (Move,
+    /// SetAdd, ObjectSet) inside nested rules form the supporting explanation
+    /// chain that callers need.
     pub fn snapshot_latest_block(&mut self, key: Value) {
         let indices = self.finalize_current_block();
         if let (Some(&start), Some(&last)) = (indices.first(), indices.last()) {

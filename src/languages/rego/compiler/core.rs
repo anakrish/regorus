@@ -518,6 +518,39 @@ impl<'a> Compiler<'a> {
                     _ => None,
                 },
             }),
+            // Not wrapping another instruction: look one instruction further back.
+            Some(Instruction::Not { dest, operand }) if dest == result_register => {
+                let inner_instruction = self.program.instructions.iter().rev().nth(2).copied();
+                match inner_instruction {
+                    Some(Instruction::Contains {
+                        dest: contains_dest,
+                        collection,
+                        value,
+                    }) if contains_dest == operand => Some(InstructionConditionProbe::Membership {
+                        operator: crate::ConditionOperator::NotIn,
+                        actual_register: value,
+                        expected_register: Some(collection),
+                        actual_hint: match *expr.as_ref() {
+                            Expr::Membership {
+                                value: ref member_expr,
+                                ..
+                            } => Self::expr_redaction_hint(member_expr),
+                            _ => None,
+                        },
+                        expected_hint: match *expr.as_ref() {
+                            Expr::Membership {
+                                collection: ref collection_expr,
+                                ..
+                            } => Self::expr_redaction_hint(collection_expr),
+                            _ => None,
+                        },
+                    }),
+                    _ => Some(InstructionConditionProbe::Truthiness {
+                        register: result_register,
+                        hint: Self::expr_redaction_hint(expr),
+                    }),
+                }
+            }
             Some(Instruction::BuiltinCall { params_index }) => {
                 self.make_builtin_probe(expr, params_index)
             }

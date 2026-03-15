@@ -102,6 +102,7 @@ pub enum ConditionOperator {
     GreaterThanOrEquals,
     ForEach,
     In,
+    NotIn,
     Contains,
     StartsWith,
     EndsWith,

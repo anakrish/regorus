@@ -25,6 +25,13 @@ export const DEMOS = [
     playground: true,
   },
 
+  // ── Intro: How It Works ───────────────────────────────
+  {
+    id: "intro", title: "How It Works",
+    subtitle: "What is SMT, Z3, and how we use them for policy analysis.",
+    intro: true,
+  },
+
   // ── 1: Rego Input Synthesis ──────────────────────────
   {
     id: "synthesis", title: "Input Synthesis", lang: "rego",
@@ -553,6 +560,7 @@ export const DEMOS = [
 //  OVERVIEW CARD DATA
 // ═══════════════════════════════════════════════════════════
 export const OVERVIEW_CARDS = [
+  { num: "📐", title: "Symbolic Policy Analysis", desc: "What is SMT? Meet Z3. Try solving constraints in your browser, then see how we apply it to policies.", tags: ["smt"], tabId: "intro" },
   { num: "Demo 1", title: "Rego: Input Synthesis", desc: "Find concrete inputs for any desired policy outcome.", tags: ["rego"], tabId: "synthesis" },
   { num: "Demo 2", title: "Cedar: Authorization", desc: "Permit/forbid with entity hierarchies, geo-fencing, RBAC.", tags: ["cedar"], tabId: "cedar" },
   { num: "Demo 3", title: "Azure Policy: Compliance", desc: "Storage HTTPS enforcement, policy version diff.", tags: ["azure"], tabId: "azurepolicy" },

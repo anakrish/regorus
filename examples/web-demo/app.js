@@ -70,6 +70,8 @@ function buildUI(DEMOS, OVERVIEW_CARDS, TAG_CLASSES, LANG_BADGE) {
     btn.dataset.tab = demo.id;
     if (demo.playground) {
       btn.innerHTML = `<span class="tab-num">🔬</span>Playground`;
+    } else if (demo.intro) {
+      btn.innerHTML = `<span class="tab-num">📐</span>How It Works`;
     } else if (di > 0) {
       const langCls = LANG_BADGE[demo.lang] || '';
       btn.innerHTML = `<span class="tab-num">${di}</span>${langCls ? `<span class="lang-badge ${langCls}">${demo.lang}</span>` : ''}${demo.title}`;
@@ -84,6 +86,8 @@ function buildUI(DEMOS, OVERVIEW_CARDS, TAG_CLASSES, LANG_BADGE) {
     panel.id = `panel-${demo.id}`;
     panel.innerHTML = demo.overview
       ? buildOverview(demo, OVERVIEW_CARDS, TAG_CLASSES)
+      : demo.intro
+      ? buildIntroPanel()
       : demo.playground
       ? buildPlayground()
       : buildActPanel(demo, di, LANG_BADGE);
@@ -108,13 +112,108 @@ function buildUI(DEMOS, OVERVIEW_CARDS, TAG_CLASSES, LANG_BADGE) {
   window.pgToggleSmt = pgToggleSmt;
   window.pgTogglePanel = pgTogglePanel;
   window.pgClearEditor = pgClearEditor;
+  window.runSmtPreset = runSmtPreset;
+  window.switchSmtPreset = switchSmtPreset;
+
 }
 
 function switchTab(tabId) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tabId));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `panel-${tabId}`));
   if (tabId === 'playground') ensurePlaygroundInit();
+  if (tabId === 'intro') ensureIntroInit();
 }
+
+// ── SMT Presets for the interactive intro ───────────────
+const SMT_PRESETS = [
+  {
+    id: 'impossible',
+    label: 'Impossible?',
+    desc: 'Can x be greater than 5 AND less than 3? Z3 proves: no.',
+    smt: `; Can a number be greater than 5 AND less than 3?
+(declare-const x Int)
+(assert (> x 5))
+(assert (< x 3))
+(check-sat)`,
+  },
+  {
+    id: 'find-value',
+    label: 'Find a value',
+    desc: 'Find an age eligible for a senior discount.',
+    smt: `; Find an age eligible for a "senior discount"
+(declare-const age Int)
+(assert (>= age 65))
+(assert (<= age 120))
+(check-sat)
+(get-value (age))`,
+  },
+  {
+    id: 'strings',
+    label: 'Strings',
+    desc: 'Find a role that starts with "a" but isn\'t "admin".',
+    smt: `; Find a role starting with "a" that isn't "admin"
+(declare-const role String)
+(assert (not (= role "admin")))
+(assert (str.prefixof "a" role))
+(assert (> (str.len role) 2))
+(check-sat)
+(get-value (role))`,
+  },
+  {
+    id: 'https',
+    label: 'HTTPS compliance',
+    desc: 'Can a storage account be compliant without HTTPS? Z3 proves: impossible.',
+    smt: `; Can a storage account be compliant without HTTPS?
+(declare-const https_enabled Bool)
+(declare-const compliant Bool)
+
+; Policy: compliant requires HTTPS
+(assert (= compliant https_enabled))
+
+; Question: compliant but no HTTPS?
+(assert compliant)
+(assert (not https_enabled))
+(check-sat)`,
+  },
+  {
+    id: 'region',
+    label: 'Region violation',
+    desc: 'What resource gets denied by a region-restriction policy?',
+    smt: `; Azure policy: deny VMs outside allowed regions
+(declare-const region String)
+
+; Region must not be in the allowed list
+(assert (not (= region "eastus")))
+(assert (not (= region "westus2")))
+
+; But it must be a plausible region string (non-empty)
+(assert (> (str.len region) 0))
+(check-sat)
+(get-value (region))`,
+  },
+  {
+    id: 'allof-anyof',
+    label: 'allOf vs anyOf',
+    desc: 'A policy requires two tags (allOf) but is mistakenly written with anyOf \u2014 Z3 finds a resource that slips through.',
+    smt: `; Two required tags for compliance
+(declare-const has_env Bool)
+(declare-const has_owner Bool)
+
+; Intent: resource must have BOTH env AND owner tags
+; Bug: policy was written with anyOf (OR) instead of allOf (AND)
+(declare-const passes_policy Bool)
+(assert (= passes_policy (or has_env has_owner)))  ; ← should be 'and'
+
+; Resource passes the policy check
+(assert passes_policy)
+
+; But is missing at least one required tag
+(assert (not (and has_env has_owner)))
+
+(check-sat)
+(get-value (has_env has_owner))`,
+  },
+];
 
 // ── Overview ────────────────────────────────────────────
 function buildOverview(demo, OVERVIEW_CARDS, TAG_CLASSES) {
@@ -137,6 +236,216 @@ function buildOverview(demo, OVERVIEW_CARDS, TAG_CLASSES) {
     </div>`;
   }
   return html + '</div>';
+}
+
+function buildIntroPanel() {
+  return `<div class="act-header">
+    <h2>Symbolic Policy Analysis</h2>
+    <div class="subtitle">How SMT solving and Z3 power policy analysis.</div>
+  </div>
+
+  <div class="intro-section">
+
+    <div class="intro-block">
+      <h3 class="intro-heading">What is SMT?</h3>
+      <p>
+        You give a solver a set of constraints —
+        <em>"x is an integer greater than 5"</em>,
+        <em>"y is a string starting with CC-"</em> —
+        and ask: <strong>is there any combination of values that satisfies all of them?</strong>
+        If yes, it hands you one (<span class="hl-sat">sat</span>).
+        If no such values exist, it proves that mathematically (<span class="hl-unsat">unsat</span>).
+        This is SMT: Satisfiability Modulo Theories.
+      </p>
+    </div>
+
+    <div class="intro-block">
+      <h3 class="intro-heading">Z3</h3>
+      <p>
+        <a href="https://github.com/Z3Prover/z3" target="_blank" rel="noopener">Z3</a>
+        is the SMT solver built by Microsoft Research.
+        It's used across the industry — in compilers, security tools, program verifiers.
+        Here, it's running directly in your browser via WebAssembly.
+      </p>
+    </div>
+
+    <div class="intro-tryit">
+      <h3 class="intro-heading">Try it</h3>
+      <p class="intro-tryit-desc">
+        This is raw SMT-LIB2 — the constraint language Z3 speaks.
+        Pick a preset, read the comments, hit <strong>Solve</strong>.
+      </p>
+      <div class="smt-preset-tabs">
+        ${SMT_PRESETS.map((p, i) => `<button class="smt-preset-btn${i === 0 ? ' active' : ''}" data-preset="${i}" onclick="switchSmtPreset(${i})">${p.label}</button>`).join('')}
+      </div>
+      <p class="smt-preset-desc" id="smt-preset-desc">${SMT_PRESETS[0].desc}</p>
+      <div class="smt-tryit-split">
+        <div class="smt-tryit-editor">
+          <pre class="smt-tryit-highlight" id="smt-tryit-highlight"></pre>
+          <textarea id="smt-tryit-input" class="smt-tryit-textarea" spellcheck="false"></textarea>
+        </div>
+        <div class="smt-tryit-result" id="smt-tryit-result">
+          <div class="smt-tryit-placeholder">Hit <strong>Solve</strong> to run Z3</div>
+        </div>
+      </div>
+      <div class="smt-tryit-actions">
+        <button class="btn btn-run" onclick="runSmtPreset()">▶ Solve with Z3</button>
+        <span class="status-text" id="smt-tryit-status"></span>
+      </div>
+    </div>
+
+    <div class="intro-block">
+      <h3 class="intro-heading">What we do with it</h3>
+      <p>
+        Normally you run a policy on one input and get one answer.
+        We do something different: we run the policy on <strong>symbolic</strong> inputs —
+        placeholders that stand for every possible value at once.
+        The output isn't a yes/no — it's a formula. Z3 solves that formula.
+      </p>
+      <div class="sym-compare">
+        <div class="sym-panel">
+          <div class="sym-panel-label">Concrete evaluation</div>
+          <pre class="sym-code"><span class="sym-dim">input.role</span> = <span class="sym-val">"admin"</span>
+<span class="sym-dim">input.suspended</span> = <span class="sym-val">false</span>
+        ↓
+<span class="sym-dim">allow</span> = <span class="sym-val">true</span>  <span class="sym-note">← one answer for one input</span></pre>
+        </div>
+        <div class="sym-vs">vs</div>
+        <div class="sym-panel sym-panel-hl">
+          <div class="sym-panel-label">Symbolic evaluation</div>
+          <pre class="sym-code"><span class="sym-dim">input.role</span> = <span class="sym-sym">R</span>  <span class="sym-note">← any string</span>
+<span class="sym-dim">input.suspended</span> = <span class="sym-sym">S</span>  <span class="sym-note">← any bool</span>
+        ↓
+<span class="sym-dim">allow = true</span>  <strong>when</strong>  <span class="sym-sym">R</span> = "admin" ∧ ¬<span class="sym-sym">S</span>
+        ↓
+<span class="sym-dim">Z3 finds:</span>  <span class="sym-val">R = "admin", S = false</span></pre>
+        </div>
+      </div>
+      <div class="pipeline-diagram">
+        <div class="pipeline-step">Policy<span class="pipeline-sub">Rego / Cedar</span></div>
+        <div class="pipeline-arrow">→</div>
+        <div class="pipeline-step pipeline-step-hl">Symbolic<br>Interpreter<span class="pipeline-sub">regorus</span></div>
+        <div class="pipeline-arrow">→</div>
+        <div class="pipeline-step">SMT<br>Formula<span class="pipeline-sub">constraints</span></div>
+        <div class="pipeline-arrow">→</div>
+        <div class="pipeline-step pipeline-step-hl">Z3<br>Solver<span class="pipeline-sub">satisfiability</span></div>
+        <div class="pipeline-arrow">→</div>
+        <div class="pipeline-step">Result<span class="pipeline-sub">input / proof</span></div>
+      </div>
+
+      <p class="intro-operations">
+        This lets us answer questions that testing alone cannot:
+        <strong>analyze</strong> — find an input that produces a specific outcome;
+        <strong>diff</strong> — find where two policy versions disagree;
+        <strong>subsumes</strong> — prove one policy is at least as permissive as another;
+        <strong>gen-tests</strong> — generate test cases covering every code path.
+      </p>
+    </div>
+  </div>`;
+}
+
+let introInitDone = false;
+function ensureIntroInit() {
+  if (introInitDone) return;
+  introInitDone = true;
+  initSmtTryit();
+}
+
+function initSmtTryit() {
+  const ta = document.getElementById('smt-tryit-input');
+  if (!ta) return;
+  ta.value = SMT_PRESETS[0].smt;
+  syncSmtHighlight();
+  ta.addEventListener('input', syncSmtHighlight);
+  ta.addEventListener('scroll', () => {
+    document.getElementById('smt-tryit-highlight').scrollTop = ta.scrollTop;
+    document.getElementById('smt-tryit-highlight').scrollLeft = ta.scrollLeft;
+  });
+}
+
+function syncSmtHighlight() {
+  const ta = document.getElementById('smt-tryit-input');
+  const pre = document.getElementById('smt-tryit-highlight');
+  if (!ta || !pre) return;
+  pre.innerHTML = highlightSMT(ta.value);
+}
+
+function switchSmtPreset(idx) {
+  const p = SMT_PRESETS[idx];
+  if (!p) return;
+  document.querySelectorAll('.smt-preset-btn').forEach((b, i) => b.classList.toggle('active', i === idx));
+  document.getElementById('smt-preset-desc').textContent = p.desc;
+  document.getElementById('smt-tryit-input').value = p.smt;
+  syncSmtHighlight();
+  // Clear previous result
+  const result = document.getElementById('smt-tryit-result');
+  result.innerHTML = '<div class="smt-tryit-placeholder">Hit <strong>Solve</strong> to run Z3</div>';
+  document.getElementById('smt-tryit-status').textContent = '';
+}
+
+function formatSmtValue(v) {
+  if (v === 'Undefined') return 'undefined';
+  if (typeof v === 'string') return v;
+  if (v.Bool !== undefined) return String(v.Bool);
+  if (v.Int !== undefined) return String(v.Int);
+  if (v.String !== undefined) return `"${v.String}"`;
+  if (v.Float !== undefined) return String(v.Float);
+  if (v.Array) return JSON.stringify(v.Array);
+  return JSON.stringify(v);
+}
+
+async function runSmtPreset() {
+  const ta = document.getElementById('smt-tryit-input');
+  const resultDiv = document.getElementById('smt-tryit-result');
+  const statusEl = document.getElementById('smt-tryit-status');
+  if (!ta) return;
+
+  const smtText = ta.value.trim();
+  if (!smtText) { statusEl.textContent = '✗ Empty formula'; statusEl.className = 'status-text error'; return; }
+
+  statusEl.textContent = 'Solving…';
+  statusEl.className = 'status-text';
+  resultDiv.innerHTML = '<div class="smt-tryit-placeholder"><span class="spinner"></span> Solving…</div>';
+
+  try {
+    const t0 = performance.now();
+    const resultJson = await solveSmtLib2(smtText, 0);
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
+    const result = JSON.parse(resultJson);
+
+    let html = '';
+    if (result.status === 'Sat') {
+      html += `<div class="smt-result-status smt-sat">sat</div>`;
+      html += `<div class="smt-result-explain">A solution exists!</div>`;
+      if (result.values && result.values.length > 0) {
+        // Extract variable names from (get-value (...)) in the input
+        const varNames = [];
+        const gvMatch = smtText.match(/\(get-value\s*\(([^)]+)\)\)/);
+        if (gvMatch) gvMatch[1].trim().split(/\s+/).forEach(n => varNames.push(n));
+        html += `<div class="smt-result-model">`;
+        result.values.forEach((v, i) => {
+          const name = varNames[i] || `value_${i}`;
+          const display = formatSmtValue(v);
+          html += `<div class="smt-model-row"><span class="smt-model-var">${escapeHtml(name)}</span> <span class="smt-model-eq">=</span> <span class="smt-model-val">${escapeHtml(display)}</span></div>`;
+        });
+        html += `</div>`;
+      }
+    } else if (result.status === 'Unsat') {
+      html += `<div class="smt-result-status smt-unsat">unsat</div>`;
+      html += `<div class="smt-result-explain">No solution exists — impossible!</div>`;
+    } else {
+      html += `<div class="smt-result-status smt-unknown">unknown</div>`;
+      html += `<div class="smt-result-explain">${escapeHtml(result.reason_unknown || 'Solver could not determine')}</div>`;
+    }
+    html += `<div class="smt-result-time">${elapsed}s</div>`;
+    resultDiv.innerHTML = html;
+    statusEl.textContent = `✓ ${result.status} (${elapsed}s)`;
+    statusEl.className = 'status-text success';
+  } catch (err) {
+    resultDiv.innerHTML = `<div class="smt-result-status smt-unknown">error</div><div class="smt-result-explain">${escapeHtml(err.message)}</div>`;
+    statusEl.textContent = `✗ ${err.message}`;
+    statusEl.className = 'status-text error';
+  }
 }
 
 // ── Demo Panel ──────────────────────────────────────────

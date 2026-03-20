@@ -160,58 +160,26 @@ const SMT_PRESETS = [
 (get-value (role))`,
   },
   {
-    id: 'https',
-    label: 'HTTPS compliance',
-    desc: 'Can a storage account be compliant without HTTPS? Z3 proves: impossible.',
-    smt: `; Can a storage account be compliant without HTTPS?
-(declare-const https_enabled Bool)
-(declare-const compliant Bool)
-
-; Policy: compliant requires HTTPS
-(assert (= compliant https_enabled))
-
-; Question: compliant but no HTTPS?
-(assert compliant)
-(assert (not https_enabled))
-(check-sat)`,
-  },
-  {
     id: 'region',
     label: 'Region violation',
-    desc: 'What resource gets denied by a region-restriction policy?',
-    smt: `; Azure policy: deny VMs outside allowed regions
+    desc: 'Region must be one of the allowed values — Z3 finds one that slips through.',
+    smt: `; Azure policy: resources must be in an allowed region
 (declare-const region String)
 
-; Region must not be in the allowed list
-(assert (not (= region "eastus")))
-(assert (not (= region "westus2")))
+; Allowed regions
+(declare-const in_allowed Bool)
+(assert (= in_allowed
+  (or (= region "eastus")
+      (= region "westus2"))))
 
-; But it must be a plausible region string (non-empty)
-(assert (> (str.len region) 0))
+; Resource is NOT in the allowed set
+(assert (not in_allowed))
+
+; Uncomment below to constrain Z3 to real Azure regions:
+; (assert (or (= region "eastus") (= region "eastus2") (= region "westus") (= region "westus2") (= region "centralus") (= region "westeurope") (= region "northeurope") (= region "southeastasia")))
+
 (check-sat)
 (get-value (region))`,
-  },
-  {
-    id: 'allof-anyof',
-    label: 'allOf vs anyOf',
-    desc: 'A policy requires two tags (allOf) but is mistakenly written with anyOf \u2014 Z3 finds a resource that slips through.',
-    smt: `; Two required tags for compliance
-(declare-const has_env Bool)
-(declare-const has_owner Bool)
-
-; Intent: resource must have BOTH env AND owner tags
-; Bug: policy was written with anyOf (OR) instead of allOf (AND)
-(declare-const passes_policy Bool)
-(assert (= passes_policy (or has_env has_owner)))  ; ← should be 'and'
-
-; Resource passes the policy check
-(assert passes_policy)
-
-; But is missing at least one required tag
-(assert (not (and has_env has_owner)))
-
-(check-sat)
-(get-value (has_env has_owner))`,
   },
 ];
 
@@ -321,16 +289,30 @@ function buildIntroPanel() {
 <span class="sym-dim">Z3 finds:</span>  <span class="sym-val">R = "admin", S = false</span></pre>
         </div>
       </div>
-      <div class="pipeline-diagram">
-        <div class="pipeline-step">Policy<span class="pipeline-sub">Rego / Cedar</span></div>
-        <div class="pipeline-arrow">→</div>
-        <div class="pipeline-step pipeline-step-hl">Symbolic<br>Interpreter<span class="pipeline-sub">regorus</span></div>
-        <div class="pipeline-arrow">→</div>
-        <div class="pipeline-step">SMT<br>Formula<span class="pipeline-sub">constraints</span></div>
-        <div class="pipeline-arrow">→</div>
-        <div class="pipeline-step pipeline-step-hl">Z3<br>Solver<span class="pipeline-sub">satisfiability</span></div>
-        <div class="pipeline-arrow">→</div>
-        <div class="pipeline-step">Result<span class="pipeline-sub">input / proof</span></div>
+      <div class="pipe-wrap">
+        <div class="pipe-line">
+          <div class="pipe-langs">
+            <div class="pipe-lang-row"><span class="pipe-box pipe-lang">Rego</span><span class="pipe-arr">→</span><span class="pipe-box">Compiler</span></div>
+            <div class="pipe-lang-row"><span class="pipe-box pipe-lang">Cedar</span><span class="pipe-arr">→</span><span class="pipe-box">Compiler</span></div>
+            <div class="pipe-lang-row"><span class="pipe-box pipe-lang">Azure Policy</span><span class="pipe-arr">→</span><span class="pipe-box">Compiler</span></div>
+          </div>
+          <svg class="pipe-lines" viewBox="0 0 32 72" preserveAspectRatio="none">
+            <line x1="0" y1="11" x2="32" y2="36" stroke="var(--text-dim)" stroke-width="1.2"/>
+            <line x1="0" y1="36" x2="32" y2="36" stroke="var(--text-dim)" stroke-width="1.2"/>
+            <line x1="0" y1="61" x2="32" y2="36" stroke="var(--text-dim)" stroke-width="1.2"/>
+          </svg>
+          <span class="pipe-box pipe-box-hl">RVM<span class="pipe-sub">bytecode</span></span>
+          <span class="pipe-arr">+</span>
+          <span class="pipe-box">Schema<span class="pipe-sub">data model</span></span>
+          <span class="pipe-arr">→</span>
+          <span class="pipe-box pipe-box-hl">Symbolic Interpreter<span class="pipe-sub">regorus</span></span>
+          <span class="pipe-arr">→</span>
+          <span class="pipe-box">SMT Formula<span class="pipe-sub">constraints</span></span>
+          <span class="pipe-arr">→</span>
+          <span class="pipe-box pipe-box-hl">Z3 Solver<span class="pipe-sub">satisfiability</span></span>
+          <span class="pipe-arr">→</span>
+          <span class="pipe-box">Result<span class="pipe-sub">input / proof</span></span>
+        </div>
       </div>
 
       <p class="intro-operations">

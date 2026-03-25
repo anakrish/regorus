@@ -18,8 +18,6 @@ updates:
       - "/bindings/python"
       - "/bindings/ruby"
       - "/bindings/wasm"
-      - "/tests/ensure_no_std"
-      - "/xtask"
     schedule:
       interval: "weekly"
     commit-message:

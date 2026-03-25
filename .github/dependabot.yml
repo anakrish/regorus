@@ -17,7 +17,6 @@ updates:
       - "/bindings/java"
       - "/bindings/python"
       - "/bindings/ruby"
-      - "/bindings/ruby/ext/regorusrb"
       - "/bindings/wasm"
       - "/tests/ensure_no_std"
       - "/xtask"

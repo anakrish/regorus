@@ -781,6 +781,7 @@ fn throw_err<T>(mut env: EnvUnowned, f: impl FnOnce(&mut Env) -> Result<T>) -> R
         match f(env) {
             Ok(val) => Ok(val),
             Err(err) => {
+<<<<<<< HEAD
                 if let Err(throw_err) = env.throw_new(
                     jni_str!("java/lang/RuntimeException"),
                     JNIString::new(err.to_string()),
@@ -812,7 +813,20 @@ fn throw_err<T>(mut env: EnvUnowned, f: impl FnOnce(&mut Env) -> Result<T>) -> R
                 Ok(())
             });
             Err(err)
+=======
+                let _ = env.throw_new(
+                    jni_str!("java/lang/RuntimeException"),
+                    JNIString::new(err.to_string()),
+                );
+                Err(err)
+            }
+>>>>>>> 7415d0e (fix: update bindings and builtins for breaking dependency upgrades)
         }
+    });
+    match outcome.into_outcome() {
+        Outcome::Ok(val) => Ok(val),
+        Outcome::Err(err) => Err(err),
+        Outcome::Panic(payload) => std::panic::resume_unwind(payload),
     }
 }
 

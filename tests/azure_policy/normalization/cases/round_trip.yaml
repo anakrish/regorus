@@ -1,0 +1,220 @@
+aliases_json: |
+  [
+    {
+      "namespace": "Microsoft.Storage",
+      "resourceTypes": [
+        {
+          "resourceType": "storageAccounts",
+          "aliases": [
+            {
+              "name": "Microsoft.Storage/storageAccounts/supportsHttpsTrafficOnly",
+              "defaultPath": "properties.supportsHttpsTrafficOnly",
+              "paths": []
+            },
+            {
+              "name": "Microsoft.Storage/storageAccounts/isHnsEnabled",
+              "defaultPath": "properties.isHnsEnabled",
+              "paths": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "namespace": "Microsoft.Network",
+      "resourceTypes": [
+        {
+          "resourceType": "networkSecurityGroups",
+          "aliases": [
+            {
+              "name": "Microsoft.Network/networkSecurityGroups/securityRules[*].protocol",
+              "defaultPath": "properties.securityRules[*].properties.protocol",
+              "paths": []
+            },
+            {
+              "name": "Microsoft.Network/networkSecurityGroups/securityRules[*].access",
+              "defaultPath": "properties.securityRules[*].properties.access",
+              "paths": []
+            },
+            {
+              "name": "Microsoft.Network/networkSecurityGroups/securityRules[*].name",
+              "defaultPath": "properties.securityRules[*].name",
+              "paths": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+
+cases:
+  - note: round-trip simple resource
+    input:
+      name: myStorage
+      type: "Microsoft.Storage/storageAccounts"
+      location: westus2
+      sku:
+        name: Standard_LRS
+      properties:
+        supportsHttpsTrafficOnly: true
+        isHnsEnabled: false
+    round_trip: true
+    expected_round_trip:
+      name: myStorage
+      type: "Microsoft.Storage/storageAccounts"
+      location: westus2
+      sku:
+        name: Standard_LRS
+      properties:
+        supportsHttpsTrafficOnly: true
+        isHnsEnabled: false
+
+  - note: round-trip sub-resource
+    input:
+      name: myNsg
+      type: "Microsoft.Network/networkSecurityGroups"
+      properties:
+        securityRules:
+          - name: rule1
+            properties:
+              protocol: Tcp
+              access: Allow
+    round_trip: true
+    expected_round_trip:
+      name: myNsg
+      type: "Microsoft.Network/networkSecurityGroups"
+      properties:
+        securityRules:
+          - name: rule1
+            properties:
+              protocol: Tcp
+              access: Allow
+
+  - note: round-trip versioned array alias (element field remap)
+    aliases_json: |
+      [
+        {
+          "namespace": "Microsoft.Network",
+          "resourceTypes": [
+            {
+              "resourceType": "firewallPolicies",
+              "aliases": [
+                {
+                  "name": "Microsoft.Network/firewallPolicies/rules[*].priority",
+                  "defaultPath": "properties.rules[*].properties.priority",
+                  "paths": [
+                    {
+                      "path": "properties.rules[*].properties.prio",
+                      "apiVersions": ["2021-01-01"]
+                    }
+                  ]
+                },
+                {
+                  "name": "Microsoft.Network/firewallPolicies/rules[*].name",
+                  "defaultPath": "properties.rules[*].name",
+                  "paths": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    input:
+      name: myPolicy
+      type: "Microsoft.Network/firewallPolicies"
+      properties:
+        rules:
+          - name: rule1
+            properties:
+              prio: 100
+    api_version: "2021-01-01"
+    round_trip: true
+    expected_round_trip:
+      name: myPolicy
+      type: "Microsoft.Network/firewallPolicies"
+      properties:
+        rules:
+          - name: rule1
+            properties:
+              prio: 100
+
+  # Regression: default and versioned paths both produce exactly one element
+  # remap (same count), but the source field differs.  A length-only comparison
+  # would silently reuse the default aggregate, producing incorrect results for
+  # the versioned API version.
+  - note: round-trip versioned remap with same count but different source field
+    aliases_json: |
+      [
+        {
+          "namespace": "Microsoft.Network",
+          "resourceTypes": [
+            {
+              "resourceType": "firewallPolicies",
+              "aliases": [
+                {
+                  "name": "Microsoft.Network/firewallPolicies/rules[*].priority",
+                  "defaultPath": "properties.rules[*].properties.oldA",
+                  "paths": [
+                    {
+                      "path": "properties.rules[*].properties.oldB",
+                      "apiVersions": ["2023-06-01"]
+                    }
+                  ]
+                },
+                {
+                  "name": "Microsoft.Network/firewallPolicies/rules[*].name",
+                  "defaultPath": "properties.rules[*].name",
+                  "paths": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    input:
+      name: myPolicy
+      type: "Microsoft.Network/firewallPolicies"
+      properties:
+        rules:
+          - name: rule1
+            properties:
+              oldB: 100
+    api_version: "2023-06-01"
+    round_trip: true
+    expected_round_trip:
+      name: myPolicy
+      type: "Microsoft.Network/firewallPolicies"
+      properties:
+        rules:
+          - name: rule1
+            properties:
+              oldb: 100
+
+  - note: round-trip systemData and extendedLocation
+    input:
+      name: myStorage
+      type: "Microsoft.Storage/storageAccounts"
+      location: westus2
+      systemData:
+        createdBy: user@example.com
+        createdByType: User
+        createdAt: "2023-01-01T00:00:00Z"
+      extendedLocation:
+        name: edge-site-1
+        type: EdgeZone
+      properties:
+        supportsHttpsTrafficOnly: true
+    round_trip: true
+    expected_round_trip:
+      name: myStorage
+      type: "Microsoft.Storage/storageAccounts"
+      location: westus2
+      systemData:
+        createdBy: user@example.com
+        createdByType: User
+        createdAt: "2023-01-01T00:00:00Z"
+      extendedLocation:
+        name: edge-site-1
+        type: EdgeZone
+      properties:
+        supportsHttpsTrafficOnly: true

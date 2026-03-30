@@ -3,9 +3,17 @@
 #![cfg(feature = "rvm")]
 
 use regorus::languages::rego::compiler::Compiler;
+#[cfg(feature = "azure_policy")]
+use regorus::registry::targets;
+#[cfg(feature = "azure_policy")]
+use regorus::rvm::vm::RegoVM;
 use regorus::rvm::Instruction;
+#[cfg(feature = "azure_policy")]
+use regorus::Target;
 use regorus::{Engine, Rc, Value};
 use std::collections::BTreeSet;
+#[cfg(feature = "azure_policy")]
+use std::sync::Once;
 
 /// Compile a single-rule Rego module and return the program.
 fn compile_rule(module: &str) -> std::sync::Arc<regorus::rvm::program::Program> {
@@ -17,6 +25,19 @@ fn compile_rule(module: &str) -> std::sync::Arc<regorus::rvm::program::Program> 
         .compile_with_entrypoint(&Rc::from("data.test.p"))
         .expect("failed to compile policy");
     Compiler::compile_from_policy(&compiled, &["data.test.p"]).expect("failed to compile to RVM")
+}
+
+#[cfg(feature = "azure_policy")]
+fn register_azure_policy_target() {
+    static REGISTER_TARGET: Once = Once::new();
+
+    REGISTER_TARGET.call_once(|| {
+        let target = Target::from_json_str(include_str!(
+            "../interpreter/cases/target/definitions/azure_policy.json"
+        ))
+        .expect("failed to parse azure policy target definition");
+        targets::register(Rc::new(target)).expect("failed to register azure policy target");
+    });
 }
 
 /// Assert that the program's instruction stream contains no collection-create
@@ -188,6 +209,99 @@ fn not_expr_emits_assert_not() {
     // The Not+AssertCondition pair should be fused — no separate Not instruction.
     let not_count = count_instructions(&program, |i| matches!(i, Instruction::Not { .. }));
     assert_eq!(not_count, 0, "Not should be fused into AssertNot");
+}
+
+#[cfg(feature = "azure_policy")]
+#[test]
+fn empty_entry_points_use_target_effect_rule() {
+    register_azure_policy_target();
+
+    let mut engine = Engine::new();
+    engine
+        .add_policy(
+            "policy.rego".to_string(),
+            r#"
+            package azure.policy.allow
+            import rego.v1
+
+            __target__ := "target.tests.azure_policy"
+
+            default allow := false
+
+            allow if {
+                input.type == "Microsoft.Storage/storageAccounts"
+                input.properties.supportsHttpsTrafficOnly == true
+            }
+        "#
+            .to_string(),
+        )
+        .expect("failed to add policy");
+
+    let compiled = engine
+        .compile_for_target()
+        .expect("failed to compile target-aware policy");
+    assert_eq!(
+        compiled.get_entrypoint_rule(),
+        "data.azure.policy.allow.allow"
+    );
+
+    let program = Compiler::compile_from_policy(&compiled, &[])
+        .expect("failed to compile target-aware policy to RVM");
+    assert!(program
+        .entry_points
+        .contains_key("data.azure.policy.allow.allow"));
+
+    let input = Value::from_json_str(
+        r#"{
+            "type": "Microsoft.Storage/storageAccounts",
+            "name": "mystorageaccount",
+            "location": "East US",
+            "properties": {
+                "supportsHttpsTrafficOnly": true
+            }
+        }"#,
+    )
+    .expect("failed to parse input");
+
+    let expected = compiled
+        .eval_with_input(input.clone())
+        .expect("compiled policy evaluation failed");
+
+    let mut vm = RegoVM::new();
+    vm.load_program(program);
+    vm.set_data(Value::new_object())
+        .expect("failed to set VM data");
+    vm.set_input(input);
+
+    let actual = vm.execute().expect("RVM execution failed");
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn empty_entry_points_use_compiled_policy_entrypoint_rule() {
+    let mut engine = Engine::new();
+    engine
+        .add_policy(
+            "test.rego".to_string(),
+            r#"
+            package test
+            import rego.v1
+
+            p := input.x + 1
+        "#
+            .to_string(),
+        )
+        .expect("failed to add policy");
+
+    let compiled = engine
+        .compile_with_entrypoint(&Rc::from("data.test.p"))
+        .expect("failed to compile policy");
+
+    let program =
+        Compiler::compile_from_policy(&compiled, &[]).expect("failed to compile policy to RVM");
+
+    let entry_points: Vec<_> = program.entry_points.keys().cloned().collect();
+    assert_eq!(entry_points, vec!["data.test.p".to_string()]);
 }
 
 // --- B-11: early_exit_on_first_success flag tests ---

@@ -60,6 +60,45 @@ int main() {
 
     regorus::Program program = program_result.program();
 
+    std::cout << "Compiling compiled policy with default entry point..." << std::endl;
+    auto compiled_policy_result = regorus::compile_policy_with_entrypoint(
+        data_json,
+        &module,
+        1,
+        "data.demo.allow"
+    );
+    if (!compiled_policy_result) {
+        std::cerr << "compile compiled policy: " << compiled_policy_result.error() << std::endl;
+        return 1;
+    }
+
+    regorus::CompiledPolicy compiled_policy(
+        reinterpret_cast<RegorusCompiledPolicy*>(compiled_policy_result.pointer())
+    );
+
+    auto compiled_policy_program_result = regorus::Program::compile_from_policy(
+        compiled_policy.raw(),
+        nullptr,
+        0
+    );
+    if (!compiled_policy_program_result) {
+        std::cerr << "compile program from compiled policy: "
+                  << compiled_policy_program_result.error() << std::endl;
+        return 1;
+    }
+
+    regorus::Program compiled_policy_program = compiled_policy_program_result.program();
+    auto compiled_policy_listing_result = compiled_policy_program.generate_listing();
+    if (!compiled_policy_listing_result) {
+        std::cerr << "generate compiled-policy listing: "
+                  << compiled_policy_listing_result.error() << std::endl;
+        return 1;
+    }
+    if (std::string(compiled_policy_listing_result.output()).find("data.demo.allow") == std::string::npos) {
+        std::cerr << "compiled-policy listing missing default entry point" << std::endl;
+        return 1;
+    }
+
     std::cout << "Generating assembly listing..." << std::endl;
     auto listing_result = program.generate_listing();
     if (!listing_result) {

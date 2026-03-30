@@ -177,7 +177,11 @@ impl<'a> Compiler<'a> {
         Ok((package, 0))
     }
 
-    /// Compile from a CompiledPolicy to RVM Program
+    /// Compile a [`CompiledPolicy`] into an RVM program.
+    ///
+    /// When `entry_points` is empty, the compiler uses the compiled policy's
+    /// effective entry point. For target-aware policies that is the resolved
+    /// effect rule path; for regular policies it is the stored entrypoint rule.
     pub fn compile_from_policy(
         policy: &CompiledPolicy,
         entry_points: &[&str],
@@ -185,6 +189,14 @@ impl<'a> Compiler<'a> {
         let mut compiler = Compiler::with_policy(policy);
         compiler.current_rule_path = "".to_string();
         let rules = policy.get_rules();
+
+        let default_entry_points;
+        let entry_points = if entry_points.is_empty() {
+            default_entry_points = [policy.get_entrypoint_rule()];
+            &default_entry_points[..]
+        } else {
+            entry_points
+        };
 
         for &entry_point_name in entry_points {
             let instruction_index = compiler.program.instructions.len();

@@ -78,8 +78,10 @@ pub extern "C" fn regorus_rvm_drop(vm: *mut RegorusRvm) {
 /// Compile a compiled policy into an RVM program.
 ///
 /// * `compiled_policy` - Compiled policy handle
-/// * `entry_points` - Array of entry point rule paths
-/// * `entry_points_len` - Number of entry points
+/// * `entry_points` - Array of entry point rule paths. May be null when
+///   `entry_points_len` is 0.
+/// * `entry_points_len` - Number of entry points. When this is 0, the
+///   compiled policy's effective entry point is used.
 #[no_mangle]
 pub extern "C" fn regorus_program_compile_from_policy(
     compiled_policy: *mut RegorusCompiledPolicy,
@@ -127,7 +129,7 @@ pub extern "C" fn regorus_program_compile_from_policy(
 /// * `modules` - Array of policy modules to compile
 /// * `modules_len` - Number of modules in the array
 /// * `entry_points` - Array of entry point rule paths
-/// * `entry_points_len` - Number of entry points
+/// * `entry_points_len` - Number of entry points. Must be greater than 0.
 #[no_mangle]
 pub extern "C" fn regorus_program_compile_from_modules(
     data_json: *const c_char,

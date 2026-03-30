@@ -54,6 +54,16 @@ impl CompiledPolicy {
     pub fn is_rego_v0(&self) -> bool {
         !self.inner.modules.iter().any(|module| module.rego_v1)
     }
+
+    /// Returns the effective rule path used when evaluating this compiled policy.
+    pub fn get_entrypoint_rule(&self) -> &str {
+        #[cfg(feature = "azure_policy")]
+        if let Some(target_info) = self.inner.target_info.as_ref() {
+            return target_info.effect_path.as_ref();
+        }
+
+        self.inner.rule_to_evaluate.as_ref()
+    }
 }
 
 impl CompiledPolicy {

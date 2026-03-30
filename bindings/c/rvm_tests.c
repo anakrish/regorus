@@ -16,6 +16,8 @@ static int assert_ok(RegorusResult r, const char* message) {
 int main() {
     RegorusResult result = {0};
     bool result_valid = false;
+    RegorusCompiledPolicy* compiled_policy = NULL;
+    RegorusProgram* compiled_policy_program = NULL;
     RegorusProgram* program = NULL;
     RegorusBuffer* buffer = NULL;
     RegorusProgram* program2 = NULL;
@@ -77,6 +79,46 @@ int main() {
         goto Cleanup;
     }
     program = (RegorusProgram*)result.pointer_value;
+    regorus_result_drop(result);
+    result_valid = false;
+
+    printf("Compiling compiled policy with default entry point...\n");
+    result = regorus_compile_policy_with_entrypoint(
+        data_json,
+        &module,
+        1,
+        "data.demo.allow"
+    );
+    result_valid = true;
+    if (!assert_ok(result, "compile compiled policy")) {
+        goto Cleanup;
+    }
+    compiled_policy = (RegorusCompiledPolicy*)result.pointer_value;
+    regorus_result_drop(result);
+    result_valid = false;
+
+    result = regorus_program_compile_from_policy(
+        compiled_policy,
+        NULL,
+        0
+    );
+    result_valid = true;
+    if (!assert_ok(result, "compile program from compiled policy")) {
+        goto Cleanup;
+    }
+    compiled_policy_program = (RegorusProgram*)result.pointer_value;
+    regorus_result_drop(result);
+    result_valid = false;
+
+    result = regorus_program_generate_listing(compiled_policy_program);
+    result_valid = true;
+    if (!assert_ok(result, "generate compiled-policy listing")) {
+        goto Cleanup;
+    }
+    if (!result.output || strstr(result.output, "data.demo.allow") == NULL) {
+        fprintf(stderr, "compiled-policy listing missing default entry point\n");
+        goto Cleanup;
+    }
     regorus_result_drop(result);
     result_valid = false;
 
@@ -266,6 +308,12 @@ int main() {
 Cleanup:
     if (result_valid) {
         regorus_result_drop(result);
+    }
+    if (compiled_policy_program) {
+        regorus_program_drop(compiled_policy_program);
+    }
+    if (compiled_policy) {
+        regorus_compiled_policy_drop(compiled_policy);
     }
     if (host_vm) {
         regorus_rvm_drop(host_vm);

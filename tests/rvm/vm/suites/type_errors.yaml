@@ -96,7 +96,7 @@ cases:
     want_error: "#undefined"
 
   - note: logical_not_int
-    description: NOT with int operand should error
+    description: NOT with int operand treats non-boolean as truthy (result false)
     example_rego: "!42"
     literals:
       - 42
@@ -104,7 +104,7 @@ cases:
       - "Load { dest: 0, literal_idx: 0 }"
       - "Not { dest: 1, operand: 0 }"
       - "Return { value: 1 }"
-    want_error: "#undefined"
+    want_result: false
 
   # Invalid indexing operations
   - note: index_int_with_string_key

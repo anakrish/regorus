@@ -631,6 +631,63 @@ namespace Regorus.Internal
         internal static extern RegorusResult regorus_effect_schema_clear();
 
         #endregion
+
+        #region Alias Registry Methods
+
+        /// <summary>
+        /// Create a new, empty AliasRegistry.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_alias_registry_new", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusAliasRegistry* regorus_alias_registry_new();
+
+        /// <summary>
+        /// Drop an AliasRegistry.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_alias_registry_drop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern void regorus_alias_registry_drop(RegorusAliasRegistry* registry);
+
+        /// <summary>
+        /// Load control-plane alias data (array of ProviderAliases) into the registry.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_alias_registry_load_json", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_alias_registry_load_json(RegorusAliasRegistry* registry, byte* json);
+
+        /// <summary>
+        /// Load a data-plane policy manifest into the registry.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_alias_registry_load_manifest", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_alias_registry_load_manifest(RegorusAliasRegistry* registry, byte* json);
+
+        /// <summary>
+        /// Return the number of resource types loaded in the alias registry.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_alias_registry_len", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_alias_registry_len(RegorusAliasRegistry* registry);
+
+        /// <summary>
+        /// Normalize an ARM resource JSON and wrap it into the standard input envelope.
+        /// Returns a JSON string.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_alias_registry_normalize_and_wrap", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_alias_registry_normalize_and_wrap(
+            RegorusAliasRegistry* registry, byte* resource_json, byte* api_version, byte* context_json, byte* parameters_json);
+
+        /// <summary>
+        /// Denormalize a previously-normalized resource JSON back to ARM format.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_alias_registry_denormalize", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_alias_registry_denormalize(
+            RegorusAliasRegistry* registry, byte* normalized_json, byte* api_version);
+
+        /// <summary>
+        /// Compile an Azure Policy definition JSON into an RVM program.
+        /// registry may be null for no alias resolution.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_compile_azure_policy_definition", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_compile_azure_policy_definition(
+            RegorusAliasRegistry* registry, byte* policy_json);
+
+        #endregion
     }
 
     #region Native Structures
@@ -813,6 +870,14 @@ namespace Regorus.Internal
     {
         public byte* id;
         public byte* content;
+    }
+
+    /// <summary>
+    /// Wrapper for AliasRegistry.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe partial struct RegorusAliasRegistry
+    {
     }
 
     #endregion

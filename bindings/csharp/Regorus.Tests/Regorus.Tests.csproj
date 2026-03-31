@@ -12,6 +12,7 @@
   <PropertyGroup>
     <!-- If the environment variable is set (such as in a Github Action run), append the suffix to the version number -->
     <RegorusPackageVersionSuffix Condition="'$(VersionSuffix)' != ''">-$(VersionSuffix)</RegorusPackageVersionSuffix>
+    <UseLocalRegorus Condition="'$(UseLocalRegorus)' == ''">false</UseLocalRegorus>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,7 +23,11 @@
     <PackageReference Include="MSTest" />
   </ItemGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="'$(UseLocalRegorus)' == 'true'">
+    <ProjectReference Include="../Regorus/Regorus.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(UseLocalRegorus)' != 'true'">
     <PackageReference Include="Regorus" />
   </ItemGroup>
 </Project>

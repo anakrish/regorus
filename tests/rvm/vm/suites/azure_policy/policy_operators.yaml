@@ -911,13 +911,13 @@ cases:
     want_result: false
 
   - note: policy_not_in_undefined_right
-    description: "defined left, undefined right → false (not in code path returns false)"
+    description: "defined left, undefined right → true (not in missing collection)"
     literals: ["hello"]
     instructions:
       - "Load { dest: 1, literal_idx: 0 }"
       - "PolicyNotIn { dest: 0, left: 1, right: 2 }"
       - "Return { value: 0 }"
-    want_result: false
+    want_result: true
 
   - note: policy_not_in_empty_array
     description: "value not in empty array → true"
@@ -1322,5 +1322,165 @@ cases:
       - "Load { dest: 1, literal_idx: 1 }"
       - "Load { dest: 2, literal_idx: 0 }"
       - "PolicyExists { dest: 0, left: 1, right: 2 }"
+      - "Return { value: 0 }"
+    want_result: false
+
+  # =========================================================================
+  # Edge cases — PolicyIn/PolicyNotIn with scalar RHS, null LHS, null sentinel
+  # =========================================================================
+
+  - note: policy_in_scalar_rhs_match
+    description: "scalar RHS is treated as single-element collection — matching value → true"
+    literals: ["hello", "HELLO"]
+    instructions:
+      - "Load { dest: 1, literal_idx: 0 }"
+      - "Load { dest: 2, literal_idx: 1 }"
+      - "PolicyIn { dest: 0, left: 1, right: 2 }"
+      - "Return { value: 0 }"
+    want_result: true
+
+  - note: policy_in_null_lhs
+    description: "explicit null LHS always returns false (null is a sentinel, not a matchable value)"
+    literals: [["hello", null]]
+    instructions:
+      - "LoadNull { dest: 1 }"
+      - "Load { dest: 2, literal_idx: 0 }"
+      - "PolicyIn { dest: 0, left: 1, right: 2 }"
+      - "Return { value: 0 }"
+    want_result: false
+
+  - note: policy_not_in_null_lhs
+    description: "explicit null LHS — notIn always returns true"
+    literals: [["hello", null]]
+    instructions:
+      - "LoadNull { dest: 1 }"
+      - "Load { dest: 2, literal_idx: 0 }"
+      - "PolicyNotIn { dest: 0, left: 1, right: 2 }"
+      - "Return { value: 0 }"
+    want_result: true
+
+  - note: policy_in_null_lhs_null_only_array
+    description: "null LHS against [null] — null-as-defined doesn't match null-as-sentinel"
+    literals: [[null]]
+    instructions:
+      - "LoadNull { dest: 1 }"
+      - "Load { dest: 2, literal_idx: 0 }"
+      - "PolicyIn { dest: 0, left: 1, right: 2 }"
+      - "Return { value: 0 }"
+    want_result: false
+
+  - note: policy_not_in_null_lhs_null_only_array
+    description: "null LHS against [null] — notIn always true for null-as-defined"
+    literals: [[null]]
+    instructions:
+      - "LoadNull { dest: 1 }"
+      - "Load { dest: 2, literal_idx: 0 }"
+      - "PolicyNotIn { dest: 0, left: 1, right: 2 }"
+      - "Return { value: 0 }"
+    want_result: true
+
+  - note: policy_in_rhs_array_with_null_sentinel
+    description: "non-null LHS, RHS array has null sentinel — null is skipped, no match"
+    literals: ["hello", [null, "world"]]
+    instructions:
+      - "Load { dest: 1, literal_idx: 0 }"
+      - "Load { dest: 2, literal_idx: 1 }"
+      - "PolicyIn { dest: 0, left: 1, right: 2 }"
+      - "Return { value: 0 }"
+    want_result: false
+
+  - note: policy_in_undefined_lhs_null_sentinel
+    description: "undefined LHS, RHS array has null sentinel → true (null means 'match missing')"
+    literals: [[null, "world"]]
+    instructions:
+      - "Load { dest: 2, literal_idx: 0 }"
+      - "PolicyIn { dest: 0, left: 1, right: 2 }"
+      - "Return { value: 0 }"
+    want_result: true
+
+  - note: policy_not_in_undefined_lhs_null_sentinel
+    description: "undefined LHS, RHS array has null sentinel → false (null matches missing)"
+    literals: [[null, "world"]]
+    instructions:
+      - "Load { dest: 2, literal_idx: 0 }"
+      - "PolicyNotIn { dest: 0, left: 1, right: 2 }"
+      - "Return { value: 0 }"
+    want_result: false
+
+  - note: policy_in_undefined_lhs_no_null_sentinel
+    description: "undefined LHS, RHS array has no null → false (no sentinel match)"
+    literals: [["hello", "world"]]
+    instructions:
+      - "Load { dest: 2, literal_idx: 0 }"
+      - "PolicyIn { dest: 0, left: 1, right: 2 }"
+      - "Return { value: 0 }"
+    want_result: false
+
+  # =========================================================================
+  # Edge cases — PolicyContains with object LHS, set LHS, scalar coercion
+  # =========================================================================
+
+  - note: policy_contains_object_key_match
+    description: "object LHS — contains checks keys only, CI match"
+    literals: [{"Alpha": 1, "beta": 2}, "ALPHA"]
+    instructions:
+      - "Load { dest: 1, literal_idx: 0 }"
+      - "Load { dest: 2, literal_idx: 1 }"
+      - "PolicyContains { dest: 0, left: 1, right: 2 }"
+      - "Return { value: 0 }"
+    want_result: true
+
+  - note: policy_contains_object_key_no_match
+    description: "object LHS — key not present"
+    literals: [{"Alpha": 1, "beta": 2}, "gamma"]
+    instructions:
+      - "Load { dest: 1, literal_idx: 0 }"
+      - "Load { dest: 2, literal_idx: 1 }"
+      - "PolicyContains { dest: 0, left: 1, right: 2 }"
+      - "Return { value: 0 }"
+    want_result: false
+
+  - note: policy_contains_object_value_not_checked
+    description: "object LHS — value exists but is not a key, so no match"
+    literals: [{"Alpha": "target"}, "target"]
+    instructions:
+      - "Load { dest: 1, literal_idx: 0 }"
+      - "Load { dest: 2, literal_idx: 1 }"
+      - "PolicyContains { dest: 0, left: 1, right: 2 }"
+      - "Return { value: 0 }"
+    want_result: false
+
+  - note: policy_contains_set_element_match
+    description: "set LHS — element match, case insensitive"
+    literals: ["HELLO"]
+    instruction_params:
+      set_create_params:
+        - dest: 1
+          elements: [3]
+    instructions:
+      - "Load { dest: 3, literal_idx: 0 }"
+      - "SetCreate { params_index: 0 }"
+      - "Load { dest: 2, literal_idx: 0 }"
+      - "PolicyContains { dest: 0, left: 1, right: 2 }"
+      - "Return { value: 0 }"
+    want_result: true
+
+  - note: policy_contains_number_lhs_string_rhs
+    description: "number LHS coerced to string when RHS is string — 42 contains '4'"
+    literals: [42, "4"]
+    instructions:
+      - "Load { dest: 1, literal_idx: 0 }"
+      - "Load { dest: 2, literal_idx: 1 }"
+      - "PolicyContains { dest: 0, left: 1, right: 2 }"
+      - "Return { value: 0 }"
+    want_result: true
+
+  - note: policy_contains_number_lhs_number_rhs
+    description: "number LHS, number RHS (not string) — no coercion path → false"
+    literals: [42, 4]
+    instructions:
+      - "Load { dest: 1, literal_idx: 0 }"
+      - "Load { dest: 2, literal_idx: 1 }"
+      - "PolicyContains { dest: 0, left: 1, right: 2 }"
       - "Return { value: 0 }"
     want_result: false

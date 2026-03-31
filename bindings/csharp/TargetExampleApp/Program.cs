@@ -232,6 +232,9 @@ allow if {
 
         Console.WriteLine("\n8. RVM host await (suspend/resume):");
         DemonstrateRvmHostAwait();
+
+        Console.WriteLine("\n9. Azure Policy JSON compilation:");
+        DemonstrateAzurePolicyCompilation();
     }
 
     static void DemonstrateConcurrentEvaluation(Regorus.CompiledPolicy compiledPolicy)
@@ -491,5 +494,64 @@ allow if {
 
         var resumed = vm.Resume("{\"tier\":\"gold\"}");
         Console.WriteLine($"HostAwait resumed result: {resumed}");
+    }
+
+    // Azure Policy definition: deny VMs without required tags
+    private const string AZURE_POLICY_DENY_VM = @"{
+  ""policyRule"": {
+    ""if"": {
+      ""field"": ""type"",
+      ""equals"": ""Microsoft.Compute/virtualMachines""
+    },
+    ""then"": {
+      ""effect"": ""deny""
+    }
+  }
+}";
+
+    private const string AZURE_VM_INPUT = @"{
+  ""resource"": {
+    ""type"": ""microsoft.compute/virtualmachines"",
+    ""name"": ""myVM"",
+    ""location"": ""eastus""
+  },
+  ""parameters"": {}
+}";
+
+    private const string AZURE_STORAGE_INPUT = @"{
+  ""resource"": {
+    ""type"": ""microsoft.storage/storageaccounts"",
+    ""name"": ""myStorage"",
+    ""location"": ""eastus""
+  },
+  ""parameters"": {}
+}";
+
+    static void DemonstrateAzurePolicyCompilation()
+    {
+        Console.WriteLine("  Compiling Azure Policy definition (deny VMs)...");
+        using var program = Regorus.AzurePolicyCompiler.CompileDefinition(AZURE_POLICY_DENY_VM);
+
+        var listing = program.GenerateListing();
+        Console.WriteLine($"  ✓ Compiled successfully ({listing?.Split('\n').Length ?? 0} listing lines)");
+
+        // Execute against a matching VM resource
+        using var vm1 = new Regorus.Rvm();
+        vm1.LoadProgram(program);
+        vm1.SetInputJson(AZURE_VM_INPUT);
+        var vmResult = vm1.Execute();
+        Console.WriteLine($"  VM resource result: {vmResult}");
+
+        // Execute against a non-matching storage resource
+        using var vm2 = new Regorus.Rvm();
+        vm2.LoadProgram(program);
+        vm2.SetInputJson(AZURE_STORAGE_INPUT);
+        var storageResult = vm2.Execute();
+        Console.WriteLine($"  Storage resource result: {storageResult}");
+
+        // Serialize/deserialize roundtrip
+        var binary = program.SerializeBinary();
+        using var restored = Regorus.Program.DeserializeBinary(binary, out var isPartial);
+        Console.WriteLine($"  ✓ Binary roundtrip: {binary.Length} bytes, partial={isPartial}");
     }
 }

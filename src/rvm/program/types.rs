@@ -387,3 +387,86 @@ mod metadata_serde {
             .collect())
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::value::Value;
+    use alloc::collections::BTreeSet;
+
+    /// Round-trip: Value → MetadataValue → Value must be equivalent for
+    /// all lossless variants.
+    fn assert_round_trip(original: &Value, expected: &Value) {
+        let mv = MetadataValue::from_value(original);
+        let recovered = mv.to_value();
+        assert_eq!(
+            &recovered, expected,
+            "round-trip failed for {original:?} → {mv:?} → {recovered:?}"
+        );
+    }
+
+    #[test]
+    fn round_trip_string() {
+        let v = Value::String("hello".into());
+        assert_round_trip(&v, &v);
+    }
+
+    #[test]
+    fn round_trip_bool() {
+        assert_round_trip(&Value::Bool(true), &Value::Bool(true));
+        assert_round_trip(&Value::Bool(false), &Value::Bool(false));
+    }
+
+    #[test]
+    fn round_trip_integer() {
+        let v = Value::from(42_i64);
+        assert_round_trip(&v, &v);
+    }
+
+    #[test]
+    fn round_trip_array() {
+        let v = Value::from_json_str(r#"[1, "two", true]"#).unwrap();
+        assert_round_trip(&v, &v);
+    }
+
+    #[test]
+    fn round_trip_string_set() {
+        let mut set = BTreeSet::new();
+        set.insert(Value::String("a".into()));
+        set.insert(Value::String("b".into()));
+        let v = Value::Set(Rc::new(set));
+        assert_round_trip(&v, &v);
+    }
+
+    #[test]
+    fn round_trip_object() {
+        let v = Value::from_json_str(r#"{"key": "value", "n": 7}"#).unwrap();
+        assert_round_trip(&v, &v);
+    }
+
+    #[test]
+    fn null_maps_to_empty_string() {
+        let mv = MetadataValue::from_value(&Value::Null);
+        assert_eq!(mv, MetadataValue::String(String::new()));
+    }
+
+    #[test]
+    fn undefined_maps_to_empty_string() {
+        let mv = MetadataValue::from_value(&Value::Undefined);
+        assert_eq!(mv, MetadataValue::String(String::new()));
+    }
+
+    #[test]
+    fn mixed_set_uses_list() {
+        let mut set = BTreeSet::new();
+        set.insert(Value::String("a".into()));
+        set.insert(Value::from(1_i64));
+        let v = Value::Set(Rc::new(set));
+        let mv = MetadataValue::from_value(&v);
+        assert!(
+            matches!(mv, MetadataValue::List(_)),
+            "mixed-type set should produce List, got {mv:?}"
+        );
+    }
+}

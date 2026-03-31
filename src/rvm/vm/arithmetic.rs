@@ -3,7 +3,8 @@
 
 // `pattern_type_mismatch` requires explicit `&`+`ref` patterns for tuple matches
 // on (&Value, &Value), which conflicts with `needless_borrowed_reference`.
-#![allow(clippy::needless_borrowed_reference)]
+// Disable both to keep patterns consistent within this file.
+#![allow(clippy::pattern_type_mismatch, clippy::needless_borrowed_reference)]
 
 use alloc::collections::BTreeSet;
 

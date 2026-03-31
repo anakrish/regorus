@@ -12,7 +12,7 @@ use anyhow::{anyhow, bail, Result};
 use crate::languages::azure_policy::ast::{
     Condition, Constraint, CountNode, FieldKind, JsonValue, OperatorKind, ValueOrExpr,
 };
-use crate::rvm::instructions::{LoopMode, LoopStartParams};
+use crate::rvm::instructions::{GuardMode, LoopMode, LoopStartParams, PolicyOp};
 use crate::rvm::Instruction;
 use crate::Value;
 
@@ -321,9 +321,11 @@ impl Compiler {
             } else {
                 let dest = self.alloc_register()?;
                 self.emit(
-                    Instruction::PolicyNot {
+                    Instruction::PolicyCondition {
                         dest,
-                        operand: any_result,
+                        left: any_result,
+                        right: 0,
+                        op: PolicyOp::Not,
                     },
                     span,
                 );
@@ -377,7 +379,13 @@ impl Compiler {
             .ok_or_else(|| anyhow::anyhow!("nested any should always return Some"))?;
 
         // The outer Any body succeeds when the inner Any returned true.
-        self.emit(Instruction::AssertCondition { condition: inner }, span);
+        self.emit(
+            Instruction::Guard {
+                register: inner,
+                mode: GuardMode::Condition,
+            },
+            span,
+        );
 
         self.count_bindings.pop();
 
@@ -409,9 +417,11 @@ impl Compiler {
         } else {
             let dest = self.alloc_register()?;
             self.emit(
-                Instruction::PolicyNot {
+                Instruction::PolicyCondition {
                     dest,
-                    operand: result_reg,
+                    left: result_reg,
+                    right: 0,
+                    op: PolicyOp::Not,
                 },
                 span,
             );
@@ -484,8 +494,9 @@ impl Compiler {
         if let Some(where_clause) = where_constraint {
             let where_reg = self.compile_constraint(where_clause)?;
             self.emit(
-                Instruction::AssertCondition {
-                    condition: where_reg,
+                Instruction::Guard {
+                    register: where_reg,
+                    mode: GuardMode::Condition,
                 },
                 span,
             );
@@ -619,9 +630,11 @@ impl Compiler {
         } else {
             let dest = self.alloc_register()?;
             self.emit(
-                Instruction::PolicyNot {
+                Instruction::PolicyCondition {
                     dest,
-                    operand: any_result,
+                    left: any_result,
+                    right: 0,
+                    op: PolicyOp::Not,
                 },
                 &condition.span,
             );
@@ -687,8 +700,9 @@ impl Compiler {
 
         let where_reg = self.compile_constraint(where_constraint)?;
         self.emit(
-            Instruction::AssertCondition {
-                condition: where_reg,
+            Instruction::Guard {
+                register: where_reg,
+                mode: GuardMode::Condition,
             },
             span,
         );

@@ -10,7 +10,7 @@ pub use params::{
     FunctionCallParams, InstructionData, LoopStartParams, ObjectCreateParams, SetCreateParams,
     VirtualDataDocumentLookupParams,
 };
-pub use types::{ComprehensionMode, LiteralOrRegister, LoopMode};
+pub use types::{ComprehensionMode, GuardMode, LiteralOrRegister, LogicalBlockMode, LoopMode, PolicyOp};
 
 use serde::{Deserialize, Serialize};
 
@@ -263,14 +263,16 @@ pub enum Instruction {
         collection: u8,
     },
 
-    /// Assert condition - if register contains false or undefined, return undefined immediately
-    AssertCondition {
-        condition: u8,
+    /// Assert that two registers are equal - if either is undefined or they differ, fail the condition
+    AssertEq {
+        left: u8,
+        right: u8,
     },
 
-    /// Assert not undefined - if register contains undefined, return undefined immediately
-    AssertNotUndefined {
+    /// Consolidated guard instruction — replaces AssertNot, AssertCondition, AssertNotUndefined.
+    Guard {
         register: u8,
+        mode: GuardMode,
     },
 
     /// Return undefined immediately when condition is false or undefined.
@@ -353,171 +355,30 @@ pub enum Instruction {
     /// End a comprehension block
     ComprehensionEnd {},
 
-    // ── Azure Policy condition operators ──────────────────────────────
-    /// Azure Policy case-insensitive equality with type coercion.
-    PolicyEquals {
-        dest: u8,
-        left: u8,
-        right: u8,
-    },
-
-    /// Azure Policy not-equals: undefined field → true, else negated CI equality.
-    PolicyNotEquals {
-        dest: u8,
-        left: u8,
-        right: u8,
-    },
-
-    /// Azure Policy greater-than with CI string comparison and type coercion.
-    PolicyGreater {
-        dest: u8,
-        left: u8,
-        right: u8,
-    },
-
-    /// Azure Policy greater-or-equals with CI string comparison and type coercion.
-    PolicyGreaterOrEquals {
-        dest: u8,
-        left: u8,
-        right: u8,
-    },
-
-    /// Azure Policy less-than with CI string comparison and type coercion.
-    PolicyLess {
-        dest: u8,
-        left: u8,
-        right: u8,
-    },
-
-    /// Azure Policy less-or-equals with CI string comparison and type coercion.
-    PolicyLessOrEquals {
-        dest: u8,
-        left: u8,
-        right: u8,
-    },
-
-    /// Azure Policy CI membership test: left ∈ right (array/set).
-    PolicyIn {
-        dest: u8,
-        left: u8,
-        right: u8,
-    },
-
-    /// Azure Policy negated CI membership: undefined field → true.
-    PolicyNotIn {
-        dest: u8,
-        left: u8,
-        right: u8,
-    },
-
-    /// Azure Policy CI substring or CI array-element containment.
-    PolicyContains {
-        dest: u8,
-        left: u8,
-        right: u8,
-    },
-
-    /// Azure Policy negated contains: undefined field → true.
-    PolicyNotContains {
-        dest: u8,
-        left: u8,
-        right: u8,
-    },
-
-    /// Azure Policy CI object-key containment.
-    PolicyContainsKey {
-        dest: u8,
-        left: u8,
-        right: u8,
-    },
-
-    /// Azure Policy negated contains-key: undefined field → true.
-    PolicyNotContainsKey {
-        dest: u8,
-        left: u8,
-        right: u8,
-    },
-
-    /// Azure Policy CI wildcard-glob pattern match (*, ?).
-    PolicyLike {
-        dest: u8,
-        left: u8,
-        right: u8,
-    },
-
-    /// Azure Policy negated like: undefined field → true.
-    PolicyNotLike {
-        dest: u8,
-        left: u8,
-        right: u8,
-    },
-
-    /// Azure Policy case-sensitive pattern match (?, #).
-    PolicyMatch {
-        dest: u8,
-        left: u8,
-        right: u8,
-    },
-
-    /// Azure Policy negated match: undefined field → true.
-    PolicyNotMatch {
-        dest: u8,
-        left: u8,
-        right: u8,
-    },
-
-    /// Azure Policy case-insensitive pattern match (?, #).
-    PolicyMatchInsensitively {
-        dest: u8,
-        left: u8,
-        right: u8,
-    },
-
-    /// Azure Policy negated match-insensitively: undefined field → true.
-    PolicyNotMatchInsensitively {
-        dest: u8,
-        left: u8,
-        right: u8,
-    },
-
-    /// Azure Policy exists: checks `(defined && !null) == as_boolish(right)`.
-    PolicyExists {
-        dest: u8,
-        left: u8,
-        right: u8,
-    },
-
-    /// Guard for `value:` conditions in Azure Policy.
+    // ── Azure Policy condition operators (consolidated) ────────────────
+    /// Consolidated Azure Policy condition instruction.
     ///
-    /// When the LHS of a `value:` condition resolves to Undefined (because
-    /// the ARM template expression failed to evaluate — e.g. a missing
-    /// intermediate property in a dot chain), the condition result must be
-    /// `false` regardless of the operator.  This differs from `field:`
-    /// conditions where Undefined has per-operator semantics (e.g.
-    /// `notEquals` returns `true` when the field doesn't exist).
+    /// Replaces 21 separate Policy* variants.  The `op` discriminant selects
+    /// the specific Azure Policy condition semantics.
     ///
-    /// `dest = if is_undefined(value) { false } else { condition }`
-    ValueConditionGuard {
+    /// For most ops: `dest = op(left, right)`.
+    /// For `PolicyOp::Not`: `dest = !is_true(left)`, `right` is unused (0).
+    /// For `PolicyOp::ValueConditionGuard`: `left` = value register,
+    ///   `right` = condition register.
+    PolicyCondition {
         dest: u8,
-        /// The LHS expression result (checked for Undefined).
-        value: u8,
-        /// The operator result to pass through when value is defined.
-        condition: u8,
-    },
-
-    /// Azure Policy logic not: `!is_true(operand)`.
-    PolicyNot {
-        dest: u8,
-        operand: u8,
+        left: u8,
+        right: u8,
+        op: PolicyOp,
     },
 
     // ── AllOf / AnyOf structured short-circuit instructions ───────────
-    /// Initialize allOf: set result register to false (pessimistic).
-    /// If there are zero children, jumps to end_pc.
-    AllOfStart {
-        /// Register that accumulates the allOf result.
+    /// Initialize allOf/anyOf: set result register to false.
+    LogicalBlockStart {
+        mode: LogicalBlockMode,
+        /// Register that accumulates the result.
         result: u8,
-        /// PC of the AllOfEnd instruction (jump target on short-circuit).
+        /// PC of the corresponding End instruction.
         end_pc: u16,
     },
 
@@ -526,24 +387,9 @@ pub enum Instruction {
     AllOfNext {
         /// Register holding the child condition result.
         check: u8,
-        /// Register that accumulates the allOf result (set to false on fail).
-        result: u8,
-        /// PC of the AllOfEnd instruction.
-        end_pc: u16,
-    },
-
-    /// Finalize allOf: all children passed, set result to true.
-    AllOfEnd {
         /// Register that accumulates the allOf result.
         result: u8,
-    },
-
-    /// Initialize anyOf: set result register to false.
-    /// If there are zero children, jumps to end_pc.
-    AnyOfStart {
-        /// Register that accumulates the anyOf result.
-        result: u8,
-        /// PC of the AnyOfEnd instruction.
+        /// PC of the AllOfEnd instruction (jump target on short-circuit).
         end_pc: u16,
     },
 
@@ -558,8 +404,15 @@ pub enum Instruction {
         end_pc: u16,
     },
 
-    /// Finalize anyOf: no child matched, result stays false.
-    AnyOfEnd {},
+    /// Finalize allOf/anyOf block.
+    ///
+    /// For AllOf: all children passed → set result to true.
+    /// For AnyOf: no child matched → result stays false (no-op).
+    LogicalBlockEnd {
+        mode: LogicalBlockMode,
+        /// Register that accumulates the result.
+        result: u8,
+    },
 }
 
 impl Instruction {
@@ -622,5 +475,23 @@ impl Instruction {
     /// Create a new ComprehensionEnd instruction
     pub const fn comprehension_end() -> Self {
         Self::ComprehensionEnd {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::mem::size_of;
+
+    #[test]
+    fn instruction_size() {
+        // Lock the instruction size to detect unintended growth.
+        // repr(C) gives a c_int-sized discriminant (4 bytes on most platforms)
+        // plus 4 bytes for the largest payload variant, = 8 bytes total.
+        let size = size_of::<Instruction>();
+        assert_eq!(
+            size, 8,
+            "Instruction size changed from 8 to {size} — review new variants for bloat"
+        );
     }
 }

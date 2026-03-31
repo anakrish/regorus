@@ -358,18 +358,15 @@ impl Compiler {
     /// Patch a set of tracked instruction indices, setting their `end_pc`
     /// field to the given value.
     ///
-    /// Works for `AllOfStart`, `AllOfNext`, `AnyOfStart`, and `AnyOfNext`
+    /// Works for `LogicalBlockStart`, `AllOfNext`, and `AnyOfNext`
     /// instructions — any instruction whose `end_pc` needs back-patching.
     fn patch_end_pc(&mut self, pcs: &[u16], end_pc: u16) {
         for &pc in pcs {
             match &mut self.program.instructions[pc as usize] {
-                Instruction::AllOfStart {
+                Instruction::LogicalBlockStart {
                     end_pc: ref mut ep, ..
                 }
                 | Instruction::AllOfNext {
-                    end_pc: ref mut ep, ..
-                }
-                | Instruction::AnyOfStart {
                     end_pc: ref mut ep, ..
                 }
                 | Instruction::AnyOfNext {
@@ -983,10 +980,11 @@ impl Compiler {
         let disabled_reg = self.load_literal(Value::from("Disabled"), span)?;
         let is_disabled_reg = self.alloc_register()?;
         self.emit(
-            Instruction::PolicyEquals {
+            Instruction::PolicyCondition {
                 dest: is_disabled_reg,
                 left: effect_name_reg,
                 right: disabled_reg,
+                op: crate::rvm::instructions::PolicyOp::Equals,
             },
             span,
         );
@@ -995,9 +993,11 @@ impl Compiler {
         // so negate: not_disabled is false when disabled → returns Undefined.
         let not_disabled_reg = self.alloc_register()?;
         self.emit(
-            Instruction::PolicyNot {
+            Instruction::PolicyCondition {
                 dest: not_disabled_reg,
-                operand: is_disabled_reg,
+                left: is_disabled_reg,
+                right: 0,
+                op: crate::rvm::instructions::PolicyOp::Not,
             },
             span,
         );
@@ -1040,10 +1040,11 @@ impl Compiler {
             let true_reg = self.load_literal(Value::Bool(true), span)?;
             let resource_found_reg = self.alloc_register()?;
             self.emit(
-                Instruction::PolicyExists {
+                Instruction::PolicyCondition {
                     dest: resource_found_reg,
                     left: related_resource_reg,
                     right: true_reg,
+                    op: crate::rvm::instructions::PolicyOp::Exists,
                 },
                 span,
             );
@@ -1074,10 +1075,11 @@ impl Compiler {
             let true_reg = self.load_literal(Value::Bool(true), span)?;
             let dest = self.alloc_register()?;
             self.emit(
-                Instruction::PolicyExists {
+                Instruction::PolicyCondition {
                     dest,
                     left: related_resource_reg,
                     right: true_reg,
+                    op: crate::rvm::instructions::PolicyOp::Exists,
                 },
                 span,
             );
@@ -1089,9 +1091,11 @@ impl Compiler {
         // If exists_reg is falsy → non-compliant → return the effect object.
         let not_exists_reg = self.alloc_register()?;
         self.emit(
-            Instruction::PolicyNot {
+            Instruction::PolicyCondition {
                 dest: not_exists_reg,
-                operand: exists_reg,
+                left: exists_reg,
+                right: 0,
+                op: crate::rvm::instructions::PolicyOp::Not,
             },
             span,
         );

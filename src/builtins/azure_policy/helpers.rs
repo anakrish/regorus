@@ -39,11 +39,6 @@ pub fn as_string(value: &Value) -> Option<String> {
     }
 }
 
-#[allow(dead_code)]
-pub fn as_string_ci(value: &Value) -> Option<String> {
-    as_string(value).map(|s| strings::case_fold::fold(&s).into_owned())
-}
-
 /// Coerce a value to its string representation for policy comparison operators.
 ///
 /// Azure Policy coerces numbers and booleans to strings when used with string
@@ -77,12 +72,7 @@ pub fn as_boolish(value: &Value) -> Option<bool> {
 
 // ── Comparison and coercion ───────────────────────────────────────────
 
-pub fn compare_values(args: &[Value]) -> Option<i8> {
-    #[allow(clippy::pattern_type_mismatch)]
-    let [left, right] = args
-    else {
-        return None;
-    };
+pub fn compare_values(left: &Value, right: &Value) -> Option<i8> {
     if is_undefined(left) || is_undefined(right) {
         return None;
     }
@@ -193,13 +183,7 @@ pub fn try_coerce_to_number(s: &str) -> Option<crate::number::Number> {
 
 // ── Pattern matching ──────────────────────────────────────────────────
 
-pub fn match_pattern(args: &[Value], insensitive: bool) -> bool {
-    #[allow(clippy::pattern_type_mismatch)]
-    let [input_val, pattern_val] = args
-    else {
-        return false;
-    };
-
+pub fn match_pattern(input_val: &Value, pattern_val: &Value, insensitive: bool) -> bool {
     let Some(mut input) = coerce_to_string(input_val) else {
         return false;
     };

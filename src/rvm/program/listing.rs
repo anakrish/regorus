@@ -643,18 +643,33 @@ fn format_instruction_readable(
             let comment = format!("Get count/length of collection r{}", collection);
             align_comment(&base, &comment, config.comment_column)
         }
-        Instruction::AssertCondition { condition } => {
-            let base = format!("{}Assert       assert r{}", indent, condition);
-            let comment = format!("Assert r{} is true (exit if false/undefined)", condition);
+        Instruction::AssertEq { left, right } => {
+            let base = format!("{}AssertEq     assert r{} == r{}", indent, left, right);
+            let comment = format!(
+                "Assert r{} equals r{} (exit if either undefined or different)",
+                left, right
+            );
             align_comment(&base, &comment, config.comment_column)
         }
-        Instruction::AssertNotUndefined { register } => {
-            let base = format!(
-                "{}AssertNotUndefined assert_not_undefined r{}",
-                indent, register
-            );
-            let comment = format!("Assert r{} is not undefined (exit if undefined)", register);
-            align_comment(&base, &comment, config.comment_column)
+        Instruction::Guard { register, mode } => {
+            let (keyword, comment) = match mode {
+                crate::rvm::instructions::GuardMode::Not => (
+                    format!("{}AssertNot    assert !r{}", indent, register),
+                    format!("Assert r{} is false/undefined (exit if true)", register),
+                ),
+                crate::rvm::instructions::GuardMode::Condition => (
+                    format!("{}Assert       assert r{}", indent, register),
+                    format!("Assert r{} is true (exit if false/undefined)", register),
+                ),
+                crate::rvm::instructions::GuardMode::NotUndefined => (
+                    format!(
+                        "{}AssertNotUndefined assert_not_undefined r{}",
+                        indent, register
+                    ),
+                    format!("Assert r{} is not undefined (exit if undefined)", register),
+                ),
+            };
+            align_comment(&keyword, &comment, config.comment_column)
         }
         Instruction::ReturnUndefinedIfNotTrue { condition } => {
             let base = format!(
@@ -898,7 +913,11 @@ fn format_instruction_readable(
         }
 
         // Azure Policy & allOf/anyOf instructions — use Display impl
-        instruction => {
+        instruction @ Instruction::PolicyCondition { .. }
+        | instruction @ Instruction::LogicalBlockStart { .. }
+        | instruction @ Instruction::AllOfNext { .. }
+        | instruction @ Instruction::AnyOfNext { .. }
+        | instruction @ Instruction::LogicalBlockEnd { .. } => {
             let base = format!("{}{}", indent, instruction);
             align_comment(&base, "", config.comment_column)
         }
@@ -1016,8 +1035,12 @@ const fn get_instruction_name(instruction: &Instruction) -> &'static str {
         Instruction::SetCreate { .. } => "SET_CREATE",
         Instruction::Contains { .. } => "CONTAINS",
         Instruction::Count { .. } => "COUNT",
-        Instruction::AssertCondition { .. } => "ASSERT",
-        Instruction::AssertNotUndefined { .. } => "ASSERT_NOT_UNDEF",
+        Instruction::AssertEq { .. } => "ASSERT_EQ",
+        Instruction::Guard { mode, .. } => match mode {
+            crate::rvm::instructions::GuardMode::Not => "ASSERT_NOT",
+            crate::rvm::instructions::GuardMode::Condition => "ASSERT",
+            crate::rvm::instructions::GuardMode::NotUndefined => "ASSERT_NOT_UNDEF",
+        },
         Instruction::ReturnUndefinedIfNotTrue { .. } => "RET_UNDEF_IF_NOT_TRUE",
         Instruction::CoalesceUndefinedToNull { .. } => "COALESCE_NULL",
         Instruction::LoopStart { .. } => "LOOP_START",
@@ -1033,34 +1056,18 @@ const fn get_instruction_name(instruction: &Instruction) -> &'static str {
         Instruction::ComprehensionYield { .. } => "COMP_YIELD",
         Instruction::ComprehensionEnd {} => "COMP_END",
         // Azure Policy instructions
-        Instruction::PolicyEquals { .. } => "POLICY_EQ",
-        Instruction::PolicyNotEquals { .. } => "POLICY_NE",
-        Instruction::PolicyGreater { .. } => "POLICY_GT",
-        Instruction::PolicyGreaterOrEquals { .. } => "POLICY_GE",
-        Instruction::PolicyLess { .. } => "POLICY_LT",
-        Instruction::PolicyLessOrEquals { .. } => "POLICY_LE",
-        Instruction::PolicyIn { .. } => "POLICY_IN",
-        Instruction::PolicyNotIn { .. } => "POLICY_NOT_IN",
-        Instruction::PolicyContains { .. } => "POLICY_CONTAINS",
-        Instruction::PolicyNotContains { .. } => "POLICY_NOT_CONTAINS",
-        Instruction::PolicyContainsKey { .. } => "POLICY_CONTAINS_KEY",
-        Instruction::PolicyNotContainsKey { .. } => "POLICY_NOT_CK",
-        Instruction::PolicyLike { .. } => "POLICY_LIKE",
-        Instruction::PolicyNotLike { .. } => "POLICY_NOT_LIKE",
-        Instruction::PolicyMatch { .. } => "POLICY_MATCH",
-        Instruction::PolicyNotMatch { .. } => "POLICY_NOT_MATCH",
-        Instruction::PolicyMatchInsensitively { .. } => "POLICY_MATCH_CI",
-        Instruction::PolicyNotMatchInsensitively { .. } => "POLICY_NOT_MATCH_CI",
-        Instruction::PolicyExists { .. } => "POLICY_EXISTS",
-        Instruction::ValueConditionGuard { .. } => "VAL_COND_GUARD",
-        Instruction::PolicyNot { .. } => "POLICY_NOT",
+        Instruction::PolicyCondition { op, .. } => op.compact_name(),
         // AllOf / AnyOf
-        Instruction::AllOfStart { .. } => "ALL_OF_START",
+        Instruction::LogicalBlockStart { mode, .. } => match mode {
+            crate::rvm::instructions::LogicalBlockMode::AllOf => "ALL_OF_START",
+            crate::rvm::instructions::LogicalBlockMode::AnyOf => "ANY_OF_START",
+        },
         Instruction::AllOfNext { .. } => "ALL_OF_NEXT",
-        Instruction::AllOfEnd { .. } => "ALL_OF_END",
-        Instruction::AnyOfStart { .. } => "ANY_OF_START",
         Instruction::AnyOfNext { .. } => "ANY_OF_NEXT",
-        Instruction::AnyOfEnd {} => "ANY_OF_END",
+        Instruction::LogicalBlockEnd { mode, .. } => match mode {
+            crate::rvm::instructions::LogicalBlockMode::AllOf => "ALL_OF_END",
+            crate::rvm::instructions::LogicalBlockMode::AnyOf => "ANY_OF_END",
+        },
     }
 }
 

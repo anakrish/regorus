@@ -12,7 +12,7 @@ use anyhow::{anyhow, Result};
 #[allow(unused_imports)]
 use crate::languages::azure_policy::ast::CountNode;
 use crate::languages::azure_policy::ast::{Condition, Constraint, FieldKind, Lhs, OperatorKind};
-use crate::rvm::instructions::{LoopMode, LoopStartParams};
+use crate::rvm::instructions::{GuardMode, LogicalBlockMode, LoopMode, LoopStartParams, PolicyOp};
 use crate::rvm::Instruction;
 
 use super::utils::{split_count_wildcard_path, split_path_without_wildcards};
@@ -28,9 +28,11 @@ impl Compiler {
                 self.emit_coalesce_undefined_to_null(inner, span);
                 let dest = self.alloc_register()?;
                 self.emit(
-                    Instruction::PolicyNot {
+                    Instruction::PolicyCondition {
                         dest,
-                        operand: inner,
+                        left: inner,
+                        right: 0,
+                        op: PolicyOp::Not,
                     },
                     span,
                 );
@@ -52,10 +54,11 @@ impl Compiler {
         // Track which instruction indices need end_pc patching.
         let mut patch_pcs = Vec::with_capacity(constraints.len().saturating_add(1));
 
-        // Emit AllOfStart — end_pc is a placeholder, patched after all children.
+        // Emit LogicalBlockStart(AllOf) — end_pc is a placeholder, patched after all children.
         patch_pcs.push(self.current_pc()?);
         self.emit(
-            Instruction::AllOfStart {
+            Instruction::LogicalBlockStart {
+                mode: LogicalBlockMode::AllOf,
                 result: result_reg,
                 end_pc: 0,
             },
@@ -83,9 +86,15 @@ impl Compiler {
             self.restore_register_counter(saved_counter);
         }
 
-        // AllOfEnd — all children passed → set result to true.
+        // LogicalBlockEnd(AllOf) — all children passed → set result to true.
         let end_pc = self.current_pc()?;
-        self.emit(Instruction::AllOfEnd { result: result_reg }, span);
+        self.emit(
+            Instruction::LogicalBlockEnd {
+                mode: LogicalBlockMode::AllOf,
+                result: result_reg,
+            },
+            span,
+        );
 
         // Patch AllOfStart and AllOfNext instructions with the final end_pc.
         self.patch_end_pc(&patch_pcs, end_pc);
@@ -105,10 +114,11 @@ impl Compiler {
         // Track which instruction indices need end_pc patching.
         let mut patch_pcs = Vec::with_capacity(constraints.len().saturating_add(1));
 
-        // Emit AnyOfStart — end_pc is a placeholder, patched after all children.
+        // Emit LogicalBlockStart(AnyOf) — end_pc is a placeholder, patched after all children.
         patch_pcs.push(self.current_pc()?);
         self.emit(
-            Instruction::AnyOfStart {
+            Instruction::LogicalBlockStart {
+                mode: LogicalBlockMode::AnyOf,
                 result: result_reg,
                 end_pc: 0,
             },
@@ -136,9 +146,15 @@ impl Compiler {
             self.restore_register_counter(saved_counter);
         }
 
-        // AnyOfEnd — no child matched → result stays false.
+        // LogicalBlockEnd(AnyOf) — no child matched → result stays false.
         let end_pc = self.current_pc()?;
-        self.emit(Instruction::AnyOfEnd {}, span);
+        self.emit(
+            Instruction::LogicalBlockEnd {
+                mode: LogicalBlockMode::AnyOf,
+                result: result_reg,
+            },
+            span,
+        );
 
         // Patch AnyOfStart and AnyOfNext instructions with the final end_pc.
         self.patch_end_pc(&patch_pcs, end_pc);
@@ -207,10 +223,11 @@ impl Compiler {
         if matches!(condition.lhs, Lhs::Value { .. }) {
             let guarded = self.alloc_register()?;
             self.emit(
-                Instruction::ValueConditionGuard {
+                Instruction::PolicyCondition {
                     dest: guarded,
-                    value: lhs,
-                    condition: op_result,
+                    left: lhs,
+                    right: op_result,
+                    op: PolicyOp::ValueConditionGuard,
                 },
                 &condition.span,
             );
@@ -238,33 +255,28 @@ impl Compiler {
     ) -> Result<u8> {
         self.record_operator(kind);
         let dest = self.alloc_register()?;
-        let instruction = match kind {
-            OperatorKind::Equals => Instruction::PolicyEquals { dest, left, right },
-            OperatorKind::NotEquals => Instruction::PolicyNotEquals { dest, left, right },
-            OperatorKind::Greater => Instruction::PolicyGreater { dest, left, right },
-            OperatorKind::GreaterOrEquals => {
-                Instruction::PolicyGreaterOrEquals { dest, left, right }
-            }
-            OperatorKind::Less => Instruction::PolicyLess { dest, left, right },
-            OperatorKind::LessOrEquals => Instruction::PolicyLessOrEquals { dest, left, right },
-            OperatorKind::In => Instruction::PolicyIn { dest, left, right },
-            OperatorKind::NotIn => Instruction::PolicyNotIn { dest, left, right },
-            OperatorKind::Contains => Instruction::PolicyContains { dest, left, right },
-            OperatorKind::NotContains => Instruction::PolicyNotContains { dest, left, right },
-            OperatorKind::ContainsKey => Instruction::PolicyContainsKey { dest, left, right },
-            OperatorKind::NotContainsKey => Instruction::PolicyNotContainsKey { dest, left, right },
-            OperatorKind::Like => Instruction::PolicyLike { dest, left, right },
-            OperatorKind::NotLike => Instruction::PolicyNotLike { dest, left, right },
-            OperatorKind::Match => Instruction::PolicyMatch { dest, left, right },
-            OperatorKind::NotMatch => Instruction::PolicyNotMatch { dest, left, right },
-            OperatorKind::MatchInsensitively => {
-                Instruction::PolicyMatchInsensitively { dest, left, right }
-            }
-            OperatorKind::NotMatchInsensitively => {
-                Instruction::PolicyNotMatchInsensitively { dest, left, right }
-            }
-            OperatorKind::Exists => Instruction::PolicyExists { dest, left, right },
+        let op = match kind {
+            OperatorKind::Equals => PolicyOp::Equals,
+            OperatorKind::NotEquals => PolicyOp::NotEquals,
+            OperatorKind::Greater => PolicyOp::Greater,
+            OperatorKind::GreaterOrEquals => PolicyOp::GreaterOrEquals,
+            OperatorKind::Less => PolicyOp::Less,
+            OperatorKind::LessOrEquals => PolicyOp::LessOrEquals,
+            OperatorKind::In => PolicyOp::In,
+            OperatorKind::NotIn => PolicyOp::NotIn,
+            OperatorKind::Contains => PolicyOp::Contains,
+            OperatorKind::NotContains => PolicyOp::NotContains,
+            OperatorKind::ContainsKey => PolicyOp::ContainsKey,
+            OperatorKind::NotContainsKey => PolicyOp::NotContainsKey,
+            OperatorKind::Like => PolicyOp::Like,
+            OperatorKind::NotLike => PolicyOp::NotLike,
+            OperatorKind::Match => PolicyOp::Match,
+            OperatorKind::NotMatch => PolicyOp::NotMatch,
+            OperatorKind::MatchInsensitively => PolicyOp::MatchInsensitively,
+            OperatorKind::NotMatchInsensitively => PolicyOp::NotMatchInsensitively,
+            OperatorKind::Exists => PolicyOp::Exists,
         };
+        let instruction = Instruction::PolicyCondition { dest, left, right, op };
         self.emit(instruction, span);
         Ok(dest)
     }
@@ -420,8 +432,9 @@ impl Compiler {
                 let inner_result =
                     self.compile_allof_loop_inner(Some(current_reg), s, rhs_reg, condition)?;
                 self.emit(
-                    Instruction::AssertCondition {
-                        condition: inner_result,
+                    Instruction::Guard {
+                        register: inner_result,
+                        mode: GuardMode::Condition,
                     },
                     span,
                 );
@@ -448,7 +461,13 @@ impl Compiler {
                     &condition.operator.span,
                 )?;
 
-                self.emit(Instruction::AssertCondition { condition: cmp_reg }, span);
+                self.emit(
+                    Instruction::Guard {
+                        register: cmp_reg,
+                        mode: GuardMode::Condition,
+                    },
+                    span,
+                );
             }
         }
 

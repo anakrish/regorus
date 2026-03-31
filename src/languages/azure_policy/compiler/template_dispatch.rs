@@ -13,6 +13,7 @@ use alloc::vec::Vec;
 use anyhow::{bail, Result};
 
 use crate::languages::azure_policy::ast::Expr;
+use crate::rvm::instructions::PolicyOp;
 use crate::rvm::Instruction;
 
 use super::Compiler;
@@ -71,9 +72,11 @@ impl Compiler {
                 let inner = self.compile_expr(&args[0])?;
                 let dest = self.alloc_register()?;
                 self.emit(
-                    Instruction::PolicyNot {
+                    Instruction::PolicyCondition {
                         dest,
-                        operand: inner,
+                        left: inner,
+                        right: 0,
+                        op: PolicyOp::Not,
                     },
                     span,
                 );
@@ -103,24 +106,24 @@ impl Compiler {
                 Instruction::Add { dest, left, right }
             })?,
             "equals" => self.emit_binary_instruction(args, span, |dest, left, right| {
-                Instruction::PolicyEquals { dest, left, right }
+                Instruction::PolicyCondition { dest, left, right, op: PolicyOp::Equals }
             })?,
             "greaterorequals" => {
                 self.emit_binary_instruction(args, span, |dest, left, right| {
-                    Instruction::PolicyGreaterOrEquals { dest, left, right }
+                    Instruction::PolicyCondition { dest, left, right, op: PolicyOp::GreaterOrEquals }
                 })?
             }
             "lessorequals" => self.emit_binary_instruction(args, span, |dest, left, right| {
-                Instruction::PolicyLessOrEquals { dest, left, right }
+                Instruction::PolicyCondition { dest, left, right, op: PolicyOp::LessOrEquals }
             })?,
             "contains" => self.emit_binary_instruction(args, span, |dest, left, right| {
-                Instruction::PolicyContains { dest, left, right }
+                Instruction::PolicyCondition { dest, left, right, op: PolicyOp::Contains }
             })?,
             "greater" => self.emit_binary_instruction(args, span, |dest, left, right| {
-                Instruction::PolicyGreater { dest, left, right }
+                Instruction::PolicyCondition { dest, left, right, op: PolicyOp::Greater }
             })?,
             "less" => self.emit_binary_instruction(args, span, |dest, left, right| {
-                Instruction::PolicyLess { dest, left, right }
+                Instruction::PolicyCondition { dest, left, right, op: PolicyOp::Less }
             })?,
 
             // ── Logical functions ─────────────────────────────────────

@@ -6,6 +6,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use super::{Instruction, InstructionData, LiteralOrRegister};
+use super::types::{GuardMode, LogicalBlockMode, PolicyOp};
 
 impl Instruction {
     /// Get detailed display string with parameter resolution for debugging
@@ -72,17 +73,12 @@ impl Instruction {
                         || format!("OBJECT_CREATE P({}) [INVALID INDEX]", params_index),
                         |params| {
                             let mut field_parts = Vec::new();
-
-                            // Add literal key fields
                             for &(literal_idx, value_reg) in params.literal_key_field_pairs() {
                                 field_parts.push(format!("L({}):R({})", literal_idx, value_reg));
                             }
-
-                            // Add non-literal key fields
                             for &(key_reg, value_reg) in params.field_pairs() {
                                 field_parts.push(format!("R({}):R({})", key_reg, value_reg));
                             }
-
                             let fields_str = field_parts.join(" ");
                             format!(
                                 "OBJECT_CREATE R({}) L({}) [{}]",
@@ -247,11 +243,16 @@ impl core::fmt::Display for Instruction {
             Instruction::Count { dest, collection } => {
                 format!("COUNT R({}) R({})", dest, collection)
             }
-            Instruction::AssertCondition { condition } => {
-                format!("ASSERT_CONDITION R({})", condition)
+            Instruction::AssertEq { left, right } => {
+                format!("ASSERT_EQ R({}) R({})", left, right)
             }
-            Instruction::AssertNotUndefined { register } => {
-                format!("ASSERT_NOT_UNDEFINED R({})", register)
+            Instruction::Guard { register, mode } => {
+                let name = match mode {
+                    GuardMode::Not => "ASSERT_NOT",
+                    GuardMode::Condition => "ASSERT_CONDITION",
+                    GuardMode::NotUndefined => "ASSERT_NOT_UNDEFINED",
+                };
+                format!("{} R({})", name, register)
             }
             Instruction::ReturnUndefinedIfNotTrue { condition } => {
                 format!("RETURN_UNDEFINED_IF_NOT_TRUE R({})", condition)
@@ -293,93 +294,34 @@ impl core::fmt::Display for Instruction {
             ),
             Instruction::ComprehensionEnd {} => String::from("COMPREHENSION_END"),
 
-            // Azure Policy condition operators
-            Instruction::PolicyEquals { dest, left, right } => {
-                format!("POLICY_EQUALS R({}) R({}) R({})", dest, left, right)
-            }
-            Instruction::PolicyNotEquals { dest, left, right } => {
-                format!("POLICY_NOT_EQUALS R({}) R({}) R({})", dest, left, right)
-            }
-            Instruction::PolicyGreater { dest, left, right } => {
-                format!("POLICY_GREATER R({}) R({}) R({})", dest, left, right)
-            }
-            Instruction::PolicyGreaterOrEquals { dest, left, right } => {
-                format!(
-                    "POLICY_GREATER_OR_EQUALS R({}) R({}) R({})",
-                    dest, left, right
-                )
-            }
-            Instruction::PolicyLess { dest, left, right } => {
-                format!("POLICY_LESS R({}) R({}) R({})", dest, left, right)
-            }
-            Instruction::PolicyLessOrEquals { dest, left, right } => {
-                format!("POLICY_LESS_OR_EQUALS R({}) R({}) R({})", dest, left, right)
-            }
-            Instruction::PolicyIn { dest, left, right } => {
-                format!("POLICY_IN R({}) R({}) R({})", dest, left, right)
-            }
-            Instruction::PolicyNotIn { dest, left, right } => {
-                format!("POLICY_NOT_IN R({}) R({}) R({})", dest, left, right)
-            }
-            Instruction::PolicyContains { dest, left, right } => {
-                format!("POLICY_CONTAINS R({}) R({}) R({})", dest, left, right)
-            }
-            Instruction::PolicyNotContains { dest, left, right } => {
-                format!("POLICY_NOT_CONTAINS R({}) R({}) R({})", dest, left, right)
-            }
-            Instruction::PolicyContainsKey { dest, left, right } => {
-                format!("POLICY_CONTAINS_KEY R({}) R({}) R({})", dest, left, right)
-            }
-            Instruction::PolicyNotContainsKey { dest, left, right } => {
-                format!(
-                    "POLICY_NOT_CONTAINS_KEY R({}) R({}) R({})",
-                    dest, left, right
-                )
-            }
-            Instruction::PolicyLike { dest, left, right } => {
-                format!("POLICY_LIKE R({}) R({}) R({})", dest, left, right)
-            }
-            Instruction::PolicyNotLike { dest, left, right } => {
-                format!("POLICY_NOT_LIKE R({}) R({}) R({})", dest, left, right)
-            }
-            Instruction::PolicyMatch { dest, left, right } => {
-                format!("POLICY_MATCH R({}) R({}) R({})", dest, left, right)
-            }
-            Instruction::PolicyNotMatch { dest, left, right } => {
-                format!("POLICY_NOT_MATCH R({}) R({}) R({})", dest, left, right)
-            }
-            Instruction::PolicyMatchInsensitively { dest, left, right } => {
-                format!(
-                    "POLICY_MATCH_INSENSITIVELY R({}) R({}) R({})",
-                    dest, left, right
-                )
-            }
-            Instruction::PolicyNotMatchInsensitively { dest, left, right } => {
-                format!(
-                    "POLICY_NOT_MATCH_INSENSITIVELY R({}) R({}) R({})",
-                    dest, left, right
-                )
-            }
-            Instruction::PolicyExists { dest, left, right } => {
-                format!("POLICY_EXISTS R({}) R({}) R({})", dest, left, right)
-            }
-            Instruction::ValueConditionGuard {
+            // Azure Policy consolidated instruction
+            Instruction::PolicyCondition {
                 dest,
-                value,
-                condition,
-            } => {
-                format!(
-                    "VALUE_CONDITION_GUARD R({}) R({}) R({})",
-                    dest, value, condition
-                )
-            }
-            Instruction::PolicyNot { dest, operand } => {
-                format!("POLICY_NOT R({}) R({})", dest, operand)
-            }
+                left,
+                right,
+                op,
+            } => match op {
+                PolicyOp::Not => format!("{} R({}) R({})", op.display_name(), dest, left),
+                _ => format!(
+                    "{} R({}) R({}) R({})",
+                    op.display_name(),
+                    dest,
+                    left,
+                    right
+                ),
+            },
 
             // AllOf / AnyOf structured instructions
-            Instruction::AllOfStart { result, end_pc } => {
-                format!("ALL_OF_START R({}) {}", result, end_pc)
+            Instruction::LogicalBlockStart {
+                mode,
+                result,
+                end_pc,
+            } => {
+                let name = match mode {
+                    LogicalBlockMode::AllOf => "ALL_OF_START",
+                    LogicalBlockMode::AnyOf => "ANY_OF_START",
+                };
+                format!("{} R({}) {}", name, result, end_pc)
             }
             Instruction::AllOfNext {
                 check,
@@ -388,12 +330,6 @@ impl core::fmt::Display for Instruction {
             } => {
                 format!("ALL_OF_NEXT R({}) R({}) {}", check, result, end_pc)
             }
-            Instruction::AllOfEnd { result } => {
-                format!("ALL_OF_END R({})", result)
-            }
-            Instruction::AnyOfStart { result, end_pc } => {
-                format!("ANY_OF_START R({}) {}", result, end_pc)
-            }
             Instruction::AnyOfNext {
                 check,
                 result,
@@ -401,7 +337,13 @@ impl core::fmt::Display for Instruction {
             } => {
                 format!("ANY_OF_NEXT R({}) R({}) {}", check, result, end_pc)
             }
-            Instruction::AnyOfEnd {} => String::from("ANY_OF_END"),
+            Instruction::LogicalBlockEnd { mode, result } => {
+                let name = match mode {
+                    LogicalBlockMode::AllOf => "ALL_OF_END",
+                    LogicalBlockMode::AnyOf => "ANY_OF_END",
+                };
+                format!("{} R({})", name, result)
+            }
         };
         write!(f, "{}", text)
     }

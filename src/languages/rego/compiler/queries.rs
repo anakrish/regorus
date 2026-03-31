@@ -9,6 +9,7 @@
 use super::{Compiler, CompilerError, ComprehensionType, ContextType, Result};
 use crate::ast::{self, LiteralStmt, Query};
 use crate::rvm::program::RuleType;
+use crate::rvm::instructions::GuardMode;
 use crate::rvm::Instruction;
 use alloc::format;
 use alloc::vec::Vec;
@@ -252,8 +253,9 @@ impl<'a> Compiler<'a> {
                 );
 
                 self.emit_instruction(
-                    Instruction::AssertCondition {
-                        condition: negated_reg,
+                    Instruction::Guard {
+                        register: negated_reg,
+                        mode: GuardMode::Condition,
                     },
                     &stmt.span,
                 );

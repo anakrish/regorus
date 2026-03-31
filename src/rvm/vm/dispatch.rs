@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use crate::rvm::instructions::{Instruction, LiteralOrRegister};
+use crate::rvm::instructions::{GuardMode, Instruction, LiteralOrRegister};
 use crate::rvm::program::Program;
 use crate::value::Value;
 use alloc::collections::BTreeSet;
@@ -326,44 +326,37 @@ impl RegoVM {
             }
             Not { dest, operand } => {
                 let operand_value = self.get_register(operand)?;
-
-                if operand_value == &Value::Undefined {
-                    // In Rego, `not expr` succeeds when `expr` has no results.
-                    // When the operand evaluates to undefined we should treat it as
-                    // a successful negation instead of propagating undefined.
-                    self.set_register(dest, Value::Bool(true))?;
-                    return Ok(InstructionOutcome::Continue);
-                }
-
-                if let Some(value) = self.to_bool(operand_value) {
-                    self.set_register(dest, Value::Bool(!value))?;
-                    Ok(InstructionOutcome::Continue)
-                } else {
-                    Err(VmError::ArithmeticError {
-                        message: alloc::format!(
-                            "#undefined: logical NOT expects a boolean (operand={operand_value:?})"
-                        ),
-                        pc: self.pc,
-                    })
-                }
-            }
-            AssertCondition { condition } => {
-                let value = self.get_register(condition)?;
-
-                let condition_result = match *value {
-                    Value::Bool(b) => b,
-                    Value::Undefined => false,
-                    _ => true,
+                let negated = match *operand_value {
+                    Value::Undefined => true,
+                    Value::Bool(b) => !b,
+                    _ => false,
                 };
-
-                self.handle_condition(condition_result)?;
+                self.set_register(dest, Value::Bool(negated))?;
                 Ok(InstructionOutcome::Continue)
             }
-            AssertNotUndefined { register } => {
+            AssertEq { left, right } => {
+                let a = self.get_register(left)?;
+                let b = self.get_register(right)?;
+                let passed = a != &Value::Undefined && b != &Value::Undefined && a == b;
+                self.handle_condition(passed)?;
+                Ok(InstructionOutcome::Continue)
+            }
+            Guard { register, mode } => {
                 let value = self.get_register(register)?;
-
-                let is_undefined = matches!(value, Value::Undefined);
-                self.handle_condition(!is_undefined)?;
+                let passed = match mode {
+                    GuardMode::Not => match *value {
+                        Value::Undefined => true,
+                        Value::Bool(b) => !b,
+                        _ => false,
+                    },
+                    GuardMode::Condition => match *value {
+                        Value::Bool(b) => b,
+                        Value::Undefined => false,
+                        _ => true,
+                    },
+                    GuardMode::NotUndefined => !matches!(value, Value::Undefined),
+                };
+                self.handle_condition(passed)?;
                 Ok(InstructionOutcome::Continue)
             }
             ReturnUndefinedIfNotTrue { condition } => {
@@ -457,7 +450,8 @@ impl RegoVM {
                 let key_value = self.get_register(key)?.clone();
                 let value_value = self.get_register(value)?.clone();
 
-                let mut obj_value = self.get_register(obj)?.clone();
+                // Take ownership so Rc refcount stays at 1 and make_mut is a no-op.
+                let mut obj_value = self.take_register(obj)?;
 
                 if let Ok(obj_mut) = obj_value.as_object_mut() {
                     obj_mut.insert(key_value, value_value);
@@ -597,7 +591,8 @@ impl RegoVM {
             ArrayPush { arr, value } => {
                 let value_to_push = self.get_register(value)?.clone();
 
-                let mut arr_value = self.get_register(arr)?.clone();
+                // Take ownership so Rc refcount stays at 1 and make_mut is a no-op.
+                let mut arr_value = self.take_register(arr)?;
 
                 if let Ok(arr_mut) = arr_value.as_array_mut() {
                     arr_mut.push(value_to_push);
@@ -624,7 +619,7 @@ impl RegoVM {
                     return Ok(InstructionOutcome::Continue);
                 }
 
-                let mut arr_value = self.get_register(arr)?.clone();
+                let mut arr_value = self.take_register(arr)?;
 
                 if let Ok(arr_mut) = arr_value.as_array_mut() {
                     arr_mut.push(value_to_push);
@@ -682,7 +677,8 @@ impl RegoVM {
             SetAdd { set, value } => {
                 let value_to_add = self.get_register(value)?.clone();
 
-                let mut set_value = self.get_register(set)?.clone();
+                // Take ownership so Rc refcount stays at 1 and make_mut is a no-op.
+                let mut set_value = self.take_register(set)?;
 
                 if let Ok(set_mut) = set_value.as_set_mut() {
                     set_mut.insert(value_to_add);
@@ -743,10 +739,9 @@ impl RegoVM {
                     Value::Array(ref array_items) => {
                         Value::Bool(array_items.contains(value_to_check))
                     }
-                    Value::Object(ref object_fields) => Value::Bool(
-                        object_fields.contains_key(value_to_check)
-                            || object_fields.values().any(|v| v == value_to_check),
-                    ),
+                    Value::Object(ref object_fields) => {
+                        Value::Bool(object_fields.values().any(|v| v == value_to_check))
+                    }
                     _ => Value::Bool(false),
                 };
 
@@ -862,6 +857,28 @@ impl RegoVM {
         }
     }
 
+    /// Evaluate a Policy comparison operator.  Undefined LHS → false.
+    #[cfg(feature = "azure_policy")]
+    fn policy_compare(
+        &mut self,
+        dest: u8,
+        left: u8,
+        right: u8,
+        cmp: fn(i8) -> bool,
+    ) -> Result<InstructionOutcome> {
+        use crate::builtins::azure_policy::helpers::{compare_values, is_undefined};
+
+        let l = self.get_register(left)?;
+        if is_undefined(l) {
+            self.set_register(dest, Value::Bool(false))?;
+        } else {
+            let r = self.get_register(right)?;
+            let result = compare_values(l, r).is_some_and(cmp);
+            self.set_register(dest, Value::Bool(result))?;
+        }
+        Ok(InstructionOutcome::Continue)
+    }
+
     #[cfg(feature = "azure_policy")]
     fn execute_policy_instruction(
         &mut self,
@@ -869,336 +886,244 @@ impl RegoVM {
         instruction: Instruction,
     ) -> Result<InstructionOutcome> {
         use crate::builtins::azure_policy::helpers::{
-            as_boolish, case_insensitive_equals, coerce_to_string_ci, compare_values, is_true,
-            is_undefined, match_like_pattern_ci, match_pattern,
+            as_boolish, case_insensitive_equals, coerce_to_string_ci, is_true, is_undefined,
+            match_like_pattern_ci, match_pattern,
         };
+        use crate::rvm::instructions::{LogicalBlockMode, PolicyOp};
+
+        /// Check if an array or set contains a null sentinel.
+        fn collection_has_null(v: &Value) -> bool {
+            match *v {
+                Value::Array(ref items) => items.iter().any(|i| matches!(i, Value::Null)),
+                Value::Set(ref items) => items.iter().any(|i| matches!(i, Value::Null)),
+                _ => false,
+            }
+        }
+
+        /// Check if any non-null element in a collection case-insensitively equals `target`.
+        /// Scalar RHS is treated as a single-element collection.
+        fn collection_any_ci_eq_excluding_null(collection: &Value, target: &Value) -> bool {
+            match *collection {
+                Value::Array(ref items) => items
+                    .iter()
+                    .filter(|i| !matches!(i, Value::Null))
+                    .any(|i| case_insensitive_equals(i, target)),
+                Value::Set(ref items) => items
+                    .iter()
+                    .filter(|i| !matches!(i, Value::Null))
+                    .any(|i| case_insensitive_equals(i, target)),
+                _ => case_insensitive_equals(collection, target),
+            }
+        }
+
         use Instruction::*;
         match instruction {
-            PolicyEquals { dest, left, right } => {
-                let l = self.get_register(left)?;
-                let r = self.get_register(right)?;
-                let result = if is_undefined(l) {
-                    // Missing field matches only a null RHS.
-                    matches!(r, Value::Null)
-                } else {
-                    case_insensitive_equals(l, r)
-                };
-                self.set_register(dest, Value::Bool(result))?;
-                Ok(InstructionOutcome::Continue)
-            }
-            PolicyNotEquals { dest, left, right } => {
-                let l = self.get_register(left)?;
-                let r = self.get_register(right)?;
-                let result = if is_undefined(l) {
-                    // Missing field: notEquals null → false (matches), else true.
-                    !matches!(r, Value::Null)
-                } else {
-                    !case_insensitive_equals(l, r)
-                };
-                self.set_register(dest, Value::Bool(result))?;
-                Ok(InstructionOutcome::Continue)
-            }
-            PolicyGreater { dest, left, right } => {
-                let l = self.get_register(left)?;
-                if is_undefined(l) {
-                    self.set_register(dest, Value::Bool(false))?;
-                } else {
-                    let args = [l.clone(), self.get_register(right)?.clone()];
-                    let result = compare_values(&args).is_some_and(|c| c > 0);
-                    self.set_register(dest, Value::Bool(result))?;
-                }
-                Ok(InstructionOutcome::Continue)
-            }
-            PolicyGreaterOrEquals { dest, left, right } => {
-                let l = self.get_register(left)?;
-                if is_undefined(l) {
-                    self.set_register(dest, Value::Bool(false))?;
-                } else {
-                    let args = [l.clone(), self.get_register(right)?.clone()];
-                    let result = compare_values(&args).is_some_and(|c| c >= 0);
-                    self.set_register(dest, Value::Bool(result))?;
-                }
-                Ok(InstructionOutcome::Continue)
-            }
-            PolicyLess { dest, left, right } => {
-                let l = self.get_register(left)?;
-                if is_undefined(l) {
-                    self.set_register(dest, Value::Bool(false))?;
-                } else {
-                    let args = [l.clone(), self.get_register(right)?.clone()];
-                    let result = compare_values(&args).is_some_and(|c| c < 0);
-                    self.set_register(dest, Value::Bool(result))?;
-                }
-                Ok(InstructionOutcome::Continue)
-            }
-            PolicyLessOrEquals { dest, left, right } => {
-                let l = self.get_register(left)?;
-                if is_undefined(l) {
-                    self.set_register(dest, Value::Bool(false))?;
-                } else {
-                    let args = [l.clone(), self.get_register(right)?.clone()];
-                    let result = compare_values(&args).is_some_and(|c| c <= 0);
-                    self.set_register(dest, Value::Bool(result))?;
-                }
-                Ok(InstructionOutcome::Continue)
-            }
-            PolicyIn { dest, left, right } => {
-                let l = self.get_register(left)?;
-                let r = self.get_register(right)?;
-
-                if is_undefined(l) {
-                    // Missing field matches only null elements in the list.
-                    let result = match *r {
-                        Value::Array(ref items) => {
-                            items.iter().any(|item| matches!(item, Value::Null))
-                        }
-                        Value::Set(ref items) => {
-                            items.iter().any(|item| matches!(item, Value::Null))
-                        }
-                        _ => false,
-                    };
-                    self.set_register(dest, Value::Bool(result))?;
-                } else if matches!(*l, Value::Null) {
-                    // Explicit null field value doesn't match anything in the
-                    // in-list.  (Null in the RHS array is a sentinel for
-                    // "match missing/undefined fields" only.)
-                    self.set_register(dest, Value::Bool(false))?;
-                } else if is_undefined(r) {
-                    self.set_register(dest, Value::Bool(false))?;
-                } else {
-                    // Skip null elements in RHS — they are sentinels for
-                    // Undefined LHS only, not for matching defined values.
-                    let result = match *r {
-                        Value::Array(ref items) => items
-                            .iter()
-                            .filter(|item| !matches!(item, Value::Null))
-                            .any(|item| case_insensitive_equals(item, l)),
-                        Value::Set(ref items) => items
-                            .iter()
-                            .filter(|item| !matches!(item, Value::Null))
-                            .any(|item| case_insensitive_equals(item, l)),
-                        // Scalar RHS: treat as single-element array.
-                        _ => case_insensitive_equals(r, l),
-                    };
-                    self.set_register(dest, Value::Bool(result))?;
-                }
-                Ok(InstructionOutcome::Continue)
-            }
-            PolicyNotIn { dest, left, right } => {
-                let l = self.get_register(left)?;
-                if is_undefined(l) {
-                    // Missing field: notIn → !(list contains null).
-                    let r = self.get_register(right)?;
-                    let has_null = match *r {
-                        Value::Array(ref items) => {
-                            items.iter().any(|item| matches!(item, Value::Null))
-                        }
-                        Value::Set(ref items) => {
-                            items.iter().any(|item| matches!(item, Value::Null))
-                        }
-                        _ => false,
-                    };
-                    self.set_register(dest, Value::Bool(!has_null))?;
-                } else if matches!(*l, Value::Null) {
-                    // Explicit null field value: notIn always true.
-                    self.set_register(dest, Value::Bool(true))?;
-                } else {
-                    let r = self.get_register(right)?;
-                    if is_undefined(r) {
-                        self.set_register(dest, Value::Bool(false))?;
-                    } else {
-                        let in_result = match *r {
-                            Value::Array(ref items) => items
-                                .iter()
-                                .filter(|item| !matches!(item, Value::Null))
-                                .any(|item| case_insensitive_equals(item, l)),
-                            Value::Set(ref items) => items
-                                .iter()
-                                .filter(|item| !matches!(item, Value::Null))
-                                .any(|item| case_insensitive_equals(item, l)),
-                            // Scalar RHS: treat as single-element array.
-                            _ => case_insensitive_equals(r, l),
-                        };
-                        self.set_register(dest, Value::Bool(!in_result))?;
-                    }
-                }
-                Ok(InstructionOutcome::Continue)
-            }
-            PolicyContains { dest, left, right } => {
-                let l = self.get_register(left)?;
-                let r = self.get_register(right)?;
-
-                if is_undefined(l) || is_undefined(r) {
-                    self.set_register(dest, Value::Bool(false))?;
-                } else {
-                    let result = Self::policy_contains_check(l, r);
-                    self.set_register(dest, Value::Bool(result))?;
-                }
-                Ok(InstructionOutcome::Continue)
-            }
-            PolicyNotContains { dest, left, right } => {
-                let l = self.get_register(left)?;
-                if is_undefined(l) {
-                    self.set_register(dest, Value::Bool(true))?;
-                } else {
-                    let r = self.get_register(right)?;
-                    if is_undefined(r) {
-                        self.set_register(dest, Value::Bool(false))?;
-                    } else {
-                        let contains_result = Self::policy_contains_check(l, r);
-                        self.set_register(dest, Value::Bool(!contains_result))?;
-                    }
-                }
-                Ok(InstructionOutcome::Continue)
-            }
-            PolicyContainsKey { dest, left, right } => {
-                let l = self.get_register(left)?;
-                let r = self.get_register(right)?;
-
-                if is_undefined(l) || is_undefined(r) {
-                    self.set_register(dest, Value::Bool(false))?;
-                } else {
-                    let result = match *l {
-                        Value::Object(ref map) => {
-                            map.keys().any(|key| case_insensitive_equals(key, r))
-                        }
-                        _ => false,
-                    };
-                    self.set_register(dest, Value::Bool(result))?;
-                }
-                Ok(InstructionOutcome::Continue)
-            }
-            PolicyNotContainsKey { dest, left, right } => {
-                let l = self.get_register(left)?;
-                if is_undefined(l) {
-                    self.set_register(dest, Value::Bool(true))?;
-                } else {
-                    let r = self.get_register(right)?;
-                    if is_undefined(r) {
-                        self.set_register(dest, Value::Bool(false))?;
-                    } else {
-                        let ck_result = match *l {
-                            Value::Object(ref map) => {
-                                map.keys().any(|key| case_insensitive_equals(key, r))
-                            }
-                            _ => false,
-                        };
-                        self.set_register(dest, Value::Bool(!ck_result))?;
-                    }
-                }
-                Ok(InstructionOutcome::Continue)
-            }
-            PolicyLike { dest, left, right } => {
-                let l = self.get_register(left)?;
-                if is_undefined(l) {
-                    self.set_register(dest, Value::Bool(false))?;
-                } else {
-                    let r = self.get_register(right)?;
-                    let result = match (coerce_to_string_ci(l), coerce_to_string_ci(r)) {
-                        (Some(input), Some(pattern)) => match_like_pattern_ci(&input, &pattern),
-                        _ => false,
-                    };
-                    self.set_register(dest, Value::Bool(result))?;
-                }
-                Ok(InstructionOutcome::Continue)
-            }
-            PolicyNotLike { dest, left, right } => {
-                let l = self.get_register(left)?;
-                if is_undefined(l) {
-                    self.set_register(dest, Value::Bool(true))?;
-                } else {
-                    let r = self.get_register(right)?;
-                    let result = match (coerce_to_string_ci(l), coerce_to_string_ci(r)) {
-                        (Some(input), Some(pattern)) => match_like_pattern_ci(&input, &pattern),
-                        _ => false,
-                    };
-                    self.set_register(dest, Value::Bool(!result))?;
-                }
-                Ok(InstructionOutcome::Continue)
-            }
-            PolicyMatch { dest, left, right } => {
-                let l = self.get_register(left)?;
-                if is_undefined(l) {
-                    self.set_register(dest, Value::Bool(false))?;
-                } else {
-                    let args = [l.clone(), self.get_register(right)?.clone()];
-                    let result = match_pattern(&args, false);
-                    self.set_register(dest, Value::Bool(result))?;
-                }
-                Ok(InstructionOutcome::Continue)
-            }
-            PolicyNotMatch { dest, left, right } => {
-                let l = self.get_register(left)?;
-                if is_undefined(l) {
-                    self.set_register(dest, Value::Bool(true))?;
-                } else {
-                    let args = [l.clone(), self.get_register(right)?.clone()];
-                    let result = !match_pattern(&args, false);
-                    self.set_register(dest, Value::Bool(result))?;
-                }
-                Ok(InstructionOutcome::Continue)
-            }
-            PolicyMatchInsensitively { dest, left, right } => {
-                let l = self.get_register(left)?;
-                if is_undefined(l) {
-                    self.set_register(dest, Value::Bool(false))?;
-                } else {
-                    let args = [l.clone(), self.get_register(right)?.clone()];
-                    let result = match_pattern(&args, true);
-                    self.set_register(dest, Value::Bool(result))?;
-                }
-                Ok(InstructionOutcome::Continue)
-            }
-            PolicyNotMatchInsensitively { dest, left, right } => {
-                let l = self.get_register(left)?;
-                if is_undefined(l) {
-                    self.set_register(dest, Value::Bool(true))?;
-                } else {
-                    let args = [l.clone(), self.get_register(right)?.clone()];
-                    let result = !match_pattern(&args, true);
-                    self.set_register(dest, Value::Bool(result))?;
-                }
-                Ok(InstructionOutcome::Continue)
-            }
-            PolicyExists { dest, left, right } => {
-                let l = self.get_register(left)?;
-                let r = self.get_register(right)?;
-                let expected = as_boolish(r).unwrap_or(false);
-                let is_defined = !is_undefined(l) && !matches!(l, Value::Null);
-                self.set_register(dest, Value::Bool(is_defined == expected))?;
-                Ok(InstructionOutcome::Continue)
-            }
-            ValueConditionGuard {
+            PolicyCondition {
                 dest,
-                value,
-                condition,
+                left,
+                right,
+                op,
             } => {
-                // For `value:` conditions: if the ARM template expression LHS
-                // resolved to Undefined (missing intermediate property), force
-                // the condition result to false.
-                let v = self.get_register(value)?;
-                if is_undefined(v) {
-                    self.set_register(dest, Value::Bool(false))?;
-                } else {
-                    let c = self.get_register(condition)?.clone();
-                    self.set_register(dest, c)?;
-                }
-                Ok(InstructionOutcome::Continue)
-            }
-            PolicyNot { dest, operand } => {
-                let val = self.get_register(operand)?;
-                let result = !is_true(val);
+                let l = self.get_register(left)?;
+                let result = match op {
+                    PolicyOp::Equals => {
+                        let r = self.get_register(right)?;
+                        if is_undefined(l) {
+                            matches!(r, Value::Null)
+                        } else {
+                            case_insensitive_equals(l, r)
+                        }
+                    }
+                    PolicyOp::NotEquals => {
+                        let r = self.get_register(right)?;
+                        if is_undefined(l) {
+                            !matches!(r, Value::Null)
+                        } else {
+                            !case_insensitive_equals(l, r)
+                        }
+                    }
+                    PolicyOp::Greater => {
+                        return self.policy_compare(dest, left, right, |c| c > 0);
+                    }
+                    PolicyOp::GreaterOrEquals => {
+                        return self.policy_compare(dest, left, right, |c| c >= 0);
+                    }
+                    PolicyOp::Less => {
+                        return self.policy_compare(dest, left, right, |c| c < 0);
+                    }
+                    PolicyOp::LessOrEquals => {
+                        return self.policy_compare(dest, left, right, |c| c <= 0);
+                    }
+                    PolicyOp::In => {
+                        let r = self.get_register(right)?;
+                        if is_undefined(l) {
+                            collection_has_null(r)
+                        } else if matches!(*l, Value::Null) || is_undefined(r) {
+                            false
+                        } else {
+                            collection_any_ci_eq_excluding_null(r, l)
+                        }
+                    }
+                    PolicyOp::NotIn => {
+                        if is_undefined(l) {
+                            let r = self.get_register(right)?;
+                            !collection_has_null(r)
+                        } else if matches!(*l, Value::Null) {
+                            true
+                        } else {
+                            let r = self.get_register(right)?;
+                            if is_undefined(r) {
+                                true
+                            } else {
+                                !collection_any_ci_eq_excluding_null(r, l)
+                            }
+                        }
+                    }
+                    PolicyOp::Contains => {
+                        let r = self.get_register(right)?;
+                        if is_undefined(l) || is_undefined(r) {
+                            false
+                        } else {
+                            Self::policy_contains_check(l, r)
+                        }
+                    }
+                    PolicyOp::NotContains => {
+                        if is_undefined(l) {
+                            true
+                        } else {
+                            let r = self.get_register(right)?;
+                            if is_undefined(r) {
+                                false
+                            } else {
+                                !Self::policy_contains_check(l, r)
+                            }
+                        }
+                    }
+                    PolicyOp::ContainsKey => {
+                        let r = self.get_register(right)?;
+                        if is_undefined(l) || is_undefined(r) {
+                            false
+                        } else {
+                            match *l {
+                                Value::Object(ref map) => {
+                                    map.keys().any(|key| case_insensitive_equals(key, r))
+                                }
+                                _ => false,
+                            }
+                        }
+                    }
+                    PolicyOp::NotContainsKey => {
+                        if is_undefined(l) {
+                            true
+                        } else {
+                            let r = self.get_register(right)?;
+                            if is_undefined(r) {
+                                false
+                            } else {
+                                let ck_result = match *l {
+                                    Value::Object(ref map) => {
+                                        map.keys().any(|key| case_insensitive_equals(key, r))
+                                    }
+                                    _ => false,
+                                };
+                                !ck_result
+                            }
+                        }
+                    }
+                    PolicyOp::Like => {
+                        if is_undefined(l) {
+                            false
+                        } else {
+                            let r = self.get_register(right)?;
+                            match (coerce_to_string_ci(l), coerce_to_string_ci(r)) {
+                                (Some(input), Some(pattern)) => {
+                                    match_like_pattern_ci(&input, &pattern)
+                                }
+                                _ => false,
+                            }
+                        }
+                    }
+                    PolicyOp::NotLike => {
+                        if is_undefined(l) {
+                            true
+                        } else {
+                            let r = self.get_register(right)?;
+                            let like_result =
+                                match (coerce_to_string_ci(l), coerce_to_string_ci(r)) {
+                                    (Some(input), Some(pattern)) => {
+                                        match_like_pattern_ci(&input, &pattern)
+                                    }
+                                    _ => false,
+                                };
+                            !like_result
+                        }
+                    }
+                    PolicyOp::Match => {
+                        if is_undefined(l) {
+                            false
+                        } else {
+                            let r = self.get_register(right)?;
+                            match_pattern(l, r, false)
+                        }
+                    }
+                    PolicyOp::NotMatch => {
+                        if is_undefined(l) {
+                            true
+                        } else {
+                            let r = self.get_register(right)?;
+                            !match_pattern(l, r, false)
+                        }
+                    }
+                    PolicyOp::MatchInsensitively => {
+                        if is_undefined(l) {
+                            false
+                        } else {
+                            let r = self.get_register(right)?;
+                            match_pattern(l, r, true)
+                        }
+                    }
+                    PolicyOp::NotMatchInsensitively => {
+                        if is_undefined(l) {
+                            true
+                        } else {
+                            let r = self.get_register(right)?;
+                            !match_pattern(l, r, true)
+                        }
+                    }
+                    PolicyOp::Exists => {
+                        let r = self.get_register(right)?;
+                        let expected = as_boolish(r).unwrap_or(false);
+                        let is_defined = !is_undefined(l) && !matches!(l, Value::Null);
+                        is_defined == expected
+                    }
+                    PolicyOp::ValueConditionGuard => {
+                        // left = value register, right = condition register
+                        if is_undefined(l) {
+                            self.set_register(dest, Value::Bool(false))?;
+                            return Ok(InstructionOutcome::Continue);
+                        } else {
+                            let c = self.get_register(right)?.clone();
+                            self.set_register(dest, c)?;
+                            return Ok(InstructionOutcome::Continue);
+                        }
+                    }
+                    PolicyOp::Not => {
+                        // left = operand, right unused
+                        !is_true(l)
+                    }
+                };
                 self.set_register(dest, Value::Bool(result))?;
                 Ok(InstructionOutcome::Continue)
             }
 
             // AllOf / AnyOf structured instructions
-            AllOfStart { result, end_pc: _ } => {
-                // Initialize result to false (pessimistic — will be set to true
-                // by AllOfEnd if all children pass).
+            LogicalBlockStart {
+                mode: _,
+                result,
+                end_pc: _,
+            } => {
+                // Initialize result to false (pessimistic).
                 self.set_register(result, Value::Bool(false))?;
-                // No children case: AllOfStart is immediately followed by AllOfEnd.
-                // The normal flow handles this — we just continue.
                 Ok(InstructionOutcome::Continue)
             }
             AllOfNext {
@@ -1209,20 +1134,8 @@ impl RegoVM {
                 let val = self.get_register(check)?;
                 if !matches!(val, Value::Bool(true)) {
                     // Child failed — short-circuit.  Result stays false.
-                    // Jump PAST AllOfEnd: after the main loop's +1 we land at
-                    // end_pc + 1, skipping the AllOfEnd that would set true.
                     self.pc = usize::from(end_pc);
                 }
-                Ok(InstructionOutcome::Continue)
-            }
-            AllOfEnd { result } => {
-                // All children passed — set result to true.
-                self.set_register(result, Value::Bool(true))?;
-                Ok(InstructionOutcome::Continue)
-            }
-            AnyOfStart { result, end_pc: _ } => {
-                // Initialize result to false.
-                self.set_register(result, Value::Bool(false))?;
                 Ok(InstructionOutcome::Continue)
             }
             AnyOfNext {
@@ -1234,14 +1147,20 @@ impl RegoVM {
                 if matches!(val, Value::Bool(true)) {
                     // Child succeeded — short-circuit.
                     self.set_register(result, Value::Bool(true))?;
-                    // Jump PAST AnyOfEnd: after the main loop's +1 we land at
-                    // end_pc + 1, skipping the AnyOfEnd no-op.
                     self.pc = usize::from(end_pc);
                 }
                 Ok(InstructionOutcome::Continue)
             }
-            AnyOfEnd {} => {
-                // No child matched — result stays false (set by AnyOfStart).
+            LogicalBlockEnd { mode, result } => {
+                match mode {
+                    LogicalBlockMode::AllOf => {
+                        // All children passed — set result to true.
+                        self.set_register(result, Value::Bool(true))?;
+                    }
+                    LogicalBlockMode::AnyOf => {
+                        // No child matched — result stays false (set by LogicalBlockStart).
+                    }
+                }
                 Ok(InstructionOutcome::Continue)
             }
 

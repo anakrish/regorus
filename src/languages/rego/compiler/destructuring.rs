@@ -7,7 +7,7 @@ use crate::compiler::destructuring_planner::plans::{
     AssignmentPlan, BindingPlan, DestructuringPlan, WildcardSide,
 };
 use crate::lexer::Span;
-use crate::rvm::instructions::Instruction;
+use crate::rvm::instructions::{GuardMode, Instruction};
 use crate::value::Value;
 use anyhow::{bail, Result};
 
@@ -101,7 +101,13 @@ impl<'a> Compiler<'a> {
                     span,
                 );
                 if !self.soft_assert_mode {
-                    self.emit_instruction(Instruction::AssertCondition { condition: dest }, span);
+                    self.emit_instruction(
+                        Instruction::Guard {
+                            register: dest,
+                            mode: GuardMode::Condition,
+                        },
+                        span,
+                    );
                 }
                 Ok(dest)
             }
@@ -115,7 +121,10 @@ impl<'a> Compiler<'a> {
                     let rhs_reg =
                         self.compile_rego_expr_with_span(rhs_expr, rhs_expr.span(), false)?;
                     self.emit_instruction(
-                        Instruction::AssertNotUndefined { register: rhs_reg },
+                        Instruction::Guard {
+                            register: rhs_reg,
+                            mode: GuardMode::NotUndefined,
+                        },
                         span,
                     );
                     Ok(self.load_bool_literal(true, span))
@@ -124,7 +133,10 @@ impl<'a> Compiler<'a> {
                     let lhs_reg =
                         self.compile_rego_expr_with_span(lhs_expr, lhs_expr.span(), false)?;
                     self.emit_instruction(
-                        Instruction::AssertNotUndefined { register: lhs_reg },
+                        Instruction::Guard {
+                            register: lhs_reg,
+                            mode: GuardMode::NotUndefined,
+                        },
                         span,
                     );
                     Ok(self.load_bool_literal(true, span))
@@ -208,7 +220,13 @@ impl<'a> Compiler<'a> {
                 if self.soft_assert_mode {
                     return Ok(Some(cmp_reg));
                 }
-                self.emit_instruction(Instruction::AssertCondition { condition: cmp_reg }, span);
+                self.emit_instruction(
+                    Instruction::Guard {
+                        register: cmp_reg,
+                        mode: GuardMode::Condition,
+                    },
+                    span,
+                );
             }
             DestructuringPlan::EqualityValue(expected_value) => {
                 let expected_reg = self.load_literal_value(expected_value, span);
@@ -224,7 +242,13 @@ impl<'a> Compiler<'a> {
                 if self.soft_assert_mode {
                     return Ok(Some(cmp_reg));
                 }
-                self.emit_instruction(Instruction::AssertCondition { condition: cmp_reg }, span);
+                self.emit_instruction(
+                    Instruction::Guard {
+                        register: cmp_reg,
+                        mode: GuardMode::Condition,
+                    },
+                    span,
+                );
             }
             DestructuringPlan::Array { element_plans } => {
                 self.assert_array_length(value_register, element_plans.len(), span)?;
@@ -241,8 +265,9 @@ impl<'a> Compiler<'a> {
                     );
                     if context.require_defined_values() {
                         self.emit_instruction(
-                            Instruction::AssertNotUndefined {
+                            Instruction::Guard {
                                 register: element_reg,
+                                mode: GuardMode::NotUndefined,
                             },
                             span,
                         );
@@ -267,8 +292,9 @@ impl<'a> Compiler<'a> {
                         span,
                     );
                     self.emit_instruction(
-                        Instruction::AssertNotUndefined {
+                        Instruction::Guard {
                             register: field_reg,
+                            mode: GuardMode::NotUndefined,
                         },
                         span,
                     );
@@ -288,8 +314,9 @@ impl<'a> Compiler<'a> {
                         span,
                     );
                     self.emit_instruction(
-                        Instruction::AssertNotUndefined {
+                        Instruction::Guard {
                             register: field_reg,
+                            mode: GuardMode::NotUndefined,
                         },
                         span,
                     );
@@ -327,7 +354,13 @@ impl<'a> Compiler<'a> {
         self.add_variable(var_name, dest);
 
         if context.require_defined_values() {
-            self.emit_instruction(Instruction::AssertNotUndefined { register: dest }, span);
+            self.emit_instruction(
+                Instruction::Guard {
+                    register: dest,
+                    mode: GuardMode::NotUndefined,
+                },
+                span,
+            );
         }
 
         Ok(())
@@ -380,7 +413,13 @@ impl<'a> Compiler<'a> {
             },
             span,
         );
-        self.emit_instruction(Instruction::AssertCondition { condition: cmp_reg }, span);
+        self.emit_instruction(
+            Instruction::Guard {
+                register: cmp_reg,
+                mode: GuardMode::Condition,
+            },
+            span,
+        );
         Ok(())
     }
 }

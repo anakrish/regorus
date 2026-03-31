@@ -276,7 +276,12 @@ impl Compiler {
             OperatorKind::NotMatchInsensitively => PolicyOp::NotMatchInsensitively,
             OperatorKind::Exists => PolicyOp::Exists,
         };
-        let instruction = Instruction::PolicyCondition { dest, left, right, op };
+        let instruction = Instruction::PolicyCondition {
+            dest,
+            left,
+            right,
+            op,
+        };
         self.emit(instruction, span);
         Ok(dest)
     }

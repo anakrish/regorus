@@ -23,6 +23,8 @@ use alloc::vec::Vec;
 
 use crate::lexer::{Lexer, Source, Span, Token, TokenKind};
 
+use super::parser::json_unescape;
+
 use super::ast::{Expr, ExprLiteral};
 
 /// Errors that can occur during ARM template expression parsing.
@@ -68,7 +70,6 @@ impl<'source> ExprParser<'source> {
     fn new(source: &'source Source) -> Self {
         let mut lexer = Lexer::new(source);
         lexer.set_unknown_char_is_symbol(true);
-        lexer.set_comment_starts_with_double_slash(true);
         let tok = Token(
             TokenKind::Eof,
             Span {
@@ -106,15 +107,18 @@ impl<'source> ExprParser<'source> {
 
     /// Parse a complete expression from a `"[...]"` string.
     ///
-    /// `expr_content` is the text between `[` and `]` (with single quotes replaced
-    /// by double quotes for the lexer).
+    /// `expr_content` is the text between `[` and `]`.
+    /// ARM template expressions use single-quoted strings; this function converts
+    /// them to double-quoted JSON strings for the lexer, handling `''` (escaped
+    /// apostrophe) and embedded characters that need JSON-escaping.
     /// `outer_span` is the span of the original string token (for error context).
     pub fn parse_from_brackets(
         expr_content: &str,
         outer_span: &Span,
     ) -> Result<Expr, ExprParseError> {
-        // Replace single quotes with double quotes (Azure Policy convention).
-        let normalized = expr_content.replace('\'', "\"");
+        // Convert ARM single-quoted strings to double-quoted JSON strings.
+        let normalized = arm_single_to_double_quotes(expr_content)
+            .map_err(|e| ExprParseError::Lexer(outer_span.error(e).to_string()))?;
 
         let source = Source::from_contents("<expr>".into(), normalized)
             .map_err(|e| ExprParseError::Lexer(e.to_string()))?;
@@ -133,7 +137,6 @@ impl<'source> ExprParser<'source> {
             let text = self.token_text();
             match text {
                 "." => {
-                    let dot_start = self.tok.1.start;
                     self.advance()?;
                     let (field_span, field_name) = self.expect_ident()?;
                     let span = Span {
@@ -143,7 +146,6 @@ impl<'source> ExprParser<'source> {
                         start: expr.span().start,
                         end: field_span.end,
                     };
-                    let _ = dot_start;
                     expr = Expr::Dot {
                         span,
                         object: Box::new(expr),
@@ -231,23 +233,12 @@ impl<'source> ExprParser<'source> {
             }
             TokenKind::String => {
                 let span = self.tok.1.clone();
-                let text: String = span.text().into();
+                let text = json_unescape(span.text());
                 self.advance()?;
-                // In ARM template expressions, string "true"/"false" → boolean.
-                match text.to_lowercase().as_str() {
-                    "true" => Ok(Expr::Literal {
-                        span,
-                        value: ExprLiteral::Bool(true),
-                    }),
-                    "false" => Ok(Expr::Literal {
-                        span,
-                        value: ExprLiteral::Bool(false),
-                    }),
-                    _ => Ok(Expr::Literal {
-                        span,
-                        value: ExprLiteral::String(text),
-                    }),
-                }
+                Ok(Expr::Literal {
+                    span,
+                    value: ExprLiteral::String(text),
+                })
             }
             // Unary minus: `-5`, `-3.14`, or `-expr`
             TokenKind::Symbol if self.token_text() == "-" => {
@@ -337,4 +328,262 @@ fn parse_expr_from_source(source: &Source, outer_span: &Span) -> Result<Expr, Ex
     }
 
     Ok(expr)
+}
+
+/// Convert ARM template expression single-quoted strings to double-quoted JSON strings.
+///
+/// ARM expressions use `'...'` for strings and `''` to escape a literal apostrophe.
+/// The JSON lexer expects `"..."` strings with backslash escapes, so this function:
+/// - Converts `'...'` delimiters to `"..."`
+/// - Converts `''` (ARM escape) to a single `'` character inside the `"` string (no backslash escape)
+/// - Escapes `"` and `\` inside the string for the JSON lexer
+/// - Leaves characters outside of strings unchanged
+fn arm_single_to_double_quotes(input: &str) -> Result<String, &'static str> {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\'' {
+            // Start of a single-quoted ARM string → emit as double-quoted.
+            result.push('"');
+            loop {
+                match chars.next() {
+                    Some('\'') => {
+                        if chars.peek() == Some(&'\'') {
+                            // '' → escaped apostrophe, emit a literal '
+                            chars.next();
+                            result.push('\'');
+                        } else {
+                            // End of string
+                            result.push('"');
+                            break;
+                        }
+                    }
+                    Some('"') => {
+                        // Escape for JSON lexer
+                        result.push('\\');
+                        result.push('"');
+                    }
+                    Some('\\') => {
+                        // Escape for JSON lexer
+                        result.push('\\');
+                        result.push('\\');
+                    }
+                    Some(c) => result.push(c),
+                    None => {
+                        return Err("unterminated string");
+                    }
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    Ok(result)
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::as_conversions,
+    clippy::indexing_slicing
+)]
+mod tests {
+    use super::*;
+
+    // ====================================================================
+    // arm_single_to_double_quotes tests
+    // ====================================================================
+
+    #[test]
+    fn test_simple_string() {
+        assert_eq!(arm_single_to_double_quotes("'hello'").unwrap(), "\"hello\"");
+    }
+
+    #[test]
+    fn test_no_quotes() {
+        assert_eq!(arm_single_to_double_quotes("field(x)").unwrap(), "field(x)");
+    }
+
+    #[test]
+    fn test_concat_two_strings() {
+        assert_eq!(
+            arm_single_to_double_quotes("concat('a', 'b')").unwrap(),
+            "concat(\"a\", \"b\")"
+        );
+    }
+
+    #[test]
+    fn test_escaped_apostrophe() {
+        // ARM: 'it''s' → string value "it's"
+        assert_eq!(arm_single_to_double_quotes("'it''s'").unwrap(), "\"it's\"");
+    }
+
+    #[test]
+    fn test_doubled_apostrophe_in_concat() {
+        // concat('a''b', 'c') → concat("a'b", "c")
+        assert_eq!(
+            arm_single_to_double_quotes("concat('a''b', 'c')").unwrap(),
+            "concat(\"a'b\", \"c\")"
+        );
+    }
+
+    #[test]
+    fn test_embedded_double_quote() {
+        // ARM: 'say "hi"' → JSON: "say \"hi\""
+        assert_eq!(
+            arm_single_to_double_quotes("'say \"hi\"'").unwrap(),
+            "\"say \\\"hi\\\"\""
+        );
+    }
+
+    #[test]
+    fn test_embedded_backslash() {
+        // ARM: 'a\b' → JSON: "a\\b"
+        assert_eq!(arm_single_to_double_quotes("'a\\b'").unwrap(), "\"a\\\\b\"");
+    }
+
+    #[test]
+    fn test_empty_string() {
+        assert_eq!(arm_single_to_double_quotes("''").unwrap(), "\"\"");
+    }
+
+    #[test]
+    fn test_unterminated_string() {
+        arm_single_to_double_quotes("'hello").unwrap_err();
+    }
+
+    #[test]
+    fn test_unterminated_string_in_expr() {
+        let source = Source::from_contents("<test>".into(), "'hello".into()).unwrap();
+        let span = Span {
+            source,
+            line: 1,
+            col: 1,
+            start: 0,
+            end: 6,
+        };
+        ExprParser::parse_from_brackets("'hello", &span).unwrap_err();
+    }
+
+    // ====================================================================
+    // ExprParser integration tests
+    // ====================================================================
+
+    fn parse_expr_str(input: &str) -> Expr {
+        let source = Source::from_contents("<test>".into(), input.into()).unwrap();
+        let span = Span {
+            source,
+            line: 1,
+            col: 1,
+            start: 0,
+            end: input.len() as u32,
+        };
+        ExprParser::parse_from_brackets(input, &span).expect("parse should succeed")
+    }
+
+    #[test]
+    fn test_parse_simple_function_call() {
+        let expr = parse_expr_str("field('type')");
+        match expr {
+            Expr::Call { func, args, .. } => {
+                assert!(matches!(*func, Expr::Ident { ref name, .. } if name == "field"));
+                assert_eq!(args.len(), 1);
+                assert!(
+                    matches!(&args[0], Expr::Literal { value: ExprLiteral::String(s), .. } if s == "type")
+                );
+            }
+            _ => panic!("expected Call, got {:?}", expr),
+        }
+    }
+
+    #[test]
+    fn test_parse_string_true_not_bool() {
+        // 'true' in an ARM expression is a string, not a boolean.
+        let expr = parse_expr_str("'true'");
+        match expr {
+            Expr::Literal {
+                value: ExprLiteral::String(s),
+                ..
+            } => assert_eq!(s, "true"),
+            _ => panic!("expected String literal, got {:?}", expr),
+        }
+    }
+
+    #[test]
+    fn test_parse_string_false_not_bool() {
+        let expr = parse_expr_str("'false'");
+        match expr {
+            Expr::Literal {
+                value: ExprLiteral::String(s),
+                ..
+            } => assert_eq!(s, "false"),
+            _ => panic!("expected String literal, got {:?}", expr),
+        }
+    }
+
+    #[test]
+    fn test_bare_true_is_ident() {
+        // Bare `true` is an identifier (for true() function call), not a boolean literal.
+        let expr = parse_expr_str("true");
+        match expr {
+            Expr::Ident { name, .. } => assert_eq!(name, "true"),
+            _ => panic!("expected Ident, got {:?}", expr),
+        }
+    }
+
+    #[test]
+    fn test_parse_dot_access() {
+        let expr = parse_expr_str("resourceGroup().location");
+        match expr {
+            Expr::Dot { field, .. } => assert_eq!(field, "location"),
+            _ => panic!("expected Dot, got {:?}", expr),
+        }
+    }
+
+    #[test]
+    fn test_parse_apostrophe_in_string() {
+        // concat('it''s') → Call(concat, [String("it's")])
+        let expr = parse_expr_str("concat('it''s')");
+        match expr {
+            Expr::Call { args, .. } => {
+                assert_eq!(args.len(), 1);
+                assert!(
+                    matches!(&args[0], Expr::Literal { value: ExprLiteral::String(s), .. } if s == "it's")
+                );
+            }
+            _ => panic!("expected Call, got {:?}", expr),
+        }
+    }
+
+    #[test]
+    fn test_string_with_embedded_double_quote_unescaped() {
+        // ARM: 'say "hi"' → after normalization: "say \"hi\""
+        // ExprLiteral::String should contain the unescaped value: say "hi"
+        let expr = parse_expr_str("'say \"hi\"'");
+        match expr {
+            Expr::Literal {
+                value: ExprLiteral::String(s),
+                ..
+            } => assert_eq!(s, "say \"hi\""),
+            _ => panic!("expected String literal, got {:?}", expr),
+        }
+    }
+
+    #[test]
+    fn test_string_with_backslash_unescaped() {
+        // ARM: 'a\b' → after normalization: "a\\b"
+        // ExprLiteral::String should contain: a\b
+        let expr = parse_expr_str("'a\\b'");
+        match expr {
+            Expr::Literal {
+                value: ExprLiteral::String(s),
+                ..
+            } => assert_eq!(s, "a\\b"),
+            _ => panic!("expected String literal, got {:?}", expr),
+        }
+    }
 }

@@ -13,7 +13,7 @@ use crate::languages::azure_policy::ast::{Constraint, JsonValue, ObjectEntry, Va
 use crate::languages::azure_policy::expr::ExprParser;
 
 use super::error::ParseError;
-use super::is_template_expr;
+use super::{is_template_expr, tail, unwrap};
 
 /// Unescape a JSON string body (the content between the outer `"` delimiters).
 ///
@@ -21,7 +21,7 @@ use super::is_template_expr;
 /// escape sequences (e.g., `\"`, `\\`, `\n`, `\uXXXX`).  This function
 /// converts them to the actual characters they represent so that runtime
 /// `Value::String` comparisons work correctly.
-fn json_unescape(raw: &str) -> String {
+pub(in crate::languages::azure_policy) fn json_unescape(raw: &str) -> String {
     // Fast path: if there is no backslash, the text is already unescaped.
     if !raw.contains('\\') {
         return raw.into();
@@ -44,7 +44,23 @@ fn json_unescape(raw: &str) -> String {
                 Some('u') => {
                     let hex: String = chars.by_ref().take(4).collect();
                     if let Ok(code_point) = u32::from_str_radix(&hex, 16) {
-                        if let Some(c) = char::from_u32(code_point) {
+                        // Handle UTF-16 surrogate pairs: \uD800-\uDBFF followed by \uDC00-\uDFFF
+                        if (0xD800..=0xDBFF).contains(&code_point) {
+                            // High surrogate — expect \uXXXX low surrogate next.
+                            let low = decode_low_surrogate(&mut chars);
+                            if let Some(low_point) = low {
+                                #[allow(clippy::arithmetic_side_effects)]
+                                // Values are range-checked above.
+                                let combined =
+                                    ((code_point - 0xD800) << 10) + (low_point - 0xDC00) + 0x10000;
+                                if let Some(c) = char::from_u32(combined) {
+                                    result.push(c);
+                                }
+                            }
+                            // If low surrogate is missing/invalid, silently skip.
+                            // (The lexer pre-validates strings via serde_json, so
+                            //  unpaired surrogates should not reach here in practice.)
+                        } else if let Some(c) = char::from_u32(code_point) {
                             result.push(c);
                         }
                     }
@@ -62,6 +78,33 @@ fn json_unescape(raw: &str) -> String {
     }
 
     result
+}
+
+/// Try to consume `\uXXXX` from the iterator and return the low surrogate code point.
+fn decode_low_surrogate(chars: &mut core::str::Chars<'_>) -> Option<u32> {
+    // We need exactly `\uXXXX` next.
+    let mut peekable = chars.clone();
+    if peekable.next() != Some('\\') {
+        return None;
+    }
+    if peekable.next() != Some('u') {
+        return None;
+    }
+    let hex: String = peekable.by_ref().take(4).collect();
+    if hex.len() != 4 {
+        return None;
+    }
+    let low = u32::from_str_radix(&hex, 16).ok()?;
+    if !(0xDC00..=0xDFFF).contains(&low) {
+        return None;
+    }
+    // Actually consume from the real iterator.
+    chars.next(); // '\'
+    chars.next(); // 'u'
+    for _ in 0..4 {
+        chars.next();
+    }
+    Some(low)
 }
 
 // ============================================================================
@@ -221,6 +264,13 @@ impl<'source> Parser<'source> {
                     });
                 }
                 let num_span = self.tok.1.clone();
+                // JSON does not permit whitespace between '-' and the digit.
+                if start_span.end != num_span.start {
+                    return Err(ParseError::UnexpectedToken {
+                        span: num_span,
+                        expected: "number immediately after '-'",
+                    });
+                }
                 let mut text = String::from("-");
                 text.push_str(num_span.text());
                 self.advance()?;
@@ -304,8 +354,7 @@ impl<'source> Parser<'source> {
     pub fn json_to_value_or_expr(jv: JsonValue) -> Result<ValueOrExpr, ParseError> {
         match jv {
             JsonValue::Str(ref span, ref s) if is_template_expr(s) => {
-                let end = s.len().saturating_sub(1);
-                let inner = &s[1..end];
+                let inner = unwrap(s, 1, 1);
                 let expr = ExprParser::parse_from_brackets(inner, span).map_err(|e| {
                     ParseError::ExprParse {
                         span: span.clone(),
@@ -320,10 +369,168 @@ impl<'source> Parser<'source> {
             }
             // Handle `[[...` escaped literals: strip the leading `[`.
             JsonValue::Str(span, ref s) if s.starts_with("[[") => {
-                let unescaped = alloc::string::String::from(&s[1..]);
+                let unescaped = alloc::string::String::from(tail(s, 1));
                 Ok(ValueOrExpr::Value(JsonValue::Str(span, unescaped)))
             }
             _ => Ok(ValueOrExpr::Value(jv)),
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::as_conversions
+)]
+mod tests {
+    use super::*;
+
+    // ====================================================================
+    // json_unescape tests
+    // ====================================================================
+
+    #[test]
+    fn test_no_escapes() {
+        assert_eq!(json_unescape("hello world"), "hello world");
+    }
+
+    #[test]
+    fn test_basic_escapes() {
+        assert_eq!(json_unescape(r#"a\"b"#), "a\"b");
+        assert_eq!(json_unescape(r"a\\b"), "a\\b");
+        assert_eq!(json_unescape(r"a\/b"), "a/b");
+        assert_eq!(json_unescape(r"a\nb"), "a\nb");
+        assert_eq!(json_unescape(r"a\tb"), "a\tb");
+        assert_eq!(json_unescape(r"a\rb"), "a\rb");
+    }
+
+    #[test]
+    fn test_unicode_escape_bmp() {
+        // \u0041 = 'A'
+        assert_eq!(json_unescape(r"\u0041"), "A");
+        // \u00e9 = 'é'
+        assert_eq!(json_unescape(r"\u00e9"), "é");
+    }
+
+    #[test]
+    fn test_unicode_surrogate_pair() {
+        // \uD83D\uDE00 = '😀' (U+1F600)
+        assert_eq!(json_unescape(r"\uD83D\uDE00"), "😀");
+    }
+
+    #[test]
+    fn test_unicode_surrogate_pair_in_context() {
+        assert_eq!(json_unescape(r"hi \uD83D\uDE00 there"), "hi 😀 there");
+    }
+
+    #[test]
+    fn test_high_surrogate_without_low_is_dropped() {
+        // High surrogate alone — silently dropped
+        assert_eq!(json_unescape(r"\uD83D abc"), " abc");
+    }
+
+    #[test]
+    fn test_unknown_escape_preserved() {
+        assert_eq!(json_unescape(r"\x"), "\\x");
+    }
+
+    // ====================================================================
+    // parse_json_value tests — negative number adjacency
+    // ====================================================================
+
+    fn parse_json(input: &str) -> Result<JsonValue, ParseError> {
+        let source = Source::from_contents("<test>".into(), input.into()).unwrap();
+        let mut parser = Parser::new(&source)?;
+        parser.parse_json_value()
+    }
+
+    #[test]
+    fn test_negative_number_adjacent() {
+        let val = parse_json("-42").unwrap();
+        match val {
+            JsonValue::Number(_, text) => assert_eq!(text, "-42"),
+            other => panic!("expected Number, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_negative_number_with_space_rejected() {
+        // JSON forbids whitespace between '-' and digits.
+        let result = parse_json("- 1");
+        assert!(result.is_err(), "expected error for '- 1'");
+    }
+
+    // ====================================================================
+    // json_to_value_or_expr tests
+    // ====================================================================
+
+    fn make_str_value(s: &str) -> JsonValue {
+        let source = Source::from_contents("<test>".into(), s.into()).unwrap();
+        let span = Span {
+            source,
+            line: 1,
+            col: 1,
+            start: 0,
+            end: s.len() as u32,
+        };
+        JsonValue::Str(span, s.into())
+    }
+
+    #[test]
+    fn test_template_expr_parsed() {
+        let jv = make_str_value("[field('type')]");
+        let result = Parser::json_to_value_or_expr(jv).unwrap();
+        match result {
+            ValueOrExpr::Expr { raw, .. } => assert_eq!(raw, "[field('type')]"),
+            other => panic!("expected Expr, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_escaped_bracket_becomes_value() {
+        // "[[foo]" → plain string "[foo]"
+        let jv = make_str_value("[[foo]");
+        let result = Parser::json_to_value_or_expr(jv).unwrap();
+        match result {
+            ValueOrExpr::Value(JsonValue::Str(_, s)) => assert_eq!(s, "[foo]"),
+            other => panic!("expected Value with unescaped string, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_plain_string_unchanged() {
+        let jv = make_str_value("hello");
+        let result = Parser::json_to_value_or_expr(jv).unwrap();
+        match result {
+            ValueOrExpr::Value(JsonValue::Str(_, s)) => assert_eq!(s, "hello"),
+            other => panic!("expected Value, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_non_string_passthrough() {
+        let source = Source::from_contents("<test>".into(), "42".into()).unwrap();
+        let span = Span {
+            source,
+            line: 1,
+            col: 1,
+            start: 0,
+            end: 2,
+        };
+        let jv = JsonValue::Number(span, "42".into());
+        let result = Parser::json_to_value_or_expr(jv).unwrap();
+        match result {
+            ValueOrExpr::Value(JsonValue::Number(_, n)) => assert_eq!(n, "42"),
+            other => panic!("expected Value(Number), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_invalid_expr_returns_error() {
+        // "[!!!]" is a template expression but contains invalid tokens
+        let jv = make_str_value("[!!!]");
+        Parser::json_to_value_or_expr(jv).unwrap_err();
     }
 }

@@ -15,7 +15,7 @@ pub enum LiteralOrRegister {
 
 /// Loop execution modes for different Rego iteration constructs
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LoopMode {
     /// Any quantification: some x in arr, x := arr[_], etc.
     /// Succeeds if ANY iteration succeeds, exits early on first success
@@ -81,58 +81,59 @@ pub enum PolicyOp {
 }
 
 impl PolicyOp {
+    /// (display_name, compact_name) pairs indexed by discriminant.
+    const NAMES: [(&'static str, &'static str); 21] = [
+        ("POLICY_EQUALS", "POLICY_EQ"),
+        ("POLICY_NOT_EQUALS", "POLICY_NE"),
+        ("POLICY_GREATER", "POLICY_GT"),
+        ("POLICY_GREATER_OR_EQUALS", "POLICY_GE"),
+        ("POLICY_LESS", "POLICY_LT"),
+        ("POLICY_LESS_OR_EQUALS", "POLICY_LE"),
+        ("POLICY_IN", "POLICY_IN"),
+        ("POLICY_NOT_IN", "POLICY_NOT_IN"),
+        ("POLICY_CONTAINS", "POLICY_CONTAINS"),
+        ("POLICY_NOT_CONTAINS", "POLICY_NOT_CONTAINS"),
+        ("POLICY_CONTAINS_KEY", "POLICY_CONTAINS_KEY"),
+        ("POLICY_NOT_CONTAINS_KEY", "POLICY_NOT_CK"),
+        ("POLICY_LIKE", "POLICY_LIKE"),
+        ("POLICY_NOT_LIKE", "POLICY_NOT_LIKE"),
+        ("POLICY_MATCH", "POLICY_MATCH"),
+        ("POLICY_NOT_MATCH", "POLICY_NOT_MATCH"),
+        ("POLICY_MATCH_INSENSITIVELY", "POLICY_MATCH_CI"),
+        ("POLICY_NOT_MATCH_INSENSITIVELY", "POLICY_NOT_MATCH_CI"),
+        ("POLICY_EXISTS", "POLICY_EXISTS"),
+        ("VALUE_CONDITION_GUARD", "VAL_COND_GUARD"),
+        ("POLICY_NOT", "POLICY_NOT"),
+    ];
+
     /// Display name used in assembly listings and Debug output.
-    pub const fn display_name(self) -> &'static str {
-        match self {
-            Self::Equals => "POLICY_EQUALS",
-            Self::NotEquals => "POLICY_NOT_EQUALS",
-            Self::Greater => "POLICY_GREATER",
-            Self::GreaterOrEquals => "POLICY_GREATER_OR_EQUALS",
-            Self::Less => "POLICY_LESS",
-            Self::LessOrEquals => "POLICY_LESS_OR_EQUALS",
-            Self::In => "POLICY_IN",
-            Self::NotIn => "POLICY_NOT_IN",
-            Self::Contains => "POLICY_CONTAINS",
-            Self::NotContains => "POLICY_NOT_CONTAINS",
-            Self::ContainsKey => "POLICY_CONTAINS_KEY",
-            Self::NotContainsKey => "POLICY_NOT_CONTAINS_KEY",
-            Self::Like => "POLICY_LIKE",
-            Self::NotLike => "POLICY_NOT_LIKE",
-            Self::Match => "POLICY_MATCH",
-            Self::NotMatch => "POLICY_NOT_MATCH",
-            Self::MatchInsensitively => "POLICY_MATCH_INSENSITIVELY",
-            Self::NotMatchInsensitively => "POLICY_NOT_MATCH_INSENSITIVELY",
-            Self::Exists => "POLICY_EXISTS",
-            Self::ValueConditionGuard => "VALUE_CONDITION_GUARD",
-            Self::Not => "POLICY_NOT",
-        }
+    #[allow(clippy::as_conversions)]
+    pub fn display_name(self) -> &'static str {
+        Self::NAMES
+            .get(self as usize)
+            .map_or("UNKNOWN_POLICY_OP", |pair| pair.0)
     }
 
     /// Compact name for tabular assembly listings.
-    pub const fn compact_name(self) -> &'static str {
-        match self {
-            Self::Equals => "POLICY_EQ",
-            Self::NotEquals => "POLICY_NE",
-            Self::Greater => "POLICY_GT",
-            Self::GreaterOrEquals => "POLICY_GE",
-            Self::Less => "POLICY_LT",
-            Self::LessOrEquals => "POLICY_LE",
-            Self::In => "POLICY_IN",
-            Self::NotIn => "POLICY_NOT_IN",
-            Self::Contains => "POLICY_CONTAINS",
-            Self::NotContains => "POLICY_NOT_CONTAINS",
-            Self::ContainsKey => "POLICY_CONTAINS_KEY",
-            Self::NotContainsKey => "POLICY_NOT_CK",
-            Self::Like => "POLICY_LIKE",
-            Self::NotLike => "POLICY_NOT_LIKE",
-            Self::Match => "POLICY_MATCH",
-            Self::NotMatch => "POLICY_NOT_MATCH",
-            Self::MatchInsensitively => "POLICY_MATCH_CI",
-            Self::NotMatchInsensitively => "POLICY_NOT_MATCH_CI",
-            Self::Exists => "POLICY_EXISTS",
-            Self::ValueConditionGuard => "VAL_COND_GUARD",
-            Self::Not => "POLICY_NOT",
-        }
+    #[allow(clippy::as_conversions)]
+    pub fn compact_name(self) -> &'static str {
+        Self::NAMES
+            .get(self as usize)
+            .map_or("UNKNOWN_POLICY_OP", |pair| pair.1)
+    }
+
+    /// Returns `true` for negated condition operators (NotEquals, NotIn, etc.).
+    pub const fn is_negated(self) -> bool {
+        matches!(
+            self,
+            Self::NotEquals
+                | Self::NotIn
+                | Self::NotContains
+                | Self::NotContainsKey
+                | Self::NotLike
+                | Self::NotMatch
+                | Self::NotMatchInsensitively
+        )
     }
 }
 

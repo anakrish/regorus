@@ -8,8 +8,8 @@
 
 use super::{Compiler, CompilerError, ComprehensionType, ContextType, Result};
 use crate::ast::{self, LiteralStmt, Query};
-use crate::rvm::program::RuleType;
 use crate::rvm::instructions::GuardMode;
+use crate::rvm::program::RuleType;
 use crate::rvm::Instruction;
 use alloc::format;
 use alloc::vec::Vec;

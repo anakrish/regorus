@@ -992,7 +992,7 @@ pub fn generate_tabular_assembly_listing(
     output
 }
 
-const fn get_instruction_name(instruction: &Instruction) -> &'static str {
+fn get_instruction_name(instruction: &Instruction) -> &'static str {
     match *instruction {
         Instruction::Load { .. } => "LOAD",
         Instruction::LoadTrue { .. } => "LOAD_TRUE",

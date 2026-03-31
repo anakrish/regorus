@@ -44,7 +44,7 @@ pub(super) struct LoopParams {
     pub(super) loop_end: u16,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 enum LoopAction {
     ExitWithSuccess,
     ExitWithFailure,
@@ -84,10 +84,7 @@ impl RegoVM {
         mode: &LoopMode,
         params: LoopParams,
     ) -> Result<()> {
-        let initial_result = match *mode {
-            LoopMode::Any | LoopMode::Every | LoopMode::ForEach => Value::Bool(false),
-        };
-        self.set_register(params.result_reg, initial_result.clone())?;
+        self.set_register(params.result_reg, Value::Bool(false))?;
 
         let iteration_state = match self.resolve_iteration_state(mode, &params)? {
             Some(state) => state,
@@ -209,10 +206,7 @@ impl RegoVM {
         mode: &LoopMode,
         params: LoopParams,
     ) -> Result<()> {
-        let initial_result = match *mode {
-            LoopMode::Any | LoopMode::Every | LoopMode::ForEach => Value::Bool(false),
-        };
-        self.set_register(params.result_reg, initial_result.clone())?;
+        self.set_register(params.result_reg, Value::Bool(false))?;
 
         let iteration_state = match self.resolve_iteration_state(mode, &params)? {
             Some(state) => state,
@@ -449,7 +443,7 @@ impl RegoVM {
                     // Azure Policy: `[*]` expects an array.  Objects are
                     // treated as non-collections — virtual element for Every
                     // mode, immediate false for Any/ForEach.
-                    if matches!(*mode, LoopMode::Every) {
+                    if *mode == LoopMode::Every {
                         Ok(Some(IterationState::Single { consumed: false }))
                     } else {
                         let result = non_collection_result(mode);
@@ -481,7 +475,7 @@ impl RegoVM {
                 }))
             }
             _ => {
-                if self.virtual_element_on_non_collection && matches!(*mode, LoopMode::Every) {
+                if self.virtual_element_on_non_collection && *mode == LoopMode::Every {
                     // Azure Policy: allOf [*] on non-collection iterates once
                     // over a virtual null element.
                     Ok(Some(IterationState::Single { consumed: false }))

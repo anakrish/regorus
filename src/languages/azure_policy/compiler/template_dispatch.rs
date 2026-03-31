@@ -106,24 +106,54 @@ impl Compiler {
                 Instruction::Add { dest, left, right }
             })?,
             "equals" => self.emit_binary_instruction(args, span, |dest, left, right| {
-                Instruction::PolicyCondition { dest, left, right, op: PolicyOp::Equals }
+                Instruction::PolicyCondition {
+                    dest,
+                    left,
+                    right,
+                    op: PolicyOp::Equals,
+                }
             })?,
             "greaterorequals" => {
                 self.emit_binary_instruction(args, span, |dest, left, right| {
-                    Instruction::PolicyCondition { dest, left, right, op: PolicyOp::GreaterOrEquals }
+                    Instruction::PolicyCondition {
+                        dest,
+                        left,
+                        right,
+                        op: PolicyOp::GreaterOrEquals,
+                    }
                 })?
             }
             "lessorequals" => self.emit_binary_instruction(args, span, |dest, left, right| {
-                Instruction::PolicyCondition { dest, left, right, op: PolicyOp::LessOrEquals }
+                Instruction::PolicyCondition {
+                    dest,
+                    left,
+                    right,
+                    op: PolicyOp::LessOrEquals,
+                }
             })?,
             "contains" => self.emit_binary_instruction(args, span, |dest, left, right| {
-                Instruction::PolicyCondition { dest, left, right, op: PolicyOp::Contains }
+                Instruction::PolicyCondition {
+                    dest,
+                    left,
+                    right,
+                    op: PolicyOp::Contains,
+                }
             })?,
             "greater" => self.emit_binary_instruction(args, span, |dest, left, right| {
-                Instruction::PolicyCondition { dest, left, right, op: PolicyOp::Greater }
+                Instruction::PolicyCondition {
+                    dest,
+                    left,
+                    right,
+                    op: PolicyOp::Greater,
+                }
             })?,
             "less" => self.emit_binary_instruction(args, span, |dest, left, right| {
-                Instruction::PolicyCondition { dest, left, right, op: PolicyOp::Less }
+                Instruction::PolicyCondition {
+                    dest,
+                    left,
+                    right,
+                    op: PolicyOp::Less,
+                }
             })?,
 
             // ── Logical functions ─────────────────────────────────────

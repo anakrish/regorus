@@ -10,7 +10,9 @@ pub use params::{
     FunctionCallParams, InstructionData, LoopStartParams, ObjectCreateParams, SetCreateParams,
     VirtualDataDocumentLookupParams,
 };
-pub use types::{ComprehensionMode, GuardMode, LiteralOrRegister, LogicalBlockMode, LoopMode, PolicyOp};
+pub use types::{
+    ComprehensionMode, GuardMode, LiteralOrRegister, LogicalBlockMode, LoopMode, PolicyOp,
+};
 
 use serde::{Deserialize, Serialize};
 

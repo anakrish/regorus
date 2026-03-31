@@ -58,6 +58,33 @@ pub fn coerce_to_string_ci(value: &Value) -> Option<String> {
     coerce_to_string(value).map(|s| strings::case_fold::fold(&s).into_owned())
 }
 
+// ── Collection helpers ────────────────────────────────────────────────
+
+/// Check if an array or set contains a null sentinel.
+pub fn collection_has_null(v: &Value) -> bool {
+    match *v {
+        Value::Array(ref items) => items.iter().any(|i| matches!(i, Value::Null)),
+        Value::Set(ref items) => items.iter().any(|i| matches!(i, Value::Null)),
+        _ => false,
+    }
+}
+
+/// Check if any non-null element in a collection case-insensitively equals `target`.
+/// Scalar RHS is treated as a single-element collection.
+pub fn collection_any_ci_eq_excluding_null(collection: &Value, target: &Value) -> bool {
+    match *collection {
+        Value::Array(ref items) => items
+            .iter()
+            .filter(|i| !matches!(i, Value::Null))
+            .any(|i| case_insensitive_equals(i, target)),
+        Value::Set(ref items) => items
+            .iter()
+            .filter(|i| !matches!(i, Value::Null))
+            .any(|i| case_insensitive_equals(i, target)),
+        _ => case_insensitive_equals(collection, target),
+    }
+}
+
 pub fn as_boolish(value: &Value) -> Option<bool> {
     match *value {
         Value::Bool(b) => Some(b),

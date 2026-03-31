@@ -108,8 +108,9 @@ impl core::fmt::Display for ParseError {
             } => {
                 write!(
                     f,
-                    "{}",
-                    span.error(&format!("expression parse error: {}", message))
+                    "{}\n  expression parse error: {}",
+                    span.error("in template expression"),
+                    message
                 )
             }
             ParseError::MultipleCountCollections { ref span } => {

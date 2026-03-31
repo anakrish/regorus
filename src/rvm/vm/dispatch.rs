@@ -886,35 +886,11 @@ impl RegoVM {
         instruction: Instruction,
     ) -> Result<InstructionOutcome> {
         use crate::builtins::azure_policy::helpers::{
-            as_boolish, case_insensitive_equals, coerce_to_string_ci, is_true, is_undefined,
+            as_boolish, case_insensitive_equals, coerce_to_string_ci,
+            collection_any_ci_eq_excluding_null, collection_has_null, is_true, is_undefined,
             match_like_pattern_ci, match_pattern,
         };
         use crate::rvm::instructions::{LogicalBlockMode, PolicyOp};
-
-        /// Check if an array or set contains a null sentinel.
-        fn collection_has_null(v: &Value) -> bool {
-            match *v {
-                Value::Array(ref items) => items.iter().any(|i| matches!(i, Value::Null)),
-                Value::Set(ref items) => items.iter().any(|i| matches!(i, Value::Null)),
-                _ => false,
-            }
-        }
-
-        /// Check if any non-null element in a collection case-insensitively equals `target`.
-        /// Scalar RHS is treated as a single-element collection.
-        fn collection_any_ci_eq_excluding_null(collection: &Value, target: &Value) -> bool {
-            match *collection {
-                Value::Array(ref items) => items
-                    .iter()
-                    .filter(|i| !matches!(i, Value::Null))
-                    .any(|i| case_insensitive_equals(i, target)),
-                Value::Set(ref items) => items
-                    .iter()
-                    .filter(|i| !matches!(i, Value::Null))
-                    .any(|i| case_insensitive_equals(i, target)),
-                _ => case_insensitive_equals(collection, target),
-            }
-        }
 
         use Instruction::*;
         match instruction {
@@ -979,115 +955,68 @@ impl RegoVM {
                             }
                         }
                     }
-                    PolicyOp::Contains => {
-                        let r = self.get_register(right)?;
-                        if is_undefined(l) || is_undefined(r) {
-                            false
+                    PolicyOp::Contains | PolicyOp::NotContains => {
+                        let negated = op.is_negated();
+                        if is_undefined(l) {
+                            negated
                         } else {
-                            Self::policy_contains_check(l, r)
+                            let r = self.get_register(right)?;
+                            if is_undefined(r) {
+                                // undefined RHS: positive → false, negated → false
+                                false
+                            } else {
+                                negated ^ Self::policy_contains_check(l, r)
+                            }
                         }
                     }
-                    PolicyOp::NotContains => {
+                    PolicyOp::ContainsKey | PolicyOp::NotContainsKey => {
+                        let negated = op.is_negated();
                         if is_undefined(l) {
-                            true
+                            negated
                         } else {
                             let r = self.get_register(right)?;
                             if is_undefined(r) {
                                 false
                             } else {
-                                !Self::policy_contains_check(l, r)
-                            }
-                        }
-                    }
-                    PolicyOp::ContainsKey => {
-                        let r = self.get_register(right)?;
-                        if is_undefined(l) || is_undefined(r) {
-                            false
-                        } else {
-                            match *l {
-                                Value::Object(ref map) => {
-                                    map.keys().any(|key| case_insensitive_equals(key, r))
-                                }
-                                _ => false,
-                            }
-                        }
-                    }
-                    PolicyOp::NotContainsKey => {
-                        if is_undefined(l) {
-                            true
-                        } else {
-                            let r = self.get_register(right)?;
-                            if is_undefined(r) {
-                                false
-                            } else {
-                                let ck_result = match *l {
+                                let found = match *l {
                                     Value::Object(ref map) => {
                                         map.keys().any(|key| case_insensitive_equals(key, r))
                                     }
                                     _ => false,
                                 };
-                                !ck_result
+                                negated ^ found
                             }
                         }
                     }
-                    PolicyOp::Like => {
+                    PolicyOp::Like | PolicyOp::NotLike => {
+                        let negated = op.is_negated();
                         if is_undefined(l) {
-                            false
+                            negated
                         } else {
                             let r = self.get_register(right)?;
-                            match (coerce_to_string_ci(l), coerce_to_string_ci(r)) {
+                            let positive = match (coerce_to_string_ci(l), coerce_to_string_ci(r)) {
                                 (Some(input), Some(pattern)) => {
                                     match_like_pattern_ci(&input, &pattern)
                                 }
                                 _ => false,
-                            }
+                            };
+                            negated ^ positive
                         }
                     }
-                    PolicyOp::NotLike => {
+                    PolicyOp::Match
+                    | PolicyOp::NotMatch
+                    | PolicyOp::MatchInsensitively
+                    | PolicyOp::NotMatchInsensitively => {
+                        let negated = op.is_negated();
+                        let case_insensitive = matches!(
+                            op,
+                            PolicyOp::MatchInsensitively | PolicyOp::NotMatchInsensitively
+                        );
                         if is_undefined(l) {
-                            true
+                            negated
                         } else {
                             let r = self.get_register(right)?;
-                            let like_result =
-                                match (coerce_to_string_ci(l), coerce_to_string_ci(r)) {
-                                    (Some(input), Some(pattern)) => {
-                                        match_like_pattern_ci(&input, &pattern)
-                                    }
-                                    _ => false,
-                                };
-                            !like_result
-                        }
-                    }
-                    PolicyOp::Match => {
-                        if is_undefined(l) {
-                            false
-                        } else {
-                            let r = self.get_register(right)?;
-                            match_pattern(l, r, false)
-                        }
-                    }
-                    PolicyOp::NotMatch => {
-                        if is_undefined(l) {
-                            true
-                        } else {
-                            let r = self.get_register(right)?;
-                            !match_pattern(l, r, false)
-                        }
-                    }
-                    PolicyOp::MatchInsensitively => {
-                        if is_undefined(l) {
-                            false
-                        } else {
-                            let r = self.get_register(right)?;
-                            match_pattern(l, r, true)
-                        }
-                    }
-                    PolicyOp::NotMatchInsensitively => {
-                        if is_undefined(l) {
-                            true
-                        } else {
-                            let r = self.get_register(right)?;
-                            !match_pattern(l, r, true)
+                            negated ^ match_pattern(l, r, case_insensitive)
                         }
                     }
                     PolicyOp::Exists => {
@@ -1097,6 +1026,9 @@ impl RegoVM {
                         is_defined == expected
                     }
                     PolicyOp::ValueConditionGuard => {
+                        // ValueConditionGuard passes through the condition register's value
+                        // (which may be any Value, not necessarily a bool), so it must
+                        // early-return to bypass the `Bool(result)` wrapper at the bottom.
                         // left = value register, right = condition register
                         if is_undefined(l) {
                             self.set_register(dest, Value::Bool(false))?;

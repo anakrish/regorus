@@ -9,7 +9,7 @@
     clippy::pattern_type_mismatch
 )] // tests unwrap conversions and slice math for brevity
 
-use crate::rvm::instructions::{Instruction, LoopMode, PolicyOp, GuardMode, LogicalBlockMode};
+use crate::rvm::instructions::{GuardMode, Instruction, LogicalBlockMode, LoopMode, PolicyOp};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use anyhow::{anyhow, bail, Result};
@@ -86,7 +86,9 @@ pub fn parse_instruction(text: &str) -> Result<Instruction> {
             "PolicyEquals" => parse_policy_condition(params_text, PolicyOp::Equals),
             "PolicyNotEquals" => parse_policy_condition(params_text, PolicyOp::NotEquals),
             "PolicyGreater" => parse_policy_condition(params_text, PolicyOp::Greater),
-            "PolicyGreaterOrEquals" => parse_policy_condition(params_text, PolicyOp::GreaterOrEquals),
+            "PolicyGreaterOrEquals" => {
+                parse_policy_condition(params_text, PolicyOp::GreaterOrEquals)
+            }
             "PolicyLess" => parse_policy_condition(params_text, PolicyOp::Less),
             "PolicyLessOrEquals" => parse_policy_condition(params_text, PolicyOp::LessOrEquals),
             "PolicyIn" => parse_policy_condition(params_text, PolicyOp::In),
@@ -124,10 +126,14 @@ pub fn parse_instruction(text: &str) -> Result<Instruction> {
             "RuleReturn" => Ok(Instruction::RuleReturn {}),
             "DestructuringSuccess" => Ok(Instruction::DestructuringSuccess {}),
             "ComprehensionEnd" => Ok(Instruction::ComprehensionEnd {}),
-            "AnyOfEnd" => Ok(Instruction::LogicalBlockEnd {
-                mode: LogicalBlockMode::AnyOf,
-                result: 0,
-            }),
+            "AnyOfEnd" => Ok(
+                parse_logical_block_end(text, LogicalBlockMode::AnyOf).unwrap_or(
+                    Instruction::LogicalBlockEnd {
+                        mode: LogicalBlockMode::AnyOf,
+                        result: 0,
+                    },
+                ),
+            ),
             _ => bail!("Unknown instruction: {}", name),
         }
     }

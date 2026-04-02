@@ -209,6 +209,18 @@ namespace Regorus.Internal
         internal static extern RegorusResult regorus_rvm_get_execution_state(RegorusRvm* vm);
 
         /// <summary>
+        /// Set explanation settings for causality tracking on the RVM.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_explanation_settings", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_set_explanation_settings(RegorusRvm* vm, [MarshalAs(UnmanagedType.U1)] bool enabled, byte value_mode, byte condition_mode);
+
+        /// <summary>
+        /// Take the causality report from the most recent RVM evaluation as JSON.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_take_causality_report", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_take_causality_report(RegorusRvm* vm);
+
+        /// <summary>
         /// Set the maximum instruction limit.
         /// </summary>
         [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_max_instructions", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

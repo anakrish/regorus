@@ -548,6 +548,69 @@ pub extern "C" fn regorus_rvm_get_execution_state(vm: *mut RegorusRvm) -> Regoru
     })
 }
 
+/// Set explanation settings for causality tracking on the RVM.
+///
+/// * `enabled`: Whether to enable explanation capture.
+/// * `value_mode`: 0 = Redacted, 1 = Full.
+/// * `condition_mode`: 0 = PrimaryOnly, 1 = AllContributing.
+#[no_mangle]
+#[cfg(feature = "explanations")]
+pub extern "C" fn regorus_rvm_set_explanation_settings(
+    vm: *mut RegorusRvm,
+    enabled: bool,
+    value_mode: u8,
+    condition_mode: u8,
+) -> RegorusResult {
+    with_unwind_guard(|| {
+        to_regorus_result(|| -> Result<()> {
+            let vm = to_ref(vm)?;
+            let mut guard = vm.try_write()?;
+            let vm_mode = match value_mode {
+                0 => regorus::ExplanationValueMode::Redacted,
+                1 => regorus::ExplanationValueMode::Full,
+                _ => {
+                    return Err(anyhow!(
+                        "invalid value_mode; expected 0 (Redacted) or 1 (Full)"
+                    ))
+                }
+            };
+            let cm = match condition_mode {
+                0 => regorus::ExplanationConditionMode::PrimaryOnly,
+                1 => regorus::ExplanationConditionMode::AllContributing,
+                _ => {
+                    return Err(anyhow!(
+                        "invalid condition_mode; expected 0 (PrimaryOnly) or 1 (AllContributing)"
+                    ))
+                }
+            };
+            guard.set_explanation_settings(regorus::ExplanationSettings {
+                enabled,
+                value_mode: vm_mode,
+                condition_mode: cm,
+            });
+            Ok(())
+        }())
+    })
+}
+
+/// Take the causality report from the most recent RVM evaluation as JSON.
+#[no_mangle]
+#[cfg(feature = "explanations")]
+pub extern "C" fn regorus_rvm_take_causality_report(vm: *mut RegorusRvm) -> RegorusResult {
+    with_unwind_guard(|| {
+        let output = || -> Result<String> {
+            let vm = to_ref(vm)?;
+            let mut guard = vm.try_write()?;
+            let report = guard.take_causality_report();
+            Ok(serde_json::to_string_pretty(&report)?)
+        }();
+        match output {
+            Ok(out) => RegorusResult::ok_string(out),
+            Err(e) => to_regorus_result(Err(e)),
+        }
+    })
+}
+
 fn convert_c_entry_points(
     entry_points: *const *const c_char,
     entry_points_len: usize,

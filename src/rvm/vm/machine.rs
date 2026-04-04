@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#[cfg(feature = "explanations")]
+use crate::evaluation_trace::{EvaluationTrace, ExplanationSettings};
 use crate::rvm::program::Program;
 #[cfg(all(feature = "allocator-memory-limits", not(miri)))]
 use crate::utils::limits;
@@ -136,6 +138,14 @@ pub struct RegoVM {
 
     /// Cached args Vec for builtin calls (avoids Vec allocation per call)
     pub(super) cached_builtin_args: Vec<Value>,
+
+    /// Explanation settings controlling what is captured.
+    #[cfg(feature = "explanations")]
+    pub(super) explanation_settings: ExplanationSettings,
+
+    /// Runtime evaluation trace (append-only log of outcomes).
+    #[cfg(feature = "explanations")]
+    pub(super) trace: EvaluationTrace,
 }
 
 impl Default for RegoVM {
@@ -182,6 +192,10 @@ impl RegoVM {
             dummy_span: None,
             dummy_exprs: Vec::new(),
             cached_builtin_args: Vec::new(),
+            #[cfg(feature = "explanations")]
+            explanation_settings: ExplanationSettings::default(),
+            #[cfg(feature = "explanations")]
+            trace: EvaluationTrace::new(),
         }
     }
 
@@ -368,6 +382,30 @@ impl RegoVM {
     /// Returns the currently configured execution timer, if any.
     pub const fn execution_timer_config(&self) -> Option<ExecutionTimerConfig> {
         self.execution_timer_config
+    }
+
+    /// Configure explanation/causality capture settings.
+    #[cfg(feature = "explanations")]
+    pub const fn set_explanation_settings(&mut self, settings: ExplanationSettings) {
+        self.explanation_settings = settings;
+    }
+
+    /// Take the causality report for the most recent evaluation.
+    ///
+    /// Returns a JSON string. Clears the internal trace.
+    #[cfg(feature = "explanations")]
+    pub fn take_causality_report(
+        &mut self,
+        query_result: Value,
+    ) -> core::result::Result<String, alloc::string::String> {
+        let report = crate::causality_report::materialize(
+            &self.program,
+            &self.trace,
+            &self.explanation_settings,
+            query_result,
+        );
+        self.trace.clear();
+        serde_json::to_string_pretty(&report).map_err(|e| alloc::format!("{e}"))
     }
 
     pub(super) fn reset_execution_timer_state(&mut self) {

@@ -119,10 +119,14 @@ mimalloc::assign_global!();
 
 mod ast;
 mod builtins;
+#[cfg(feature = "explanations")]
+pub mod causality_report;
 mod compile;
 mod compiled_policy;
 mod compiler;
 mod engine;
+#[cfg(feature = "explanations")]
+pub mod evaluation_trace;
 mod indexchecker;
 mod interpreter;
 
@@ -150,6 +154,8 @@ pub mod rvm;
 mod scheduler;
 #[cfg(feature = "azure_policy")]
 mod schema;
+#[cfg(feature = "explanations")]
+pub mod static_provenance;
 #[cfg(feature = "azure_policy")]
 pub mod target;
 #[cfg(any(test, all(feature = "yaml", feature = "std")))]

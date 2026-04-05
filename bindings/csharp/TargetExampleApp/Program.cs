@@ -114,6 +114,30 @@ allow if {
     }
     """;
 
+    private const string ASSUMPTIONS_POLICY = """
+package demo
+import rego.v1
+
+default allow := false
+
+role := input.identity.role
+expected_role := "release-admin"
+
+allow if {
+    role == expected_role
+    count(input.approvals) >= 2
+}
+""";
+
+    private const string ASSUMPTIONS_INPUT = """
+{
+    "identity": {
+        "name": "alex"
+    },
+    "approvals": []
+}
+""";
+
     // Test data constants
     private const string COMPLIANT_STORAGE_ACCOUNT = @"{
   ""type"": ""Microsoft.Storage/storageAccounts"",
@@ -232,6 +256,9 @@ allow if {
 
         Console.WriteLine("\n8. RVM host await (suspend/resume):");
         DemonstrateRvmHostAwait();
+
+        Console.WriteLine("\n9. Causality assumptions (--why with unknown input):");
+        DemonstrateAssumptions();
     }
 
     static void DemonstrateConcurrentEvaluation(Regorus.CompiledPolicy compiledPolicy)
@@ -491,5 +518,56 @@ allow if {
 
         var resumed = vm.Resume("{\"tier\":\"gold\"}");
         Console.WriteLine($"HostAwait resumed result: {resumed}");
+    }
+
+    static void DemonstrateAssumptions()
+    {
+        // NOTE: Causality/assumptions are currently supported via the RVM path only.
+        // Engine.SetExplanationSettings is a TODO / no-op at the moment.
+
+        using var engineForCompile = new Regorus.Engine();
+        engineForCompile.AddPolicy("demo.rego", ASSUMPTIONS_POLICY);
+        var entryPoints = new[] { "data.demo.allow" };
+        using var program = Regorus.Program.CompileFromEngine(engineForCompile, entryPoints);
+
+        using var vm = new Regorus.Rvm();
+        vm.LoadProgram(program);
+        vm.SetExplanationSettings(
+            enabled: true,
+            valueMode: Regorus.ExplanationValueMode.Full,
+            conditionMode: Regorus.ExplanationConditionMode.AllContributing,
+            detail: Regorus.ExplanationDetail.Standard,
+            assumeUnknownInput: true);
+
+        vm.SetInputJson(ASSUMPTIONS_INPUT);
+        var result = vm.ExecuteEntryPoint("data.demo.allow");
+        Console.WriteLine($"  Result (RVM): {result}");
+
+        var report = vm.TakeCausalityReport();
+        if (report != null)
+        {
+            var doc = JsonDocument.Parse(report);
+
+            if (doc.RootElement.TryGetProperty("assumptions", out var assumptions))
+            {
+                Console.WriteLine($"  Assumptions discovered ({assumptions.GetArrayLength()}):");
+                foreach (var assumption in assumptions.EnumerateArray())
+                {
+                    var kind = assumption.GetProperty("kind").GetString();
+                    var inputPath = assumption.GetProperty("input_path").GetString();
+                    var op = assumption.TryGetProperty("operator", out var opProp) && opProp.ValueKind != JsonValueKind.Null
+                        ? opProp.GetString()
+                        : null;
+                    var val = assumption.TryGetProperty("assumed_value", out var valProp) && valProp.ValueKind != JsonValueKind.Null
+                        ? valProp.ToString()
+                        : null;
+
+                    var desc = op != null
+                        ? $"{inputPath} {op} {val}"
+                        : $"{inputPath} exists";
+                    Console.WriteLine($"    - [{kind}] {desc}");
+                }
+            }
+        }
     }
 }

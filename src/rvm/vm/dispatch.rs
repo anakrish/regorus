@@ -314,6 +314,8 @@ impl RegoVM {
                 }
 
                 self.set_register(dest, Value::Bool(a == b))?;
+                #[cfg(feature = "explanations")]
+                self.provenance.copy_first_available(dest, left, right);
                 Ok(InstructionOutcome::Continue)
             }
             Ne { dest, left, right } => {
@@ -326,6 +328,8 @@ impl RegoVM {
                 }
 
                 self.set_register(dest, Value::Bool(a != b))?;
+                #[cfg(feature = "explanations")]
+                self.provenance.copy_first_available(dest, left, right);
                 Ok(InstructionOutcome::Continue)
             }
             Lt { dest, left, right } => {

@@ -7,11 +7,13 @@
 //! infrastructure.
 
 use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::format;
 use alloc::string::{String, ToString as _};
 use alloc::vec::Vec;
 
 use anyhow::{anyhow, bail, Result};
 
+use crate::rvm::instructions::{BuiltinCallParams, ChainedIndexParams, LiteralOrRegister};
 use crate::rvm::program::{Program, SpanInfo};
 use crate::rvm::Instruction;
 use crate::{Rc, Value};
@@ -157,6 +159,130 @@ impl Compiler {
         self.program.add_instruction(instruction, Some(span_info));
     }
 
+    // -- literal / builtin / chained-index helpers -------------------------
+
+    pub(super) fn add_literal_u16(&mut self, value: Value) -> Result<u16> {
+        let idx = self.program.add_literal(value);
+        u16::try_from(idx).map_err(|_| anyhow!("literal table exceeds u16 index space"))
+    }
+
+    pub(super) fn load_literal(&mut self, value: Value, span: &crate::lexer::Span) -> Result<u8> {
+        let literal_idx = self.add_literal_u16(value)?;
+        let dest = self.alloc_register()?;
+        self.emit(Instruction::Load { dest, literal_idx }, span);
+        Ok(dest)
+    }
+
+    pub(super) fn get_or_add_builtin_index(&mut self, name: &str, num_args: u16) -> u16 {
+        let key = format!("{}/{}", name, num_args);
+        if let Some(index) = self.builtin_index.get(&key) {
+            return *index;
+        }
+
+        let index = self
+            .program
+            .add_builtin_info(crate::rvm::program::BuiltinInfo {
+                name: name.to_string(),
+                num_args,
+            });
+        self.builtin_index.insert(key, index);
+        index
+    }
+
+    pub(super) fn emit_builtin_call(
+        &mut self,
+        name: &str,
+        args: &[u8],
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        if args.len() > 8 {
+            bail!(span.error(&format!("builtin call {} exceeds max 8 args", name)));
+        }
+
+        let dest = self.alloc_register()?;
+        let builtin_index = self.get_or_add_builtin_index(
+            name,
+            u16::try_from(args.len()).map_err(|_| anyhow!("arg count overflow"))?,
+        );
+
+        let mut arg_slots = [0_u8; 8];
+        for (slot, arg) in arg_slots.iter_mut().zip(args.iter()) {
+            *slot = *arg;
+        }
+
+        let params_index = self.program.add_builtin_call_params(BuiltinCallParams {
+            dest,
+            builtin_index,
+            num_args: u8::try_from(args.len()).map_err(|_| anyhow!("arg count overflow"))?,
+            args: arg_slots,
+        });
+
+        self.emit(Instruction::BuiltinCall { params_index }, span);
+        Ok(dest)
+    }
+
+    pub(super) fn emit_chained_index_literal_path(
+        &mut self,
+        root: u8,
+        path: &[&str],
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        let dest = self.alloc_register()?;
+
+        let path_components = path
+            .iter()
+            .map(|segment| {
+                let value = segment
+                    .parse::<u64>()
+                    .map_or_else(|_| Value::from((*segment).to_string()), Value::from);
+                self.add_literal_u16(value).map(LiteralOrRegister::Literal)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let params_index =
+            self.program
+                .instruction_data
+                .add_chained_index_params(ChainedIndexParams {
+                    dest,
+                    root,
+                    path_components,
+                });
+        self.emit(Instruction::ChainedIndex { params_index }, span);
+
+        Ok(dest)
+    }
+
+    pub(super) fn load_input(&mut self, span: &crate::lexer::Span) -> Result<u8> {
+        if let Some(reg) = self.cached_input_reg {
+            return Ok(reg);
+        }
+        let dest = self.alloc_register()?;
+        self.emit(Instruction::LoadInput { dest }, span);
+        self.cached_input_reg = Some(dest);
+        Ok(dest)
+    }
+
+    pub(super) fn load_context(&mut self, span: &crate::lexer::Span) -> Result<u8> {
+        if let Some(reg) = self.cached_context_reg {
+            return Ok(reg);
+        }
+        let dest = self.alloc_register()?;
+        self.emit(Instruction::LoadContext { dest }, span);
+        self.cached_context_reg = Some(dest);
+        Ok(dest)
+    }
+
+    /// Emit a `CoalesceUndefinedToNull` instruction for the given register.
+    ///
+    /// In Azure Policy, a missing field is semantically `null`, not undefined.
+    pub(super) fn emit_coalesce_undefined_to_null(
+        &mut self,
+        register: u8,
+        span: &crate::lexer::Span,
+    ) {
+        self.emit(Instruction::CoalesceUndefinedToNull { register }, span);
+    }
+
     /// Return the PC (instruction index) that the *next* emitted instruction
     /// will occupy.
     pub(super) fn current_pc(&self) -> Result<u16> {
@@ -191,5 +317,51 @@ impl Compiler {
             }
         }
         Ok(())
+    }
+
+    // -- alias resolution --------------------------------------------------
+
+    pub(super) fn resolve_alias_path(&self, path: &str) -> Result<String> {
+        let lc = path.to_ascii_lowercase();
+        if let Some(short) = self.alias_map.get(&lc) {
+            let resolved = short.clone();
+            let result = Self::strip_fq_prefix(&resolved).to_ascii_lowercase();
+            return Ok(result);
+        }
+
+        // Fallback: derive array path from a corresponding `[*]` alias.
+        if !lc.contains("[*]") {
+            let wildcard_key = alloc::format!("{}[*]", lc);
+            if let Some(short) = self.alias_map.get(&wildcard_key) {
+                let resolved = Self::strip_fq_prefix(short).to_ascii_lowercase();
+                if let Some(base) = resolved.strip_suffix("[*]") {
+                    return Ok(base.to_string());
+                }
+            }
+        }
+
+        if !self.alias_map.is_empty() && !self.alias_fallback_to_raw {
+            bail!(
+                "unknown alias '{}': field references must use fully-qualified alias names when an alias catalog is loaded",
+                path
+            );
+        }
+
+        if self.alias_map.is_empty() {
+            Ok(path.to_string())
+        } else {
+            let result = Self::strip_fq_prefix(path).to_ascii_lowercase();
+            Ok(result)
+        }
+    }
+
+    /// Strip any resource-type prefix segments from a resolved alias short
+    /// name, keeping only the trailing property path.
+    pub(super) fn strip_fq_prefix(resolved: &str) -> String {
+        resolved
+            .rfind('/')
+            .and_then(|idx| resolved.get(idx.saturating_add(1)..))
+            .unwrap_or(resolved)
+            .to_string()
     }
 }

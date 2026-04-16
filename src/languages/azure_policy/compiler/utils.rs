@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-#![allow(dead_code, clippy::pattern_type_mismatch, clippy::redundant_pub_crate)]
+#![allow(dead_code, clippy::pattern_type_mismatch)]
 
 //! Free helper functions used by the Azure Policy compiler.
 
@@ -37,7 +37,9 @@ pub(super) fn split_count_wildcard_path(path: &str) -> Result<(String, Option<St
             path
         );
     }
-    let after_wildcard = &rest[3..];
+    let after_wildcard = rest
+        .strip_prefix("[*]")
+        .ok_or_else(|| anyhow!("count.field could not be parsed after [*] split: {}", path))?;
     if after_wildcard.contains("[*]") {
         bail!("nested [*] wildcards are not supported: {}", path);
     }
@@ -145,7 +147,7 @@ pub(super) fn split_path_without_wildcards(path: &str) -> Result<Vec<String>> {
 }
 
 /// Convert a parsed JSON value from the Azure Policy AST into a runtime [`Value`].
-pub(crate) fn json_value_to_runtime(value: &JsonValue) -> Result<Value> {
+pub(super) fn json_value_to_runtime(value: &JsonValue) -> Result<Value> {
     match value {
         JsonValue::Null(_) => Ok(Value::Null),
         JsonValue::Bool(_, b) => Ok(Value::Bool(*b)),

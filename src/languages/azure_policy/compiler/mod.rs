@@ -7,9 +7,8 @@
 //! - [`core`]: `Compiler` struct, main pipeline, register/emit helpers
 //! - [`conditions`]: constraint / condition / LHS compilation
 //! - [`conditions_wildcard`]: implicit allOf for unbound `[*]` fields
-//! - [`count`]: `count` / `count.where` loops
-//! - [`count_any`]: existence-pattern optimization (count → Any loop)
-//! - [`count_bindings`]: count-binding resolution and `current()` references
+//! - [`count`]: `count` / `count.where` loops, existence-pattern optimization,
+//!   count-binding resolution and `current()` references
 //! - [`expressions`]: template-expression and call-expression compilation
 //! - [`fields`]: field-kind and resource-path compilation
 //! - [`template_dispatch`]: ARM template function dispatch
@@ -22,8 +21,6 @@ mod conditions;
 mod conditions_wildcard;
 mod core;
 mod count;
-mod count_any;
-mod count_bindings;
 mod effects;
 mod effects_modify_append;
 mod expressions;

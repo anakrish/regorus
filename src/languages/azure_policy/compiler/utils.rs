@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-#![allow(dead_code, clippy::pattern_type_mismatch)]
+#![allow(clippy::pattern_type_mismatch)]
 
 //! Free helper functions used by the Azure Policy compiler.
 
@@ -40,9 +40,6 @@ pub(super) fn split_count_wildcard_path(path: &str) -> Result<(String, Option<St
     let after_wildcard = rest
         .strip_prefix("[*]")
         .ok_or_else(|| anyhow!("count.field could not be parsed after [*] split: {}", path))?;
-    if after_wildcard.contains("[*]") {
-        bail!("nested [*] wildcards are not supported: {}", path);
-    }
     let suffix_str = after_wildcard.trim_start_matches('.');
     let suffix = if suffix_str.is_empty() {
         None
@@ -336,7 +333,9 @@ mod tests {
 
     #[test]
     fn wildcard_nested() {
-        split_count_wildcard_path("a[*].b[*].c").unwrap_err();
+        let (prefix, suffix) = split_count_wildcard_path("a[*].b[*].c").unwrap();
+        assert_eq!(prefix, "a");
+        assert_eq!(suffix.as_deref(), Some("b[*].c"));
     }
 
     // -----------------------------------------------------------------------

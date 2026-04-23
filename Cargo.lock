@@ -629,9 +629,6 @@ name = "hashbrown"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
-dependencies = [
- "foldhash 0.2.0",
-]
 
 [[package]]
 name = "heck"
@@ -1377,7 +1374,7 @@ dependencies = [
  "dashmap",
  "data-encoding",
  "globset",
- "hashbrown 0.17.0",
+ "hashbrown 0.16.1",
  "icu_casemap",
  "indexmap",
  "ipnet",

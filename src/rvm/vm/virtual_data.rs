@@ -220,6 +220,23 @@ impl RegoVM {
         for (i, component) in params.path_components.iter().enumerate() {
             let key_value = self.literal_or_register_value(component)?;
 
+            // In PE mode, when a path component is Undefined and traces to an
+            // input path, remember the provenance so we can propagate it to
+            // the dest register.
+            #[cfg(feature = "explanations")]
+            if key_value == Value::Undefined && self.explanation_settings.assume_unknown_input {
+                if let &LiteralOrRegister::Register(reg) = component {
+                    if let Some(path) = self.runtime_path_for_register(reg) {
+                        // Set dest to Undefined with the key's input provenance
+                        // so downstream comparisons can fire assumptions.
+                        self.set_register(params.dest, Value::Undefined)?;
+                        self.provenance
+                            .set_path(params.dest, Some(crate::Rc::from(path.as_str())));
+                        return Ok(());
+                    }
+                }
+            }
+
             current_node = &current_node[&key_value];
             components_consumed = self.checked_add_one(i, "path components traversed")?;
 
@@ -267,6 +284,24 @@ impl RegoVM {
 
                 for component in &params.path_components {
                     let key_value = self.literal_or_register_value(component)?;
+
+                    // In PE mode, when a path component is Undefined and
+                    // traces to an input path, propagate provenance so
+                    // downstream comparisons can fire assumptions.
+                    #[cfg(feature = "explanations")]
+                    if key_value == Value::Undefined
+                        && self.explanation_settings.assume_unknown_input
+                    {
+                        if let &LiteralOrRegister::Register(reg) = component {
+                            if let Some(path) = self.runtime_path_for_register(reg) {
+                                self.set_register(params.dest, Value::Undefined)?;
+                                self.provenance
+                                    .set_path(params.dest, Some(crate::Rc::from(path.as_str())));
+                                return Ok(());
+                            }
+                        }
+                    }
+
                     data_ref = &data_ref[&key_value];
                 }
 

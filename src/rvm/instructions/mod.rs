@@ -323,6 +323,10 @@ pub enum Instruction {
 
     /// End a comprehension block
     ComprehensionEnd {},
+
+    /// Mark the beginning of a negation body (`not expr`).
+    /// The VM uses this to track which assumptions belong to the inner body.
+    NegationBegin {},
 }
 
 impl Instruction {

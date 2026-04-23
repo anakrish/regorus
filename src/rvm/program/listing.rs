@@ -902,6 +902,10 @@ fn format_instruction_readable(
             let base = format!("{}}} CompEnd", indent);
             align_comment(&base, "End comprehension block", config.comment_column)
         }
+        Instruction::NegationBegin {} => {
+            let base = format!("{}NegBegin", indent);
+            align_comment(&base, "Begin negation body", config.comment_column)
+        }
     }
 }
 
@@ -1032,6 +1036,7 @@ const fn get_instruction_name(instruction: &Instruction) -> &'static str {
         Instruction::ComprehensionBegin { .. } => "COMP_BEGIN",
         Instruction::ComprehensionYield { .. } => "COMP_YIELD",
         Instruction::ComprehensionEnd {} => "COMP_END",
+        Instruction::NegationBegin {} => "NEG_BEGIN",
     }
 }
 

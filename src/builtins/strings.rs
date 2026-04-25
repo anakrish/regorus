@@ -36,6 +36,7 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
     m.insert("strings.any_suffix_match", (any_suffix_match, 2));
     m.insert("strings.count", (strings_count, 2));
     m.insert("strings.replace_n", (replace_n, 2));
+    m.insert("strings.repeat", (repeat, 2));
     m.insert("strings.reverse", (reverse, 1));
     m.insert("substring", (substring, 3));
     m.insert("trim", (trim, 2));
@@ -589,6 +590,25 @@ fn reverse(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
     ensure_args_count(span, name, params, args, 1)?;
     let s = ensure_string(name, &params[0], &args[0])?;
     Ok(Value::String(s.chars().rev().collect::<String>().into()))
+}
+
+fn repeat(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
+    let name = "strings.repeat";
+    ensure_args_count(span, name, params, args, 2)?;
+
+    let s = ensure_string(name, &params[0], &args[0])?;
+    let count = args[1].as_f64().unwrap() as usize;
+
+    if count == 0 {
+        return Ok(Value::String("".into()));
+    }
+
+    let mut result = String::new();
+    for _ in 0..count {
+        result.push_str(&s);
+    }
+
+    Ok(Value::String(result.into()))
 }
 
 fn substring(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {

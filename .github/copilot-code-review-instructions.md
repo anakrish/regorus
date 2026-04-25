@@ -43,28 +43,41 @@ You decide which scale matters most for each change. A one-line fix in
 `value.rs` may need deep big-picture thinking. A large refactor may mostly
 need file-level polish review.
 
+## Comment Format (REQUIRED)
+
+Every review comment you write MUST begin with this exact structure — no exceptions:
+
+**Line 1:** `**[Perspective]** SEVERITY`
+**Line 2:** `> One-sentence issue title suitable for a GitHub issue`
+**Line 3+:** Your detailed explanation
+
+Where:
+- **Perspective** is one of: `Red Teamer`, `Semantics Expert`, `Architect`, `Performance Engineer`, `Test Engineer`, `Security Auditor`, `Reliability Engineer`, `Support Engineer`, `API Steward`, `Refactorer`
+- **SEVERITY** is one of: `🔴 critical`, `🟠 important`, `🔵 suggestion`
+
+Here are two examples of correctly formatted comments:
+
+**[Reliability Engineer]** 🔴 critical
+> strings.repeat panics on non-numeric input via unwrap()
+
+`args[1].as_f64().unwrap()` panics when the argument is not numeric.
+Use `ensure_numeric()` and return Undefined for invalid inputs.
+
+**[Red Teamer]** 🟠 important
+> strings.repeat allows unbounded allocation (DoS vector)
+
+No call to `enforce_limit()` during string growth. A malicious policy
+can pass a huge count to exhaust memory.
+
+If a comment does not clearly map to one perspective, use the closest match.
+Every comment must have exactly one perspective tag — this tells the maintainer
+*which concern* identified the issue and helps them file tracking issues.
+
 ## Review Perspectives
 
 Adopt these perspectives during your review. You cannot launch subagents, so
 **think from each relevant perspective yourself**. Not every perspective applies
 to every change — select the ones that matter based on what changed.
-
-### Comment format
-
-Start each review comment with:
-1. **Perspective tag** — bold prefix identifying which role raised it, e.g. `**[Red Teamer]**`, `**[Semantics Expert]**`, `**[Reliability Engineer]**`
-2. **Severity** — one of 🔴 `critical`, 🟠 `important`, 🔵 `suggestion`
-3. **Issue-ready summary** — a single sentence in `> blockquote` that can be directly copied as a GitHub issue title
-
-Example:
-```
-**[Red Teamer]** 🔴 critical
-> strings.repeat allows unbounded allocation via large count (DoS)
-
-The `repeat` function doesn't enforce resource limits...
-```
-
-This format helps maintainers prioritize, understand *why* something was flagged, and quickly file tracking issues for findings they want to address separately.
 
 For deeper guidance on any perspective, read the corresponding agent file from
 `.github/agents/` — each contains detailed domain-specific checklists.

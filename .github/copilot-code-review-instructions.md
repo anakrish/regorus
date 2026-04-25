@@ -49,6 +49,23 @@ Adopt these perspectives during your review. You cannot launch subagents, so
 **think from each relevant perspective yourself**. Not every perspective applies
 to every change — select the ones that matter based on what changed.
 
+### Comment format
+
+Start each review comment with:
+1. **Perspective tag** — bold prefix identifying which role raised it, e.g. `**[Red Teamer]**`, `**[Semantics Expert]**`, `**[Reliability Engineer]**`
+2. **Severity** — one of 🔴 `critical`, 🟠 `important`, 🔵 `suggestion`
+3. **Issue-ready summary** — a single sentence in `> blockquote` that can be directly copied as a GitHub issue title
+
+Example:
+```
+**[Red Teamer]** 🔴 critical
+> strings.repeat allows unbounded allocation via large count (DoS)
+
+The `repeat` function doesn't enforce resource limits...
+```
+
+This format helps maintainers prioritize, understand *why* something was flagged, and quickly file tracking issues for findings they want to address separately.
+
 For deeper guidance on any perspective, read the corresponding agent file from
 `.github/agents/` — each contains detailed domain-specific checklists.
 

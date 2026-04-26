@@ -14,11 +14,10 @@
 name: Perspective Review
 
 on:
-  # Use pull_request_target so we have write access and secrets,
-  # but NEVER checkout the PR head — only fetch diff/files via API.
+  pull_request:
+    types: [opened, synchronize]
   pull_request_target:
     types: [opened, synchronize]
-  # Allow manual triggering for testing
   workflow_dispatch:
     inputs:
       pr_number:

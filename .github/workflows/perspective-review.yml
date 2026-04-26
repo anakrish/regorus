@@ -21,6 +21,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
+  models: read
   contents: read
   pull-requests: write
 

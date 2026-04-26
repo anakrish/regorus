@@ -4,6 +4,10 @@
 # Codebase audit using GitHub Models API.
 # Discovers all relevant files for a topic, analyzes them with multiple
 # perspectives, and posts findings as a GitHub Issue.
+#
+# Triggers:
+# - Manual: pick a preset or enter a free-text topic
+# - Scheduled: rotates through presets on a weekly cadence
 
 name: Codebase Audit
 
@@ -12,7 +16,8 @@ on:
     inputs:
       topic:
         description: 'Audit topic (e.g., "error handling patterns", "FFI boundary safety")'
-        required: true
+        required: false
+        default: ''
         type: string
       perspectives:
         description: 'Comma-separated perspectives (or "auto" for topic-based selection)'
@@ -30,9 +35,19 @@ on:
           - 'security-hardening'
           - 'undefined-propagation'
           - 'resource-limits'
+          - 'performance'
+          - 'design-alternatives'
+          - 'code-cleanup'
+          - 'test-gaps'
+          - 'api-ergonomics'
+
+  # Weekly rotation: one preset per week, cycling through all 10.
+  # GitHub week numbers mod 10 select which preset runs.
+  schedule:
+    - cron: '0 8 * * 1'  # Every Monday at 8:00 UTC
 
 concurrency:
-  group: codebase-audit
+  group: codebase-audit-${{ github.event.inputs.preset || 'scheduled' }}
   cancel-in-progress: false
 
 permissions:
@@ -55,6 +70,27 @@ jobs:
           TOPIC="${{ github.event.inputs.topic }}"
           PERSPECTIVES="${{ github.event.inputs.perspectives }}"
 
+          # For scheduled runs, rotate through presets by week number
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            PRESETS=(
+              panic-safety
+              ffi-boundary
+              security-hardening
+              undefined-propagation
+              resource-limits
+              performance
+              design-alternatives
+              code-cleanup
+              test-gaps
+              api-ergonomics
+            )
+            WEEK=$(date +%V)
+            INDEX=$((10#$WEEK % ${#PRESETS[@]}))
+            PRESET="${PRESETS[$INDEX]}"
+            echo "Scheduled run: week ${WEEK} → preset '${PRESET}'"
+          fi
+
+          # Resolve preset to topic + perspectives
           if [ "$PRESET" != "(none)" ] && [ -n "$PRESET" ]; then
             PRESET_FILE=".github/prompts/audit-${PRESET}.json"
             if [ -f "$PRESET_FILE" ]; then
@@ -62,8 +98,13 @@ jobs:
               PERSPECTIVES=$(jq -r '.perspectives // "auto"' "$PRESET_FILE")
               echo "Using preset: ${PRESET} → topic='${TOPIC}'"
             else
-              echo "Preset file not found: ${PRESET_FILE}, using manual inputs"
+              echo "::warning::Preset file not found: ${PRESET_FILE}"
             fi
+          fi
+
+          if [ -z "$TOPIC" ]; then
+            echo "::error::No topic specified. Use a preset or enter a topic."
+            exit 1
           fi
 
           echo "topic=${TOPIC}" >> "$GITHUB_OUTPUT"

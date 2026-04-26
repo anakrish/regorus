@@ -1,0 +1,81 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+
+# Codebase audit using GitHub Models API.
+# Discovers all relevant files for a topic, analyzes them with multiple
+# perspectives, and posts findings as a GitHub Issue.
+
+name: Codebase Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: 'Audit topic (e.g., "error handling patterns", "FFI boundary safety")'
+        required: true
+        type: string
+      perspectives:
+        description: 'Comma-separated perspectives (or "auto" for topic-based selection)'
+        required: false
+        default: 'auto'
+        type: string
+      preset:
+        description: 'Use a preset audit (overrides topic/perspectives if set)'
+        required: false
+        type: choice
+        options:
+          - '(none)'
+          - 'panic-safety'
+          - 'ffi-boundary'
+          - 'security-hardening'
+          - 'undefined-propagation'
+          - 'resource-limits'
+
+concurrency:
+  group: codebase-audit
+  cancel-in-progress: false
+
+permissions:
+  models: read
+  contents: read
+  issues: write
+
+jobs:
+  codebase-audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Resolve preset
+        id: resolve
+        run: |
+          PRESET="${{ github.event.inputs.preset }}"
+          TOPIC="${{ github.event.inputs.topic }}"
+          PERSPECTIVES="${{ github.event.inputs.perspectives }}"
+
+          if [ "$PRESET" != "(none)" ] && [ -n "$PRESET" ]; then
+            PRESET_FILE=".github/prompts/audit-${PRESET}.json"
+            if [ -f "$PRESET_FILE" ]; then
+              TOPIC=$(jq -r '.topic' "$PRESET_FILE")
+              PERSPECTIVES=$(jq -r '.perspectives // "auto"' "$PRESET_FILE")
+              echo "Using preset: ${PRESET} → topic='${TOPIC}'"
+            else
+              echo "Preset file not found: ${PRESET_FILE}, using manual inputs"
+            fi
+          fi
+
+          echo "topic=${TOPIC}" >> "$GITHUB_OUTPUT"
+          echo "perspectives=${PERSPECTIVES}" >> "$GITHUB_OUTPUT"
+
+      - name: Run codebase audit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          chmod +x .github/scripts/codebase-audit.sh
+          .github/scripts/codebase-audit.sh \
+            "${{ github.repository }}" \
+            "${{ steps.resolve.outputs.topic }}" \
+            "${{ steps.resolve.outputs.perspectives }}"

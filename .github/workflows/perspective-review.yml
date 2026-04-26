@@ -18,24 +18,30 @@ on:
   # but NEVER checkout the PR head — only fetch diff/files via API.
   pull_request_target:
     types: [opened, synchronize]
+  # Allow manual triggering for testing
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review'
+        required: true
 
 # Only one review per PR at a time; cancel stale runs.
 concurrency:
-  group: perspective-review-${{ github.event.pull_request.number }}
+  group: perspective-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
   cancel-in-progress: true
 
 permissions:
   contents: read
   pull-requests: write
-  models: read
 
 jobs:
   perspective-review:
     runs-on: ubuntu-latest
-    # Skip draft PRs and bot PRs
+    # Skip draft PRs and bot PRs (only for PR events)
     if: >
-      !github.event.pull_request.draft &&
-      github.event.pull_request.user.login != 'dependabot[bot]'
+      github.event_name == 'workflow_dispatch' ||
+      (!github.event.pull_request.draft &&
+      github.event.pull_request.user.login != 'dependabot[bot]')
 
     steps:
       - name: Checkout base branch only (security: never checkout PR head)
@@ -47,7 +53,7 @@ jobs:
         id: meta
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
         run: |
           # Get changed files
           gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" \
@@ -254,7 +260,7 @@ jobs:
       - name: Post or update review comment
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
         run: |
           MARKER="<!-- perspective-review-bot -->"
           BODY="${MARKER}

@@ -130,6 +130,9 @@ CONTEXT_SUMMARY=$(awk -F: '
   $3 == "context" { print $1 ":" $2 }
 ' /tmp/valid_anchors_full.txt | head -50)
 
+# Plain file:line list for validation
+VALID_ANCHORS_PLAIN=$(cat /tmp/valid_anchors.txt)
+
 # Step 5: Review with each perspective, posting one PR review per perspective
 TOTAL_FINDINGS=0
 
@@ -243,13 +246,13 @@ PROMPT
 
   # Separate findings into anchored (inline) and unanchored (body-only)
   # Validate each finding's file:line against the valid anchors list
-  INLINE_COMMENTS=$(echo "$CONTENT" | jq -c --arg anchors "$ANCHOR_LIST" '
+  INLINE_COMMENTS=$(echo "$CONTENT" | jq -c --arg anchors "$VALID_ANCHORS_PLAIN" '
     ($anchors | split("\n") | map(select(. != ""))) as $valid |
     [.[] | select(.file != null and .line != null) |
       select((.file + ":" + (.line | tostring)) as $key | $valid | any(. == $key))]
   ' 2>/dev/null || echo "[]")
 
-  UNANCHORED=$(echo "$CONTENT" | jq -c --arg anchors "$ANCHOR_LIST" '
+  UNANCHORED=$(echo "$CONTENT" | jq -c --arg anchors "$VALID_ANCHORS_PLAIN" '
     ($anchors | split("\n") | map(select(. != ""))) as $valid |
     [.[] | select(
       .file == null or .line == null or

@@ -1,0 +1,279 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+
+# Multi-perspective AI code review using GitHub Models API.
+# Posts a single consolidated review comment with perspective-tagged findings.
+#
+# Design:
+#   1. Triggered on PRs (not fork-safe via pull_request_target — uses API-only diff fetch)
+#   2. Selects relevant perspectives based on changed file paths
+#   3. Calls GitHub Models API with agent instructions + file context + diff
+#   4. Requests structured JSON output, renders tagged markdown
+#   5. Upserts a single PR comment (idempotent on push updates)
+
+name: Perspective Review
+
+on:
+  # Use pull_request_target so we have write access and secrets,
+  # but NEVER checkout the PR head — only fetch diff/files via API.
+  pull_request_target:
+    types: [opened, synchronize]
+
+# Only one review per PR at a time; cancel stale runs.
+concurrency:
+  group: perspective-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  models: read
+
+jobs:
+  perspective-review:
+    runs-on: ubuntu-latest
+    # Skip draft PRs and bot PRs
+    if: >
+      !github.event.pull_request.draft &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
+
+    steps:
+      - name: Checkout base branch only (security: never checkout PR head)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Gather PR metadata
+        id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Get changed files
+          gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" \
+            --jq '.[].filename' > changed_files.txt
+
+          # Get the diff (truncate to ~60KB to stay within token limits)
+          gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" \
+            -H "Accept: application/vnd.github.v3.diff" \
+            | head -c 60000 > pr_diff.txt
+
+          echo "file_count=$(wc -l < changed_files.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Select perspectives
+        id: perspectives
+        run: |
+          # Always-on base perspectives
+          PERSPECTIVES="reliability-engineer,test-engineer"
+
+          # Add specialists based on changed paths
+          if grep -qE 'src/builtins/' changed_files.txt; then
+            PERSPECTIVES="${PERSPECTIVES},semantics-expert,red-teamer"
+          fi
+          if grep -qE 'src/(value|number)' changed_files.txt; then
+            PERSPECTIVES="${PERSPECTIVES},semantics-expert"
+          fi
+          if grep -qE 'bindings/|src/.*ffi' changed_files.txt; then
+            PERSPECTIVES="${PERSPECTIVES},architect,api-steward"
+          fi
+          if grep -qE 'Cargo\.(toml|lock)' changed_files.txt; then
+            PERSPECTIVES="${PERSPECTIVES},security-auditor,architect"
+          fi
+          if grep -qE 'src/(interpreter|rvm|compiler|scheduler)' changed_files.txt; then
+            PERSPECTIVES="${PERSPECTIVES},semantics-expert,performance-engineer"
+          fi
+          if grep -qE '\.github/' changed_files.txt; then
+            PERSPECTIVES="${PERSPECTIVES},ci-engineer"
+          fi
+
+          # Deduplicate
+          PERSPECTIVES=$(echo "$PERSPECTIVES" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+          echo "selected=${PERSPECTIVES}" >> "$GITHUB_OUTPUT"
+          echo "Selected perspectives: ${PERSPECTIVES}"
+
+      - name: Build context files
+        run: |
+          mkdir -p review_context
+
+          # Collect relevant knowledge docs based on perspectives
+          for perspective in $(echo "${{ steps.perspectives.outputs.selected }}" | tr ',' ' '); do
+            agent_file=".github/agents/${perspective}.agent.md"
+            if [ -f "$agent_file" ]; then
+              cp "$agent_file" "review_context/${perspective}.agent.md"
+            fi
+          done
+
+          # Include key knowledge files for context (keep small — only most relevant)
+          for f in builtin-system value-semantics policy-evaluation-security ffi-boundary; do
+            kf="docs/knowledge/${f}.md"
+            if [ -f "$kf" ]; then
+              # Truncate large files to 4KB
+              head -c 4000 "$kf" > "review_context/${f}.md"
+            fi
+          done
+
+          # Include surrounding code for changed source files (first 3 .rs files)
+          while IFS= read -r file; do
+            if [[ "$file" == *.rs ]] && [ -f "$file" ]; then
+              mkdir -p "review_context/src"
+              # Include full file if < 8KB, otherwise first+last 3KB
+              if [ "$(wc -c < "$file")" -lt 8000 ]; then
+                cp "$file" "review_context/src/$(basename "$file")"
+              else
+                { head -c 3000 "$file"; echo -e "\n\n... [truncated] ...\n\n"; tail -c 3000 "$file"; } \
+                  > "review_context/src/$(basename "$file")"
+              fi
+            fi
+          done < <(head -3 changed_files.txt)
+
+      - name: Run perspective reviews
+        id: review
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          PERSPECTIVES="${{ steps.perspectives.outputs.selected }}"
+          DIFF=$(cat pr_diff.txt)
+          ALL_FINDINGS=""
+
+          for perspective in $(echo "$PERSPECTIVES" | tr ',' ' '); do
+            echo "=== Reviewing from: ${perspective} ==="
+
+            # Build the agent context
+            AGENT_INSTRUCTIONS=""
+            agent_file="review_context/${perspective}.agent.md"
+            if [ -f "$agent_file" ]; then
+              AGENT_INSTRUCTIONS=$(cat "$agent_file")
+            fi
+
+            # Build knowledge context
+            KNOWLEDGE=""
+            for kf in review_context/*.md; do
+              [ -f "$kf" ] && KNOWLEDGE="${KNOWLEDGE}\n--- $(basename "$kf") ---\n$(cat "$kf")\n"
+            done
+
+            # Build source context
+            SOURCE_CTX=""
+            for sf in review_context/src/*.rs 2>/dev/null; do
+              [ -f "$sf" ] && SOURCE_CTX="${SOURCE_CTX}\n--- $(basename "$sf") ---\n$(cat "$sf")\n"
+            done
+
+            # Format the perspective name for display
+            DISPLAY_NAME=$(echo "$perspective" | sed 's/-/ /g' | sed 's/\b\(.\)/\u\1/g')
+
+            # Create the prompt
+            PROMPT=$(cat <<PROMPT_EOF
+          You are reviewing a pull request from the perspective of a ${DISPLAY_NAME}.
+
+          Your agent instructions:
+          ${AGENT_INSTRUCTIONS}
+
+          Relevant knowledge context:
+          ${KNOWLEDGE}
+
+          Source files for context:
+          ${SOURCE_CTX}
+
+          PR Diff:
+          ${DIFF}
+
+          Respond with a JSON array of findings. Each finding must have these fields:
+          - "severity": one of "critical", "important", "suggestion"
+          - "summary": a single sentence suitable as a GitHub issue title
+          - "file": the file path (from the diff)
+          - "line": approximate line number (from the diff), or null
+          - "explanation": 2-4 sentences explaining the issue
+
+          If you find no issues from this perspective, return an empty array: []
+
+          Return ONLY valid JSON — no markdown fences, no extra text.
+          PROMPT_EOF
+          )
+
+            # Call GitHub Models API
+            RESPONSE=$(curl -s -X POST "https://models.github.ai/inference/chat/completions" \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n \
+                --arg model "openai/gpt-4o-mini" \
+                --arg prompt "$PROMPT" \
+                '{
+                  model: $model,
+                  messages: [
+                    {role: "system", content: "You are a code reviewer. Return findings as a JSON array only."},
+                    {role: "user", content: $prompt}
+                  ],
+                  temperature: 0.1
+                }')" 2>/dev/null || echo '{"error": "API call failed"}')
+
+            # Extract the content from the response
+            CONTENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "[]"' 2>/dev/null || echo "[]")
+
+            # Parse findings and render as tagged markdown
+            SEVERITY_MAP='{"critical": "🔴", "important": "🟠", "suggestion": "🔵"}'
+
+            RENDERED=$(echo "$CONTENT" | jq -r --arg perspective "$DISPLAY_NAME" --argjson smap "$SEVERITY_MAP" '
+              if type == "array" then
+                .[] |
+                "**[\($perspective)]** \($smap[.severity] // "🔵") \(.severity)\n> \(.summary)\n\n\(.explanation)\n\(.file):\(.line // "?")\n\n---\n"
+              else
+                empty
+              end
+            ' 2>/dev/null || echo "")
+
+            if [ -n "$RENDERED" ]; then
+              ALL_FINDINGS="${ALL_FINDINGS}${RENDERED}"
+            fi
+          done
+
+          # Save findings to file
+          if [ -n "$ALL_FINDINGS" ]; then
+            {
+              echo "## 🔍 Perspective Review"
+              echo ""
+              echo "Automated multi-perspective review of this PR."
+              echo "Each finding is tagged with the perspective that identified it."
+              echo ""
+              echo "---"
+              echo ""
+              echo -e "$ALL_FINDINGS"
+              echo ""
+              echo "<sub>Generated by perspective-review workflow • Perspectives: ${PERSPECTIVES}</sub>"
+            } > review_comment.md
+          else
+            {
+              echo "## 🔍 Perspective Review"
+              echo ""
+              echo "✅ No significant findings from the selected perspectives."
+              echo ""
+              echo "<sub>Generated by perspective-review workflow • Perspectives: ${PERSPECTIVES}</sub>"
+            } > review_comment.md
+          fi
+
+          echo "has_findings=$([ -n "$ALL_FINDINGS" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Post or update review comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          MARKER="<!-- perspective-review-bot -->"
+          BODY="${MARKER}
+          $(cat review_comment.md)"
+
+          # Find existing bot comment
+          EXISTING_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
+            --jq ".[] | select(.body | contains(\"${MARKER}\")) | .id" \
+            | head -1)
+
+          if [ -n "$EXISTING_ID" ]; then
+            # Update existing comment
+            gh api "repos/${{ github.repository }}/issues/comments/${EXISTING_ID}" \
+              -X PATCH \
+              -f body="$BODY"
+            echo "Updated existing comment ${EXISTING_ID}"
+          else
+            # Create new comment
+            gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
+              -f body="$BODY"
+            echo "Created new review comment"
+          fi

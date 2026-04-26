@@ -40,9 +40,10 @@ on:
           - 'code-cleanup'
           - 'test-gaps'
           - 'api-ergonomics'
+          - 'knowledge-accuracy'
 
-  # Runs Mon/Wed/Fri, rotating through all 10 presets.
-  # Full codebase coverage every ~3.5 weeks.
+  # Runs Mon/Wed/Fri, rotating through all 11 presets.
+  # Full codebase coverage every ~4 weeks.
   schedule:
     - cron: '0 8 * * 1'  # Monday at 8:00 UTC
     - cron: '0 8 * * 3'  # Wednesday at 8:00 UTC
@@ -73,7 +74,7 @@ jobs:
           PERSPECTIVES="${{ github.event.inputs.perspectives }}"
 
           # For scheduled runs, rotate through presets by day-of-year.
-          # With 3 runs/week and 10 presets, full coverage in ~3.5 weeks.
+          # With 3 runs/week and 11 presets, full coverage in ~4 weeks.
           if [ "${{ github.event_name }}" = "schedule" ]; then
             PRESETS=(
               panic-safety
@@ -86,6 +87,7 @@ jobs:
               code-cleanup
               test-gaps
               api-ergonomics
+              knowledge-accuracy
             )
             DAY_OF_YEAR=$(date +%j)
             INDEX=$((10#$DAY_OF_YEAR % ${#PRESETS[@]}))
@@ -93,12 +95,14 @@ jobs:
             echo "Scheduled run: day ${DAY_OF_YEAR} → preset '${PRESET}'"
           fi
 
-          # Resolve preset to topic + perspectives
+          # Resolve preset to topic + perspectives + optional script override
+          SCRIPT=""
           if [ "$PRESET" != "(none)" ] && [ -n "$PRESET" ]; then
             PRESET_FILE=".github/prompts/audit-${PRESET}.json"
             if [ -f "$PRESET_FILE" ]; then
               TOPIC=$(jq -r '.topic' "$PRESET_FILE")
               PERSPECTIVES=$(jq -r '.perspectives // "auto"' "$PRESET_FILE")
+              SCRIPT=$(jq -r '.script // ""' "$PRESET_FILE")
               echo "Using preset: ${PRESET} → topic='${TOPIC}'"
             else
               echo "::warning::Preset file not found: ${PRESET_FILE}"
@@ -112,14 +116,24 @@ jobs:
 
           echo "topic=${TOPIC}" >> "$GITHUB_OUTPUT"
           echo "perspectives=${PERSPECTIVES}" >> "$GITHUB_OUTPUT"
+          echo "script=${SCRIPT}" >> "$GITHUB_OUTPUT"
 
       - name: Run codebase audit
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          chmod +x .github/scripts/codebase-audit.sh
-          .github/scripts/codebase-audit.sh \
-            "${{ github.repository }}" \
-            "${{ steps.resolve.outputs.topic }}" \
-            "${{ steps.resolve.outputs.perspectives }}"
+          SCRIPT="${{ steps.resolve.outputs.script }}"
+
+          if [ -n "$SCRIPT" ]; then
+            # Specialized audit script (e.g., knowledge-accuracy)
+            chmod +x ".github/scripts/${SCRIPT}.sh"
+            ".github/scripts/${SCRIPT}.sh" "${{ github.repository }}"
+          else
+            # Generic topic-based audit
+            chmod +x .github/scripts/codebase-audit.sh
+            .github/scripts/codebase-audit.sh \
+              "${{ github.repository }}" \
+              "${{ steps.resolve.outputs.topic }}" \
+              "${{ steps.resolve.outputs.perspectives }}"
+          fi

@@ -3,7 +3,7 @@
 # Licensed under the MIT License.
 #
 # Multi-perspective PR review using GitHub Models API.
-# Called by the perspective-review.yml workflow.
+# Posts one PR review per perspective with inline code comments.
 #
 # Usage: perspective-review.sh <repo> <pr_number>
 # Requires: GITHUB_TOKEN env var, jq, gh CLI
@@ -15,18 +15,60 @@ PR_NUMBER="$2"
 
 echo "=== Perspective Review for ${REPO}#${PR_NUMBER} ==="
 
-# Step 1: Get changed files
+# Step 1: Get PR metadata (head SHA) and changed files
+echo "Fetching PR metadata..."
+PR_DATA=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")
+HEAD_SHA=$(echo "$PR_DATA" | jq -r '.head.sha')
+echo "Head SHA: ${HEAD_SHA}"
+
 echo "Fetching changed files..."
-gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" \
+gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate \
   --jq '.[].filename' > /tmp/changed_files.txt
 echo "Changed files: $(wc -l < /tmp/changed_files.txt)"
 
-# Step 2: Get the diff (truncate to ~60KB for token limits)
+# Step 2: Get the diff and extract valid line anchors
 echo "Fetching diff..."
 gh api "repos/${REPO}/pulls/${PR_NUMBER}" \
   -H "Accept: application/vnd.github.v3.diff" \
   | head -c 60000 > /tmp/pr_diff.txt
 echo "Diff size: $(wc -c < /tmp/pr_diff.txt) bytes"
+
+# Parse diff to extract valid RIGHT-side line anchors with code content.
+# Format: file:line:type:code  (type is "added" for + lines, "context" for unchanged)
+echo "Extracting valid line anchors from diff..."
+awk '
+  /^diff --git/ { file = "" }
+  /^\+\+\+ b\// { file = substr($0, 7) }
+  /^@@ / {
+    match($0, /\+([0-9]+)(,([0-9]+))?/, arr)
+    start = arr[1] + 0
+    line = start
+  }
+  file != "" && !/^diff --git/ && !/^---/ && !/^\+\+\+/ && !/^@@/ {
+    if (/^-/) {
+      # Deleted line: skip (not on RIGHT side)
+    } else if (/^\+/) {
+      # Added line
+      code = substr($0, 2)  # strip leading +
+      gsub(/\t/, "    ", code)
+      print file ":" line ":added:" code
+      line++
+    } else {
+      # Context line
+      code = substr($0, 2)  # strip leading space
+      gsub(/\t/, "    ", code)
+      print file ":" line ":context:" code
+      line++
+    }
+  }
+' /tmp/pr_diff.txt > /tmp/valid_anchors_full.txt
+
+# Also create a plain file:line list for validation
+awk -F: '{print $1 ":" $2}' /tmp/valid_anchors_full.txt > /tmp/valid_anchors.txt
+
+ADDED_COUNT=$(grep -c ':added:' /tmp/valid_anchors_full.txt || echo 0)
+CONTEXT_COUNT=$(grep -c ':context:' /tmp/valid_anchors_full.txt || echo 0)
+echo "Valid anchors: ${ADDED_COUNT} added, ${CONTEXT_COUNT} context"
 
 # Step 3: Select perspectives based on changed paths
 PERSPECTIVES="reliability-engineer,test-engineer"
@@ -51,7 +93,7 @@ fi
 PERSPECTIVES=$(echo "$PERSPECTIVES" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
 echo "Selected perspectives: ${PERSPECTIVES}"
 
-# Step 4: Build context
+# Step 4: Build context from knowledge files
 echo "Building context..."
 KNOWLEDGE_CTX=""
 for f in builtin-system value-semantics policy-evaluation-security ffi-boundary; do
@@ -66,8 +108,33 @@ done
 
 DIFF_CONTENT=$(cat /tmp/pr_diff.txt)
 
-# Step 5: Run each perspective
-ALL_FINDINGS=""
+# Build a structured anchor table for the prompt.
+# Show added lines prominently, include some context lines for reference.
+ANCHOR_TABLE=$(awk -F: '
+  {
+    file = $1; line = $2; type = $3
+    # Rejoin remaining fields as code (code may contain colons)
+    code = ""
+    for (i = 4; i <= NF; i++) {
+      if (i > 4) code = code ":"
+      code = code $i
+    }
+    if (type == "added") {
+      printf "  + %s:%s  %s\n", file, line, code
+    }
+  }
+' /tmp/valid_anchors_full.txt)
+
+# Also list context lines but more compactly (just file:line ranges)
+CONTEXT_SUMMARY=$(awk -F: '
+  $3 == "context" { print $1 ":" $2 }
+' /tmp/valid_anchors_full.txt | head -50)
+
+# Plain file:line list for validation
+VALID_ANCHORS_PLAIN=$(cat /tmp/valid_anchors.txt)
+
+# Step 5: Review with each perspective, posting one PR review per perspective
+TOTAL_FINDINGS=0
 
 for perspective in $(echo "$PERSPECTIVES" | tr ',' ' '); do
   echo "--- Reviewing: ${perspective} ---"
@@ -79,11 +146,21 @@ for perspective in $(echo "$PERSPECTIVES" | tr ',' ' '); do
     AGENT_INSTRUCTIONS=$(head -c 4000 "$agent_file")
   fi
 
-  # Format display name
+  # Format display name and emoji
   DISPLAY_NAME=$(echo "$perspective" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)}1')
+  case "$perspective" in
+    red-teamer)              EMOJI="🔴" ;;
+    security-auditor)        EMOJI="🔒" ;;
+    reliability-engineer)    EMOJI="⚙️" ;;
+    test-engineer)           EMOJI="🧪" ;;
+    semantics-expert)        EMOJI="📐" ;;
+    performance-engineer)    EMOJI="⚡" ;;
+    architect)               EMOJI="🏗️" ;;
+    api-steward)             EMOJI="📡" ;;
+    *)                       EMOJI="🔍" ;;
+  esac
 
-  # Build prompt as a temp file to avoid heredoc/quoting issues
-  cat > /tmp/review_prompt.txt <<EOF
+  cat > /tmp/review_prompt.txt <<PROMPT
 You are reviewing a pull request from the perspective of a ${DISPLAY_NAME}.
 
 Your agent instructions:
@@ -95,21 +172,36 @@ ${KNOWLEDGE_CTX}
 PR Diff:
 ${DIFF_CONTENT}
 
-Respond with a JSON array of findings. Each finding must have these fields:
-- "severity": one of "critical", "important", "suggestion"
-- "summary": a single sentence suitable as a GitHub issue title
-- "file": the file path (from the diff)
-- "line": approximate line number (from the diff), or null
-- "explanation": 2-4 sentences explaining the issue
+=== ANCHORING INSTRUCTIONS ===
 
-If you find no issues from this perspective, return an empty array: []
+Each finding MUST be anchored to a specific line in the diff.
+Below are the ADDED lines (marked with +) that you can reference.
+Pick the most relevant added line for each finding.
 
-Return ONLY valid JSON — no markdown fences, no extra text.
-EOF
+ADDED LINES (preferred — use these):
+${ANCHOR_TABLE}
+
+CONTEXT LINES (also valid, but prefer added lines above):
+${CONTEXT_SUMMARY}
+
+For each finding, set "file" and "line" to an EXACT file:line pair from the lists above.
+Do NOT invent line numbers. Do NOT use line numbers that aren't listed.
+
+=== OUTPUT FORMAT ===
+
+Respond with a JSON array. Each finding:
+- "severity": "critical" | "important" | "suggestion"
+- "title": one-sentence heading
+- "file": exact file path from the anchor lists
+- "line": exact line number from the anchor lists
+- "body": 2-4 sentence explanation in markdown
+
+If no issues found, return: []
+Return ONLY valid JSON — no markdown fences, no commentary.
+PROMPT
 
   PROMPT_CONTENT=$(cat /tmp/review_prompt.txt)
 
-  # Call GitHub Models API using jq for safe JSON encoding
   RESPONSE=$(jq -n \
     --arg model "openai/gpt-4o-mini" \
     --arg prompt "$PROMPT_CONTENT" \
@@ -125,7 +217,6 @@ EOF
       -H "Content-Type: application/json" \
       -d @- 2>/dev/null || echo '{"error": "API call failed"}')
 
-  # Extract content
   CONTENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null || true)
 
   if [ -z "$CONTENT" ]; then
@@ -134,74 +225,133 @@ EOF
     continue
   fi
 
-  # Try to parse as JSON array and render as tagged markdown
-  RENDERED=$(echo "$CONTENT" | jq -r --arg perspective "$DISPLAY_NAME" '
-    if type == "array" then
-      .[] |
-      "**[\($perspective)]** " +
-      (if .severity == "critical" then "🔴 critical" elif .severity == "important" then "🟠 important" else "🔵 suggestion" end) +
-      "\n> " + .summary + "\n\n" + .explanation +
-      (if .file then "\n\n📁 `" + .file + "`" + (if .line then ":" + (.line | tostring) else "" end) else "" end) +
-      "\n\n---\n"
-    else
-      empty
-    end
-  ' 2>/dev/null || true)
+  # Strip markdown fences if the model wrapped them
+  CONTENT=$(echo "$CONTENT" | sed 's/^```json//; s/^```//; /^$/d')
 
-  if [ -n "$RENDERED" ]; then
-    FINDING_COUNT=$(echo "$CONTENT" | jq 'if type == "array" then length else 0 end' 2>/dev/null || echo 0)
-    echo "  Found ${FINDING_COUNT} findings"
-    ALL_FINDINGS="${ALL_FINDINGS}${RENDERED}"
+  # Validate JSON
+  if ! echo "$CONTENT" | jq empty 2>/dev/null; then
+    echo "  Invalid JSON response, skipping"
+    continue
+  fi
+
+  FINDING_COUNT=$(echo "$CONTENT" | jq 'if type == "array" then length else 0 end' 2>/dev/null || echo 0)
+
+  if [ "$FINDING_COUNT" -eq 0 ]; then
+    echo "  No findings"
+    continue
+  fi
+
+  echo "  Found ${FINDING_COUNT} findings"
+  TOTAL_FINDINGS=$((TOTAL_FINDINGS + FINDING_COUNT))
+
+  # Separate findings into anchored (inline) and unanchored (body-only)
+  # Validate each finding's file:line against the valid anchors list
+  INLINE_COMMENTS=$(echo "$CONTENT" | jq -c --arg anchors "$VALID_ANCHORS_PLAIN" '
+    ($anchors | split("\n") | map(select(. != ""))) as $valid |
+    [.[] | select(.file != null and .line != null) |
+      select((.file + ":" + (.line | tostring)) as $key | $valid | any(. == $key))]
+  ' 2>/dev/null || echo "[]")
+
+  UNANCHORED=$(echo "$CONTENT" | jq -c --arg anchors "$VALID_ANCHORS_PLAIN" '
+    ($anchors | split("\n") | map(select(. != ""))) as $valid |
+    [.[] | select(
+      .file == null or .line == null or
+      ((.file + ":" + (.line | tostring)) as $key | $valid | all(. != $key))
+    )]
+  ' 2>/dev/null || echo "[]")
+
+  INLINE_COUNT=$(echo "$INLINE_COMMENTS" | jq 'length' 2>/dev/null || echo 0)
+  UNANCHORED_COUNT=$(echo "$UNANCHORED" | jq 'length' 2>/dev/null || echo 0)
+  echo "  Inline: ${INLINE_COUNT}, Unanchored: ${UNANCHORED_COUNT}"
+
+  # Build review body
+  SEVERITY_ICON() {
+    case "$1" in
+      critical)   echo "🔴" ;;
+      important)  echo "🟠" ;;
+      suggestion) echo "🔵" ;;
+      *)          echo "⚪" ;;
+    esac
+  }
+
+  REVIEW_BODY="${EMOJI} **${DISPLAY_NAME}** — ${FINDING_COUNT} finding(s)"
+
+  # Add unanchored findings to the review body
+  if [ "$UNANCHORED_COUNT" -gt 0 ]; then
+    UNANCHORED_TEXT=$(echo "$UNANCHORED" | jq -r '
+      .[] |
+      "\n\n" +
+      (if .severity == "critical" then "🔴" elif .severity == "important" then "🟠" else "🔵" end) +
+      " **" + .severity + "**: " + .title +
+      "\n" + .body +
+      (if .file then "\n📁 `" + .file + "`" + (if .line then ":" + (.line | tostring) else "" end) else "" end)
+    ' 2>/dev/null || true)
+    REVIEW_BODY="${REVIEW_BODY}
+
+### General findings
+${UNANCHORED_TEXT}"
+  fi
+
+  # Build inline comments JSON for the PR Review API
+  COMMENTS_JSON="[]"
+  if [ "$INLINE_COUNT" -gt 0 ]; then
+    COMMENTS_JSON=$(echo "$INLINE_COMMENTS" | jq -c --arg perspective "$DISPLAY_NAME" '
+      [.[] | {
+        path: .file,
+        line: .line,
+        side: "RIGHT",
+        body: (
+          "**" +
+          (if .severity == "critical" then "🔴 Critical" elif .severity == "important" then "🟠 Important" else "🔵 Suggestion" end) +
+          "**: " + .title + "\n\n" + .body
+        )
+      }]
+    ' 2>/dev/null || echo "[]")
+  fi
+
+  # Post the PR review
+  echo "  Posting review..."
+  REVIEW_PAYLOAD=$(jq -n \
+    --arg sha "$HEAD_SHA" \
+    --arg body "$REVIEW_BODY" \
+    --argjson comments "$COMMENTS_JSON" \
+    '{
+      commit_id: $sha,
+      body: $body,
+      event: "COMMENT",
+      comments: $comments
+    }')
+
+  REVIEW_RESULT=$(echo "$REVIEW_PAYLOAD" | gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
+    --input - 2>&1 || true)
+
+  if echo "$REVIEW_RESULT" | jq -e '.id' > /dev/null 2>&1; then
+    REVIEW_ID=$(echo "$REVIEW_RESULT" | jq -r '.id')
+    echo "  Posted review ${REVIEW_ID}"
   else
-    echo "  No findings (or unparseable response)"
+    # If inline comments failed (invalid anchors), retry without them
+    echo "  Review with inline comments failed, retrying as body-only..."
+    REVIEW_BODY="${REVIEW_BODY}
+
+### Findings"
+    BODY_FINDINGS=$(echo "$CONTENT" | jq -r '
+      .[] |
+      "\n" +
+      (if .severity == "critical" then "🔴" elif .severity == "important" then "🟠" else "🔵" end) +
+      " **" + .severity + "**: " + .title +
+      "\n" + .body +
+      (if .file then "\n📁 `" + .file + "`" + (if .line then ":" + (.line | tostring) else "" end) else "" end)
+    ' 2>/dev/null || true)
+    REVIEW_BODY="${REVIEW_BODY}${BODY_FINDINGS}"
+
+    jq -n \
+      --arg sha "$HEAD_SHA" \
+      --arg body "$REVIEW_BODY" \
+      '{commit_id: $sha, body: $body, event: "COMMENT", comments: []}' \
+    | gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" --input - > /dev/null 2>&1 \
+    && echo "  Posted body-only review" \
+    || echo "  Failed to post review"
   fi
 done
 
-# Step 6: Build the final comment
-MARKER="<!-- perspective-review-bot -->"
-
-if [ -n "$ALL_FINDINGS" ]; then
-  cat > /tmp/review_comment.md <<EOF
-${MARKER}
-## 🔍 Perspective Review
-
-Automated multi-perspective review of this PR.
-Each finding is tagged with the perspective that identified it.
-
----
-
-$(echo -e "$ALL_FINDINGS")
-
-<sub>Generated by perspective-review workflow • Perspectives: ${PERSPECTIVES}</sub>
-EOF
-else
-  cat > /tmp/review_comment.md <<EOF
-${MARKER}
-## 🔍 Perspective Review
-
-✅ No significant findings from the selected perspectives.
-
-<sub>Generated by perspective-review workflow • Perspectives: ${PERSPECTIVES}</sub>
-EOF
-fi
-
-# Step 7: Upsert the comment (update existing or create new)
-echo "Posting review comment..."
-EXISTING_ID=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-  --jq ".[] | select(.body | contains(\"${MARKER}\")) | .id" \
-  | head -1 || true)
-
-COMMENT_BODY=$(cat /tmp/review_comment.md)
-
-if [ -n "$EXISTING_ID" ]; then
-  gh api "repos/${REPO}/issues/comments/${EXISTING_ID}" \
-    -X PATCH \
-    -f body="$COMMENT_BODY"
-  echo "Updated existing comment ${EXISTING_ID}"
-else
-  gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-    -f body="$COMMENT_BODY"
-  echo "Created new review comment"
-fi
-
-echo "=== Review complete ==="
+echo "=== Review complete: ${TOTAL_FINDINGS} total findings ==="

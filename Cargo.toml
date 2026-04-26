@@ -209,6 +209,9 @@ harness=false
 test=false
 doctest=false
 
+[[example]]
+name="eval_rule"
+
 [package.metadata.docs.rs]
 # To build locally:
 # RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --all-features --no-deps

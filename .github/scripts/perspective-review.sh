@@ -33,37 +33,42 @@ gh api "repos/${REPO}/pulls/${PR_NUMBER}" \
   | head -c 60000 > /tmp/pr_diff.txt
 echo "Diff size: $(wc -c < /tmp/pr_diff.txt) bytes"
 
-# Parse diff to extract valid RIGHT-side line numbers per file.
-# These are the only lines the PR Review API will accept for inline comments.
+# Parse diff to extract valid RIGHT-side line anchors with code content.
+# Format: file:line:type:code  (type is "added" for + lines, "context" for unchanged)
 echo "Extracting valid line anchors from diff..."
 awk '
-  /^diff --git/ {
-    # Extract filename from +++ line (next after ---)
-    file = ""
-  }
-  /^\+\+\+ b\// {
-    file = substr($0, 7)  # strip "+++ b/"
-  }
+  /^diff --git/ { file = "" }
+  /^\+\+\+ b\// { file = substr($0, 7) }
   /^@@ / {
-    # Parse new-file line number from @@ -old,len +new,len @@
     match($0, /\+([0-9]+)(,([0-9]+))?/, arr)
     start = arr[1] + 0
-    count = (arr[3] != "") ? arr[3] + 0 : 1
     line = start
   }
   file != "" && !/^diff --git/ && !/^---/ && !/^\+\+\+/ && !/^@@/ {
     if (/^-/) {
-      # Deleted line: not on RIGHT side, skip
+      # Deleted line: skip (not on RIGHT side)
+    } else if (/^\+/) {
+      # Added line
+      code = substr($0, 2)  # strip leading +
+      gsub(/\t/, "    ", code)
+      print file ":" line ":added:" code
+      line++
     } else {
-      # Added (+) or context ( ) line: valid on RIGHT side
-      if (file != "" && line > 0) {
-        print file ":" line
-      }
+      # Context line
+      code = substr($0, 2)  # strip leading space
+      gsub(/\t/, "    ", code)
+      print file ":" line ":context:" code
       line++
     }
   }
-' /tmp/pr_diff.txt > /tmp/valid_anchors.txt
-echo "Valid anchors: $(wc -l < /tmp/valid_anchors.txt)"
+' /tmp/pr_diff.txt > /tmp/valid_anchors_full.txt
+
+# Also create a plain file:line list for validation
+awk -F: '{print $1 ":" $2}' /tmp/valid_anchors_full.txt > /tmp/valid_anchors.txt
+
+ADDED_COUNT=$(grep -c ':added:' /tmp/valid_anchors_full.txt || echo 0)
+CONTEXT_COUNT=$(grep -c ':context:' /tmp/valid_anchors_full.txt || echo 0)
+echo "Valid anchors: ${ADDED_COUNT} added, ${CONTEXT_COUNT} context"
 
 # Step 3: Select perspectives based on changed paths
 PERSPECTIVES="reliability-engineer,test-engineer"
@@ -103,8 +108,27 @@ done
 
 DIFF_CONTENT=$(cat /tmp/pr_diff.txt)
 
-# Build the anchor list for the prompt (file:line pairs the LLM can reference)
-ANCHOR_LIST=$(cat /tmp/valid_anchors.txt)
+# Build a structured anchor table for the prompt.
+# Show added lines prominently, include some context lines for reference.
+ANCHOR_TABLE=$(awk -F: '
+  {
+    file = $1; line = $2; type = $3
+    # Rejoin remaining fields as code (code may contain colons)
+    code = ""
+    for (i = 4; i <= NF; i++) {
+      if (i > 4) code = code ":"
+      code = code $i
+    }
+    if (type == "added") {
+      printf "  + %s:%s  %s\n", file, line, code
+    }
+  }
+' /tmp/valid_anchors_full.txt)
+
+# Also list context lines but more compactly (just file:line ranges)
+CONTEXT_SUMMARY=$(awk -F: '
+  $3 == "context" { print $1 ":" $2 }
+' /tmp/valid_anchors_full.txt | head -50)
 
 # Step 5: Review with each perspective, posting one PR review per perspective
 TOTAL_FINDINGS=0
@@ -145,20 +169,32 @@ ${KNOWLEDGE_CTX}
 PR Diff:
 ${DIFF_CONTENT}
 
-IMPORTANT: You must anchor findings to exact lines from this list of valid diff lines.
-Each entry is file:line. Only use lines from this list:
+=== ANCHORING INSTRUCTIONS ===
 
-${ANCHOR_LIST}
+Each finding MUST be anchored to a specific line in the diff.
+Below are the ADDED lines (marked with +) that you can reference.
+Pick the most relevant added line for each finding.
 
-Respond with a JSON array of findings. Each finding must have:
-- "severity": one of "critical", "important", "suggestion"
-- "title": a single sentence suitable as a heading
-- "file": exact file path from the valid lines list above
-- "line": exact line number from the valid lines list above, or null if no suitable anchor
-- "body": 2-4 sentences explaining the issue in markdown
+ADDED LINES (preferred — use these):
+${ANCHOR_TABLE}
 
-If you find no issues, return an empty array: []
-Return ONLY valid JSON — no markdown fences, no extra text.
+CONTEXT LINES (also valid, but prefer added lines above):
+${CONTEXT_SUMMARY}
+
+For each finding, set "file" and "line" to an EXACT file:line pair from the lists above.
+Do NOT invent line numbers. Do NOT use line numbers that aren't listed.
+
+=== OUTPUT FORMAT ===
+
+Respond with a JSON array. Each finding:
+- "severity": "critical" | "important" | "suggestion"
+- "title": one-sentence heading
+- "file": exact file path from the anchor lists
+- "line": exact line number from the anchor lists
+- "body": 2-4 sentence explanation in markdown
+
+If no issues found, return: []
+Return ONLY valid JSON — no markdown fences, no commentary.
 PROMPT
 
   PROMPT_CONTENT=$(cat /tmp/review_prompt.txt)

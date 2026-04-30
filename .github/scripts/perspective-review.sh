@@ -113,33 +113,12 @@ ADDED_COUNT=$(grep -c ':added:' "$TMPDIR/valid_anchors_full.txt" || echo 0)
 CONTEXT_COUNT=$(grep -c ':context:' "$TMPDIR/valid_anchors_full.txt" || echo 0)
 echo "Valid anchors: ${ADDED_COUNT} added, ${CONTEXT_COUNT} context"
 
-# Step 3: Select perspectives based on changed paths
-PERSPECTIVES="reliability-engineer,test-engineer"
+# Step 3: Select all review perspectives
+# Every perspective runs on every PR — path-based filtering proved too narrow
+# (missed security issues in new modules that didn't match known paths).
+# The false-positive filter handles noise from irrelevant perspectives.
+PERSPECTIVES="api-steward,architect,ci-cd-security,performance-engineer,red-teamer,reliability-engineer,security-auditor,semantics-expert,test-engineer"
 
-if grep -qE 'src/builtins/' "$TMPDIR/changed_files.txt" 2>/dev/null; then
-  PERSPECTIVES="${PERSPECTIVES},semantics-expert,red-teamer"
-fi
-if grep -qE 'src/(value|number)' "$TMPDIR/changed_files.txt" 2>/dev/null; then
-  PERSPECTIVES="${PERSPECTIVES},semantics-expert"
-fi
-if grep -qE 'bindings/|src/.*ffi' "$TMPDIR/changed_files.txt" 2>/dev/null; then
-  PERSPECTIVES="${PERSPECTIVES},architect,api-steward"
-fi
-if grep -qE 'Cargo\.(toml|lock)' "$TMPDIR/changed_files.txt" 2>/dev/null; then
-  PERSPECTIVES="${PERSPECTIVES},security-auditor,architect"
-fi
-if grep -qE 'src/(interpreter|rvm|compiler|scheduler)' "$TMPDIR/changed_files.txt" 2>/dev/null; then
-  PERSPECTIVES="${PERSPECTIVES},semantics-expert,performance-engineer"
-fi
-if grep -qE '\.(yml|yaml|sh)$|\.github/' "$TMPDIR/changed_files.txt" 2>/dev/null; then
-  PERSPECTIVES="${PERSPECTIVES},ci-cd-security"
-fi
-if grep -qE '\.json$' "$TMPDIR/changed_files.txt" 2>/dev/null && grep -qE '\.github/' "$TMPDIR/changed_files.txt" 2>/dev/null; then
-  PERSPECTIVES="${PERSPECTIVES},ci-cd-security"
-fi
-
-# Deduplicate
-PERSPECTIVES=$(echo "$PERSPECTIVES" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
 echo "Selected perspectives: ${PERSPECTIVES}"
 
 # Step 4: Build context from knowledge files (limited to stay within model context)

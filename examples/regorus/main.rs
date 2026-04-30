@@ -46,6 +46,7 @@ fn rego_eval(
     non_strict: bool,
     #[cfg(feature = "coverage")] coverage: bool,
     v0: bool,
+    format: &str,
 ) -> Result<()> {
     // Create engine.
     let mut engine = regorus::Engine::new();
@@ -117,8 +118,17 @@ fn rego_eval(
     // to use.
     let results = engine.eval_query(query, enable_tracing)?;
 
-    println!("{}", serde_json::to_string_pretty(&results)?);
-
+    match format {
+        "sarif" => {
+            let config = regorus::sarif::SarifConfig::default();
+            let report = regorus::sarif::SarifReport::from_query_results(&results, &config)
+                .map_err(|e| anyhow!("SARIF generation failed: {e}"))?;
+            println!("{}", report.to_json().map_err(|e| anyhow!("{e}"))?);
+        }
+        "json" | _ => {
+            println!("{}", serde_json::to_string_pretty(&results)?);
+        }
+    }
     #[cfg(feature = "coverage")]
     if coverage {
         let report = engine.get_coverage_report()?;
@@ -249,9 +259,11 @@ enum RegorusCommand {
         /// Turn on Rego language v0.
         #[arg(long)]
         v0: bool,
-    },
 
-    /// Tokenize a Rego policy.
+        /// Output format (json or sarif).
+        #[arg(long, short = 'F', default_value = "json")]
+        format: String,
+    },    /// Tokenize a Rego policy.
     Lex {
         /// Rego policy file.
         file: String,
@@ -331,6 +343,7 @@ fn main() -> Result<()> {
             #[cfg(feature = "coverage")]
             coverage,
             v0,
+            format,
         } => rego_eval(
             &bundles,
             &data,
@@ -341,6 +354,7 @@ fn main() -> Result<()> {
             #[cfg(feature = "coverage")]
             coverage,
             v0,
+            &format,
         ),
         RegorusCommand::Lex { file, verbose } => rego_lex(file, verbose),
         RegorusCommand::Parse { file, v0 } => rego_parse(file, v0),

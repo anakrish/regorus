@@ -154,6 +154,7 @@ mod schema;
 pub mod target;
 #[cfg(any(test, all(feature = "yaml", feature = "std")))]
 pub mod test_utils;
+pub mod sarif;
 pub mod utils;
 mod value;
 

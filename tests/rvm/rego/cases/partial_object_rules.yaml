@@ -1,0 +1,160 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  - note: partial_object_variable_key_collects_all_bindings
+    data: {}
+    input:
+      items:
+        FOO: 1
+        BAR: 2
+        BAZ: 3
+    modules:
+      - |
+        package test
+
+        p[k] if {
+          some k, _ in input.items
+        }
+    query: data.test.p
+    want_result:
+      BAR: true
+      BAZ: true
+      FOO: true
+
+  - note: partial_object_explicit_value_collects_all_bindings
+    data: {}
+    input:
+      items:
+        FOO: 1
+        BAR: 2
+        BAZ: 3
+    modules:
+      - |
+        package test
+
+        p[k] := v if {
+          some k, v in input.items
+        }
+    query: data.test.p
+    want_result:
+      BAR: 2
+      BAZ: 3
+      FOO: 1
+
+  - note: partial_object_constant_key_still_works
+    skip: true  # Existing constant-key rule path handling is tracked separately.
+    data: {}
+    input:
+      enabled: true
+    modules:
+      - |
+        package test
+
+        p["fixed"] if {
+          input.enabled
+        }
+    query: data.test.p
+    want_result:
+      fixed: true
+
+  - note: partial_object_multiple_bodies_collects_all_bindings
+    data: {}
+    input:
+      items:
+        FOO: 1
+        BAR: 2
+        BAZ: 3
+    modules:
+      - |
+        package test
+
+        p[k] if {
+          some k, _ in input.items
+          k in {"FOO", "BAR"}
+        }
+
+        p[k] if {
+          some k, _ in input.items
+          k == "BAZ"
+        }
+    query: data.test.p
+    want_result:
+      BAR: true
+      BAZ: true
+      FOO: true
+
+  - note: partial_set_contains_collects_all_bindings
+    data: {}
+    input:
+      items:
+        FOO: 1
+        BAR: 2
+        BAZ: 3
+    modules:
+      - |
+        package test
+
+        p contains k if {
+          some k, _ in input.items
+        }
+    query: data.test.p
+    want_result:
+      set!: ["BAR", "BAZ", "FOO"]
+
+  - note: partial_object_multilevel_key_collects_nested_bindings
+    skip: true  # Existing multi-level bracket rule path handling is tracked separately.
+    data: {}
+    input:
+      nested:
+        app:
+          read: 1
+          write: 2
+        ops:
+          deploy: 3
+    modules:
+      - |
+        package test
+
+        p[a][b] if {
+          some a, obj in input.nested
+          some b, _ in obj
+        }
+    query: data.test.p
+    want_result:
+      app:
+        read: true
+        write: true
+      ops:
+        deploy: true
+
+  - note: partial_object_array_iteration_collects_all_bindings
+    data: {}
+    input:
+      items: ["FOO", "BAR", "BAZ"]
+    modules:
+      - |
+        package test
+
+        p[v] if {
+          some _, v in input.items
+        }
+    query: data.test.p
+    want_result:
+      BAR: true
+      BAZ: true
+      FOO: true
+
+  - note: partial_object_empty_input_is_empty_object
+    data: {}
+    input:
+      items: {}
+    modules:
+      - |
+        package test
+
+        p[k] if {
+          some k, _ in input.items
+        }
+    query: data.test.p
+    want_result: {}

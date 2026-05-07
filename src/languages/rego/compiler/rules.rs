@@ -59,7 +59,7 @@ impl<'a> Compiler<'a> {
                             crate::ast::Expr::RefBrack { .. } if assign.is_some() => {
                                 RuleType::PartialObject
                             }
-                            crate::ast::Expr::RefBrack { .. } => RuleType::PartialSet,
+                            crate::ast::Expr::RefBrack { .. } => RuleType::PartialObject,
                             _ => RuleType::Complete,
                         },
                         _ => RuleType::Complete,

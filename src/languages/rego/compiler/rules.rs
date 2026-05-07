@@ -88,6 +88,27 @@ impl<'a> Compiler<'a> {
         })
     }
 
+    fn validate_partial_object_shape(&self, refr: &ExprRef) -> Result<()> {
+        let Expr::RefBrack {
+            refr: prefix,
+            index,
+            ..
+        } = refr.as_ref()
+        else {
+            return Ok(());
+        };
+
+        if matches!(prefix.as_ref(), Expr::RefBrack { .. }) {
+            return Err(CompilerError::PartialObjectNestedKeyUnsupported.at(refr.span()));
+        }
+
+        if !matches!(index.as_ref(), Expr::Var { .. }) {
+            return Err(CompilerError::PartialObjectConstantKeyUnsupported.at(index.span()));
+        }
+
+        Ok(())
+    }
+
     pub(super) fn get_or_assign_rule_index(&mut self, rule_path: &str) -> Result<u16> {
         if let Some(&index) = self.rule_index_map.get(rule_path) {
             return Ok(index);
@@ -345,6 +366,10 @@ impl<'a> Compiler<'a> {
 
                     let (key_expr, value_expr) = match head {
                         RuleHead::Compr { refr, assign, .. } => {
+                            if rule_type == RuleType::PartialObject && assign.is_none() {
+                                self.validate_partial_object_shape(refr)?;
+                            }
+
                             self.rule_definition_function_params[rule_index as usize].push(None);
                             self.rule_definition_destructuring_patterns[rule_index as usize]
                                 .push(None);

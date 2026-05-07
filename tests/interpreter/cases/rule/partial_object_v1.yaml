@@ -1,0 +1,47 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  - note: constant_key_partial_object_v1
+    data: {}
+    input:
+      enabled: true
+    modules:
+      - |
+        package test
+        import rego.v1
+
+        p["fixed"] if {
+          input.enabled
+        }
+    query: data.test
+    want_result:
+      p:
+        fixed: true
+
+  - note: multilevel_partial_object_v1
+    data: {}
+    input:
+      nested:
+        app:
+          read: 1
+          write: 2
+        ops:
+          deploy: 3
+    modules:
+      - |
+        package test
+        import rego.v1
+
+        p[a][b] if {
+          some a, obj in input.nested
+          some b, _ in obj
+        }
+    query: data.test
+    want_result:
+      p:
+        app:
+          read: true
+          write: true
+        ops:
+          deploy: true

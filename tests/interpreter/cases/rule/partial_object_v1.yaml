@@ -45,3 +45,47 @@ cases:
           write: true
         ops:
           deploy: true
+
+  - note: constant_key_partial_object_explicit_value_v1
+    data: {}
+    input:
+      enabled: true
+    modules:
+      - |
+        package test
+        import rego.v1
+
+        p["fixed"] := 7 if {
+          input.enabled
+        }
+    query: data.test
+    want_result:
+      p:
+        fixed: 7
+
+  - note: multilevel_partial_object_explicit_value_v1
+    data: {}
+    input:
+      nested:
+        app:
+          read: 1
+          write: 2
+        ops:
+          deploy: 3
+    modules:
+      - |
+        package test
+        import rego.v1
+
+        p[a][b] := v if {
+          some a, obj in input.nested
+          some b, v in obj
+        }
+    query: data.test
+    want_result:
+      p:
+        app:
+          read: 1
+          write: 2
+        ops:
+          deploy: 3

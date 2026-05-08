@@ -98,22 +98,36 @@ impl<'a> Compiler<'a> {
             return Ok(());
         };
 
-        if matches!(prefix.as_ref(), Expr::RefBrack { .. }) {
+        if Self::has_dynamic_bracket(prefix) {
             return Err(CompilerError::PartialObjectNestedKeyUnsupported.at(refr.span()));
         }
 
-        if matches!(
-            index.as_ref(),
+        if Self::is_simple_literal(index) {
+            return Err(CompilerError::PartialObjectConstantKeyUnsupported.at(index.span()));
+        }
+
+        Ok(())
+    }
+
+    fn has_dynamic_bracket(expr: &ExprRef) -> bool {
+        match expr.as_ref() {
+            Expr::RefBrack { refr, index, .. } => {
+                !Self::is_simple_literal(index) || Self::has_dynamic_bracket(refr)
+            }
+            Expr::RefDot { refr, .. } => Self::has_dynamic_bracket(refr),
+            _ => false,
+        }
+    }
+
+    fn is_simple_literal(expr: &ExprRef) -> bool {
+        matches!(
+            expr.as_ref(),
             Expr::String { .. }
                 | Expr::RawString { .. }
                 | Expr::Number { .. }
                 | Expr::Bool { .. }
                 | Expr::Null { .. }
-        ) {
-            return Err(CompilerError::PartialObjectConstantKeyUnsupported.at(index.span()));
-        }
-
-        Ok(())
+        )
     }
 
     pub(super) fn get_or_assign_rule_index(&mut self, rule_path: &str) -> Result<u16> {

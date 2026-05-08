@@ -66,6 +66,26 @@ cases:
       alias-baz: 3
       alias-foo: 1
 
+  - note: partial_object_static_bracket_prefix_collects_all_bindings
+    data: {}
+    input:
+      items:
+        FOO: 1
+        BAR: 2
+        BAZ: 3
+    modules:
+      - |
+        package test
+
+        p["a"][k] := v if {
+          some k, v in input.items
+        }
+    query: data.test.p.a
+    want_result:
+      BAR: 2
+      BAZ: 3
+      FOO: 1
+
   - note: partial_object_constant_key_unsupported_in_rvm
     data: {}
     input:
@@ -179,6 +199,31 @@ cases:
         p[a][b] := v if {
           some a, obj in input.nested
           some b, v in obj
+        }
+
+        main := p
+    query: data.test.main
+    want_error: "partial object rules with nested bracket keys are not yet supported by the RVM compiler"
+    allow_interpreter_success: true
+
+  - note: partial_object_hidden_dynamic_prefix_unsupported_in_rvm
+    data: {}
+    input:
+      nested:
+        app:
+          q:
+            read: 1
+            write: 2
+        ops:
+          q:
+            deploy: 3
+    modules:
+      - |
+        package test
+
+        p[a].q[b] if {
+          some a, obj in input.nested
+          some b, _ in obj.q
         }
 
         main := p

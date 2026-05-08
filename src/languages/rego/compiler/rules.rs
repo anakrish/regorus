@@ -102,7 +102,14 @@ impl<'a> Compiler<'a> {
             return Err(CompilerError::PartialObjectNestedKeyUnsupported.at(refr.span()));
         }
 
-        if !matches!(index.as_ref(), Expr::Var { .. }) {
+        if matches!(
+            index.as_ref(),
+            Expr::String { .. }
+                | Expr::RawString { .. }
+                | Expr::Number { .. }
+                | Expr::Bool { .. }
+                | Expr::Null { .. }
+        ) {
             return Err(CompilerError::PartialObjectConstantKeyUnsupported.at(index.span()));
         }
 
@@ -366,7 +373,7 @@ impl<'a> Compiler<'a> {
 
                     let (key_expr, value_expr) = match head {
                         RuleHead::Compr { refr, assign, .. } => {
-                            if rule_type == RuleType::PartialObject && assign.is_none() {
+                            if rule_type == RuleType::PartialObject {
                                 self.validate_partial_object_shape(refr)?;
                             }
 

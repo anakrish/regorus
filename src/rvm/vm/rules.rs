@@ -52,6 +52,7 @@ impl RegoVM {
         rule_definitions: &[Vec<u32>],
         rule_info: &RuleInfo,
         function_call_params: Option<&FunctionCallParams>,
+        #[cfg(feature = "explanations")] rule_index: u16,
     ) -> Result<(Value, bool, Option<crate::Rc<str>>)> {
         let mut first_successful_result: Option<Value> = None;
         let mut rule_failed_due_to_inconsistency = false;
@@ -130,6 +131,9 @@ impl RegoVM {
             #[cfg(feature = "explanations")]
             let def_assumptions_start = self.trace.assumptions.len();
 
+            #[cfg(feature = "explanations")]
+            let mut def_succeeded = false;
+
             for (body_entry_point_idx, body_entry_point) in definition_bodies.iter().enumerate() {
                 if let Some(ctx) = self.call_rule_stack.last_mut() {
                     ctx.current_body_index = body_entry_point_idx;
@@ -164,6 +168,10 @@ impl RegoVM {
 
                 match self.jump_to(*body_entry_point) {
                     Ok(_) => {
+                        #[cfg(feature = "explanations")]
+                        {
+                            def_succeeded = true;
+                        }
                         if matches!(rule_info.rule_type, RuleType::Complete) || is_function_call {
                             let current_result = self.get_register(result_reg)?.clone();
                             if current_result != Value::Undefined {
@@ -184,6 +192,18 @@ impl RegoVM {
                                     let is_pe = false;
 
                                     if rule_info.early_exit_on_first_success && !is_pe {
+                                        // Record per-definition outcome before exiting early.
+                                        #[cfg(feature = "explanations")]
+                                        if self.explanation_settings.enabled {
+                                            self.trace.record_rule_outcome(
+                                                rule_index,
+                                                u16::try_from(def_idx).unwrap_or(u16::MAX),
+                                                true,
+                                                None,
+                                            );
+                                        }
+                                        #[cfg(feature = "explanations")]
+                                        self.pop_conjunction_scope();
                                         break 'outer;
                                     }
                                 }
@@ -221,12 +241,32 @@ impl RegoVM {
 
             if rule_failed_due_to_inconsistency {
                 #[cfg(feature = "explanations")]
-                self.pop_conjunction_scope();
+                {
+                    if self.explanation_settings.enabled {
+                        self.trace.record_rule_outcome(
+                            rule_index,
+                            u16::try_from(def_idx).unwrap_or(u16::MAX),
+                            def_succeeded,
+                            None,
+                        );
+                    }
+                    self.pop_conjunction_scope();
+                }
                 break;
             }
 
             #[cfg(feature = "explanations")]
-            self.pop_conjunction_scope();
+            {
+                if self.explanation_settings.enabled {
+                    self.trace.record_rule_outcome(
+                        rule_index,
+                        u16::try_from(def_idx).unwrap_or(u16::MAX),
+                        def_succeeded,
+                        None,
+                    );
+                }
+                self.pop_conjunction_scope();
+            }
         }
 
         // PE definitiveness: if at least one definition resolved without
@@ -391,7 +431,13 @@ impl RegoVM {
 
         #[allow(unused)]
         let (final_result, rule_failed_due_to_inconsistency, return_provenance) = self
-            .execute_rule_definitions_common(&rule_definitions, &rule_info, function_call_params)?;
+            .execute_rule_definitions_common(
+                &rule_definitions,
+                &rule_info,
+                function_call_params,
+                #[cfg(feature = "explanations")]
+                rule_index,
+            )?;
 
         #[cfg(feature = "explanations")]
         let assumptions_after = self.trace.assumptions.len();
@@ -419,13 +465,8 @@ impl RegoVM {
         #[cfg(feature = "explanations")]
         if self.explanation_settings.enabled {
             let succeeded = result_from_rule != Value::Undefined;
-            let def_idx = u16::try_from(call_context.current_definition_index).unwrap_or(u16::MAX);
-            self.trace.record_rule_outcome(
-                rule_index,
-                def_idx,
-                succeeded,
-                Some(result_from_rule.clone()),
-            );
+            self.trace
+                .record_rule_summary(rule_index, succeeded, Some(result_from_rule.clone()));
             // Track assumption-dependent depth so negation handling can detect it.
             if succeeded && result_is_assumption_dependent {
                 self.assumption_dependent_depth = self.assumption_dependent_depth.saturating_add(1);
@@ -815,6 +856,30 @@ impl RegoVM {
         frame_data.conjunction_scope_active = false;
         self.pop_conjunction_scope();
 
+        // Record a per-definition outcome so the causality report can
+        // surface one entry per evaluated definition body (Causality-3).
+        // We only emit once per definition; subsequent body iterations
+        // (e.g. multi-body definitions) collapse into the single outcome
+        // for the definition.
+        let def_idx = u16::try_from(frame_data.current_definition_index).unwrap_or(u16::MAX);
+        if !self
+            .trace
+            .rule_outcomes
+            .iter()
+            .any(|o| {
+                !o.is_summary
+                    && o.rule_index == frame_data.rule_index
+                    && o.definition_index == def_idx
+            })
+        {
+            self.trace.record_rule_outcome(
+                frame_data.rule_index,
+                def_idx,
+                frame_data.current_def_succeeded,
+                None,
+            );
+        }
+
         // Track per-definition assumption resolution for PE definitiveness.
         if self.explanation_settings.eval_mode
             == crate::evaluation_trace::EvaluationMode::PartialEval
@@ -952,12 +1017,8 @@ impl RegoVM {
         #[cfg(feature = "explanations")]
         if self.explanation_settings.enabled {
             let succeeded = result_from_rule != Value::Undefined;
-            self.trace.record_rule_outcome(
-                rule_index,
-                u16::try_from(frame_data.current_definition_index).unwrap_or(u16::MAX),
-                succeeded,
-                Some(result_from_rule.clone()),
-            );
+            self.trace
+                .record_rule_summary(rule_index, succeeded, Some(result_from_rule.clone()));
         }
 
         let mut current_window = Vec::default();

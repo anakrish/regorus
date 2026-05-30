@@ -450,3 +450,11 @@ impl IntoIterator for Set {
         SetIntoIter::new(self.into_btreeset().into_iter())
     }
 }
+
+impl<'a> IntoIterator for &'a Set {
+    type Item = &'a Value;
+    type IntoIter = SetIter<'a>;
+    fn into_iter(self) -> SetIter<'a> {
+        self.iter()
+    }
+}

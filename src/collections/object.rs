@@ -533,6 +533,22 @@ impl IntoIterator for Object {
     }
 }
 
+impl<'a> IntoIterator for &'a Object {
+    type Item = (&'a Value, &'a Value);
+    type IntoIter = Iter<'a>;
+    fn into_iter(self) -> Iter<'a> {
+        self.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut Object {
+    type Item = (&'a Value, &'a mut Value);
+    type IntoIter = IterMut<'a>;
+    fn into_iter(self) -> IterMut<'a> {
+        self.iter_mut()
+    }
+}
+
 impl core::ops::Index<&Value> for Object {
     type Output = Value;
 

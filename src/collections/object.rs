@@ -4,7 +4,6 @@
 use alloc::collections::BTreeMap;
 use core::cmp::Ordering;
 use core::fmt;
-use core::ops::{Deref, DerefMut};
 
 use serde::de::{Deserializer, Error as DeError, MapAccess, Visitor};
 use serde::ser::{SerializeMap, Serializer};
@@ -77,12 +76,100 @@ impl Object {
     ///
     /// Returns `Err(InsertError::NonFiniteKey)` when `key` is a non-finite
     /// `Number::Float` (NaN, +∞, -∞).
-    ///
-    /// Named `try_insert` rather than `insert` so it does not shadow
-    /// `BTreeMap::insert` reached through the transitional `DerefMut` impl.
     #[inline]
-    pub fn try_insert(&mut self, key: Value, value: Value) -> Result<Option<Value>, InsertError> {
+    pub fn insert(&mut self, key: Value, value: Value) -> Result<Option<Value>, InsertError> {
         self.storage.insert(key, value)
+    }
+
+    #[inline]
+    pub fn get_mut(&mut self, key: &Value) -> Option<&mut Value> {
+        self.storage.as_btreemap_mut().get_mut(key)
+    }
+
+    #[inline]
+    pub fn get(&self, key: &Value) -> Option<&Value> {
+        self.as_ref().get(key)
+    }
+
+    #[inline]
+    pub fn get_str(&self, key: &str) -> Option<&Value> {
+        self.as_ref().get_str(key)
+    }
+
+    #[inline]
+    pub fn contains_key(&self, key: &Value) -> bool {
+        self.as_ref().contains_key(key)
+    }
+
+    #[inline]
+    pub fn iter(&self) -> Iter<'_> {
+        self.as_ref().iter()
+    }
+
+    #[inline]
+    pub fn keys(&self) -> Keys<'_> {
+        self.as_ref().keys()
+    }
+
+    #[inline]
+    pub fn values(&self) -> Values<'_> {
+        self.as_ref().values()
+    }
+
+    #[inline]
+    pub fn iter_unordered(&self) -> IterUnordered<'_> {
+        self.as_ref().iter_unordered()
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn as_btreemap(&self) -> &BTreeMap<Value, Value> {
+        self.storage.as_btreemap()
+    }
+
+    #[inline]
+    pub fn iter_mut(&mut self) -> IterMut<'_> {
+        IterMut::new(self.storage.as_btreemap_mut().iter_mut())
+    }
+
+    #[inline]
+    pub fn values_mut(&mut self) -> ValuesMut<'_> {
+        ValuesMut::new(self.storage.as_btreemap_mut().values_mut())
+    }
+
+    #[inline]
+    pub fn remove(&mut self, key: &Value) -> Option<Value> {
+        self.storage.remove(key)
+    }
+
+    pub fn retain<F: FnMut(&Value, &mut Value) -> bool>(&mut self, f: F) {
+        self.storage.as_btreemap_mut().retain(f);
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.storage.clear();
+    }
+
+    pub fn extend<I: IntoIterator<Item = (Value, Value)>>(
+        &mut self,
+        iter: I,
+    ) -> Result<(), InsertError> {
+        for (k, v) in iter {
+            self.insert(k, v)?;
+        }
+        Ok(())
+    }
+
+    pub fn entry(&mut self, key: Value) -> Result<MapEntry<'_>, InsertError> {
+        check_key(&key)?;
+        Ok(entry_from_storage(&mut self.storage, key))
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn as_btreemap_mut(&mut self) -> &mut BTreeMap<Value, Value> {
+        self.storage.as_btreemap_mut()
     }
 
     /// Construct an `Object` from an iterator, rejecting non-finite keys.
@@ -92,7 +179,7 @@ impl Object {
     {
         let mut obj = Self::new();
         for (k, v) in iter {
-            obj.try_insert(k, v)?;
+            obj.insert(k, v)?;
         }
         Ok(obj)
     }
@@ -129,7 +216,7 @@ impl FromIterator<(Value, Value)> for Object {
         // non-finite numeric keys. Callers needing failure semantics use
         // `try_from_iter`.
         for (k, v) in it {
-            let _ = obj.try_insert(k, v);
+            let _ = obj.insert(k, v);
         }
         obj
     }
@@ -138,7 +225,7 @@ impl FromIterator<(Value, Value)> for Object {
 impl Extend<(Value, Value)> for Object {
     fn extend<I: IntoIterator<Item = (Value, Value)>>(&mut self, iter: I) {
         for (k, v) in iter {
-            let _ = self.try_insert(k, v);
+            let _ = self.insert(k, v);
         }
     }
 }
@@ -209,7 +296,7 @@ impl<'de> Visitor<'de> for ObjectVisitor {
     {
         let mut obj = Object::new();
         while let Some((k, v)) = access.next_entry::<Value, Value>()? {
-            obj.try_insert(k, v)
+            obj.insert(k, v)
                 .map_err(|e| M::Error::custom(e.to_string()))?;
         }
         Ok(obj)
@@ -219,27 +306,6 @@ impl<'de> Visitor<'de> for ObjectVisitor {
 impl<'de> Deserialize<'de> for Object {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         deserializer.deserialize_map(ObjectVisitor)
-    }
-}
-
-// Transitional Deref/DerefMut to `BTreeMap` lets the existing ~430 call sites
-// continue to operate on the inner map through pattern bindings. These impls
-// are `#[doc(hidden)]` and are not part of the public abstraction commitment;
-// future internal storage variants will retire them.
-#[doc(hidden)]
-impl Deref for Object {
-    type Target = BTreeMap<Value, Value>;
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        self.storage.as_btreemap()
-    }
-}
-
-#[doc(hidden)]
-impl DerefMut for Object {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.storage.as_btreemap_mut()
     }
 }
 
@@ -473,5 +539,13 @@ impl IntoIterator for Object {
     type IntoIter = IntoIter;
     fn into_iter(self) -> Self::IntoIter {
         IntoIter::new(self.into_btreemap().into_iter())
+    }
+}
+
+impl core::ops::Index<&Value> for Object {
+    type Output = Value;
+
+    fn index(&self, key: &Value) -> &Self::Output {
+        self.get(key).unwrap_or(&Value::Undefined)
     }
 }

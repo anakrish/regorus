@@ -461,7 +461,7 @@ impl Engine {
     /// # }
     /// ```
     pub fn add_data(&mut self, data: Value) -> Result<()> {
-        if data.as_object().is_err() {
+        if data.object_ref().is_err() {
             bail!("data must be object");
         }
         self.prepared = false;

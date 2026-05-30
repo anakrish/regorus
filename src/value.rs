@@ -95,7 +95,7 @@ impl Serialize for Value {
             Value::Array(a) => a.serialize(serializer),
             Value::Object(fields) => {
                 let mut map = serializer.serialize_map(Some(fields.len()))?;
-                for (k, v) in fields.iter() {
+                for (k, v) in fields.as_ref().iter() {
                     match k {
                         Value::String(_) => map.serialize_entry(k, v)?,
                         _ => {
@@ -296,7 +296,7 @@ impl Value {
     /// # use regorus::*;
     /// # fn main() -> anyhow::Result<()> {
     /// let obj = Value::new_object();
-    /// assert_eq!(obj.as_object().expect("not an object").len(), 0);
+    /// assert_eq!(obj.object_ref().expect("not an object").len(), 0);
     /// # Ok(())
     /// # }
     /// ```
@@ -310,7 +310,7 @@ impl Value {
     /// # use regorus::*;
     /// # fn main() -> anyhow::Result<()> {
     /// let obj = Value::new_set();
-    /// assert_eq!(obj.as_set().expect("not a set").len(), 0);
+    /// assert_eq!(obj.set_ref().expect("not a set").len(), 0);
     /// # Ok(())
     /// # }
     /// ```
@@ -441,9 +441,9 @@ impl Value {
     /// assert_eq!(array[2], Value::from(false));
     /// assert_eq!(array[3], Value::from("hello"));
     /// assert_eq!(array[4], Value::from(12345u64));
-    /// let obj = array[5].as_object().expect("not an object");
+    /// let obj = array[5].object_ref().expect("not an object");
     /// assert_eq!(obj.len(), 1);
-    /// assert_eq!(obj[&Value::from("name")], Value::from("regorus"));
+    /// assert_eq!(obj.get(&Value::from("name")), Some(&Value::from("regorus")));
     /// # Ok(())
     /// # }
     /// ```
@@ -871,7 +871,7 @@ impl From<BTreeSet<Value>> for Value {
     ///            .map(|s| Value::from(*s))
     ///            .collect::<BTreeSet<Value>>());
     ///
-    /// let mut iter = v.as_set()?.iter();
+    /// let mut iter = v.set_ref()?.iter();
     /// assert_eq!(iter.next(), Some(&Value::from(strings[0])));
     /// assert_eq!(iter.next(), Some(&Value::from(strings[1])));
     /// # Ok(())
@@ -893,7 +893,7 @@ impl From<BTreeMap<Value, Value>> for Value {
     ///            .map(|(k,v)| (Value::from(*k), Value::from(*v)))
     ///            .collect::<BTreeMap<Value, Value>>());
     ///
-    /// let mut iter = v.as_object()?.iter();
+    /// let mut iter = v.object_ref()?.iter();
     /// assert_eq!(iter.next(), Some((&Value::from(strings[0].0), &Value::from(strings[0].1))));
     /// # Ok(())
     /// # }
@@ -1346,12 +1346,16 @@ impl Value {
     ///        .cloned()
     ///        .collect::<BTreeSet<Value>>(),
     /// );
-    /// assert_eq!(v.as_set()?.first(), Some(&Value::from("Hello")));
+    /// assert_eq!(v.set_ref()?.first(), Some(&Value::from("Hello")));
     /// # Ok(())
     /// # }
+    #[deprecated(
+        note = "use `set_ref()` instead; this method exists only for one-release migration and will be removed in the next major version. The mutable form is intentionally slow."
+    )]
     pub fn as_set(&self) -> Result<&BTreeSet<Value>> {
+        #[allow(deprecated)]
         match self {
-            Value::Set(s) => Ok(s),
+            Value::Set(s) => Ok(s.storage.as_btreeset()),
             _ => Err(anyhow!("not a set")),
         }
     }
@@ -1367,12 +1371,16 @@ impl Value {
     ///        .cloned()
     ///        .collect::<BTreeSet<Value>>(),
     /// );
-    /// v.as_set_mut()?.insert(Value::from("World"));
+    /// v.set_ref_mut()?.insert(Value::from("World"));
     /// # Ok(())
     /// # }
+    #[deprecated(
+        note = "use `set_ref_mut()` instead; this method exists only for one-release migration and will be removed in the next major version. The mutable form is intentionally slow."
+    )]
     pub fn as_set_mut(&mut self) -> Result<&mut BTreeSet<Value>> {
+        #[allow(deprecated)]
         match self {
-            Value::Set(s) => Ok(&mut **Rc::make_mut(s)),
+            Value::Set(s) => Ok(Rc::make_mut(s).storage.as_btreeset_mut()),
             _ => Err(anyhow!("not a set")),
         }
     }
@@ -1389,14 +1397,18 @@ impl Value {
     ///        .collect::<BTreeMap<Value, Value>>(),
     /// );
     /// assert_eq!(
-    ///    v.as_object()?.iter().next(),
+    ///    v.object_ref()?.iter().next(),
     ///    Some((&Value::from("Hello"), &Value::from("World"))),
     /// );
     /// # Ok(())
     /// # }
+    #[deprecated(
+        note = "use `object_ref()` instead; this method exists only for one-release migration and will be removed in the next major version. The mutable form is intentionally slow."
+    )]
     pub fn as_object(&self) -> Result<&BTreeMap<Value, Value>> {
+        #[allow(deprecated)]
         match self {
-            Value::Object(m) => Ok(m),
+            Value::Object(m) => Ok(m.storage.as_btreemap()),
             _ => Err(anyhow!("not an object")),
         }
     }
@@ -1412,12 +1424,16 @@ impl Value {
     ///        .cloned()
     ///        .collect::<BTreeMap<Value, Value>>(),
     /// );
-    /// v.as_object_mut()?.insert(Value::from("Good"), Value::from("Bye"));
+    /// v.object_ref_mut()?.insert(Value::from("Good"), Value::from("Bye"));
     /// # Ok(())
     /// # }
+    #[deprecated(
+        note = "use `object_ref_mut()` instead; this method exists only for one-release migration and will be removed in the next major version. The mutable form is intentionally slow."
+    )]
     pub fn as_object_mut(&mut self) -> Result<&mut BTreeMap<Value, Value>> {
+        #[allow(deprecated)]
         match self {
-            Value::Object(m) => Ok(&mut **Rc::make_mut(m)),
+            Value::Object(m) => Ok(Rc::make_mut(m).storage.as_btreemap_mut()),
             _ => Err(anyhow!("not an object")),
         }
     }
@@ -1434,8 +1450,11 @@ impl Value {
             *self = Value::new_object();
         }
         if let Value::Object(map) = self {
-            if map.get(&key).is_none() {
-                Rc::make_mut(map).insert(key.clone(), Value::Undefined);
+            if map.as_ref().get(&key).is_none() {
+                Rc::make_mut(map)
+                    .as_mut()
+                    .insert(key.clone(), Value::Undefined)
+                    .map_err(|e| anyhow!("{e}"))?;
                 // Enforce allocator limit while creating nested object entries.
                 enforce_limit_anyhow()?;
             }
@@ -1463,17 +1482,13 @@ impl Value {
         match (self, &mut new) {
             (v @ Value::Undefined, _) => *v = new,
             (Value::Set(ref mut set), Value::Set(new)) => {
-                #[allow(clippy::explicit_auto_deref)]
-                let new_set: &mut BTreeSet<Value> = &mut **Rc::make_mut(new);
-                #[allow(clippy::explicit_auto_deref)]
-                let cur_set: &mut BTreeSet<Value> = &mut **Rc::make_mut(set);
-                cur_set.append(new_set);
+                Rc::make_mut(set).as_mut().append(Rc::make_mut(new));
                 // Enforce allocator limit after merging set entries.
                 enforce_limit_anyhow()?;
             }
             (Value::Object(map), Value::Object(new)) => {
-                for (k, v) in new.iter() {
-                    match map.get(k) {
+                for (k, v) in new.as_ref().iter() {
+                    match map.as_ref().get(k) {
                         Some(pv) if *pv != *v => {
                             bail!(
                                 "value for key `{}` generated multiple times: `{}` and `{}`",
@@ -1483,9 +1498,10 @@ impl Value {
                             )
                         }
                         _ => {
-                            #[allow(clippy::explicit_auto_deref)]
-                            let cur_map: &mut BTreeMap<Value, Value> = &mut **Rc::make_mut(map);
-                            cur_map.insert(k.clone(), v.clone());
+                            Rc::make_mut(map)
+                                .as_mut()
+                                .insert(k.clone(), v.clone())
+                                .map_err(|e| anyhow!("{e}"))?;
                             // Enforce allocator limit after merging object entries.
                             enforce_limit_anyhow()?;
                         }
@@ -1520,8 +1536,8 @@ impl ops::Index<&Value> for Value {
     /// assert_eq!(arr[&Value::from(10)], Value::Undefined);
     ///
     /// let mut set = Value::new_set();
-    /// set.as_set_mut()?.insert(Value::from(100));
-    /// set.as_set_mut()?.insert(Value::from("Hello"));
+    /// set.set_ref_mut()?.insert(Value::from(100));
+    /// set.set_ref_mut()?.insert(Value::from("Hello"));
     ///
     /// // Index a set.
     /// let item = Value::from("Hello");
@@ -1529,8 +1545,8 @@ impl ops::Index<&Value> for Value {
     /// assert_eq!(&set[&Value::from(10)], &Value::Undefined);
     ///
     /// let mut obj = Value::new_object();
-    /// obj.as_object_mut()?.insert(Value::from("Hello"), Value::from("World"));
-    /// obj.as_object_mut()?.insert(Value::new_array(), Value::from("bye"));
+    /// obj.object_ref_mut()?.insert(Value::from("Hello"), Value::from("World"));
+    /// obj.object_ref_mut()?.insert(Value::new_array(), Value::from("bye"));
     ///
     /// // Index an object.
     /// assert_eq!(&obj[Value::from("Hello")].as_string()?.as_ref(), &"World");
@@ -1550,11 +1566,11 @@ impl ops::Index<&Value> for Value {
     ///`
     fn index(&self, key: &Value) -> &Self::Output {
         match (self, key) {
-            (Value::Object(o), _) => match &o.get(key) {
+            (Value::Object(o), _) => match &o.as_ref().get(key) {
                 Some(v) => v,
                 _ => &Value::Undefined,
             },
-            (Value::Set(s), _) => match s.get(key) {
+            (Value::Set(s), _) => match s.as_ref().get(key) {
                 Some(v) => v,
                 _ => &Value::Undefined,
             },

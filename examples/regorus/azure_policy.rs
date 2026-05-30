@@ -69,7 +69,7 @@ pub fn azure_policy_eval(
     let raw_resource = Value::from_json_str(&resource_json)?;
     let normalized = normalizer::normalize(&raw_resource, Some(&registry), api_version.as_deref());
     println!("Normalized resource ({} top-level fields)", {
-        normalized.as_object().map(|m| m.len()).unwrap_or(0)
+        normalized.object_ref().map(|m| m.len()).unwrap_or(0)
     });
 
     // Inject api_version into the normalized resource (lowercased key to match
@@ -77,8 +77,8 @@ pub fn azure_policy_eval(
     // compiler lowercases to `apiversion`).
     let mut resource = normalized;
     if let Some(ref api_ver) = api_version {
-        let map = resource.as_object_mut()?;
-        map.insert(Value::from("apiversion"), Value::from(api_ver.clone()));
+        let mut map = resource.object_ref_mut()?;
+        map.insert(Value::from("apiversion"), Value::from(api_ver.clone()))?;
     }
 
     // Build the input envelope: { resource, parameters }
@@ -89,9 +89,9 @@ pub fn azure_policy_eval(
     };
     let mut input = Value::new_object();
     {
-        let map = input.as_object_mut()?;
-        map.insert(Value::from("resource"), resource);
-        map.insert(Value::from("parameters"), parameters);
+        let mut map = input.object_ref_mut()?;
+        map.insert(Value::from("resource"), resource)?;
+        map.insert(Value::from("parameters"), parameters)?;
     }
 
     // Build a default context with requestContext if api_version is provided.
@@ -103,10 +103,10 @@ pub fn azure_policy_eval(
     )?;
     if let Some(ref api_ver) = api_version {
         let mut req_ctx = Value::new_object();
-        let rc_map = req_ctx.as_object_mut()?;
-        rc_map.insert(Value::from("apiVersion"), Value::from(api_ver.clone()));
-        let ctx_map = context.as_object_mut()?;
-        ctx_map.insert(Value::from("requestContext"), req_ctx);
+        let mut rc_map = req_ctx.object_ref_mut()?;
+        rc_map.insert(Value::from("apiVersion"), Value::from(api_ver.clone()))?;
+        let mut ctx_map = context.object_ref_mut()?;
+        ctx_map.insert(Value::from("requestContext"), req_ctx)?;
     }
 
     // 5. Execute in the Rego VM.

@@ -161,10 +161,10 @@ fn eval_test_case(case: &TestCase, is_rego_v0_test: bool) -> Result<Value> {
 
     let mut values = vec![];
     for qr in query_results.result {
-        values.push(if !qr.bindings.as_object()?.is_empty() {
+        values.push(if !qr.bindings.object_ref()?.is_empty() {
             if case.sort_bindings == Some(true) {
                 let mut v = qr.bindings.clone();
-                let bindings = v.as_object_mut()?;
+                let mut bindings = v.object_ref_mut()?;
                 for (_, v) in bindings.iter_mut() {
                     match v {
                         Value::Array(_) => v.as_array_mut()?.sort(),

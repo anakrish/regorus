@@ -53,19 +53,22 @@ pub fn process_value(v: &Value) -> Result<Value> {
         Value::String(s) if s.as_ref() == "#undefined" => Ok(Value::Undefined),
         Value::Object(ref fields) if fields.len() == 1 && matches!(&v["set!"], Value::Array(_)) => {
             let mut set_value = Value::new_set();
-            let set = set_value.as_set_mut()?;
+            let mut set = set_value.set_ref_mut()?;
             for item in v["set!"].as_array()? {
-                set.insert(process_value(item)?);
+                set.insert(process_value(item)?)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
             }
             Ok(set_value)
         }
         Value::Object(fields) if fields.len() == 1 && matches!(&v["object!"], Value::Array(_)) => {
             let mut object_value = Value::new_object();
-            let object = object_value.as_object_mut()?;
+            let mut object = object_value.object_ref_mut()?;
             for item in v["object!"].as_array()? {
                 let key = process_value(&item["key"])?;
                 let value = process_value(&item["value"])?;
-                object.insert(key, value);
+                object
+                    .insert(key, value)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
             }
             Ok(object_value)
         }
@@ -79,9 +82,11 @@ pub fn process_value(v: &Value) -> Result<Value> {
         }
         Value::Object(fields) => {
             let mut object_value = Value::new_object();
-            let object = object_value.as_object_mut()?;
+            let mut object = object_value.object_ref_mut()?;
             for (key, value) in fields.iter() {
-                object.insert(process_value(key)?, process_value(value)?);
+                object
+                    .insert(process_value(key)?, process_value(value)?)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
             }
             Ok(object_value)
         }

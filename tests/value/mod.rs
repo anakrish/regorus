@@ -10,30 +10,51 @@ use regorus::*;
 fn non_string_key() -> Result<()> {
     let mut obj = Value::new_object();
 
-    obj.as_object_mut()?.insert(Value::Null, Value::Null);
-    obj.as_object_mut()?.insert(Value::Bool(false), Value::Null);
-    obj.as_object_mut()?
-        .insert(Value::from(std::f64::consts::PI), Value::Null);
-    obj.as_object_mut()?.insert(
-        Value::from(vec![
-            Value::Bool(true),
+    obj.object_ref_mut()?
+        .insert(Value::Null, Value::Null)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    obj.object_ref_mut()?
+        .insert(Value::Bool(false), Value::Null)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    obj.object_ref_mut()?
+        .insert(Value::from(std::f64::consts::PI), Value::Null)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    obj.object_ref_mut()?
+        .insert(
+            Value::from(vec![
+                Value::Bool(true),
+                Value::Null,
+                Value::from(std::f64::consts::PI),
+            ]),
             Value::Null,
-            Value::from(std::f64::consts::PI),
-        ]),
-        Value::Null,
-    );
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let mut set = Value::new_set();
-    set.as_set_mut()?.insert(Value::Bool(true));
-    set.as_set_mut()?.insert(Value::Bool(false));
-    set.as_set_mut()?.insert(Value::Bool(true));
-    set.as_set_mut()?.insert(Value::from(std::f64::consts::PI));
-    obj.as_object_mut()?.insert(set, Value::Null);
+    set.set_ref_mut()?
+        .insert(Value::Bool(true))
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    set.set_ref_mut()?
+        .insert(Value::Bool(false))
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    set.set_ref_mut()?
+        .insert(Value::Bool(true))
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    set.set_ref_mut()?
+        .insert(Value::from(std::f64::consts::PI))
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    obj.object_ref_mut()?
+        .insert(set, Value::Null)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    obj.as_object_mut()?.insert(Value::Undefined, Value::Null);
+    obj.object_ref_mut()?
+        .insert(Value::Undefined, Value::Null)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let key_obj = obj.clone();
-    obj.as_object_mut()?.insert(key_obj, Value::Null);
+    obj.object_ref_mut()?
+        .insert(key_obj, Value::Null)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let json = serde_json::to_string_pretty(&obj)?;
     println!("{json}");
@@ -78,7 +99,7 @@ fn serialize_string() -> Result<()> {
 #[test]
 fn constructors() -> Result<()> {
     assert_eq!(Value::new_object(), Value::from_json_str("{}")?);
-    assert!(Value::new_set().as_set()?.is_empty());
+    assert!(Value::new_set().set_ref()?.is_empty());
     Ok(())
 }
 
@@ -128,22 +149,23 @@ fn usize_as_index() -> Result<()> {
 
 #[test]
 fn api() -> Result<()> {
-    assert!(&Value::from_json_str("{}")?.as_object()?.is_empty());
+    assert!(&Value::from_json_str("{}")?.object_ref()?.is_empty());
     let mut v = Value::new_object();
-    v.as_object_mut()?
-        .insert(Value::String("a".into()), Value::from(3.145));
+    v.object_ref_mut()?
+        .insert(Value::String("a".into()), Value::from(3.145))
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     assert_eq!(v["a"], Value::from(3.145));
-    assert_eq!(v.as_object()?.len(), 1);
+    assert_eq!(v.object_ref()?.len(), 1);
 
     let v = Value::new_set();
-    assert_eq!(v.as_set()?.len(), 0);
+    assert_eq!(v.set_ref()?.len(), 0);
 
     // Check invalid api calls.
-    assert!(Value::Undefined.as_object().is_err());
-    assert!(Value::Undefined.as_object_mut().is_err());
+    assert!(Value::Undefined.object_ref().is_err());
+    assert!(Value::Undefined.object_ref_mut().is_err());
 
-    assert!(Value::Null.as_set().is_err());
-    assert!(Value::Null.as_set_mut().is_err());
+    assert!(Value::Null.set_ref().is_err());
+    assert!(Value::Null.set_ref_mut().is_err());
 
     assert!(Value::String("anc".into()).as_array().is_err());
     assert!(Value::String("anc".into()).as_array_mut().is_err());

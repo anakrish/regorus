@@ -89,7 +89,7 @@ fn navigate_arm_path_segments(value: &Value, segments: &[Rc<str>]) -> Option<Val
     let mut current = value;
     for segment in segments {
         current = current
-            .as_object()
+            .object_ref()
             .ok()?
             .get(&Value::String(Rc::clone(segment)))?;
     }

@@ -170,7 +170,7 @@ pub(super) fn json_value_to_runtime(value: &JsonValue) -> Result<Value> {
         }
         JsonValue::Object(_, entries) => {
             let mut obj = Value::new_object();
-            let map = obj.as_object_mut()?;
+            let mut map = obj.object_ref_mut()?;
             for ObjectEntry {
                 key,
                 value: entry_value,
@@ -180,7 +180,7 @@ pub(super) fn json_value_to_runtime(value: &JsonValue) -> Result<Value> {
                 map.insert(
                     Value::from(key.clone()),
                     json_value_to_runtime(entry_value)?,
-                );
+                )?;
             }
             Ok(obj)
         }
@@ -308,7 +308,7 @@ mod tests {
             }],
         );
         let v = json_value_to_runtime(&obj).unwrap();
-        let map = v.as_object().unwrap();
+        let map = v.object_ref().unwrap();
         assert_eq!(map.len(), 1);
     }
 

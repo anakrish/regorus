@@ -46,7 +46,7 @@ pub fn denormalize_with_aliases(
     aliases: Option<&ResolvedAliases>,
     api_version: Option<&str>,
 ) -> Value {
-    let obj = match normalized.as_object() {
+    let obj = match normalized.object_ref() {
         Ok(o) => o,
         Err(_) => return normalized.clone(),
     };
@@ -216,7 +216,9 @@ pub fn denormalize_with_aliases(
             // Merge directly into the BTreeMap, avoiding full ObjMap round-trip.
             let existing = Rc::make_mut(existing_rc);
             for (k, v) in properties {
-                existing.entry(Value::String(k)).or_insert(v);
+                if let Ok(entry) = existing.entry(Value::String(k)) {
+                    entry.or_insert(v);
+                }
             }
         } else {
             obj_insert(&mut result, "properties", make_value(properties));

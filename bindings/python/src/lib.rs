@@ -163,16 +163,16 @@ fn to(mut v: Value, py: Python<'_>) -> Result<Py<PyAny>> {
 
         Value::Set(_) => {
             let set = PySet::empty(py)?;
-            for v in std::mem::take(v.as_set_mut()?) {
-                set.add(to(v, py)?)?;
+            for item in v.set_ref()?.iter() {
+                set.add(to(item.clone(), py)?)?;
             }
             set.into_bound_py_any(py)
         }
 
         Value::Object(_) => {
             let dict = PyDict::new(py);
-            for (k, v) in std::mem::take(v.as_object_mut()?) {
-                dict.set_item(to(k, py)?, to(v, py)?)?;
+            for (k, val) in v.object_ref()?.iter() {
+                dict.set_item(to(k.clone(), py)?, to(val.clone(), py)?)?;
             }
             dict.into_bound_py_any(py)
         }

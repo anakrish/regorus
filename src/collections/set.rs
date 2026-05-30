@@ -4,7 +4,6 @@
 use alloc::collections::BTreeSet;
 use core::cmp::Ordering;
 use core::fmt;
-use core::ops::{Deref, DerefMut};
 
 use serde::ser::{SerializeSeq, Serializer};
 use serde::{Deserialize, Serialize};
@@ -65,8 +64,97 @@ impl Set {
     }
 
     #[inline]
-    pub fn try_insert(&mut self, value: Value) -> Result<bool, InsertError> {
+    pub fn insert(&mut self, value: Value) -> Result<bool, InsertError> {
         self.storage.insert(value)
+    }
+
+    #[inline]
+    pub fn remove(&mut self, value: &Value) -> bool {
+        self.storage.as_btreeset_mut().remove(value)
+    }
+
+    #[inline]
+    pub fn contains(&self, value: &Value) -> bool {
+        self.as_ref().contains(value)
+    }
+
+    #[inline]
+    pub fn get(&self, value: &Value) -> Option<&Value> {
+        self.as_ref().get(value)
+    }
+
+    #[inline]
+    pub fn iter(&self) -> SetIter<'_> {
+        self.as_ref().iter()
+    }
+
+    #[inline]
+    pub fn first(&self) -> Option<&Value> {
+        self.as_ref().first()
+    }
+
+    #[inline]
+    pub fn iter_unordered(&self) -> SetIterUnordered<'_> {
+        self.as_ref().iter_unordered()
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn as_btreeset(&self) -> &BTreeSet<Value> {
+        self.storage.as_btreeset()
+    }
+
+    pub fn retain<F: FnMut(&Value) -> bool>(&mut self, f: F) {
+        self.storage.as_btreeset_mut().retain(f);
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.storage.clear();
+    }
+
+    pub fn extend<I: IntoIterator<Item = Value>>(&mut self, iter: I) -> Result<(), InsertError> {
+        for v in iter {
+            self.insert(v)?;
+        }
+        Ok(())
+    }
+
+    pub fn append(&mut self, other: &mut Set) {
+        self.storage
+            .as_btreeset_mut()
+            .append(other.storage.as_btreeset_mut());
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn as_btreeset_mut(&mut self) -> &mut BTreeSet<Value> {
+        self.storage.as_btreeset_mut()
+    }
+
+    #[inline]
+    pub fn intersection(&self, other: &Set) -> Set {
+        self.as_ref().intersection(&other.as_ref())
+    }
+
+    #[inline]
+    pub fn union(&self, other: &Set) -> Set {
+        self.as_ref().union(&other.as_ref())
+    }
+
+    #[inline]
+    pub fn difference(&self, other: &Set) -> Set {
+        self.as_ref().difference(&other.as_ref())
+    }
+
+    #[inline]
+    pub fn is_subset(&self, other: &Set) -> bool {
+        self.as_ref().is_subset(&other.as_ref())
+    }
+
+    #[inline]
+    pub fn is_disjoint(&self, other: &Set) -> bool {
+        self.as_ref().is_disjoint(&other.as_ref())
     }
 
     pub fn try_from_iter<I>(iter: I) -> Result<Self, InsertError>
@@ -75,7 +163,7 @@ impl Set {
     {
         let mut s = Self::new();
         for v in iter {
-            s.try_insert(v)?;
+            s.insert(v)?;
         }
         Ok(s)
     }
@@ -105,7 +193,7 @@ impl FromIterator<Value> for Set {
     fn from_iter<I: IntoIterator<Item = Value>>(it: I) -> Self {
         let mut s = Self::new();
         for v in it {
-            let _ = s.try_insert(v);
+            let _ = s.insert(v);
         }
         s
     }
@@ -114,7 +202,7 @@ impl FromIterator<Value> for Set {
 impl Extend<Value> for Set {
     fn extend<I: IntoIterator<Item = Value>>(&mut self, iter: I) {
         for v in iter {
-            let _ = self.try_insert(v);
+            let _ = self.insert(v);
         }
     }
 }
@@ -175,27 +263,10 @@ impl<'de> Deserialize<'de> for Set {
         let v: alloc::vec::Vec<Value> = alloc::vec::Vec::deserialize(deserializer)?;
         let mut s = Self::new();
         for item in v {
-            s.try_insert(item)
+            s.insert(item)
                 .map_err(|e| serde::de::Error::custom(e.to_string()))?;
         }
         Ok(s)
-    }
-}
-
-#[doc(hidden)]
-impl Deref for Set {
-    type Target = BTreeSet<Value>;
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        self.storage.as_btreeset()
-    }
-}
-
-#[doc(hidden)]
-impl DerefMut for Set {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.storage.as_btreeset_mut()
     }
 }
 
@@ -231,6 +302,10 @@ impl<'a> SetRef<'a> {
     #[inline]
     pub fn iter(&self) -> SetIter<'a> {
         SetIter::new(self.inner.as_btreeset().iter())
+    }
+    #[inline]
+    pub fn first(&self) -> Option<&'a Value> {
+        self.iter().next()
     }
     #[inline]
     pub fn iter_unordered(&self) -> SetIterUnordered<'a> {

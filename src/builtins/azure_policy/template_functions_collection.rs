@@ -72,7 +72,8 @@ fn fn_intersection(
             // Intersection of objects: keep key-value pairs from the first
             // object only when the key exists in every other object AND
             // the value is equal across all of them.
-            let mut result: BTreeMap<Value, Value> = (***first).clone();
+            let mut result: BTreeMap<Value, Value> =
+                first.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             for arg in rest {
                 let Value::Object(ref other) = *arg else {
                     return Ok(Value::Undefined);
@@ -280,9 +281,10 @@ fn fn_create_object(
 
 /// Recursively merge two objects.  Nested objects are merged; everything
 /// else (including arrays) uses the value from `incoming`.
-fn merge_objects(base: &BTreeMap<Value, Value>, overlay: &BTreeMap<Value, Value>) -> Value {
-    let mut result = base.clone();
-    for (k, v) in overlay {
+fn merge_objects(base: &crate::collections::Object, overlay: &crate::collections::Object) -> Value {
+    let mut result: BTreeMap<Value, Value> =
+        base.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    for (k, v) in overlay.iter() {
         #[allow(clippy::needless_borrowed_reference)]
         let merged = match (result.get(k), v) {
             (Some(&Value::Object(ref prev)), &Value::Object(ref next)) => merge_objects(prev, next),

@@ -47,7 +47,7 @@ fn max(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Resu
         Value::Array(a) if a.is_empty() => Value::Undefined,
         Value::Array(a) => a.iter().max().unwrap().clone(),
         Value::Set(a) if a.is_empty() => Value::Undefined,
-        Value::Set(a) => a.iter().max().unwrap().clone(),
+        Value::Set(a) => a.as_ref().iter().max().unwrap().clone(),
         a => {
             let span = params[0].span();
             bail!(span.error(format!("`max` requires array/set argument. Got `{a}`.").as_str()))
@@ -62,7 +62,7 @@ fn min(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Resu
         Value::Array(a) if a.is_empty() => Value::Undefined,
         Value::Array(a) => a.iter().min().unwrap().clone(),
         Value::Set(a) if a.is_empty() => Value::Undefined,
-        Value::Set(a) => a.iter().min().unwrap().clone(),
+        Value::Set(a) => a.as_ref().iter().min().unwrap().clone(),
         a => {
             let span = params[0].span();
             bail!(span.error(format!("`min` requires array/set argument. Got `{a}`.").as_str()))
@@ -76,7 +76,7 @@ fn product(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
     let mut v = Number::from(1_u64);
     Ok(Value::from(match &args[0] {
         Value::Array(a) => {
-            for e in a.iter() {
+            for e in a.as_ref().iter() {
                 v.mul_assign(&ensure_numeric("product", &params[0], e)?)?;
             }
             v
@@ -106,7 +106,7 @@ fn sort(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Res
         // Sorting a set produces array.
         Value::Set(a) => {
             let mut items = Vec::with_capacity(a.len());
-            for value in a.iter() {
+            for value in a.as_ref().iter() {
                 items.push(value.clone());
                 // Guard array growth while materializing the sorted set.
                 enforce_limit()?;
@@ -126,7 +126,7 @@ fn sum(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Resu
     let mut v = Number::from(0_u64);
     Ok(Value::from(match &args[0] {
         Value::Array(a) => {
-            for e in a.iter() {
+            for e in a.as_ref().iter() {
                 v.add_assign(&ensure_numeric("sum", &params[0], e)?)?;
             }
             v

@@ -86,12 +86,14 @@ fn apply_remap_at_depth(
             None => return,
         };
         for segment in nav.iter().skip(1) {
-            cur = match cur.as_object_mut() {
-                Ok(inner) => match inner.get_mut(&Value::from(segment.as_str())) {
-                    Some(v) => v,
-                    None => return,
-                },
-                Err(_) => return,
+            cur = match cur {
+                Value::Object(inner_rc) => {
+                    match crate::Rc::make_mut(inner_rc).get_mut(&Value::from(segment.as_str())) {
+                        Some(v) => v,
+                        None => return,
+                    }
+                }
+                _ => return,
             };
         }
         cur
@@ -101,7 +103,7 @@ fn apply_remap_at_depth(
         let inner = crate::Rc::make_mut(elements);
         for elem in inner.iter_mut() {
             if let Value::Object(obj_rc) = elem {
-                let inner_btree = crate::Rc::make_mut(obj_rc);
+                let inner_btree = crate::Rc::make_mut(obj_rc).as_btreemap_mut();
                 remap_at_depth_in_btree(
                     inner_btree,
                     array_chain,
@@ -147,12 +149,14 @@ fn remap_at_depth_in_btree(
             None => return,
         };
         for segment in nav.iter().skip(1) {
-            cur = match cur.as_object_mut() {
-                Ok(inner) => match inner.get_mut(&Value::from(segment.as_str())) {
-                    Some(v) => v,
-                    None => return,
-                },
-                Err(_) => return,
+            cur = match cur {
+                Value::Object(inner_rc) => {
+                    match crate::Rc::make_mut(inner_rc).get_mut(&Value::from(segment.as_str())) {
+                        Some(v) => v,
+                        None => return,
+                    }
+                }
+                _ => return,
             };
         }
         cur
@@ -162,7 +166,7 @@ fn remap_at_depth_in_btree(
         let inner = crate::Rc::make_mut(elements);
         for elem in inner.iter_mut() {
             if let Value::Object(obj_rc) = elem {
-                let inner_btree = crate::Rc::make_mut(obj_rc);
+                let inner_btree = crate::Rc::make_mut(obj_rc).as_btreemap_mut();
                 remap_at_depth_in_btree(
                     inner_btree,
                     array_chain,
@@ -210,7 +214,7 @@ fn read_dotted_path_btree(
     let first = segments.first()?;
     let mut cur: &Value = btree.get(&Value::from(*first))?;
     for &seg in segments.iter().skip(1) {
-        cur = cur.as_object().ok()?.get(&Value::from(seg))?;
+        cur = cur.object_ref().ok()?.get(&Value::from(seg))?;
     }
     Some(cur.clone())
 }
@@ -246,7 +250,7 @@ fn read_dotted_path(obj: &ObjMap, path: &str) -> Option<Value> {
     let first = segments.first()?;
     let mut cur: &Value = obj_get(obj, first)?;
     for &seg in segments.iter().skip(1) {
-        cur = cur.as_object().ok()?.get(&Value::from(seg))?;
+        cur = cur.object_ref().ok()?.get(&Value::from(seg))?;
     }
     Some(cur.clone())
 }

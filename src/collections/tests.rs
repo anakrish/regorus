@@ -32,7 +32,7 @@ fn object_oracle_insert_get_len() {
         for i in 0..n {
             let (k, v) = build_pair(i);
             oracle.insert(k.clone(), v.clone());
-            obj.try_insert(k, v).expect("finite key");
+            obj.insert(k, v).expect("finite key");
         }
         assert_eq!(obj.len(), oracle.len());
         assert_eq!(obj.is_empty(), oracle.is_empty());
@@ -51,7 +51,7 @@ fn object_sorted_iter_matches_oracle() {
         for i in (0..n).rev() {
             let (k, v) = build_pair(i);
             oracle.insert(k.clone(), v.clone());
-            obj.try_insert(k, v).expect("finite key");
+            obj.insert(k, v).expect("finite key");
         }
         let mine: alloc::vec::Vec<_> = obj.as_ref().iter().collect();
         let theirs: alloc::vec::Vec<_> = oracle.iter().collect();
@@ -67,7 +67,7 @@ fn object_remove_matches_oracle() {
         for i in 0..n {
             let (k, v) = build_pair(i);
             oracle.insert(k.clone(), v.clone());
-            obj.try_insert(k, v).expect("finite key");
+            obj.insert(k, v).expect("finite key");
         }
         for i in (0..n).step_by(2) {
             let k = Value::from(i as u64);
@@ -98,7 +98,7 @@ fn object_entry_or_insert() {
 fn object_non_finite_key_rejected() {
     let mut obj = Object::new();
     let nan = Value::Number(Number::from(f64::NAN));
-    match obj.try_insert(nan, Value::from(1u64)) {
+    match obj.insert(nan, Value::from(1u64)) {
         Err(InsertError::NonFiniteKey) => {}
         other => panic!("expected NonFiniteKey, got {other:?}"),
     }
@@ -112,7 +112,7 @@ fn set_oracle_basic() {
         for i in 0..n {
             let v = Value::from(i as u64);
             oracle.insert(v.clone());
-            let _ = set.try_insert(v);
+            let _ = set.insert(v);
         }
         assert_eq!(set.len(), oracle.len());
         let mine: alloc::vec::Vec<_> = set.as_ref().iter().collect();

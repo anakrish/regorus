@@ -277,14 +277,18 @@ impl RegoVM {
 
         match (&comprehension_context.mode, &mut current_result) {
             (&ComprehensionMode::Set, &mut Value::Set(ref mut set)) => {
-                crate::Rc::make_mut(set).insert(value_to_add);
+                crate::Rc::make_mut(set)
+                    .insert(value_to_add)
+                    .map_err(anyhow::Error::from)?;
             }
             (&ComprehensionMode::Array, &mut Value::Array(ref mut arr)) => {
                 crate::Rc::make_mut(arr).push(value_to_add);
             }
             (&ComprehensionMode::Object, &mut Value::Object(ref mut obj)) => {
                 if let Some(key) = key_value {
-                    crate::Rc::make_mut(obj).insert(key, value_to_add);
+                    crate::Rc::make_mut(obj)
+                        .insert(key, value_to_add)
+                        .map_err(anyhow::Error::from)?;
                 } else {
                     self.set_register(result_reg, current_result)?;
                     self.comprehension_stack.push(comprehension_context);
@@ -403,14 +407,18 @@ impl RegoVM {
 
         match (&mode, &mut current_result) {
             (&ComprehensionMode::Set, &mut Value::Set(ref mut set)) => {
-                crate::Rc::make_mut(set).insert(value_to_add);
+                crate::Rc::make_mut(set)
+                    .insert(value_to_add)
+                    .map_err(anyhow::Error::from)?;
             }
             (&ComprehensionMode::Array, &mut Value::Array(ref mut arr)) => {
                 crate::Rc::make_mut(arr).push(value_to_add);
             }
             (&ComprehensionMode::Object, &mut Value::Object(ref mut obj)) => {
                 if let Some(key) = key_value {
-                    crate::Rc::make_mut(obj).insert(key, value_to_add);
+                    crate::Rc::make_mut(obj)
+                        .insert(key, value_to_add)
+                        .map_err(anyhow::Error::from)?;
                 } else {
                     self.set_register(result_reg_idx, current_result)?;
                     return Err(VmError::InvalidIteration {

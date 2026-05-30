@@ -117,7 +117,7 @@ fn rewrap_nested_array(
 
     for element in parent_arr.iter_mut() {
         if let Value::Object(obj_rc) = element {
-            let inner_btree = crate::Rc::make_mut(obj_rc);
+            let inner_btree = crate::Rc::make_mut(obj_rc).as_btreemap_mut();
 
             if parent_parts.len() > 1 {
                 rewrap_nested_array_in_btree(
@@ -165,7 +165,7 @@ fn rewrap_nested_array_in_btree(
 
     for element in parent_arr.iter_mut() {
         if let Value::Object(obj_rc) = element {
-            let inner_btree = crate::Rc::make_mut(obj_rc);
+            let inner_btree = crate::Rc::make_mut(obj_rc).as_btreemap_mut();
 
             if parent_parts.len() > 1 {
                 rewrap_nested_array_in_btree(
@@ -200,7 +200,7 @@ fn find_key_ci_btree(
 /// Re-wrap a single sub-resource array element by moving non-envelope
 /// fields back under a `properties` object.
 fn rewrap_element(element: &Value, envelope_fields: &BTreeSet<String>) -> Value {
-    let obj = match element.as_object() {
+    let obj = match element.object_ref() {
         Ok(o) => o,
         Err(_) => return element.clone(),
     };

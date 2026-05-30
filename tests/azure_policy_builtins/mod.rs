@@ -73,9 +73,9 @@ fn yaml_to_value(v: &serde_yaml::Value) -> Value {
         serde_yaml::Value::Mapping(map) => {
             let mut obj = Value::new_object();
             {
-                let m = obj.as_object_mut().unwrap();
+                let mut m = obj.object_ref_mut().unwrap();
                 for (k, v) in map {
-                    m.insert(yaml_to_value(k), yaml_to_value(v));
+                    m.insert(yaml_to_value(k), yaml_to_value(v)).unwrap();
                 }
             }
             obj

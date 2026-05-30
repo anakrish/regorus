@@ -10,7 +10,7 @@ use crate::lexer::Span;
 use crate::value::Value;
 use crate::*;
 
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::collections::BTreeSet;
 
 use anyhow::{bail, Result};
 
@@ -80,7 +80,7 @@ fn reachable(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) ->
 }
 
 fn visit(
-    graph: &BTreeMap<Value, Value>,
+    graph: &crate::collections::Object,
     visited: &mut BTreeSet<Value>,
     node: &Value,
     path: &mut Vec<Value>,

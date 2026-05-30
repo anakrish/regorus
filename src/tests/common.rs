@@ -20,7 +20,7 @@ pub fn process_value(v: &Value) -> Result<Value> {
         //   ...
         Value::Object(ref fields) if fields.len() == 1 && matches!(&v["set!"], Value::Array(_)) => {
             let mut set_value = Value::new_set();
-            let set = set_value.as_set_mut()?;
+            let set = set_value.set_ref_mut()?;
             for item in v["set!"].as_array()? {
                 set.insert(process_value(item)?);
             }
@@ -33,7 +33,7 @@ pub fn process_value(v: &Value) -> Result<Value> {
         //    value: ...
         Value::Object(fields) if fields.len() == 1 && matches!(&v["object!"], Value::Array(_)) => {
             let mut object_value = Value::new_object();
-            let object = object_value.as_object_mut()?;
+            let object = object_value.object_ref_mut()?;
             for item in v["object!"].as_array()? {
                 object.insert(process_value(&item["key"])?, process_value(&item["value"])?);
             }
@@ -53,7 +53,7 @@ pub fn process_value(v: &Value) -> Result<Value> {
         // Recursively process objects
         Value::Object(fields) => {
             let mut object_value = Value::new_object();
-            let object = object_value.as_object_mut()?;
+            let object = object_value.object_ref_mut()?;
             for (key, value) in fields.iter() {
                 object.insert(process_value(key)?, process_value(value)?);
             }

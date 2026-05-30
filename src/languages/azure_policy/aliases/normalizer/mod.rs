@@ -45,7 +45,7 @@ pub fn normalize_with_aliases(
     aliases: Option<&ResolvedAliases>,
     api_version: Option<&str>,
 ) -> Value {
-    let obj = match arm_resource.as_object() {
+    let obj = match arm_resource.object_ref() {
         Ok(o) => o,
         Err(_) => return arm_resource.clone(),
     };
@@ -109,7 +109,7 @@ pub fn normalize_with_aliases(
 /// Merge `properties` fields into the result map, skipping keys that already
 /// exist.
 fn merge_properties(
-    obj: &alloc::collections::BTreeMap<Value, Value>,
+    obj: crate::collections::ObjectRef<'_>,
     result: &mut ObjMap,
     sub_arrays: Option<&alloc::collections::BTreeSet<alloc::string::String>>,
 ) {

@@ -136,7 +136,7 @@ fn build_parameter_defaults(
     use alloc::format;
     use anyhow::Context as _;
     let mut obj = Value::new_object();
-    let map = obj.as_object_mut()?;
+    let mut map = obj.object_ref_mut()?;
     for param in params {
         if let Some(ref default_val) = param.default_value {
             check_json_depth(default_val, 0).with_context(|| {
@@ -147,7 +147,7 @@ fn build_parameter_defaults(
             })?;
             let runtime_val = json_value_to_runtime(default_val)
                 .with_context(|| format!("invalid defaultValue for parameter '{}'", param.name))?;
-            map.insert(Value::from(param.name.clone()), runtime_val);
+            map.insert(Value::from(param.name.clone()), runtime_val)?;
         }
     }
     Ok(obj)

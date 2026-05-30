@@ -52,11 +52,14 @@ impl RegoVM {
         }
 
         if let Value::Object(ref mut map) = *target {
-            if !map.contains_key(head) {
-                crate::Rc::make_mut(map).insert(head.clone(), Value::Undefined);
+            if !map.as_ref().contains_key(head) {
+                crate::Rc::make_mut(map)
+                    .as_mut()
+                    .insert(head.clone(), Value::Undefined)
+                    .map_err(anyhow::Error::from)?;
             }
 
-            if let Some(next_target) = crate::Rc::make_mut(map).get_mut(head) {
+            if let Some(next_target) = crate::Rc::make_mut(map).as_mut().get_mut(head) {
                 Self::set_nested_value_static(next_target, tail, value)?;
             }
         } else {
@@ -102,7 +105,7 @@ impl RegoVM {
 
                         for path_component in root_path.iter().chain(relative_path.iter()) {
                             if let Value::Object(ref map) = *cache_lookup {
-                                if let Some(next_value) = map.get(path_component) {
+                                if let Some(next_value) = map.as_ref().get(path_component) {
                                     cache_lookup = next_value;
                                 } else {
                                     path_exists = false;
@@ -116,7 +119,7 @@ impl RegoVM {
 
                         if path_exists {
                             if let Value::Object(ref map) = *cache_lookup {
-                                map.get(&Value::Undefined).cloned()
+                                map.as_ref().get(&Value::Undefined).cloned()
                             } else {
                                 None
                             }

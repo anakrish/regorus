@@ -57,7 +57,7 @@ fn match_span_opt(s: &Span, v: &Value) -> Result<()> {
 }
 
 fn match_vec(s: &Span, vec: &Vec<Ref<Expr>>, v: &Value) -> Result<()> {
-    if v.as_object().is_ok() {
+    if v.object_ref().is_ok() {
         match_span_opt(s, &v["span"])?;
         return match_vec(s, vec, &v["values"]);
     }

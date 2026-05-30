@@ -357,7 +357,7 @@ mod tests {
         let val = meta.to_value();
         // optimization_level must be emitted as an integer Value, not float.
         let key = Value::String("optimization_level".into());
-        let opt = val.as_object().unwrap().get(&key).unwrap().clone();
+        let opt = val.object_ref().unwrap().get(&key).unwrap().clone();
         assert_eq!(opt, Value::from(2_i64));
     }
 

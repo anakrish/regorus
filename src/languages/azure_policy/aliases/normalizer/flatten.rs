@@ -75,7 +75,7 @@ pub fn flatten_element(
     array_path: &str,
     sub_arrays: Option<&BTreeSet<String>>,
 ) -> Value {
-    let obj = match element.as_object() {
+    let obj = match element.object_ref() {
         Ok(o) => o,
         Err(_) => return element.clone(),
     };

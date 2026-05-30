@@ -537,7 +537,7 @@ impl SchemaValidator {
     }
 
     fn validate_discriminated_subobject_with_base(
-        object_value: &BTreeMap<Value, Value>,
+        object_value: &crate::collections::Object,
         discriminated_subobject: &crate::schema::DiscriminatedSubobject,
         base_properties: &BTreeMap<String, Schema>,
         base_additional_properties: Option<&Schema>,
@@ -653,7 +653,7 @@ impl SchemaValidator {
     }
 
     fn validate_subobject(
-        object_value: &BTreeMap<Value, Value>,
+        object_value: &crate::collections::Object,
         subobject: &crate::schema::Subobject,
         path: &str,
     ) -> Result<(), ValidationError> {

@@ -24,19 +24,19 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
 pub fn intersection(expr1: &Expr, expr2: &Expr, v1: Value, v2: Value) -> Result<Value> {
     let s1 = ensure_set("intersection", expr1, v1)?;
     let s2 = ensure_set("intersection", expr2, v2)?;
-    Ok(Value::from_set(s1.intersection(&s2).cloned().collect()))
+    Ok(s1.as_ref().intersection(s2.as_ref()).into_value())
 }
 
 pub fn union(expr1: &Expr, expr2: &Expr, v1: Value, v2: Value) -> Result<Value> {
     let s1 = ensure_set("union", expr1, v1)?;
     let s2 = ensure_set("union", expr2, v2)?;
-    Ok(Value::from_set(s1.union(&s2).cloned().collect()))
+    Ok(s1.as_ref().union(s2.as_ref()).into_value())
 }
 
 pub fn difference(expr1: &Expr, expr2: &Expr, v1: Value, v2: Value) -> Result<Value> {
     let s1 = ensure_set("difference", expr1, v1)?;
     let s2 = ensure_set("difference", expr2, v2)?;
-    Ok(Value::from_set(s1.difference(&s2).cloned().collect()))
+    Ok(s1.as_ref().difference(s2.as_ref()).into_value())
 }
 
 fn binary_set_union(
@@ -49,7 +49,7 @@ fn binary_set_union(
     ensure_args_count(span, name, params, args, 2)?;
     let left = ensure_set(name, &params[0], args[0].clone())?;
     let right = ensure_set(name, &params[1], args[1].clone())?;
-    Ok(Value::from_set(left.union(&right).cloned().collect()))
+    Ok(left.as_ref().union(right.as_ref()).into_value())
 }
 
 fn binary_set_intersection(
@@ -62,9 +62,7 @@ fn binary_set_intersection(
     ensure_args_count(span, name, params, args, 2)?;
     let left = ensure_set(name, &params[0], args[0].clone())?;
     let right = ensure_set(name, &params[1], args[1].clone())?;
-    Ok(Value::from_set(
-        left.intersection(&right).cloned().collect(),
-    ))
+    Ok(left.as_ref().intersection(right.as_ref()).into_value())
 }
 
 fn intersection_of_set_of_sets(
@@ -80,7 +78,7 @@ fn intersection_of_set_of_sets(
     let mut res = BTreeSet::new();
     let mut first = true;
 
-    for s in set.iter() {
+    for s in set.as_ref().iter() {
         let s = match s {
             Value::Set(s) => s,
             _ => bail!(
@@ -89,10 +87,13 @@ fn intersection_of_set_of_sets(
         };
 
         if first {
-            res.clone_from(s);
+            res.clone_from(s.as_ref().as_ref().as_btreeset());
             first = false;
         } else {
-            res = res.intersection(s).cloned().collect();
+            res = res
+                .intersection(s.as_ref().as_ref().as_btreeset())
+                .cloned()
+                .collect();
         }
     }
 
@@ -111,7 +112,7 @@ fn union_of_set_of_sets(
 
     let mut res = BTreeSet::new();
 
-    for s in set.iter() {
+    for s in set.as_ref().iter() {
         let s = match s {
             Value::Set(s) => s,
             _ => bail!(
@@ -119,7 +120,10 @@ fn union_of_set_of_sets(
             ),
         };
 
-        res = res.union(s).cloned().collect();
+        res = res
+            .union(s.as_ref().as_ref().as_btreeset())
+            .cloned()
+            .collect();
     }
 
     Ok(Value::from_set(res))

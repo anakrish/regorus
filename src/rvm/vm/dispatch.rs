@@ -453,8 +453,10 @@ impl RegoVM {
                 // Take ownership so Rc refcount stays at 1 and make_mut is a no-op.
                 let mut obj_value = self.take_register(obj)?;
 
-                if let Ok(obj_mut) = obj_value.as_object_mut() {
-                    obj_mut.insert(key_value, value_value);
+                if let Ok(mut obj_mut) = obj_value.object_ref_mut() {
+                    obj_mut
+                        .insert(key_value, value_value)
+                        .map_err(anyhow::Error::from)?;
                     self.set_register(obj, obj_value)?;
                 } else {
                     let offending = obj_value.clone();
@@ -510,7 +512,7 @@ impl RegoVM {
                         })?
                         .clone();
 
-                    if let Ok(obj_mut) = obj_value.as_object_mut() {
+                    if let Ok(mut obj_mut) = obj_value.object_ref_mut() {
                         let mut literal_updates = params.literal_key_field_pairs().iter();
                         let mut current_literal_update = literal_updates.next();
 
@@ -533,7 +535,9 @@ impl RegoVM {
                             if let Some(key_value) = program.literals.get(usize::from(literal_idx))
                             {
                                 let value_value = self.get_register(value_reg)?.clone();
-                                obj_mut.insert(key_value.clone(), value_value);
+                                obj_mut
+                                    .insert(key_value.clone(), value_value)
+                                    .map_err(anyhow::Error::from)?;
                             }
                             current_literal_update = literal_updates.next();
                         }
@@ -541,7 +545,9 @@ impl RegoVM {
                         for &(key_reg, value_reg) in params.field_pairs() {
                             let key_value = self.get_register(key_reg)?.clone();
                             let value_value = self.get_register(value_reg)?.clone();
-                            obj_mut.insert(key_value, value_value);
+                            obj_mut
+                                .insert(key_value, value_value)
+                                .map_err(anyhow::Error::from)?;
                         }
                     } else {
                         return Err(VmError::ObjectCreateInvalidTemplate {
@@ -680,8 +686,8 @@ impl RegoVM {
                 // Take ownership so Rc refcount stays at 1 and make_mut is a no-op.
                 let mut set_value = self.take_register(set)?;
 
-                if let Ok(set_mut) = set_value.as_set_mut() {
-                    set_mut.insert(value_to_add);
+                if let Ok(mut set_mut) = set_value.set_ref_mut() {
+                    set_mut.insert(value_to_add).map_err(anyhow::Error::from)?;
                     self.set_register(set, set_value)?;
                 } else {
                     let offending = set_value.clone();

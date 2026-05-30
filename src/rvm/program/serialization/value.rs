@@ -86,13 +86,13 @@ impl<'a> Serialize for BinaryValueRef<'a> {
                 "BinaryValue",
                 VARIANT_SET,
                 "Set",
-                &BinarySetRef(items.as_ref()),
+                &BinarySetRef(items.as_btreeset()),
             ),
             Value::Object(ref entries) => serializer.serialize_newtype_variant(
                 "BinaryValue",
                 VARIANT_OBJECT,
                 "Object",
-                &BinaryObjectRef(entries.as_ref()),
+                &BinaryObjectRef(entries.as_btreemap()),
             ),
             Value::Undefined => {
                 serializer.serialize_unit_variant("BinaryValue", VARIANT_UNDEFINED, "Undefined")

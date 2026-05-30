@@ -27,8 +27,8 @@ use crate::{Expression, Extension, Location, QueryResult, QueryResults};
 #[cfg(feature = "coverage")]
 use crate::query::traversal::traverse;
 
+use crate::collections::MapEntry;
 use crate::Rc;
-use alloc::collections::btree_map::Entry as BTreeMapEntry;
 use alloc::collections::{BTreeMap, BTreeSet};
 use anyhow::{anyhow, bail, Result};
 use core::ops::Bound::*;
@@ -706,7 +706,7 @@ impl Interpreter {
                 }
             }
             Value::Set(s) => {
-                for v in s.iter() {
+                for v in s.as_ref().iter() {
                     self.add_variable(&value.source_str(), v.clone())?;
                     if let Some(key) = key {
                         self.add_variable(&key.source_str(), v.clone())?;
@@ -718,7 +718,7 @@ impl Interpreter {
                 }
             }
             Value::Object(o) => {
-                for (k, v) in o.iter() {
+                for (k, v) in o.as_ref().iter() {
                     self.add_variable(&value.source_str(), v.clone())?;
                     if let Some(key) = key {
                         self.add_variable(&key.source_str(), k.clone())?;
@@ -1002,7 +1002,7 @@ impl Interpreter {
                 }
             }
             Value::Set(s) => {
-                for value in s.iter() {
+                for value in s.as_ref().iter() {
                     *self.current_scope_mut()? = scope_saved.clone();
 
                     let mut success = if let Some(key_plan) = &key_plan {
@@ -1039,7 +1039,7 @@ impl Interpreter {
             }
 
             Value::Object(o) => {
-                for (key, value) in o.iter() {
+                for (key, value) in o.as_ref().iter() {
                     *self.current_scope_mut()? = scope_saved.clone();
 
                     let mut success = if let Some(key_plan) = &key_plan {
@@ -1312,10 +1312,16 @@ impl Interpreter {
                                 *obj = Value::new_object();
                             }
 
-                            obj = obj
-                                .as_object_mut()?
-                                .entry(Value::String(p.to_string().into()))
-                                .or_insert(Value::new_object());
+                            obj = match obj {
+                                Value::Object(map) => Rc::make_mut(map)
+                                    .entry(Value::String(p.to_string().into()))
+                                    .map_err(|e| anyhow!("{e}"))?
+                                    .or_insert(Value::new_object()),
+                                _ => bail!(wm
+                                    .refr
+                                    .span()
+                                    .error("not a valid target for with modifier")),
+                            };
                         }
                         *obj = value;
                         // Mark modified rules as processed.
@@ -1561,7 +1567,7 @@ impl Interpreter {
                     self.remove_loop_var_value(loop_target_expr);
                 }
                 Value::Set(items) => {
-                    for v in items.iter() {
+                    for v in items.as_ref().iter() {
                         self.memory_check()?;
                         self.set_loop_var_value(loop_target_expr, v.clone())?;
 
@@ -1581,7 +1587,7 @@ impl Interpreter {
                     self.remove_loop_var_value(loop_target_expr);
                 }
                 Value::Object(obj) => {
-                    for (k, v) in obj.iter() {
+                    for (k, v) in obj.as_ref().iter() {
                         self.memory_check()?;
                         self.set_loop_var_value(loop_target_expr, v.clone())?;
                         // For objects, index is key.
@@ -1679,20 +1685,26 @@ impl Interpreter {
             if idx == len.saturating_sub(1) {
                 // last key.
                 if is_set {
-                    let set = obj
-                        .as_object_mut()
-                        .map_err(|_| anyhow!(span.error("previous value is not an object")))?
-                        .entry(p)
-                        .or_insert(Value::new_set())
-                        .as_set_mut()
-                        .map_err(|_| anyhow!(span.error("previous value is not a set")))?;
-                    set.append(value.as_set_mut()?);
+                    let target = match obj {
+                        Value::Object(map) => Rc::make_mut(map)
+                            .entry(p)
+                            .map_err(|e| anyhow!("{e}"))?
+                            .or_insert(Value::new_set()),
+                        _ => bail!(span.error("previous value is not an object")),
+                    };
+                    match (target, &mut value) {
+                        (Value::Set(existing), Value::Set(set_value)) => {
+                            Rc::make_mut(existing).append(Rc::make_mut(set_value));
+                        }
+                        _ => bail!(span.error("previous value is not a set")),
+                    }
                 } else {
-                    let obj = obj
-                        .as_object_mut()
-                        .map_err(|_| anyhow!(span.error("previous value is not an object")))?;
-                    match obj.entry(p) {
-                        BTreeMapEntry::Vacant(v) => {
+                    let map = match obj {
+                        Value::Object(map) => map,
+                        _ => bail!(span.error("previous value is not an object")),
+                    };
+                    match Rc::make_mut(map).entry(p).map_err(|e| anyhow!("{e}"))? {
+                        MapEntry::Vacant(v) => {
                             if value != Value::Undefined {
                                 v.insert(value);
                             } else {
@@ -1700,7 +1712,7 @@ impl Interpreter {
                                 v.insert(Value::new_object());
                             }
                         }
-                        BTreeMapEntry::Occupied(o) => {
+                        MapEntry::Occupied(o) => {
                             if o.get() != &value && value != Value::Undefined {
                                 bail!(span
                                     .error("complete rules should not produce multiple outputs"))
@@ -1710,11 +1722,13 @@ impl Interpreter {
                 }
                 break;
             } else {
-                obj = obj
-                    .as_object_mut()
-                    .map_err(|_| anyhow!(span.error("previous value is not an object")))?
-                    .entry(p)
-                    .or_insert(Value::new_object());
+                obj = match obj {
+                    Value::Object(map) => Rc::make_mut(map)
+                        .entry(p)
+                        .map_err(|e| anyhow!("{e}"))?
+                        .or_insert(Value::new_object()),
+                    _ => bail!(span.error("previous value is not an object")),
+                };
             }
         }
         Ok(())
@@ -1819,13 +1833,22 @@ impl Interpreter {
 
                 if is_set {
                     // Ensure that set rule is created even if the element is undefined.
-                    let set = ctx_mut
-                        .rule_value
-                        .as_object_mut()?
-                        .entry(Value::from_array(comps))
-                        .or_insert(Value::new_set());
+                    let set = match &mut ctx_mut.rule_value {
+                        Value::Object(map) => Rc::make_mut(map)
+                            .entry(Value::from_array(comps))
+                            .map_err(|e| anyhow!("{e}"))?
+                            .or_insert(Value::new_set()),
+                        _ => bail!("internal error: invalid rule value"),
+                    };
                     if output != Value::Undefined {
-                        set.as_set_mut()?.insert(output);
+                        match set {
+                            Value::Set(values) => {
+                                Rc::make_mut(values)
+                                    .insert(output)
+                                    .map_err(|e| anyhow!("{e}"))?;
+                            }
+                            _ => bail!("internal error: invalid rule value"),
+                        }
                         return Ok(true);
                     }
                     return Ok(false);
@@ -1834,13 +1857,14 @@ impl Interpreter {
                 // Non-set rule.
                 match ctx_mut
                     .rule_value
-                    .as_object_mut()?
+                    .object_ref_mut()?
                     .entry(Value::from_array(comps))
+                    .map_err(|e| anyhow!("{e}"))?
                 {
-                    BTreeMapEntry::Vacant(v) => {
+                    MapEntry::Vacant(v) => {
                         v.insert(output);
                     }
-                    BTreeMapEntry::Occupied(o) if o.get() != &output => bail!(rule_ref
+                    MapEntry::Occupied(o) if o.get() != &output => bail!(rule_ref
                         .span()
                         .error("rules must not produce multiple outputs")),
                     _ => {
@@ -1858,7 +1882,7 @@ impl Interpreter {
 
                     let ctx_mut = self.get_current_context_mut()?;
                     if key != Value::Undefined && value != Value::Undefined {
-                        let map = ctx_mut.value.as_object_mut()?;
+                        let mut map = ctx_mut.value.object_ref_mut()?;
                         match map.get(&key) {
                             Some(pv) if *pv != value => {
                                 let span = ke.span();
@@ -1874,7 +1898,9 @@ impl Interpreter {
                                     .as_str(),
                                 ));
                             }
-                            _ => map.insert(key, value),
+                            _ => {
+                                map.insert(key, value).map_err(|e| anyhow!("{e}"))?;
+                            }
                         };
                     } else {
                         match &ctx_mut.value {
@@ -1892,7 +1918,10 @@ impl Interpreter {
                                 Rc::make_mut(a).push(output);
                             }
                             Value::Set(ref mut s) => {
-                                Rc::make_mut(s).insert(output);
+                                Rc::make_mut(s)
+                                    .as_mut()
+                                    .insert(output)
+                                    .map_err(|e| anyhow!("{e}"))?;
                             }
                             a => bail!("internal error: invalid context value {a}"),
                         }
@@ -1919,8 +1948,9 @@ impl Interpreter {
                     for (name, value) in scope.iter() {
                         current_result
                             .bindings
-                            .as_object_mut()?
-                            .insert(Value::String(name.to_string().into()), value.clone());
+                            .object_ref_mut()?
+                            .insert(Value::String(name.to_string().into()), value.clone())
+                            .map_err(|e| anyhow!("{e}"))?;
                     }
                 }
                 if current_result.expressions.len() == 1 // Single expression query
@@ -1952,13 +1982,13 @@ impl Interpreter {
                 }
             }
             Value::Set(items) => {
-                for v in items.iter() {
+                for v in items.as_ref().iter() {
                     self.set_loop_var_value(loop_target_expr, v.clone())?;
                     result = self.eval_output_expr_in_loop(loop_tail)? || result;
                 }
             }
             Value::Object(obj) => {
-                for (_, v) in obj.iter() {
+                for (_, v) in obj.as_ref().iter() {
                     self.set_loop_var_value(loop_target_expr, v.clone())?;
                     result = self.eval_output_expr_in_loop(loop_tail)? || result;
                 }
@@ -2103,8 +2133,9 @@ impl Interpreter {
                     for (name, value) in scope.iter() {
                         gathered_result
                             .bindings
-                            .as_object_mut()?
-                            .insert(Value::String(name.to_string().into()), value.clone());
+                            .object_ref_mut()?
+                            .insert(Value::String(name.to_string().into()), value.clone())
+                            .map_err(|e| anyhow!("{e}"))?;
                     }
                 }
 
@@ -2286,14 +2317,14 @@ impl Interpreter {
                     let key = self.eval_expr(key)?;
                     collection[&key] == value
                 } else {
-                    object.values().any(|item| *item == value)
+                    object.as_ref().values().any(|item| *item == value)
                 }
             }
             Value::Set(set) => {
                 if key.is_some() {
                     false
                 } else {
-                    set.contains(&value)
+                    set.as_ref().contains(&value)
                 }
             }
             _ => {
@@ -2461,7 +2492,7 @@ impl Interpreter {
             }
             Value::Set(set) => {
                 s.push('{');
-                for (idx, e) in set.iter().enumerate() {
+                for (idx, e) in set.as_ref().iter().enumerate() {
                     if idx > 0 {
                         s.push_str(", ");
                     }
@@ -2471,7 +2502,7 @@ impl Interpreter {
             }
             Value::Object(map) => {
                 s.push('{');
-                for (idx, (k, entry_value)) in map.iter().enumerate() {
+                for (idx, (k, entry_value)) in map.as_ref().iter().enumerate() {
                     if idx > 0 {
                         s.push_str(", ");
                     }
@@ -2735,7 +2766,7 @@ impl Interpreter {
 
             let result = match &value {
                 Value::Set(s) if s.len() == 1 => {
-                    let Some(v) = s.iter().next() else {
+                    let Some(v) = s.as_ref().first() else {
                         return Err(anyhow!("internal error: expected single value in set"));
                     };
                     v.clone()
@@ -3001,7 +3032,9 @@ impl Interpreter {
         if obj == &Value::Undefined {
             *obj = Value::new_object();
         }
-        obj.as_object_mut()?.insert(Value::Undefined, Value::Null);
+        obj.object_ref_mut()?
+            .insert(Value::Undefined, Value::Null)
+            .map_err(|e| anyhow!("{e}"))?;
         Ok(())
     }
 
@@ -3399,8 +3432,11 @@ impl Interpreter {
             *obj = Value::new_object();
         }
         if let Value::Object(map) = obj {
-            if map.get(&key).is_none() {
-                Rc::make_mut(map).insert(key.clone(), Value::Undefined);
+            if map.as_ref().get(&key).is_none() {
+                Rc::make_mut(map)
+                    .as_mut()
+                    .insert(key.clone(), Value::Undefined)
+                    .map_err(|e| anyhow!("{e}"))?;
             }
         }
 
@@ -3614,12 +3650,15 @@ impl Interpreter {
             if let Some(index) = index {
                 let index = self.eval_expr(&index)?;
                 let mut object = Value::new_object();
-                object.as_object_mut()?.insert(index.clone(), value);
+                object
+                    .object_ref_mut()?
+                    .insert(index.clone(), value)
+                    .map_err(|e| anyhow!("{e}"))?;
 
                 let vref = Self::make_or_get_value_mut(&mut self.data, &paths)?;
 
                 if let Value::Object(btree) = &vref {
-                    if !btree.contains_key(&index) {
+                    if !btree.as_ref().contains_key(&index) {
                         Self::merge_rule_value(span, vref, object)?;
                     }
                 } else if let Value::Undefined = vref {
@@ -3749,7 +3788,7 @@ impl Interpreter {
                         let package_components = self.eval_rule_ref(&module.package.refr)?;
 
                         if value != Value::Undefined {
-                            for (path, value_in_map) in value.as_object()? {
+                            for (path, value_in_map) in value.object_ref()? {
                                 let mut full_path = package_components.clone();
                                 full_path.append(&mut path.as_array()?.clone());
                                 self.check_rule_path(refr, &full_path, value_in_map, is_set)?;

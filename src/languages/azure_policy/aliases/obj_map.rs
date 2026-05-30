@@ -108,7 +108,7 @@ pub fn val_str(v: &Value) -> Option<&str> {
 ///
 /// Performs a case-insensitive key lookup so both `"type"` and `"Type"` work.
 pub fn extract_type_field(resource: &Value) -> Option<&str> {
-    resource.as_object().ok().and_then(|obj| {
+    resource.object_ref().ok().and_then(|obj| {
         obj.iter()
             .find(|(k, _)| val_str(k).is_some_and(|s| s.eq_ignore_ascii_case("type")))
             .and_then(|(_, v)| val_str(v))
@@ -120,7 +120,7 @@ pub fn extract_type_field(resource: &Value) -> Option<&str> {
 /// Non-string keys are silently skipped.
 #[allow(dead_code)]
 pub fn value_to_obj_map(value: &Value) -> Option<ObjMap> {
-    let btree = value.as_object().ok()?;
+    let btree = value.object_ref().ok()?;
     let mut map = ObjMap::with_capacity(btree.len());
     for (k, v) in btree.iter() {
         if let Value::String(s) = k {
@@ -193,7 +193,7 @@ fn set_nested_inner(obj: &mut ObjMap, segments: &[&str], value: Value, lowercase
 
     // Descend directly into the BTreeMap, avoiding ObjMap round-trip.
     if let Some(Value::Object(inner_rc)) = obj.get_mut(&*seg) {
-        let inner_btree = Rc::make_mut(inner_rc);
+        let inner_btree = Rc::make_mut(inner_rc).as_btreemap_mut();
         set_nested_in_btree(
             inner_btree,
             segments.get(1..).unwrap_or_default(),
@@ -236,7 +236,7 @@ pub fn set_nested_in_btree(
     }
 
     if let Some(Value::Object(inner_rc)) = btree.get_mut(&key_val) {
-        let inner = Rc::make_mut(inner_rc);
+        let inner = Rc::make_mut(inner_rc).as_btreemap_mut();
         set_nested_in_btree(
             inner,
             segments.get(1..).unwrap_or_default(),
@@ -336,12 +336,14 @@ fn remove_field_at_depth(obj: &mut ObjMap, array_chain: &[Vec<String>], depth: u
             None => return,
         };
         for segment in nav.iter().skip(1) {
-            cur = match cur.as_object_mut() {
-                Ok(inner) => match inner.get_mut(&Value::from(segment.as_str())) {
-                    Some(v) => v,
-                    None => return,
-                },
-                Err(_) => return,
+            cur = match cur {
+                Value::Object(inner_rc) => {
+                    match Rc::make_mut(inner_rc).get_mut(&Value::from(segment.as_str())) {
+                        Some(v) => v,
+                        None => return,
+                    }
+                }
+                _ => return,
             };
         }
         cur
@@ -351,7 +353,7 @@ fn remove_field_at_depth(obj: &mut ObjMap, array_chain: &[Vec<String>], depth: u
         let inner = Rc::make_mut(elements);
         for elem in inner.iter_mut() {
             if let Value::Object(obj_rc) = elem {
-                let inner_btree = Rc::make_mut(obj_rc);
+                let inner_btree = Rc::make_mut(obj_rc).as_btreemap_mut();
                 remove_field_at_depth_in_btree(
                     inner_btree,
                     array_chain,
@@ -399,12 +401,14 @@ fn remove_field_at_depth_in_btree(
             None => return,
         };
         for segment in nav.iter().skip(1) {
-            cur = match cur.as_object_mut() {
-                Ok(inner) => match inner.get_mut(&Value::from(segment.as_str())) {
-                    Some(v) => v,
-                    None => return,
-                },
-                Err(_) => return,
+            cur = match cur {
+                Value::Object(inner_rc) => {
+                    match Rc::make_mut(inner_rc).get_mut(&Value::from(segment.as_str())) {
+                        Some(v) => v,
+                        None => return,
+                    }
+                }
+                _ => return,
             };
         }
         cur
@@ -414,7 +418,7 @@ fn remove_field_at_depth_in_btree(
         let inner = Rc::make_mut(elements);
         for elem in inner.iter_mut() {
             if let Value::Object(obj_rc) = elem {
-                let inner_btree = Rc::make_mut(obj_rc);
+                let inner_btree = Rc::make_mut(obj_rc).as_btreemap_mut();
                 remove_field_at_depth_in_btree(
                     inner_btree,
                     array_chain,
@@ -450,22 +454,24 @@ fn remove_at_dotted_path_in_btree(
 
     if parent_segs.len() == 1 {
         if let Value::Object(inner_rc) = parent_val {
-            let inner_btree = Rc::make_mut(inner_rc);
+            let inner_btree = Rc::make_mut(inner_rc).as_btreemap_mut();
             inner_btree.remove(&Value::from(leaf));
         }
     } else {
         let mut cur = parent_val;
         for &seg in parent_segs.iter().skip(1) {
-            cur = match cur.as_object_mut() {
-                Ok(inner) => match inner.get_mut(&Value::from(seg)) {
-                    Some(v) => v,
-                    None => return,
-                },
-                Err(_) => return,
+            cur = match cur {
+                Value::Object(inner_rc) => {
+                    match Rc::make_mut(inner_rc).get_mut(&Value::from(seg)) {
+                        Some(v) => v,
+                        None => return,
+                    }
+                }
+                _ => return,
             };
         }
         if let Value::Object(inner_rc) = cur {
-            let inner_btree = Rc::make_mut(inner_rc);
+            let inner_btree = Rc::make_mut(inner_rc).as_btreemap_mut();
             inner_btree.remove(&Value::from(leaf));
         }
     }
@@ -497,16 +503,18 @@ fn remove_at_dotted_path(obj: &mut ObjMap, segments: &[&str]) {
     } else {
         let mut cur = parent_val;
         for &seg in parent_segs.iter().skip(1) {
-            cur = match cur.as_object_mut() {
-                Ok(inner) => match inner.get_mut(&Value::from(seg)) {
-                    Some(v) => v,
-                    None => return,
-                },
-                Err(_) => return,
+            cur = match cur {
+                Value::Object(inner_rc) => {
+                    match Rc::make_mut(inner_rc).get_mut(&Value::from(seg)) {
+                        Some(v) => v,
+                        None => return,
+                    }
+                }
+                _ => return,
             };
         }
         if let Value::Object(inner_rc) = cur {
-            let inner_btree = Rc::make_mut(inner_rc);
+            let inner_btree = Rc::make_mut(inner_rc).as_btreemap_mut();
             inner_btree.remove(&Value::from(leaf));
         }
     }

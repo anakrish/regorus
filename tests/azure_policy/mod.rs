@@ -482,8 +482,8 @@ fn make_input(case: &TestCase, alias_registry: Option<&AliasRegistry>) -> Result
     // Use lowercase key to match normalizer-lowercased keys and
     // the compiler's lowercased lookup paths.
     if let Some(ref api_ver) = case.api_version {
-        let map = resource.as_object_mut()?;
-        map.insert(Value::from("apiversion"), Value::from(api_ver.clone()));
+        let mut map = resource.object_ref_mut()?;
+        map.insert(Value::from("apiversion"), Value::from(api_ver.clone()))?;
     }
 
     // Inject `fullname` when the resource has a `name` but no explicit
@@ -492,10 +492,10 @@ fn make_input(case: &TestCase, alias_registry: Option<&AliasRegistry>) -> Result
     // For test resources the YAML `name` already contains the full name
     // (ARM names include ancestor segments for child resources).
     {
-        let map = resource.as_object_mut()?;
+        let mut map = resource.object_ref_mut()?;
         if map.get(&Value::from("fullname")).is_none() {
             if let Some(name_val) = map.get(&Value::from("name")).cloned() {
-                map.insert(Value::from("fullname"), name_val);
+                map.insert(Value::from("fullname"), name_val)?;
             }
         }
     }
@@ -506,9 +506,9 @@ fn make_input(case: &TestCase, alias_registry: Option<&AliasRegistry>) -> Result
     }
 
     let mut input = Value::new_object();
-    let map = input.as_object_mut()?;
-    map.insert(Value::from("resource"), resource);
-    map.insert(Value::from("parameters"), parameters);
+    let mut map = input.object_ref_mut()?;
+    map.insert(Value::from("resource"), resource)?;
+    map.insert(Value::from("parameters"), parameters)?;
 
     Ok(input)
 }
@@ -541,18 +541,20 @@ fn make_context(case: &TestCase) -> Result<Value> {
     // harness mirrors the same contract.
     if let Some(ref rc) = case.request_context {
         let rc_val = yaml_to_regorus_value(Some(rc))?.unwrap_or_else(Value::new_object);
-        let map = ctx.as_object_mut()?;
+        let mut map = ctx.object_ref_mut()?;
         // Only inject if the caller didn't already provide requestContext
         // in the context object, to avoid clobbering custom test setups.
-        map.entry(Value::from("requestContext")).or_insert(rc_val);
+        if let Ok(entry) = map.entry(Value::from("requestContext")) {
+            entry.or_insert(rc_val);
+        }
     } else if let Some(ref api_ver) = case.api_version {
-        let map = ctx.as_object_mut()?;
-        if let std::collections::btree_map::Entry::Vacant(e) =
+        let mut map = ctx.object_ref_mut()?;
+        if let Ok(regorus::collections::MapEntry::Vacant(e)) =
             map.entry(Value::from("requestContext"))
         {
             let mut req_ctx = Value::new_object();
-            let rc_map = req_ctx.as_object_mut()?;
-            rc_map.insert(Value::from("apiVersion"), Value::from(api_ver.clone()));
+            let mut rc_map = req_ctx.object_ref_mut()?;
+            rc_map.insert(Value::from("apiVersion"), Value::from(api_ver.clone()))?;
             e.insert(req_ctx);
         }
     }
@@ -580,13 +582,13 @@ fn lowercase_value_keys(value: &Value) -> Value {
     match value {
         Value::Object(btree) => {
             let mut result = Value::new_object();
-            let map = result.as_object_mut().unwrap();
+            let mut map = result.object_ref_mut().unwrap();
             for (k, v) in btree.iter() {
                 let lc_key = match k {
                     Value::String(s) => Value::String(s.to_lowercase().into()),
                     other => other.clone(),
                 };
-                map.insert(lc_key, lowercase_value_keys(v));
+                map.insert(lc_key, lowercase_value_keys(v)).unwrap();
             }
             result
         }
@@ -604,7 +606,7 @@ fn lowercase_value_keys(value: &Value) -> Value {
 /// field's value. If the value is a plain string (legacy format), returns it
 /// directly.
 fn extract_effect_name(value: &Value) -> Value {
-    if let Ok(obj) = value.as_object() {
+    if let Ok(obj) = value.object_ref() {
         if let Some(effect) = obj.get(&Value::from("effect")) {
             return effect.clone();
         }
@@ -615,7 +617,7 @@ fn extract_effect_name(value: &Value) -> Value {
 
 /// Extract the details object from a structured result.
 fn extract_details(value: &Value) -> Value {
-    if let Ok(obj) = value.as_object() {
+    if let Ok(obj) = value.object_ref() {
         if let Some(details) = obj.get(&Value::from("details")) {
             return details.clone();
         }
@@ -658,10 +660,10 @@ fn extract_details_resource_type(source_text: &str, is_definition: bool) -> Opti
 /// field.  Real ARM responses always include `type`; the test YAML omits it
 /// for brevity.
 fn inject_type_field(value: &mut Value, resource_type: &str) {
-    if let Ok(obj) = value.as_object_mut() {
+    if let Ok(mut obj) = value.object_ref_mut() {
         let key = Value::from("type");
         if obj.get(&key).is_none() {
-            obj.insert(key, Value::from(resource_type));
+            obj.insert(key, Value::from(resource_type)).unwrap();
         }
     }
 }

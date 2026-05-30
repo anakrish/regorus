@@ -39,7 +39,7 @@ fn json_filter_impl(v: &Value, filter: &Value) -> Result<Value> {
         Value::Object(fields) if fields.len() == 1 && filter[&Value::Null] == Value::Null => {
             return Ok(v.clone())
         }
-        Value::Object(fields) if !fields.is_empty() => fields,
+        Value::Object(fields) if !fields.is_empty() => fields.as_ref(),
         _ => return Ok(v.clone()),
     };
 
@@ -66,7 +66,7 @@ fn json_filter_impl(v: &Value, filter: &Value) -> Result<Value> {
         Value::Set(s) => {
             let mut items = BTreeSet::new();
             for (item, filter) in filters.iter() {
-                if s.contains(item) {
+                if s.as_ref().contains(item) {
                     let item = json_filter_impl(item, filter)?;
                     if item != Value::Undefined {
                         items.insert(item);
@@ -130,7 +130,7 @@ fn json_remove_impl(v: &Value, filter: &Value) -> Result<Value> {
 
         Value::Set(s) => {
             let mut items = BTreeSet::new();
-            for item in s.iter() {
+            for item in s.as_ref().iter() {
                 if let Some(f) = filters.get(item) {
                     let v = json_remove_impl(item, f)?;
                     if v != Value::Undefined {
@@ -150,7 +150,7 @@ fn json_remove_impl(v: &Value, filter: &Value) -> Result<Value> {
 
         Value::Object(obj) => {
             let mut items = BTreeMap::new();
-            for (key, value) in obj.iter() {
+            for (key, value) in obj.as_ref().iter() {
                 if let Some(f) = filters.get(key) {
                     let v = json_remove_impl(value, f)?;
                     if v != Value::Undefined {
@@ -191,8 +191,9 @@ fn merge_filters(
                     // Guard recursive filter construction as path objects materialize.
                     enforce_limit()?;
                 }
-                if let Ok(f) = f.as_object_mut() {
-                    f.insert(Value::Null, Value::Null);
+                if let Ok(mut f) = f.object_ref_mut() {
+                    f.insert(Value::Null, Value::Null)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
                     // Guard filter map growth when marking terminal entries.
                     enforce_limit()?;
                 };
@@ -204,8 +205,10 @@ fn merge_filters(
                 for p in a.iter() {
                     let vref = match f {
                         Value::Object(obj) => {
-                            let obj = Rc::make_mut(obj);
-                            let entry = obj.entry(p.clone()).or_insert_with(Value::new_object);
+                            let entry = Rc::make_mut(obj)
+                                .entry(p.clone())
+                                .map_err(|e| anyhow::anyhow!("{e}"))?
+                                .or_insert_with(Value::new_object);
                             // Guard filter map growth when creating nested objects.
                             enforce_limit()?;
                             entry
@@ -216,8 +219,9 @@ fn merge_filters(
                     // Guard recursive descent as additional path components attach.
                     enforce_limit()?;
                 }
-                if let Ok(f) = f.as_object_mut() {
-                    f.insert(Value::Null, Value::Null);
+                if let Ok(mut f) = f.object_ref_mut() {
+                    f.insert(Value::Null, Value::Null)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
                     // Guard filter map growth when sealing terminal markers.
                     enforce_limit()?;
                 };
@@ -246,7 +250,7 @@ fn json_filter(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool)
         _ => bail!(span.error(format!("`{name}` requires set/array argument").as_str())),
     };
 
-    if let Ok(v) = filters.as_object() {
+    if let Ok(v) = filters.object_ref() {
         if v.is_empty() {
             return Ok(Value::new_object());
         }
@@ -273,14 +277,14 @@ fn filter(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> R
     let name = "object.filter";
     ensure_args_count(span, name, params, args, 2)?;
     let mut obj = ensure_object(name, &params[0], args[0].clone())?;
-    let obj_ref = Rc::make_mut(&mut obj);
+    let mut obj_ref = Rc::make_mut(&mut obj).as_mut();
     match &args[1] {
         Value::Array(a) => {
             let keys: BTreeSet<&Value> = a.iter().collect();
             obj_ref.retain(|k, _| keys.contains(k))
         }
-        Value::Set(s) => obj_ref.retain(|k, _| s.contains(k)),
-        Value::Object(o) => obj_ref.retain(|k, _| o.contains_key(k)),
+        Value::Set(s) => obj_ref.retain(|k, _| s.as_ref().contains(k)),
+        Value::Object(o) => obj_ref.retain(|k, _| o.as_ref().contains_key(k)),
         _ => bail!(span.error(format!("`{name}` requires array/object/set argument").as_str())),
     };
 
@@ -305,7 +309,7 @@ fn get(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Resu
             }
             v.clone()
         }
-        key => match obj.get(key) {
+        key => match obj.as_ref().get(key) {
             Some(v) => v.clone(),
             _ => default.clone(),
         },
@@ -316,21 +320,21 @@ fn keys(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Res
     let name = "object.keys";
     ensure_args_count(span, name, params, args, 1)?;
     let obj = ensure_object(name, &params[0], args[0].clone())?;
-    Ok(Value::from_set(obj.keys().cloned().collect()))
+    Ok(Value::from_set(obj.as_ref().keys().cloned().collect()))
 }
 
 fn remove(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "object.remove";
     ensure_args_count(span, name, params, args, 2)?;
     let mut obj = ensure_object(name, &params[0], args[0].clone())?;
-    let obj_ref = Rc::make_mut(&mut obj);
+    let mut obj_ref = Rc::make_mut(&mut obj).as_mut();
     match &args[1] {
         Value::Array(a) => {
             let keys: BTreeSet<&Value> = a.iter().collect();
             obj_ref.retain(|k, _| !keys.contains(k))
         }
-        Value::Set(s) => obj_ref.retain(|k, _| !s.contains(k)),
-        Value::Object(o) => obj_ref.retain(|k, _| !o.contains_key(k)),
+        Value::Set(s) => obj_ref.retain(|k, _| !s.as_ref().contains(k)),
+        Value::Object(o) => obj_ref.retain(|k, _| !o.as_ref().contains_key(k)),
         _ => bail!(span.error(format!("`{name}` requires array/object/set argument").as_str())),
     };
 
@@ -340,15 +344,15 @@ fn remove(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> R
 fn is_subset(sup: &Value, sub: &Value) -> bool {
     match (sup, sub) {
         (Value::Object(sup), Value::Object(sub)) => {
-            sub.iter().all(|(k, vsub)| {
-                match sup.get(k) {
+            sub.as_ref().iter().all(|(k, vsub)| {
+                match sup.as_ref().get(k) {
                     //		    Some(vsup @ Value::Object(_)) => is_subset(vsup, vsub),
                     Some(vsup) => is_subset(vsup, vsub),
                     _ => false,
                 }
             })
         }
-        (Value::Set(sup), Value::Set(sub)) => sub.is_subset(sup),
+        (Value::Set(sup), Value::Set(sub)) => sub.as_ref().is_subset(sup.as_ref()),
         (Value::Array(sup), Value::Array(sub)) => sup.windows(sub.len()).any(|w| w == &sub[..]),
         (Value::Array(sup), Value::Set(_)) => {
             let sup = Value::from_set(sup.iter().cloned().collect());
@@ -369,14 +373,15 @@ fn union(obj1: &Value, obj2: &Value) -> Result<Value> {
     match (obj1, obj2) {
         (Value::Object(m1), Value::Object(m2)) => {
             let mut u = obj1.clone();
-            let um = u.as_object_mut()?;
+            let mut um = u.object_ref_mut()?;
 
-            for (key2, value2) in m2.iter() {
-                let vm = match m1.get(key2) {
+            for (key2, value2) in m2.as_ref().iter() {
+                let vm = match m1.as_ref().get(key2) {
                     Some(value1) => union(value1, value2)?,
                     _ => value2.clone(),
                 };
-                um.insert(key2.clone(), vm);
+                um.insert(key2.clone(), vm)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
             }
             Ok(u)
         }
@@ -407,7 +412,7 @@ fn object_union_n(
 
     let mut u = Value::new_object();
     for (idx, a) in arr.iter().enumerate() {
-        if a.as_object().is_err() {
+        if a.object_ref().is_err() {
             if strict {
                 bail!(params[0]
                     .span()

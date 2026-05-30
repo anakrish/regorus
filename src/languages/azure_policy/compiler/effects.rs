@@ -583,7 +583,7 @@ impl Compiler {
         };
 
         let defaults = self.parameter_defaults.as_ref()?;
-        let defaults_obj = defaults.as_object().ok()?;
+        let defaults_obj = defaults.object_ref().ok()?;
         let default_effect = defaults_obj.get(&Value::from(parameter_name))?;
         let effect_name = default_effect.as_string().ok()?;
         Some(effect_name.to_string())

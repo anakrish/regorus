@@ -59,11 +59,11 @@ pub enum Value {
     /// A set of values.
     /// No JSON equivalent.
     /// Sets are serialized as arrays in JSON.
-    Set(Rc<BTreeSet<Value>>),
+    Set(Rc<crate::collections::Set>),
 
     /// An object.
     /// Unlike JSON, keys can be any value, not just string.
-    Object(Rc<BTreeMap<Value, Value>>),
+    Object(Rc<crate::collections::Object>),
 
     /// Undefined value.
     /// Used to indicate the absence of a value.
@@ -316,6 +316,104 @@ impl Value {
     /// ```
     pub fn new_set() -> Value {
         Value::from(BTreeSet::new())
+    }
+
+    /// Construct a `Value::Object` from an iterator of key/value pairs.
+    ///
+    /// Non-finite numeric keys are silently dropped (mirroring std).
+    pub fn object_from_iter<I>(iter: I) -> Value
+    where
+        I: IntoIterator<Item = (Value, Value)>,
+    {
+        crate::collections::Object::from_iter(iter).into_value()
+    }
+
+    /// Construct a `Value::Set` from an iterator of elements.
+    pub fn set_from_iter<I>(iter: I) -> Value
+    where
+        I: IntoIterator<Item = Value>,
+    {
+        crate::collections::Set::from_iter(iter).into_value()
+    }
+
+    /// Borrow a read-only view of the inner object.
+    pub fn object_ref(&self) -> Result<crate::collections::ObjectRef<'_>> {
+        match self {
+            Value::Object(o) => Ok(crate::collections::Object::as_ref(o)),
+            _ => Err(anyhow!("not an object")),
+        }
+    }
+
+    /// Borrow a mutable view of the inner object, COW-promoting the inner Rc.
+    pub fn object_ref_mut(&mut self) -> Result<crate::collections::ObjectRefMut<'_>> {
+        match self {
+            Value::Object(o) => Ok(crate::collections::Object::as_mut(Rc::make_mut(o))),
+            _ => Err(anyhow!("not an object")),
+        }
+    }
+
+    /// Borrow a read-only view of the inner set.
+    pub fn set_ref(&self) -> Result<crate::collections::SetRef<'_>> {
+        match self {
+            Value::Set(s) => Ok(crate::collections::Set::as_ref(s)),
+            _ => Err(anyhow!("not a set")),
+        }
+    }
+
+    /// Borrow a mutable view of the inner set.
+    pub fn set_ref_mut(&mut self) -> Result<crate::collections::SetRefMut<'_>> {
+        match self {
+            Value::Set(s) => Ok(crate::collections::Set::as_mut(Rc::make_mut(s))),
+            _ => Err(anyhow!("not a set")),
+        }
+    }
+
+    /// Length of the inner object, or `None` if not an object.
+    pub fn object_len(&self) -> Option<usize> {
+        match self {
+            Value::Object(o) => Some(o.len()),
+            _ => None,
+        }
+    }
+
+    /// Length of the inner set, or `None` if not a set.
+    pub fn set_len(&self) -> Option<usize> {
+        match self {
+            Value::Set(s) => Some(s.len()),
+            _ => None,
+        }
+    }
+
+    /// Direct key lookup that avoids constructing the borrow view.
+    pub fn object_get(&self, key: &Value) -> Option<&Value> {
+        match self {
+            Value::Object(o) => crate::collections::Object::as_ref(o).get(key),
+            _ => None,
+        }
+    }
+
+    /// String-keyed lookup shortcut.
+    pub fn object_get_str(&self, key: &str) -> Option<&Value> {
+        match self {
+            Value::Object(o) => crate::collections::Object::as_ref(o).get_str(key),
+            _ => None,
+        }
+    }
+
+    /// Whether the object contains `key`.
+    pub fn object_contains_key(&self, key: &Value) -> bool {
+        match self {
+            Value::Object(o) => crate::collections::Object::as_ref(o).contains_key(key),
+            _ => false,
+        }
+    }
+
+    /// Whether the set contains `value`.
+    pub fn set_contains(&self, value: &Value) -> bool {
+        match self {
+            Value::Set(s) => crate::collections::Set::as_ref(s).contains(value),
+            _ => false,
+        }
     }
 }
 
@@ -779,7 +877,7 @@ impl From<BTreeSet<Value>> for Value {
     /// # Ok(())
     /// # }
     fn from(s: BTreeSet<Value>) -> Self {
-        Value::Set(Rc::new(s))
+        Value::Set(Rc::new(crate::collections::Set::from(s)))
     }
 }
 
@@ -800,7 +898,7 @@ impl From<BTreeMap<Value, Value>> for Value {
     /// # Ok(())
     /// # }
     fn from(s: BTreeMap<Value, Value>) -> Self {
-        Value::Object(Rc::new(s))
+        Value::Object(Rc::new(crate::collections::Object::from(s)))
     }
 }
 
@@ -1274,7 +1372,7 @@ impl Value {
     /// # }
     pub fn as_set_mut(&mut self) -> Result<&mut BTreeSet<Value>> {
         match self {
-            Value::Set(s) => Ok(Rc::make_mut(s)),
+            Value::Set(s) => Ok(&mut **Rc::make_mut(s)),
             _ => Err(anyhow!("not a set")),
         }
     }
@@ -1319,7 +1417,7 @@ impl Value {
     /// # }
     pub fn as_object_mut(&mut self) -> Result<&mut BTreeMap<Value, Value>> {
         match self {
-            Value::Object(m) => Ok(Rc::make_mut(m)),
+            Value::Object(m) => Ok(&mut **Rc::make_mut(m)),
             _ => Err(anyhow!("not an object")),
         }
     }
@@ -1365,7 +1463,11 @@ impl Value {
         match (self, &mut new) {
             (v @ Value::Undefined, _) => *v = new,
             (Value::Set(ref mut set), Value::Set(new)) => {
-                Rc::make_mut(set).append(Rc::make_mut(new));
+                #[allow(clippy::explicit_auto_deref)]
+                let new_set: &mut BTreeSet<Value> = &mut **Rc::make_mut(new);
+                #[allow(clippy::explicit_auto_deref)]
+                let cur_set: &mut BTreeSet<Value> = &mut **Rc::make_mut(set);
+                cur_set.append(new_set);
                 // Enforce allocator limit after merging set entries.
                 enforce_limit_anyhow()?;
             }
@@ -1381,7 +1483,9 @@ impl Value {
                             )
                         }
                         _ => {
-                            Rc::make_mut(map).insert(k.clone(), v.clone());
+                            #[allow(clippy::explicit_auto_deref)]
+                            let cur_map: &mut BTreeMap<Value, Value> = &mut **Rc::make_mut(map);
+                            cur_map.insert(k.clone(), v.clone());
                             // Enforce allocator limit after merging object entries.
                             enforce_limit_anyhow()?;
                         }

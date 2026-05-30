@@ -1,10 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use crate::collections::{Object, Set};
 use crate::rvm::instructions::{ComprehensionMode, LoopMode};
 use crate::value::Value;
 use crate::Rc;
-use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 /// Loop execution context for managing iteration state
@@ -32,14 +32,17 @@ pub enum IterationState {
         index: usize,
     },
     Object {
-        obj: Rc<BTreeMap<Value, Value>>,
-        current_key: Option<Value>,
-        first_iteration: bool,
+        obj: Rc<Object>,
+        /// Sorted snapshot of keys at loop entry; preserves resumption order
+        /// without depending on `BTreeMap::range`, per DESIGN §7.3.
+        keys: Rc<[Value]>,
+        pos: usize,
     },
     Set {
-        items: Rc<BTreeSet<Value>>,
-        current_item: Option<Value>,
-        first_iteration: bool,
+        set: Rc<Set>,
+        /// Sorted snapshot of elements at loop entry.
+        values: Rc<[Value]>,
+        pos: usize,
     },
     /// Virtual single-element iteration for non-collection values.
     /// Used by Azure Policy's `[*]` on scalar/null fields: presents a single
@@ -56,15 +59,8 @@ impl IterationState {
             Self::Array { ref mut index, .. } => {
                 *index = index.saturating_add(1);
             }
-            Self::Object {
-                ref mut first_iteration,
-                ..
-            }
-            | Self::Set {
-                ref mut first_iteration,
-                ..
-            } => {
-                *first_iteration = false;
+            Self::Object { ref mut pos, .. } | Self::Set { ref mut pos, .. } => {
+                *pos = pos.saturating_add(1);
             }
             Self::Single {
                 ref mut consumed, ..

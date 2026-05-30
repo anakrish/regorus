@@ -84,11 +84,11 @@ fn fn_items(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) 
         return Ok(Value::Undefined);
     };
     let mut result = Vec::with_capacity(obj.len());
-    for (k, v) in obj.as_ref() {
+    for (k, v) in obj.iter() {
         let mut entry = BTreeMap::<Value, Value>::new();
         entry.insert(Value::from("key"), k.clone());
         entry.insert(Value::from("value"), v.clone());
-        result.push(Value::Object(Rc::new(entry)));
+        result.push(Value::Object(Rc::new(entry.into())));
     }
     Ok(Value::Array(Rc::new(result)))
 }

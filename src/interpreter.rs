@@ -4082,10 +4082,10 @@ impl Interpreter {
             }
 
             match self.compiled_policy_mut().rules.entry(path) {
-                MapEntry::Occupied(o) => {
+                StdMapEntry::Occupied(o) => {
                     o.into_mut().push(rule.clone());
                 }
-                MapEntry::Vacant(v) => {
+                StdMapEntry::Vacant(v) => {
                     v.insert(vec![rule.clone()]);
                 }
             }
@@ -4118,7 +4118,7 @@ impl Interpreter {
             }
 
             match self.compiled_policy_mut().default_rules.entry(path) {
-                MapEntry::Occupied(o) => {
+                StdMapEntry::Occupied(o) => {
                     if idx == comps.len().saturating_sub(1) {
                         for (_, i) in o.get() {
                             if let (Some(old), Some(new)) = (i, &index) {
@@ -4132,7 +4132,7 @@ impl Interpreter {
                     }
                     o.into_mut().push((rule.clone(), index.clone()));
                 }
-                MapEntry::Vacant(v) => {
+                StdMapEntry::Vacant(v) => {
                     v.insert(vec![(rule.clone(), index.clone())]);
                 }
             }
@@ -4234,7 +4234,7 @@ impl Interpreter {
         nargs: u8,
         extension: Box<dyn Extension>,
     ) -> Result<()> {
-        if let MapEntry::Vacant(v) = self.extensions.entry(path) {
+        if let StdMapEntry::Vacant(v) = self.extensions.entry(path) {
             v.insert((nargs, Rc::new(extension)));
             Ok(())
         } else {

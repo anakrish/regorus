@@ -1498,7 +1498,7 @@ fn test_deserialize_object_default_empty_object() {
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
         Type::Object { default, .. } => {
-            assert_eq!(default, &Some(Value::Object(Rc::new(BTreeMap::new()))));
+            assert_eq!(default, &Some(Value::new_object()));
         }
         _ => panic!("Expected Type::Object"),
     }

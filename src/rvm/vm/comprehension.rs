@@ -4,7 +4,7 @@
 use crate::rvm::instructions::{ComprehensionBeginParams, ComprehensionMode};
 use crate::value::Value;
 use crate::Rc;
-use alloc::collections::BTreeMap;
+
 use alloc::format;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -34,7 +34,7 @@ impl RegoVM {
         let initial_result = match params.mode {
             ComprehensionMode::Set => Value::new_set(),
             ComprehensionMode::Array => Value::new_array(),
-            ComprehensionMode::Object => Value::Object(Rc::new(BTreeMap::new())),
+            ComprehensionMode::Object => Value::new_object(),
         };
         self.set_register(params.result_reg, initial_result.clone())?;
 
@@ -53,10 +53,14 @@ impl RegoVM {
                     if obj.is_empty() {
                         None
                     } else {
+                        let keys: alloc::vec::Vec<Value> = crate::collections::Object::as_ref(&obj)
+                            .keys()
+                            .cloned()
+                            .collect();
                         Some(IterationState::Object {
                             obj,
-                            current_key: None,
-                            first_iteration: true,
+                            keys: Rc::from(keys),
+                            pos: 0,
                         })
                     }
                 }
@@ -64,10 +68,14 @@ impl RegoVM {
                     if set.is_empty() {
                         None
                     } else {
+                        let values: alloc::vec::Vec<Value> = crate::collections::Set::as_ref(&set)
+                            .iter()
+                            .cloned()
+                            .collect();
                         Some(IterationState::Set {
-                            items: set,
-                            current_item: None,
-                            first_iteration: true,
+                            set,
+                            values: Rc::from(values),
+                            pos: 0,
                         })
                     }
                 }
@@ -123,7 +131,7 @@ impl RegoVM {
         let initial_result = match params.mode {
             ComprehensionMode::Set => Value::new_set(),
             ComprehensionMode::Array => Value::new_array(),
-            ComprehensionMode::Object => Value::Object(Rc::new(BTreeMap::new())),
+            ComprehensionMode::Object => Value::new_object(),
         };
         self.set_register(params.result_reg, initial_result.clone())?;
 
@@ -142,10 +150,14 @@ impl RegoVM {
                     if obj.is_empty() {
                         None
                     } else {
+                        let keys: alloc::vec::Vec<Value> = crate::collections::Object::as_ref(&obj)
+                            .keys()
+                            .cloned()
+                            .collect();
                         Some(IterationState::Object {
                             obj,
-                            current_key: None,
-                            first_iteration: true,
+                            keys: Rc::from(keys),
+                            pos: 0,
                         })
                     }
                 }
@@ -153,10 +165,14 @@ impl RegoVM {
                     if set.is_empty() {
                         None
                     } else {
+                        let values: alloc::vec::Vec<Value> = crate::collections::Set::as_ref(&set)
+                            .iter()
+                            .cloned()
+                            .collect();
                         Some(IterationState::Set {
-                            items: set,
-                            current_item: None,
-                            first_iteration: true,
+                            set,
+                            values: Rc::from(values),
+                            pos: 0,
                         })
                     }
                 }
@@ -292,29 +308,7 @@ impl RegoVM {
         self.set_register(result_reg, current_result)?;
 
         if let Some(iter_state) = comprehension_context.iteration_state.as_mut() {
-            match *iter_state {
-                IterationState::Object {
-                    ref mut current_key,
-                    ..
-                } => {
-                    let tracked_key =
-                        if comprehension_context.key_reg != comprehension_context.value_reg {
-                            self.get_register(comprehension_context.key_reg)?.clone()
-                        } else {
-                            self.get_register(comprehension_context.value_reg)?.clone()
-                        };
-                    *current_key = Some(tracked_key);
-                }
-                IterationState::Set {
-                    ref mut current_item,
-                    ..
-                } => {
-                    *current_item =
-                        Some(self.get_register(comprehension_context.value_reg)?.clone());
-                }
-                IterationState::Array { .. } | IterationState::Single { .. } => {}
-            }
-
+            // Snapshot pattern: pos is the cursor. No need to track current_key.
             iter_state.advance();
             let has_next = self.setup_next_iteration(
                 iter_state,
@@ -450,27 +444,8 @@ impl RegoVM {
             } = &mut frame.kind
             {
                 if let Some(iter_state) = context.iteration_state.as_mut() {
-                    match *iter_state {
-                        IterationState::Object {
-                            ref mut current_key,
-                            ..
-                        } => {
-                            let tracked_key = if context.key_reg != context.value_reg {
-                                iteration_key.clone()
-                            } else {
-                                iteration_value.clone()
-                            };
-                            *current_key = Some(tracked_key);
-                        }
-                        IterationState::Set {
-                            ref mut current_item,
-                            ..
-                        } => {
-                            *current_item = Some(iteration_value.clone());
-                        }
-                        IterationState::Array { .. } | IterationState::Single { .. } => {}
-                    }
-
+                    // Snapshot pattern: pos is the cursor.
+                    let _ = (iteration_key, iteration_value);
                     iter_state.advance();
                 }
 
@@ -554,11 +529,7 @@ impl RegoVM {
         context: &mut ComprehensionContext,
     ) -> Result<()> {
         if let Some(iter_state) = context.iteration_state.as_mut() {
-            self.capture_comprehension_iteration_position(
-                iter_state,
-                context.key_reg,
-                context.value_reg,
-            )?;
+            // Snapshot pattern: advance() bumps `pos`.
             iter_state.advance();
             let has_next =
                 self.setup_next_iteration(iter_state, context.key_reg, context.value_reg)?;
@@ -570,36 +541,6 @@ impl RegoVM {
             }
         } else {
             self.pc = usize::from(context.comprehension_end.saturating_sub(1));
-        }
-
-        Ok(())
-    }
-
-    fn capture_comprehension_iteration_position(
-        &mut self,
-        iter_state: &mut IterationState,
-        key_reg: u8,
-        value_reg: u8,
-    ) -> Result<()> {
-        match *iter_state {
-            IterationState::Object {
-                ref mut current_key,
-                ..
-            } => {
-                let tracked_key = if key_reg != value_reg {
-                    self.get_register(key_reg)?.clone()
-                } else {
-                    self.get_register(value_reg)?.clone()
-                };
-                *current_key = Some(tracked_key);
-            }
-            IterationState::Set {
-                ref mut current_item,
-                ..
-            } => {
-                *current_item = Some(self.get_register(value_reg)?.clone());
-            }
-            IterationState::Array { .. } | IterationState::Single { .. } => {}
         }
 
         Ok(())

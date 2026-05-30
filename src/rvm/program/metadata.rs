@@ -81,11 +81,11 @@ impl ProgramMetadata {
             }
             obj.insert(
                 Value::String("annotations".into()),
-                Value::Object(Rc::new(annotations_obj)),
+                Value::Object(Rc::new(annotations_obj.into())),
             );
         }
 
-        Value::Object(Rc::new(obj))
+        Value::Object(Rc::new(obj.into()))
     }
 }
 
@@ -202,7 +202,7 @@ impl MetadataValue {
                 for s in set {
                     bset.insert(Value::String(s.as_str().into()));
                 }
-                Value::Set(Rc::new(bset))
+                Value::Set(Rc::new(bset.into()))
             }
             MetadataValue::Bool(b) => Value::Bool(b),
             MetadataValue::Integer(n) => Value::from(n),
@@ -215,7 +215,7 @@ impl MetadataValue {
                 for (k, v) in map {
                     obj.insert(Value::String(k.as_str().into()), v.to_value());
                 }
-                Value::Object(Rc::new(obj))
+                Value::Object(Rc::new(obj.into()))
             }
         }
     }
@@ -302,7 +302,7 @@ mod tests {
         let mut set = BTreeSet::new();
         set.insert(Value::String("a".into()));
         set.insert(Value::String("b".into()));
-        let v = Value::Set(Rc::new(set));
+        let v = Value::Set(Rc::new(set.into()));
         assert_round_trip(&v, &v);
     }
 
@@ -329,7 +329,7 @@ mod tests {
         let mut set = BTreeSet::new();
         set.insert(Value::String("a".into()));
         set.insert(Value::from(1_i64));
-        let v = Value::Set(Rc::new(set));
+        let v = Value::Set(Rc::new(set.into()));
         let mv = MetadataValue::from_value(&v);
         assert!(
             matches!(mv, MetadataValue::List(_)),

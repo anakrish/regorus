@@ -670,7 +670,7 @@ impl RegoVM {
                 }
             }
             SetNew { dest } => {
-                let empty_set = Value::Set(crate::Rc::new(BTreeSet::new()));
+                let empty_set = Value::new_set();
                 self.set_register(dest, empty_set)?;
                 Ok(InstructionOutcome::Continue)
             }
@@ -712,7 +712,7 @@ impl RegoVM {
                             set.insert(self.get_register(reg)?.clone());
                         }
 
-                        let set_value = Value::Set(crate::Rc::new(set));
+                        let set_value = Value::Set(crate::Rc::new(set.into()));
                         self.set_register(params.dest, set_value)?;
                     }
                     Ok(InstructionOutcome::Continue)

@@ -75,7 +75,8 @@ fn constant_set_is_hoisted() {
         [1, 2, 3]
             .into_iter()
             .map(Value::from)
-            .collect::<BTreeSet<_>>(),
+            .collect::<BTreeSet<_>>()
+            .into(),
     ));
     assert_literal_exists(&program, &expected_set);
 }

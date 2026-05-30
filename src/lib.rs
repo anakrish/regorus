@@ -119,6 +119,7 @@ mimalloc::assign_global!();
 
 mod ast;
 mod builtins;
+pub mod collections;
 mod compile;
 mod compiled_policy;
 mod compiler;
@@ -179,6 +180,11 @@ pub use utils::limits::{
 };
 pub use value::Value;
 
+// Note: `Object`, `Set`, `ObjectRef`, etc. are re-exported under
+// `crate::collections` rather than the crate root to avoid shadowing
+// `ast::Expr::Object` / `ast::Expr::Set` in modules that do
+// `use crate::ast::Expr::*`.
+
 /// Compiled-pattern caches for the `regex.*` and `glob.*` Rego builtins.
 ///
 /// When the `cache` feature is enabled, compiled patterns are held in
@@ -205,10 +211,14 @@ pub use alloc::sync::Arc as Rc;
 pub use alloc::rc::Rc;
 
 #[cfg(feature = "std")]
-use std::collections::{hash_map::Entry as MapEntry, HashMap as Map, HashSet as Set};
+use std::collections::{
+    hash_map::Entry as StdMapEntry, HashMap as Map, HashSet as StdHashOrBTreeSet,
+};
 
 #[cfg(not(feature = "std"))]
-use alloc::collections::{btree_map::Entry as MapEntry, BTreeMap as Map, BTreeSet as Set};
+use alloc::collections::{
+    btree_map::Entry as StdMapEntry, BTreeMap as Map, BTreeSet as StdHashOrBTreeSet,
+};
 
 use alloc::{
     borrow::ToOwned as _,

@@ -88,7 +88,7 @@ pub fn make_value(map: ObjMap) -> Value {
     for (k, v) in map {
         btree.insert(Value::String(k), v);
     }
-    Value::Object(Rc::new(btree))
+    Value::Object(Rc::new(btree.into()))
 }
 
 /// Convert a `Vec<Value>` into a `Value::Array`.

@@ -237,7 +237,10 @@ impl Compiler {
                 .iter()
                 .map(|p| Value::String(p.name.as_str().into()))
                 .collect();
-            annot.insert("parameter_names".to_string(), Value::Set(Rc::new(set)));
+            annot.insert(
+                "parameter_names".to_string(),
+                Value::Set(Rc::new(set.into())),
+            );
         }
 
         // Extra fields: policyType → policy_type, id → policy_id, name → policy_name.
@@ -279,6 +282,6 @@ fn insert_string_set_annotation(
             .iter()
             .map(|s| Value::String(s.as_str().into()))
             .collect();
-        annot.insert(key.to_string(), Value::Set(Rc::new(set)));
+        annot.insert(key.to_string(), Value::Set(Rc::new(set.into())));
     }
 }

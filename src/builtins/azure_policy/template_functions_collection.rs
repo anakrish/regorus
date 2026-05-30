@@ -72,14 +72,14 @@ fn fn_intersection(
             // Intersection of objects: keep key-value pairs from the first
             // object only when the key exists in every other object AND
             // the value is equal across all of them.
-            let mut result: BTreeMap<Value, Value> = first.as_ref().clone();
+            let mut result: BTreeMap<Value, Value> = (***first).clone();
             for arg in rest {
                 let Value::Object(ref other) = *arg else {
                     return Ok(Value::Undefined);
                 };
                 result.retain(|k, v| other.get(k).is_some_and(|ov| *ov == *v));
             }
-            Ok(Value::Object(Rc::new(result)))
+            Ok(Value::Object(Rc::new(result.into())))
         }
         _ => Ok(Value::Undefined),
     }
@@ -130,7 +130,7 @@ fn fn_union(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) 
                     result.insert(k.clone(), merged);
                 }
             }
-            Ok(Value::Object(Rc::new(result)))
+            Ok(Value::Object(Rc::new(result.into())))
         }
         _ => Ok(Value::Undefined),
     }
@@ -273,7 +273,7 @@ fn fn_create_object(
         }
     }
 
-    Ok(Value::Object(Rc::new(map)))
+    Ok(Value::Object(Rc::new(map.into())))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────
@@ -290,7 +290,7 @@ fn merge_objects(base: &BTreeMap<Value, Value>, overlay: &BTreeMap<Value, Value>
         };
         result.insert(k.clone(), merged);
     }
-    Value::Object(Rc::new(result))
+    Value::Object(Rc::new(result.into()))
 }
 
 fn extract_usize(v: &Value) -> Option<usize> {

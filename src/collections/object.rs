@@ -193,16 +193,7 @@ impl Object {
         }
     }
 
-    /// Construct from an existing `Rc<BTreeMap>` without an additional copy.
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn from_rc_btreemap(map: Rc<BTreeMap<Value, Value>>) -> Self {
-        Self {
-            storage: ObjectStorage::from_rc_btreemap(map),
-        }
-    }
-
-    /// Consume into a `BTreeMap`. Cloning is avoided if uniquely owned.
+    /// Consume into a `BTreeMap`.
     #[inline]
     pub(crate) fn into_btreemap(self) -> BTreeMap<Value, Value> {
         self.storage.into_btreemap()

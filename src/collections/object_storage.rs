@@ -6,15 +6,19 @@ use alloc::collections::BTreeMap;
 use crate::collections::error::InsertError;
 use crate::number::Number;
 use crate::value::Value;
-use crate::Rc;
 
 /// Internal storage backing an `Object`.
 ///
 /// The abstraction is designed so additional variants (inline / hash / lazy)
 /// can be added in the future without changing the public wrapper API.
+///
+/// COW for `Value::Object` is provided by the outer `Rc<Object>` at the
+/// `Value` level — the inner `BTreeMap` is owned directly here so that
+/// an empty `Object` costs a single heap allocation (matching the
+/// pre-abstraction layout).
 #[derive(Debug, Clone)]
 pub(crate) enum ObjectStorage {
-    BTree(Rc<BTreeMap<Value, Value>>),
+    BTree(BTreeMap<Value, Value>),
 }
 
 impl Default for ObjectStorage {
@@ -26,7 +30,7 @@ impl Default for ObjectStorage {
 impl ObjectStorage {
     #[inline]
     pub(crate) fn new() -> Self {
-        Self::BTree(Rc::new(BTreeMap::new()))
+        Self::BTree(BTreeMap::new())
     }
 
     #[inline]
@@ -37,12 +41,6 @@ impl ObjectStorage {
 
     #[inline]
     pub(crate) fn from_btreemap(map: BTreeMap<Value, Value>) -> Self {
-        Self::BTree(Rc::new(map))
-    }
-
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn from_rc_btreemap(map: Rc<BTreeMap<Value, Value>>) -> Self {
         Self::BTree(map)
     }
 
@@ -56,18 +54,15 @@ impl ObjectStorage {
     #[inline]
     pub(crate) fn as_btreemap_mut(&mut self) -> &mut BTreeMap<Value, Value> {
         match self {
-            Self::BTree(m) => Rc::make_mut(m),
+            Self::BTree(m) => m,
         }
     }
 
-    /// Take ownership of the inner BTreeMap, cloning if shared.
+    /// Take ownership of the inner BTreeMap.
     #[inline]
     pub(crate) fn into_btreemap(self) -> BTreeMap<Value, Value> {
         match self {
-            Self::BTree(m) => match Rc::try_unwrap(m) {
-                Ok(map) => map,
-                Err(rc) => (*rc).clone(),
-            },
+            Self::BTree(m) => m,
         }
     }
 

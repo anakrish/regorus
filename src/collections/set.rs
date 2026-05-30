@@ -176,14 +176,6 @@ impl Set {
     }
 
     #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn from_rc_btreeset(set: Rc<BTreeSet<Value>>) -> Self {
-        Self {
-            storage: SetStorage::from_rc_btreeset(set),
-        }
-    }
-
-    #[inline]
     pub(crate) fn into_btreeset(self) -> BTreeSet<Value> {
         self.storage.into_btreeset()
     }

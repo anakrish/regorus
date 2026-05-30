@@ -6,11 +6,15 @@ use alloc::collections::BTreeSet;
 use crate::collections::error::InsertError;
 use crate::collections::object_storage::check_key;
 use crate::value::Value;
-use crate::Rc;
 
+/// Internal storage backing a `Set`.
+///
+/// COW is provided by the outer `Rc<Set>` at the `Value` level — the inner
+/// `BTreeSet` is owned directly here so that an empty `Set` costs a single
+/// heap allocation.
 #[derive(Debug, Clone)]
 pub(crate) enum SetStorage {
-    BTree(Rc<BTreeSet<Value>>),
+    BTree(BTreeSet<Value>),
 }
 
 impl Default for SetStorage {
@@ -22,7 +26,7 @@ impl Default for SetStorage {
 impl SetStorage {
     #[inline]
     pub(crate) fn new() -> Self {
-        Self::BTree(Rc::new(BTreeSet::new()))
+        Self::BTree(BTreeSet::new())
     }
 
     #[inline]
@@ -32,12 +36,6 @@ impl SetStorage {
 
     #[inline]
     pub(crate) fn from_btreeset(set: BTreeSet<Value>) -> Self {
-        Self::BTree(Rc::new(set))
-    }
-
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn from_rc_btreeset(set: Rc<BTreeSet<Value>>) -> Self {
         Self::BTree(set)
     }
 
@@ -51,17 +49,14 @@ impl SetStorage {
     #[inline]
     pub(crate) fn as_btreeset_mut(&mut self) -> &mut BTreeSet<Value> {
         match self {
-            Self::BTree(s) => Rc::make_mut(s),
+            Self::BTree(s) => s,
         }
     }
 
     #[inline]
     pub(crate) fn into_btreeset(self) -> BTreeSet<Value> {
         match self {
-            Self::BTree(s) => match Rc::try_unwrap(s) {
-                Ok(set) => set,
-                Err(rc) => (*rc).clone(),
-            },
+            Self::BTree(s) => s,
         }
     }
 

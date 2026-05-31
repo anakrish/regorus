@@ -345,16 +345,7 @@ impl RegoVM {
                 pc: self.pc,
             })?;
 
-        let (
-            value_to_add,
-            key_value,
-            mode,
-            result_reg_idx,
-            key_reg_idx,
-            value_reg_idx,
-            _iteration_key,
-            _iteration_value,
-        ) = {
+        let (value_to_add, key_value, mode, result_reg_idx, key_reg_idx, value_reg_idx) = {
             let frame =
                 self.execution_stack
                     .get(comprehension_index)
@@ -375,8 +366,6 @@ impl RegoVM {
 
                 let result_reg_idx = context.result_reg;
                 let mode = context.mode.clone();
-                let iteration_key = self.get_register(context.key_reg)?.clone();
-                let iteration_value = self.get_register(context.value_reg)?.clone();
 
                 (
                     value_to_add,
@@ -385,8 +374,6 @@ impl RegoVM {
                     result_reg_idx,
                     context.key_reg,
                     context.value_reg,
-                    iteration_key,
-                    iteration_value,
                 )
             } else {
                 return Err(VmError::InvalidIteration {

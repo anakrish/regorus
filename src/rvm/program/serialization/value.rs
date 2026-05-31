@@ -1,6 +1,5 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -10,6 +9,7 @@ use serde::de::{self, EnumAccess, VariantAccess as _, Visitor};
 use serde::ser::{SerializeSeq as _, SerializeTuple as _};
 use serde::{Deserialize, Serialize};
 
+use crate::collections::{Object, Set};
 use crate::number::Number;
 use crate::value::Value;
 
@@ -117,7 +117,7 @@ impl<'a> Serialize for BinaryValueSlice<'a> {
     }
 }
 
-struct BinarySetRef<'a>(&'a BTreeSet<Value>);
+struct BinarySetRef<'a>(&'a Set);
 
 impl<'a> Serialize for BinarySetRef<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -132,7 +132,7 @@ impl<'a> Serialize for BinarySetRef<'a> {
     }
 }
 
-struct BinaryObjectRef<'a>(&'a BTreeMap<Value, Value>);
+struct BinaryObjectRef<'a>(&'a Object);
 
 impl<'a> Serialize for BinaryObjectRef<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -253,19 +253,19 @@ impl<'de> Visitor<'de> for BinaryValueVisitor {
             }
             (BinaryVariant::Set, variant) => {
                 let items: Vec<BinaryValue> = variant.newtype_variant()?;
-                let mut set = BTreeSet::new();
+                let mut set = Set::new();
                 for item in items {
                     set.insert(item.into_value());
                 }
-                Ok(BinaryValue(Value::from(set)))
+                Ok(BinaryValue(Value::Set(crate::Rc::new(set))))
             }
             (BinaryVariant::Object, variant) => {
                 let entries: Vec<(BinaryValue, BinaryValue)> = variant.newtype_variant()?;
-                let mut map = BTreeMap::new();
+                let mut map = Object::new();
                 for (key, value) in entries {
                     map.insert(key.into_value(), value.into_value());
                 }
-                Ok(BinaryValue(Value::from(map)))
+                Ok(BinaryValue(Value::Object(crate::Rc::new(map))))
             }
             (BinaryVariant::Undefined, variant) => {
                 variant.unit_variant()?;

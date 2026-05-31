@@ -11,7 +11,7 @@
 //! to fetch a related resource and an optional `existenceCondition` evaluated
 //! inline.
 
-use alloc::collections::BTreeMap;
+use crate::collections::Object;
 use alloc::format;
 use alloc::string::ToString as _;
 use alloc::vec::Vec;
@@ -814,7 +814,7 @@ pub(super) fn build_object_from_keys(
     span: &crate::lexer::Span,
 ) -> Result<u8> {
     // Build template: object with all keys set to Undefined.
-    let mut template = BTreeMap::new();
+    let mut template = Object::new();
     for &(key_idx, _) in &keys {
         // key_idx was returned by `add_literal_u16` in the calling code,
         // so it is always in bounds.  We use `.get()` + `?` instead of
@@ -834,7 +834,8 @@ pub(super) fn build_object_from_keys(
             .clone();
         template.insert(key_val, Value::Undefined);
     }
-    let template_idx = compiler.add_literal_u16(Value::Object(crate::Rc::new(template)))?;
+    let template_idx =
+        compiler.add_literal_u16(Value::Object(crate::Rc::new(Object::from_iter(template))))?;
 
     // Sort keys by literal value (BTreeMap order).  All indices were
     // validated in the loop above (which returns Err for out-of-bounds),

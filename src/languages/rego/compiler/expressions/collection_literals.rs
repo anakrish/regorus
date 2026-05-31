@@ -8,11 +8,11 @@
 
 use super::{Compiler, Register, Result};
 use crate::ast::{Expr, ExprRef};
+use crate::collections::{Object, Set};
 use crate::lexer::Span;
 use crate::rvm::instructions::{ArrayCreateParams, ObjectCreateParams, SetCreateParams};
 use crate::rvm::Instruction;
 use crate::{Rc, Value};
-use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 /// Try to evaluate an expression as a compile-time constant.
@@ -38,12 +38,12 @@ pub(in crate::languages::rego::compiler) fn try_eval_const(expr: &Expr) -> Optio
         Expr::Set { items, .. } => items
             .iter()
             .map(|i| try_eval_const(i.as_ref()))
-            .collect::<Option<BTreeSet<_>>>()
+            .collect::<Option<Set>>()
             .map(|s| Value::Set(Rc::new(s))),
         Expr::Object { fields, .. } => fields
             .iter()
             .map(|(_, k, v)| Some((try_eval_const(k.as_ref())?, try_eval_const(v.as_ref())?)))
-            .collect::<Option<BTreeMap<_, _>>>()
+            .collect::<Option<Object>>()
             .map(|m| Value::Object(Rc::new(m))),
         _ => None,
     }
@@ -87,8 +87,7 @@ impl<'a> Compiler<'a> {
         items: &[ExprRef],
         span: &Span,
     ) -> Result<Register> {
-        let all_const: Option<BTreeSet<_>> =
-            items.iter().map(|i| try_eval_const(i.as_ref())).collect();
+        let all_const: Option<Set> = items.iter().map(|i| try_eval_const(i.as_ref())).collect();
         if let Some(values) = all_const {
             let dest = self.alloc_register();
             let literal_idx = self.add_literal(Value::Set(Rc::new(values)));
@@ -117,7 +116,7 @@ impl<'a> Compiler<'a> {
         fields: &[(crate::lexer::Span, ExprRef, ExprRef)],
         span: &Span,
     ) -> Result<Register> {
-        let all_const: Option<BTreeMap<_, _>> = fields
+        let all_const: Option<Object> = fields
             .iter()
             .map(|(_, k, v)| Some((try_eval_const(k.as_ref())?, try_eval_const(v.as_ref())?)))
             .collect();
@@ -166,7 +165,7 @@ impl<'a> Compiler<'a> {
             let mut template_keys = literal_keys.clone();
             template_keys.sort();
 
-            let mut template_obj = BTreeMap::new();
+            let mut template_obj = Object::new();
             for key in &template_keys {
                 template_obj.insert(key.clone(), Value::Undefined);
             }

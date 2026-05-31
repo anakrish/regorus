@@ -1,8 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use alloc::collections::BTreeSet;
-
+use crate::collections::Set;
 use crate::value::Value;
 
 use super::evaluator::RbacBuiltinError;
@@ -28,7 +27,7 @@ fn list_contains_values(list: &[Value], needle: &Value) -> bool {
 }
 
 // For sets, treat a list/set needle as "all elements are contained".
-fn set_contains_values(set: &BTreeSet<Value>, needle: &Value) -> bool {
+fn set_contains_values(set: &Set, needle: &Value) -> bool {
     match *needle {
         // For collection needles, require all elements to be present.
         Value::Array(ref right_list) => right_list.iter().all(|item| set.contains(item)),

@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use crate::collections::{Object, ObjectCursor, Set, SetCursor};
 use crate::rvm::instructions::{ComprehensionMode, LoopMode};
 use crate::value::Value;
 use crate::Rc;
@@ -23,7 +24,13 @@ pub struct LoopContext {
     pub current_iteration_failed: bool, // Track if current iteration had condition failures
 }
 
-/// Iterator state for different collection types
+/// Iterator state for different collection types.
+///
+/// Snapshot independence is provided by the shared `Rc<Object>` /
+/// `Rc<Set>` / `Rc<Vec<Value>>` — `Rc::make_mut` on an aliased Rc allocates
+/// a new collection, leaving the iterator's Rc pointing at the original
+/// pre-mutation state. The cursor for `Object` / `Set` is opaque and resumes
+/// in O(log n) for the BTree backend.
 #[derive(Debug, Clone)]
 pub enum IterationState {
     Array {
@@ -31,12 +38,12 @@ pub enum IterationState {
         index: usize,
     },
     Object {
-        pairs: Rc<[(Value, Value)]>,
-        pos: usize,
+        obj: Rc<Object>,
+        cursor: ObjectCursor,
     },
     Set {
-        values: Rc<[Value]>,
-        pos: usize,
+        set: Rc<Set>,
+        cursor: SetCursor,
     },
     /// Virtual single-element iteration for non-collection values.
     /// Used by Azure Policy's `[*]` on scalar/null fields: presents a single
@@ -53,9 +60,10 @@ impl IterationState {
             Self::Array { ref mut index, .. } => {
                 *index = index.saturating_add(1);
             }
-            Self::Object { ref mut pos, .. } | Self::Set { ref mut pos, .. } => {
-                *pos = pos.saturating_add(1);
-            }
+            // For Object/Set the cursor advances inside `setup_next_iteration`
+            // when it pulls the next item via `Object::next` / `Set::next`,
+            // so `advance` is a no-op for cursor-backed variants.
+            Self::Object { .. } | Self::Set { .. } => {}
             Self::Single {
                 ref mut consumed, ..
             } => {
@@ -111,9 +119,9 @@ mod tests {
     use super::*;
     use crate::collections::Object;
 
-    /// IterationState::Object snapshots (key, value) pairs at construction
-    /// time. Mutating the source Value::Object (via Rc::make_mut on a clone)
-    /// while the iteration is in flight must not affect the snapshot.
+    /// IterationState::Object holds an `Rc<Object>` plus an opaque cursor.
+    /// Mutating an aliased Rc via `Rc::make_mut` allocates a new collection
+    /// (CoW) so the in-flight iterator's source is unaffected.
     #[test]
     fn iteration_state_object_is_snapshot_independent_of_source() {
         let mut obj = Object::new();
@@ -123,18 +131,13 @@ mod tests {
 
         let source = Value::Object(Rc::new(obj));
 
-        // Build the snapshot exactly as loops.rs / comprehension.rs do.
-        let snapshot_pairs: Rc<[(Value, Value)]> = match &source {
-            Value::Object(o) => o
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect::<Vec<_>>()
-                .into(),
+        let snapshot_obj = match &source {
+            Value::Object(o) => Rc::clone(o),
             _ => unreachable!(),
         };
         let state = IterationState::Object {
-            pairs: Rc::clone(&snapshot_pairs),
-            pos: 0,
+            obj: Rc::clone(&snapshot_obj),
+            cursor: snapshot_obj.cursor(),
         };
 
         // Mutate a clone of the source mid-iteration.
@@ -144,11 +147,20 @@ mod tests {
         inner.insert(Value::from("d"), Value::from(4));
         inner.remove(&Value::from("b"));
 
-        // Snapshot must still report the original 3 entries with original values.
-        let collected: Vec<(Value, Value)> = match &state {
-            IterationState::Object { pairs, .. } => pairs.to_vec(),
-            _ => unreachable!(),
-        };
+        // Drain the snapshot via the cursor — must still report the original
+        // 3 entries with original values.
+        let mut collected: Vec<(Value, Value)> = Vec::new();
+        if let IterationState::Object {
+            ref obj,
+            mut cursor,
+        } = state
+        {
+            while let Some((k, v)) = obj.next(&mut cursor) {
+                collected.push((k.clone(), v.clone()));
+            }
+        } else {
+            unreachable!();
+        }
         assert_eq!(collected.len(), 3);
         assert!(collected.contains(&(Value::from("a"), Value::from(1))));
         assert!(collected.contains(&(Value::from("b"), Value::from(2))));

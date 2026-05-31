@@ -4,7 +4,6 @@
 use crate::rvm::instructions::LoopMode;
 use crate::value::Value;
 use crate::Rc;
-use alloc::vec::Vec;
 
 use super::context::{IterationState, LoopContext};
 use super::errors::{Result, VmError};
@@ -91,13 +90,13 @@ impl RegoVM {
     ) -> Result<()> {
         self.set_register(params.result_reg, Value::Bool(false))?;
 
-        let iteration_state = match self.resolve_iteration_state(mode, &params)? {
+        let mut iteration_state = match self.resolve_iteration_state(mode, &params)? {
             Some(state) => state,
             None => return Ok(()),
         };
 
         let has_next =
-            self.setup_next_iteration(&iteration_state, params.key_reg, params.value_reg)?;
+            self.setup_next_iteration(&mut iteration_state, params.key_reg, params.value_reg)?;
         if !has_next {
             self.pc = usize::from(params.loop_end);
             return Ok(());
@@ -159,7 +158,7 @@ impl RegoVM {
 
             loop_ctx.iteration_state.advance();
             let has_next = self.setup_next_iteration(
-                &loop_ctx.iteration_state,
+                &mut loop_ctx.iteration_state,
                 loop_ctx.key_reg,
                 loop_ctx.value_reg,
             )?;
@@ -197,13 +196,13 @@ impl RegoVM {
     ) -> Result<()> {
         self.set_register(params.result_reg, Value::Bool(false))?;
 
-        let iteration_state = match self.resolve_iteration_state(mode, &params)? {
+        let mut iteration_state = match self.resolve_iteration_state(mode, &params)? {
             Some(state) => state,
             None => return Ok(()),
         };
 
         let has_next =
-            self.setup_next_iteration(&iteration_state, params.key_reg, params.value_reg)?;
+            self.setup_next_iteration(&mut iteration_state, params.key_reg, params.value_reg)?;
         if !has_next {
             self.pc = usize::from(params.loop_end);
             return Ok(());
@@ -302,7 +301,14 @@ impl RegoVM {
                 Ok(())
             }
             LoopAction::Continue => {
-                let (mode, success_count, total_iterations, key_reg, value_reg, iteration_state) = {
+                let (
+                    mode,
+                    success_count,
+                    total_iterations,
+                    key_reg,
+                    value_reg,
+                    mut iteration_state,
+                ) = {
                     let (mode, success_count, total_iterations, key_reg, value_reg) = {
                         let frame = self
                             .execution_stack
@@ -344,7 +350,19 @@ impl RegoVM {
                     }
                 };
 
-                let has_next = self.setup_next_iteration(&iteration_state, key_reg, value_reg)?;
+                let has_next =
+                    self.setup_next_iteration(&mut iteration_state, key_reg, value_reg)?;
+
+                // Write the (possibly cursor-advanced) iteration_state back
+                // to the frame.
+                if let Some(frame) = self.execution_stack.last_mut() {
+                    if let FrameKind::Loop {
+                        ref mut context, ..
+                    } = frame.kind
+                    {
+                        context.iteration_state = iteration_state;
+                    }
+                }
 
                 if has_next {
                     if let Some(frame) = self.execution_stack.last_mut() {
@@ -422,17 +440,15 @@ impl RegoVM {
                         self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
                         return Ok(None);
                     }
-                    // Snapshot (key, value) pairs for iteration. Symmetric
-                    // with Set: O(n) iteration, no per-step lookup, no
-                    // silent-termination footgun on missing keys.
-                    let mut buf: Vec<(Value, Value)> = Vec::new();
-                    for (k, v) in obj.iter() {
-                        crate::utils::limits::check_memory_limit_if_needed()
-                            .map_err(anyhow::Error::msg)?;
-                        buf.push((k.clone(), v.clone()));
-                    }
-                    let pairs: Rc<[(Value, Value)]> = buf.into();
-                    Ok(Some(IterationState::Object { pairs, pos: 0 }))
+                    // O(1) resumable cursor over the shared Rc<Object>.
+                    // No eager pair snapshot: avoids O(N) setup, O(N) memory
+                    // floor, and O(N) memory-limit checks. Snapshot
+                    // independence is via the shared Rc (CoW).
+                    let cursor = obj.cursor();
+                    Ok(Some(IterationState::Object {
+                        obj: Rc::clone(obj),
+                        cursor,
+                    }))
                 }
             }
             Value::Set(ref set) => {
@@ -440,15 +456,12 @@ impl RegoVM {
                     self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
                     return Ok(None);
                 }
-                // Build sorted snapshot of values for deterministic iteration
-                let mut buf: Vec<Value> = Vec::new();
-                for v in set.iter() {
-                    crate::utils::limits::check_memory_limit_if_needed()
-                        .map_err(anyhow::Error::msg)?;
-                    buf.push(v.clone());
-                }
-                let values: Rc<[Value]> = buf.into();
-                Ok(Some(IterationState::Set { values, pos: 0 }))
+                // O(1) resumable cursor over the shared Rc<Set>.
+                let cursor = set.cursor();
+                Ok(Some(IterationState::Set {
+                    set: Rc::clone(set),
+                    cursor,
+                }))
             }
             _ => {
                 if self.virtual_element_on_non_collection && *mode == LoopMode::Every {
@@ -485,7 +498,7 @@ impl RegoVM {
 
     pub(super) fn setup_next_iteration(
         &mut self,
-        state: &IterationState,
+        state: &mut IterationState,
         key_reg: u8,
         value_reg: u8,
     ) -> Result<bool> {
@@ -509,27 +522,31 @@ impl RegoVM {
                     Ok(false)
                 }
             }
-            IterationState::Object { ref pairs, ref pos } => {
-                if let Some(pair) = pairs.get(*pos) {
-                    let (key, value) = (&pair.0, &pair.1);
+            IterationState::Object {
+                ref obj,
+                ref mut cursor,
+            } => {
+                if let Some((key, value)) = obj.next(cursor) {
+                    let (key, value) = (key.clone(), value.clone());
                     if key_reg != value_reg {
-                        self.set_register(key_reg, key.clone())?;
+                        self.set_register(key_reg, key)?;
                     }
-                    self.set_register(value_reg, value.clone())?;
+                    self.set_register(value_reg, value)?;
                     Ok(true)
                 } else {
                     Ok(false)
                 }
             }
             IterationState::Set {
-                ref values,
-                ref pos,
+                ref set,
+                ref mut cursor,
             } => {
-                if let Some(value) = values.get(*pos) {
+                if let Some(value) = set.next(cursor) {
+                    let value = value.clone();
                     if key_reg != value_reg {
                         self.set_register(key_reg, value.clone())?;
                     }
-                    self.set_register(value_reg, value.clone())?;
+                    self.set_register(value_reg, value)?;
                     Ok(true)
                 } else {
                     Ok(false)

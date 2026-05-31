@@ -39,7 +39,7 @@ impl RegoVM {
         self.set_register(params.result_reg, initial_result.clone())?;
 
         let auto_iterate = params.collection_reg != params.result_reg;
-        let iteration_state = if auto_iterate {
+        let mut iteration_state = if auto_iterate {
             let source_value = self.get_register(params.collection_reg)?.clone();
             match source_value {
                 Value::Array(items) => {
@@ -53,30 +53,17 @@ impl RegoVM {
                     if obj.is_empty() {
                         None
                     } else {
-                        // Snapshot (key, value) pairs for iteration.
-                        let mut buf: Vec<(Value, Value)> = Vec::new();
-                        for (k, v) in obj.iter() {
-                            crate::utils::limits::check_memory_limit_if_needed()
-                                .map_err(anyhow::Error::msg)?;
-                            buf.push((k.clone(), v.clone()));
-                        }
-                        let pairs: Rc<[(Value, Value)]> = buf.into();
-                        Some(IterationState::Object { pairs, pos: 0 })
+                        // O(1) cursor over shared Rc<Object>.
+                        let cursor = obj.cursor();
+                        Some(IterationState::Object { obj, cursor })
                     }
                 }
                 Value::Set(set) => {
                     if set.is_empty() {
                         None
                     } else {
-                        // Build snapshot of values for iteration
-                        let mut buf: Vec<Value> = Vec::new();
-                        for v in set.iter() {
-                            crate::utils::limits::check_memory_limit_if_needed()
-                                .map_err(anyhow::Error::msg)?;
-                            buf.push(v.clone());
-                        }
-                        let values: Rc<[Value]> = buf.into();
-                        Some(IterationState::Set { values, pos: 0 })
+                        let cursor = set.cursor();
+                        Some(IterationState::Set { set, cursor })
                     }
                 }
                 Value::Undefined => None,
@@ -87,7 +74,7 @@ impl RegoVM {
             None
         };
 
-        let has_iteration = if let Some(state) = iteration_state.as_ref() {
+        let has_iteration = if let Some(state) = iteration_state.as_mut() {
             self.setup_next_iteration(state, params.key_reg, params.value_reg)?
         } else {
             false
@@ -136,7 +123,7 @@ impl RegoVM {
         self.set_register(params.result_reg, initial_result.clone())?;
 
         let auto_iterate = params.collection_reg != params.result_reg;
-        let iteration_state = if auto_iterate {
+        let mut iteration_state = if auto_iterate {
             let source_value = self.get_register(params.collection_reg)?.clone();
             match source_value {
                 Value::Array(items) => {
@@ -150,30 +137,16 @@ impl RegoVM {
                     if obj.is_empty() {
                         None
                     } else {
-                        // Snapshot (key, value) pairs for iteration.
-                        let mut buf: Vec<(Value, Value)> = Vec::new();
-                        for (k, v) in obj.iter() {
-                            crate::utils::limits::check_memory_limit_if_needed()
-                                .map_err(anyhow::Error::msg)?;
-                            buf.push((k.clone(), v.clone()));
-                        }
-                        let pairs: Rc<[(Value, Value)]> = buf.into();
-                        Some(IterationState::Object { pairs, pos: 0 })
+                        let cursor = obj.cursor();
+                        Some(IterationState::Object { obj, cursor })
                     }
                 }
                 Value::Set(set) => {
                     if set.is_empty() {
                         None
                     } else {
-                        // Build snapshot of values for iteration
-                        let mut buf: Vec<Value> = Vec::new();
-                        for v in set.iter() {
-                            crate::utils::limits::check_memory_limit_if_needed()
-                                .map_err(anyhow::Error::msg)?;
-                            buf.push(v.clone());
-                        }
-                        let values: Rc<[Value]> = buf.into();
-                        Some(IterationState::Set { values, pos: 0 })
+                        let cursor = set.cursor();
+                        Some(IterationState::Set { set, cursor })
                     }
                 }
                 Value::Undefined => None,
@@ -184,7 +157,7 @@ impl RegoVM {
             None
         };
 
-        let has_iteration = if let Some(state) = iteration_state.as_ref() {
+        let has_iteration = if let Some(state) = iteration_state.as_mut() {
             self.setup_next_iteration(state, params.key_reg, params.value_reg)?
         } else {
             false
@@ -446,8 +419,18 @@ impl RegoVM {
             }
         };
 
-        if let Some(state) = iteration_state_snapshot.as_ref() {
-            let has_next = self.setup_next_iteration(state, key_reg_idx, value_reg_idx)?;
+        if let Some(mut state) = iteration_state_snapshot {
+            let has_next = self.setup_next_iteration(&mut state, key_reg_idx, value_reg_idx)?;
+
+            // Write the cursor-advanced state back to the frame.
+            if let Some(frame) = self.execution_stack.get_mut(comprehension_index) {
+                if let FrameKind::Comprehension {
+                    ref mut context, ..
+                } = frame.kind
+                {
+                    context.iteration_state = Some(state);
+                }
+            }
 
             if has_next {
                 if let Some(frame) = self.execution_stack.get_mut(comprehension_index) {

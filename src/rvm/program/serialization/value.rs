@@ -125,7 +125,7 @@ impl<'a> Serialize for BinarySetRef<'a> {
         S: serde::Serializer,
     {
         let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
-        for value in self.0.iter() {
+        for value in self.0.iter_sorted() {
             seq.serialize_element(&BinaryValueRef(value))?;
         }
         seq.end()
@@ -140,7 +140,7 @@ impl<'a> Serialize for BinaryObjectRef<'a> {
         S: serde::Serializer,
     {
         let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
-        for (key, value) in self.0.iter() {
+        for (key, value) in self.0.iter_sorted() {
             seq.serialize_element(&BinaryEntryRef(key, value))?;
         }
         seq.end()

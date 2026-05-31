@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use alloc::string::ToString as _;
 
 use crate::collections::error::InsertError;
-use crate::collections::iter::{SetIntoIter, SetIter, SetIterUnordered};
+use crate::collections::iter::{SetIntoIter, SetIter, SetIterSorted};
 use crate::collections::object_storage::check_key;
 use crate::collections::set_storage::SetStorage;
 use crate::value::Value;
@@ -89,13 +89,13 @@ impl Set {
     }
 
     #[inline]
-    pub fn first(&self) -> Option<&Value> {
-        self.as_ref().first()
+    pub fn iter_sorted(&self) -> SetIterSorted<'_> {
+        self.as_ref().iter_sorted()
     }
 
     #[inline]
-    pub fn iter_unordered(&self) -> SetIterUnordered<'_> {
-        self.as_ref().iter_unordered()
+    pub fn first(&self) -> Option<&Value> {
+        self.as_ref().first()
     }
 
     #[doc(hidden)]
@@ -291,17 +291,22 @@ impl<'a> SetRef<'a> {
     pub fn get(&self, value: &Value) -> Option<&'a Value> {
         self.inner.as_btreeset().get(value)
     }
+    /// Iteration without an order guarantee. Currently delegates to
+    /// `iter_sorted()` because the BTree storage variant naturally
+    /// iterates in sorted order; future variants may differ. Callers
+    /// MUST NOT depend on the order.
     #[inline]
     pub fn iter(&self) -> SetIter<'a> {
-        SetIter::new(self.inner.as_btreeset().iter())
+        SetIter::new(self.iter_sorted())
+    }
+    /// Iteration in sorted order. Use when deterministic order is required.
+    #[inline]
+    pub fn iter_sorted(&self) -> SetIterSorted<'a> {
+        SetIterSorted::new(self.inner.as_btreeset().iter())
     }
     #[inline]
     pub fn first(&self) -> Option<&'a Value> {
-        self.iter().next()
-    }
-    #[inline]
-    pub fn iter_unordered(&self) -> SetIterUnordered<'a> {
-        SetIterUnordered::new(self.iter())
+        self.iter_sorted().next()
     }
 
     /// Intersection of two sets.
@@ -393,7 +398,11 @@ impl<'a> SetRefMut<'a> {
     }
     #[inline]
     pub fn iter(&self) -> SetIter<'_> {
-        SetIter::new(self.inner.as_btreeset().iter())
+        SetIter::new(self.iter_sorted())
+    }
+    #[inline]
+    pub fn iter_sorted(&self) -> SetIterSorted<'_> {
+        SetIterSorted::new(self.inner.as_btreeset().iter())
     }
     #[inline]
     pub fn as_ref(&self) -> SetRef<'_> {

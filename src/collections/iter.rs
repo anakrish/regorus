@@ -6,18 +6,23 @@ use alloc::collections::{btree_map, btree_set};
 use crate::value::Value;
 
 /// Iterator over `(key, value)` pairs of an `Object` in sorted key order.
+///
+/// Use this when deterministic order is required (serialization, snapshots,
+/// `object.keys` builtin, etc.). For iteration without an order guarantee,
+/// use `Iter` (which may iterate in hash or insertion order for future
+/// storage variants).
 #[derive(Debug, Clone)]
-pub struct Iter<'a> {
+pub struct IterSorted<'a> {
     inner: btree_map::Iter<'a, Value, Value>,
 }
 
-impl<'a> Iter<'a> {
+impl<'a> IterSorted<'a> {
     pub(crate) const fn new(inner: btree_map::Iter<'a, Value, Value>) -> Self {
         Self { inner }
     }
 }
 
-impl<'a> Iterator for Iter<'a> {
+impl<'a> Iterator for IterSorted<'a> {
     type Item = (&'a Value, &'a Value);
 
     #[inline]
@@ -31,16 +36,16 @@ impl<'a> Iterator for Iter<'a> {
     }
 }
 
-impl ExactSizeIterator for Iter<'_> {
+impl ExactSizeIterator for IterSorted<'_> {
     #[inline]
     fn len(&self) -> usize {
         self.inner.len()
     }
 }
 
-impl core::iter::FusedIterator for Iter<'_> {}
+impl core::iter::FusedIterator for IterSorted<'_> {}
 
-impl<'a> DoubleEndedIterator for Iter<'a> {
+impl<'a> DoubleEndedIterator for IterSorted<'a> {
     #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
         self.inner.next_back()
@@ -187,20 +192,24 @@ impl ExactSizeIterator for ValuesMut<'_> {
 
 impl core::iter::FusedIterator for ValuesMut<'_> {}
 
-/// Unordered iteration. For the BTree storage variant this delegates to the
-/// sorted iterator; future variants may return entries in another order.
+/// Iteration without an order guarantee.
+///
+/// For the BTree storage variant this currently delegates to the sorted
+/// iterator (today's observable behavior); future storage variants
+/// (e.g. hash-backed) may return entries in another order. Callers
+/// MUST NOT depend on the order.
 #[derive(Debug, Clone)]
-pub struct IterUnordered<'a> {
-    inner: Iter<'a>,
+pub struct Iter<'a> {
+    inner: IterSorted<'a>,
 }
 
-impl<'a> IterUnordered<'a> {
-    pub(crate) const fn new(inner: Iter<'a>) -> Self {
+impl<'a> Iter<'a> {
+    pub(crate) const fn new(inner: IterSorted<'a>) -> Self {
         Self { inner }
     }
 }
 
-impl<'a> Iterator for IterUnordered<'a> {
+impl<'a> Iterator for Iter<'a> {
     type Item = (&'a Value, &'a Value);
 
     #[inline]
@@ -214,14 +223,14 @@ impl<'a> Iterator for IterUnordered<'a> {
     }
 }
 
-impl ExactSizeIterator for IterUnordered<'_> {
+impl ExactSizeIterator for Iter<'_> {
     #[inline]
     fn len(&self) -> usize {
         self.inner.len()
     }
 }
 
-impl core::iter::FusedIterator for IterUnordered<'_> {}
+impl core::iter::FusedIterator for Iter<'_> {}
 
 /// Owning iterator over an `Object`'s entries.
 #[derive(Debug)]
@@ -260,14 +269,58 @@ impl core::iter::FusedIterator for IntoIter {}
 
 // ---------- Set iterators ----------
 
-/// Iterator over `Set` elements in sorted order.
+/// Iterator over `Set` elements in sorted order. Use when deterministic
+/// order is required.
 #[derive(Debug, Clone)]
-pub struct SetIter<'a> {
+pub struct SetIterSorted<'a> {
     inner: btree_set::Iter<'a, Value>,
 }
 
-impl<'a> SetIter<'a> {
+impl<'a> SetIterSorted<'a> {
     pub(crate) const fn new(inner: btree_set::Iter<'a, Value>) -> Self {
+        Self { inner }
+    }
+}
+
+impl<'a> Iterator for SetIterSorted<'a> {
+    type Item = &'a Value;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl ExactSizeIterator for SetIterSorted<'_> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+impl core::iter::FusedIterator for SetIterSorted<'_> {}
+
+impl<'a> DoubleEndedIterator for SetIterSorted<'a> {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner.next_back()
+    }
+}
+
+/// Iteration over `Set` elements without an order guarantee. BTree variant
+/// currently delegates to the sorted iter; future variants may differ.
+#[derive(Debug, Clone)]
+pub struct SetIter<'a> {
+    inner: SetIterSorted<'a>,
+}
+
+impl<'a> SetIter<'a> {
+    pub(crate) const fn new(inner: SetIterSorted<'a>) -> Self {
         Self { inner }
     }
 }
@@ -294,48 +347,6 @@ impl ExactSizeIterator for SetIter<'_> {
 }
 
 impl core::iter::FusedIterator for SetIter<'_> {}
-
-impl<'a> DoubleEndedIterator for SetIter<'a> {
-    #[inline]
-    fn next_back(&mut self) -> Option<Self::Item> {
-        self.inner.next_back()
-    }
-}
-
-/// Unordered iteration on a `Set`. BTree variant delegates to sorted iter.
-#[derive(Debug, Clone)]
-pub struct SetIterUnordered<'a> {
-    inner: SetIter<'a>,
-}
-
-impl<'a> SetIterUnordered<'a> {
-    pub(crate) const fn new(inner: SetIter<'a>) -> Self {
-        Self { inner }
-    }
-}
-
-impl<'a> Iterator for SetIterUnordered<'a> {
-    type Item = &'a Value;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next()
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
-}
-
-impl ExactSizeIterator for SetIterUnordered<'_> {
-    #[inline]
-    fn len(&self) -> usize {
-        self.inner.len()
-    }
-}
-
-impl core::iter::FusedIterator for SetIterUnordered<'_> {}
 
 /// Owning iterator over `Set` elements.
 #[derive(Debug)]

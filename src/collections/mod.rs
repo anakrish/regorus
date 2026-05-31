@@ -31,7 +31,7 @@ pub(crate) mod set_storage;
 pub use entry::{MapEntry, OccupiedMapEntry, VacantMapEntry};
 pub use error::InsertError;
 pub use iter::{
-    IntoIter, Iter, IterMut, IterUnordered, Keys, SetIntoIter, SetIter, SetIterUnordered, Values,
+    IntoIter, Iter, IterMut, IterSorted, Keys, SetIntoIter, SetIter, SetIterSorted, Values,
     ValuesMut,
 };
 pub use object::{Object, ObjectRef, ObjectRefMut};

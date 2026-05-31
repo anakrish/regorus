@@ -13,7 +13,7 @@ use alloc::string::ToString as _;
 
 use crate::collections::entry::{entry_from_storage, MapEntry};
 use crate::collections::error::InsertError;
-use crate::collections::iter::{IntoIter, Iter, IterMut, IterUnordered, Keys, Values, ValuesMut};
+use crate::collections::iter::{IntoIter, Iter, IterMut, IterSorted, Keys, Values, ValuesMut};
 use crate::collections::object_storage::{check_key, ObjectStorage};
 use crate::value::Value;
 use crate::Rc;
@@ -107,6 +107,11 @@ impl Object {
     }
 
     #[inline]
+    pub fn iter_sorted(&self) -> IterSorted<'_> {
+        self.as_ref().iter_sorted()
+    }
+
+    #[inline]
     pub fn keys(&self) -> Keys<'_> {
         self.as_ref().keys()
     }
@@ -114,11 +119,6 @@ impl Object {
     #[inline]
     pub fn values(&self) -> Values<'_> {
         self.as_ref().values()
-    }
-
-    #[inline]
-    pub fn iter_unordered(&self) -> IterUnordered<'_> {
-        self.as_ref().iter_unordered()
     }
 
     #[doc(hidden)]
@@ -349,9 +349,20 @@ impl<'a> ObjectRef<'a> {
         self.inner.contains_key(key)
     }
 
+    /// Iteration without an order guarantee. Currently delegates to
+    /// `iter_sorted()` because the BTree storage variant naturally iterates
+    /// in sorted order; future storage variants may differ. Callers MUST
+    /// NOT depend on the order.
     #[inline]
     pub fn iter(&self) -> Iter<'a> {
-        Iter::new(self.inner.as_btreemap().iter())
+        Iter::new(self.iter_sorted())
+    }
+
+    /// Iteration in sorted key order. Use when deterministic order is
+    /// required (serialization, snapshots, `object.keys` builtin, etc.).
+    #[inline]
+    pub fn iter_sorted(&self) -> IterSorted<'a> {
+        IterSorted::new(self.inner.as_btreemap().iter())
     }
 
     #[inline]
@@ -362,13 +373,6 @@ impl<'a> ObjectRef<'a> {
     #[inline]
     pub fn values(&self) -> Values<'a> {
         Values::new(self.inner.as_btreemap().values())
-    }
-
-    /// Opt-in unordered iteration. For the BTree variant this is the same as
-    /// `iter()`; callers MUST NOT depend on the order.
-    #[inline]
-    pub fn iter_unordered(&self) -> IterUnordered<'a> {
-        IterUnordered::new(self.iter())
     }
 
     /// Clone into a freshly-owned `Value::Object`.
@@ -434,12 +438,12 @@ impl<'a> ObjectRefMut<'a> {
 
     #[inline]
     pub fn iter(&self) -> Iter<'_> {
-        Iter::new(self.inner.as_btreemap().iter())
+        Iter::new(self.iter_sorted())
     }
 
     #[inline]
-    pub fn iter_unordered(&self) -> IterUnordered<'_> {
-        IterUnordered::new(self.iter())
+    pub fn iter_sorted(&self) -> IterSorted<'_> {
+        IterSorted::new(self.inner.as_btreemap().iter())
     }
 
     #[inline]

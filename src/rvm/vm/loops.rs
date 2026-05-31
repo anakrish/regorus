@@ -422,19 +422,17 @@ impl RegoVM {
                         self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
                         return Ok(None);
                     }
-                    // Build sorted snapshot of keys for deterministic iteration
-                    let mut buf: Vec<Value> = Vec::new();
-                    for k in obj.keys() {
+                    // Snapshot (key, value) pairs for iteration. Symmetric
+                    // with Set: O(n) iteration, no per-step lookup, no
+                    // silent-termination footgun on missing keys.
+                    let mut buf: Vec<(Value, Value)> = Vec::new();
+                    for (k, v) in obj.iter() {
                         crate::utils::limits::check_memory_limit_if_needed()
                             .map_err(anyhow::Error::msg)?;
-                        buf.push(k.clone());
+                        buf.push((k.clone(), v.clone()));
                     }
-                    let keys: Rc<[Value]> = buf.into();
-                    Ok(Some(IterationState::Object {
-                        obj: obj.clone(),
-                        keys,
-                        pos: 0,
-                    }))
+                    let pairs: Rc<[(Value, Value)]> = buf.into();
+                    Ok(Some(IterationState::Object { pairs, pos: 0 }))
                 }
             }
             Value::Set(ref set) => {
@@ -512,20 +510,15 @@ impl RegoVM {
                 }
             }
             IterationState::Object {
-                ref obj,
-                ref keys,
+                ref pairs,
                 ref pos,
             } => {
-                if let Some(key) = keys.get(*pos) {
+                if let Some((key, value)) = pairs.get(*pos) {
                     if key_reg != value_reg {
                         self.set_register(key_reg, key.clone())?;
                     }
-                    if let Some(value) = obj.get(key) {
-                        self.set_register(value_reg, value.clone())?;
-                        Ok(true)
-                    } else {
-                        Ok(false)
-                    }
+                    self.set_register(value_reg, value.clone())?;
+                    Ok(true)
                 } else {
                     Ok(false)
                 }

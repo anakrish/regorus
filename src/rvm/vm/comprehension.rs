@@ -53,22 +53,22 @@ impl RegoVM {
                     if obj.is_empty() {
                         None
                     } else {
-                        // Build sorted snapshot of keys for deterministic iteration
-                        let mut buf: Vec<Value> = Vec::new();
-                        for k in obj.keys() {
+                        // Snapshot (key, value) pairs for iteration.
+                        let mut buf: Vec<(Value, Value)> = Vec::new();
+                        for (k, v) in obj.iter() {
                             crate::utils::limits::check_memory_limit_if_needed()
                                 .map_err(anyhow::Error::msg)?;
-                            buf.push(k.clone());
+                            buf.push((k.clone(), v.clone()));
                         }
-                        let keys: Rc<[Value]> = buf.into();
-                        Some(IterationState::Object { obj, keys, pos: 0 })
+                        let pairs: Rc<[(Value, Value)]> = buf.into();
+                        Some(IterationState::Object { pairs, pos: 0 })
                     }
                 }
                 Value::Set(set) => {
                     if set.is_empty() {
                         None
                     } else {
-                        // Build sorted snapshot of values for deterministic iteration
+                        // Build snapshot of values for iteration
                         let mut buf: Vec<Value> = Vec::new();
                         for v in set.iter() {
                             crate::utils::limits::check_memory_limit_if_needed()
@@ -150,22 +150,22 @@ impl RegoVM {
                     if obj.is_empty() {
                         None
                     } else {
-                        // Build sorted snapshot of keys for deterministic iteration
-                        let mut buf: Vec<Value> = Vec::new();
-                        for k in obj.keys() {
+                        // Snapshot (key, value) pairs for iteration.
+                        let mut buf: Vec<(Value, Value)> = Vec::new();
+                        for (k, v) in obj.iter() {
                             crate::utils::limits::check_memory_limit_if_needed()
                                 .map_err(anyhow::Error::msg)?;
-                            buf.push(k.clone());
+                            buf.push((k.clone(), v.clone()));
                         }
-                        let keys: Rc<[Value]> = buf.into();
-                        Some(IterationState::Object { obj, keys, pos: 0 })
+                        let pairs: Rc<[(Value, Value)]> = buf.into();
+                        Some(IterationState::Object { pairs, pos: 0 })
                     }
                 }
                 Value::Set(set) => {
                     if set.is_empty() {
                         None
                     } else {
-                        // Build sorted snapshot of values for deterministic iteration
+                        // Build snapshot of values for iteration
                         let mut buf: Vec<Value> = Vec::new();
                         for v in set.iter() {
                             crate::utils::limits::check_memory_limit_if_needed()

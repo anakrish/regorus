@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use crate::collections::Object;
 use crate::rvm::instructions::{ComprehensionMode, LoopMode};
 use crate::value::Value;
 use crate::Rc;
@@ -32,8 +31,7 @@ pub enum IterationState {
         index: usize,
     },
     Object {
-        obj: Rc<Object>,
-        keys: Rc<[Value]>,
+        pairs: Rc<[(Value, Value)]>,
         pos: usize,
     },
     Set {

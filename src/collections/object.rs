@@ -28,8 +28,6 @@ use crate::value::Value;
 /// - [`Object::cursor`] / [`Object::next`] — implementation-defined order,
 ///   resumable; cheapest per-step cost. Used by interpreter/RVM when iteration
 ///   must yield mid-flight.
-/// - [`Object::cursor_sorted`] / [`Object::next_sorted`] — sorted order,
-///   resumable; for canonical iteration that must yield.
 #[derive(Default, Clone, Eq, PartialEq)]
 pub struct Object {
     inner: BTreeMap<Value, Value>,
@@ -59,18 +57,6 @@ impl Object {
         self.inner.get(key)
     }
 
-    /// Look up by string key.
-    ///
-    /// Currently equivalent to `self.get(&Value::String(Rc::from(key)))` — the
-    /// probe `Value::String` is constructed eagerly, so this allocates an
-    /// `Rc<str>` per call. A future storage variant (e.g. hash-backed) may
-    /// implement this as an allocation-free lookup; today it is a
-    /// convenience wrapper, not a hot-path fast path.
-    pub fn get_str(&self, key: &str) -> Option<&Value> {
-        let probe = Value::String(key.into());
-        self.inner.get(&probe)
-    }
-
     #[inline]
     pub fn contains_key(&self, key: &Value) -> bool {
         self.inner.contains_key(key)
@@ -88,10 +74,8 @@ impl Object {
     /// deterministic order is required, or [`Object::cursor`] when iteration
     /// must yield and resume.
     #[inline]
-    pub fn iter(&self) -> Iter<'_> {
-        Iter {
-            inner: self.inner.iter(),
-        }
+    pub fn iter(&self) -> impl Iterator<Item = (&Value, &Value)> + '_ {
+        self.inner.iter()
     }
 
     /// Iteration in sorted key order (by `Value::Ord`). Non-resumable.
@@ -112,18 +96,8 @@ impl Object {
     }
 
     #[inline]
-    pub fn keys_sorted(&self) -> impl DoubleEndedIterator<Item = &Value> + '_ {
-        self.inner.keys()
-    }
-
-    #[inline]
     pub fn values(&self) -> impl Iterator<Item = &Value> + '_ {
         self.inner.values()
-    }
-
-    #[inline]
-    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut Value> + '_ {
-        self.inner.values_mut()
     }
 
     #[inline]
@@ -172,17 +146,6 @@ impl Object {
         self.inner.entry(key).or_insert_with(default)
     }
 
-    /// Insert `value` if `key` is not already present; return a mutable
-    /// reference to the existing or newly-inserted value.
-    ///
-    /// Unlike [`Object::get_or_insert_with`], takes `value` by value — no
-    /// closure allocation. Prefer when the default is a cheap value already
-    /// in hand.
-    #[inline]
-    pub fn insert_if_absent(&mut self, key: Value, value: Value) -> &mut Value {
-        self.inner.entry(key).or_insert(value)
-    }
-
     /// Wrap into a `Value::Object`.
     #[inline]
     pub fn into_value(self) -> Value {
@@ -214,34 +177,6 @@ impl Object {
         *last = Some(k.clone());
         Some((k, v))
     }
-
-    /// Create a resumable cursor over entries in sorted `Value::Ord` order.
-    /// Stable for the lifetime of `&self`.
-    #[inline]
-    pub const fn cursor_sorted(&self) -> ObjectCursorSorted {
-        ObjectCursorSorted {
-            inner: ObjectCursorSortedInner::BTree(None),
-        }
-    }
-
-    /// Advance the sorted cursor and yield the next entry.
-    pub fn next_sorted<'a>(
-        &'a self,
-        cursor: &mut ObjectCursorSorted,
-    ) -> Option<(&'a Value, &'a Value)> {
-        let ObjectCursorSortedInner::BTree(ref mut last) = cursor.inner;
-        let next = last.as_ref().map_or_else(
-            || self.inner.iter().next(),
-            |prev| {
-                self.inner
-                    .range((Bound::Excluded(prev.clone()), Bound::Unbounded))
-                    .next()
-            },
-        );
-        let (k, v) = next?;
-        *last = Some(k.clone());
-        Some((k, v))
-    }
 }
 
 /// Opaque resumable cursor over an [`Object`]'s entries in
@@ -254,17 +189,6 @@ pub struct ObjectCursor {
 #[derive(Debug, Clone)]
 enum ObjectCursorInner {
     /// BTree backend cursor: tracks last-seen key. `None` means "before start".
-    BTree(Option<Value>),
-}
-
-/// Opaque resumable cursor over an [`Object`]'s entries in sorted order.
-#[derive(Debug, Clone)]
-pub struct ObjectCursorSorted {
-    inner: ObjectCursorSortedInner,
-}
-
-#[derive(Debug, Clone)]
-enum ObjectCursorSortedInner {
     BTree(Option<Value>),
 }
 

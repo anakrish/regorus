@@ -105,14 +105,6 @@ fn object_remove_and_retain() {
 }
 
 #[test]
-fn object_get_str() {
-    let mut obj = Object::new();
-    obj.insert(Value::String("hello".into()), val(1));
-    assert_eq!(obj.get_str("hello"), Some(&val(1)));
-    assert!(obj.get_str("missing").is_none());
-}
-
-#[test]
 fn object_into_iterator_owned() {
     let pairs = make_pairs(8);
     let obj: Object = pairs.clone().into_iter().collect();
@@ -184,23 +176,12 @@ fn set_algebra_matches_btreeset() {
         sorted(a_btree.difference(&b_btree))
     );
 
-    let sym_set = a.symmetric_difference(&b);
-    assert_eq!(
-        sorted(sym_set.iter_sorted()),
-        sorted(a_btree.symmetric_difference(&b_btree))
-    );
-
-    // Subset / superset: trivial + non-trivial cases.
+    // Subset: trivial + non-trivial cases.
     let proper_subset: Set = (0..16_u64).map(val).collect();
     let non_subset: Set = (30..50_u64).map(val).collect();
     assert!(a.is_subset(&a));
     assert!(proper_subset.is_subset(&a));
     assert!(!non_subset.is_subset(&a));
-    assert!(a.is_superset(&proper_subset));
-    assert!(!a.is_superset(&non_subset));
-
-    assert!(!a.is_disjoint(&b));
-    assert!(Set::from_iter([val(99)]).is_disjoint(&a));
 }
 
 #[test]
@@ -332,10 +313,6 @@ fn object_accessor_coverage() {
     assert_eq!(keys.len(), 4);
     assert_eq!(keys[0], &val(0));
 
-    let keys_sorted: Vec<&Value> = obj.keys_sorted().collect();
-    assert_eq!(keys_sorted.len(), 4);
-    assert_eq!(keys_sorted[0], &val(0));
-
     let values_sum: u64 = obj.values().map(|v| v.as_u64().unwrap_or(0)).sum();
     // 0 + 2 + 999 + 6 = 1007
     assert_eq!(values_sum, 1007);
@@ -433,22 +410,6 @@ fn object_cursor_yields_every_entry_once() {
 }
 
 #[test]
-fn object_cursor_sorted_yields_in_value_ord_order() {
-    let obj: Object = make_pairs(16).into_iter().collect();
-    let mut cursor = obj.cursor_sorted();
-    let mut last: Option<Value> = None;
-    let mut count = 0;
-    while let Some((k, _)) = obj.next_sorted(&mut cursor) {
-        if let Some(ref prev) = last {
-            assert!(prev < k);
-        }
-        last = Some(k.clone());
-        count += 1;
-    }
-    assert_eq!(count, 16);
-}
-
-#[test]
 fn object_cursor_resumable_fresh_cursor_restarts() {
     let obj: Object = make_pairs(8).into_iter().collect();
     let mut c1 = obj.cursor();
@@ -497,8 +458,6 @@ fn object_cursor_empty_returns_none_immediately() {
     let obj = Object::new();
     let mut cursor = obj.cursor();
     assert!(obj.next(&mut cursor).is_none());
-    let mut cursor_s = obj.cursor_sorted();
-    assert!(obj.next_sorted(&mut cursor_s).is_none());
 }
 
 #[test]
@@ -520,44 +479,10 @@ fn set_cursor_yields_every_element_once() {
 }
 
 #[test]
-fn set_cursor_sorted_yields_in_order() {
-    let s: Set = (0..16_u64).map(val).collect();
-    let mut cursor = s.cursor_sorted();
-    let mut last: Option<Value> = None;
-    while let Some(v) = s.next_sorted(&mut cursor) {
-        if let Some(ref prev) = last {
-            assert!(prev < v);
-        }
-        last = Some(v.clone());
-    }
-}
-
-#[test]
 fn set_cursor_empty_returns_none_immediately() {
     let s = Set::new();
     let mut c = s.cursor();
     assert!(s.next(&mut c).is_none());
-    let mut cs = s.cursor_sorted();
-    assert!(s.next_sorted(&mut cs).is_none());
-}
-
-// ---- insert_if_absent ----------------------------------------------------
-
-#[test]
-fn object_insert_if_absent_inserts_when_absent() {
-    let mut obj = Object::new();
-    let v = obj.insert_if_absent(val(7), val(42));
-    assert_eq!(*v, val(42));
-    *v = val(43);
-    assert_eq!(obj.get(&val(7)), Some(&val(43)));
-}
-
-#[test]
-fn object_insert_if_absent_returns_existing_when_present() {
-    let mut obj = Object::new();
-    obj.insert(val(7), val(1));
-    let v = obj.insert_if_absent(val(7), val(999));
-    assert_eq!(*v, val(1));
 }
 
 // ---- Hand-written Ord consistency ---------------------------------------

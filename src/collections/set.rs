@@ -21,7 +21,7 @@ use crate::value::Value;
 /// private so the representation can change without touching call sites.
 ///
 /// See the module-level docs for iteration order semantics, and
-/// [`Set::cursor`] / [`Set::cursor_sorted`] for resumable iteration.
+/// [`Set::cursor`] for resumable iteration.
 #[derive(Default, Clone, Eq, PartialEq)]
 pub struct Set {
     inner: BTreeSet<Value>,
@@ -69,10 +69,8 @@ impl Set {
 
     /// Iteration in implementation-defined order. Non-resumable.
     #[inline]
-    pub fn iter(&self) -> Iter<'_> {
-        Iter {
-            inner: self.inner.iter(),
-        }
+    pub fn iter(&self) -> impl Iterator<Item = &Value> + '_ {
+        self.inner.iter()
     }
 
     /// Iteration in sorted order (by `Value::Ord`). Non-resumable.
@@ -130,29 +128,9 @@ impl Set {
         }
     }
 
-    pub fn symmetric_difference(&self, other: &Set) -> Set {
-        Set {
-            inner: self
-                .inner
-                .symmetric_difference(&other.inner)
-                .cloned()
-                .collect(),
-        }
-    }
-
     #[inline]
     pub fn is_subset(&self, other: &Set) -> bool {
         self.inner.is_subset(&other.inner)
-    }
-
-    #[inline]
-    pub fn is_superset(&self, other: &Set) -> bool {
-        self.inner.is_superset(&other.inner)
-    }
-
-    #[inline]
-    pub fn is_disjoint(&self, other: &Set) -> bool {
-        self.inner.is_disjoint(&other.inner)
     }
 
     #[inline]
@@ -184,31 +162,6 @@ impl Set {
         *last = Some(v.clone());
         Some(v)
     }
-
-    /// Create a resumable cursor over elements in sorted order. Stable for
-    /// the lifetime of `&self`.
-    #[inline]
-    pub const fn cursor_sorted(&self) -> SetCursorSorted {
-        SetCursorSorted {
-            inner: SetCursorSortedInner::BTree(None),
-        }
-    }
-
-    /// Advance the sorted cursor and yield the next element.
-    pub fn next_sorted<'a>(&'a self, cursor: &mut SetCursorSorted) -> Option<&'a Value> {
-        let SetCursorSortedInner::BTree(ref mut last) = cursor.inner;
-        let next = last.as_ref().map_or_else(
-            || self.inner.iter().next(),
-            |prev| {
-                self.inner
-                    .range((Bound::Excluded(prev.clone()), Bound::Unbounded))
-                    .next()
-            },
-        );
-        let v = next?;
-        *last = Some(v.clone());
-        Some(v)
-    }
 }
 
 /// Opaque resumable cursor over a [`Set`]'s elements in implementation-defined order.
@@ -219,17 +172,6 @@ pub struct SetCursor {
 
 #[derive(Debug, Clone)]
 enum SetCursorInner {
-    BTree(Option<Value>),
-}
-
-/// Opaque resumable cursor over a [`Set`]'s elements in sorted order.
-#[derive(Debug, Clone)]
-pub struct SetCursorSorted {
-    inner: SetCursorSortedInner,
-}
-
-#[derive(Debug, Clone)]
-enum SetCursorSortedInner {
     BTree(Option<Value>),
 }
 

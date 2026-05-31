@@ -13,6 +13,7 @@
 
 use crate::number::Number;
 
+use crate::collections::{Object, Set};
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use core::fmt;
@@ -59,11 +60,11 @@ pub enum Value {
     /// A set of values.
     /// No JSON equivalent.
     /// Sets are serialized as arrays in JSON.
-    Set(Rc<BTreeSet<Value>>),
+    Set(Rc<Set>),
 
     /// An object.
     /// Unlike JSON, keys can be any value, not just string.
-    Object(Rc<BTreeMap<Value, Value>>),
+    Object(Rc<Object>),
 
     /// Undefined value.
     /// Used to indicate the absence of a value.
@@ -95,7 +96,7 @@ impl Serialize for Value {
             Value::Array(a) => a.serialize(serializer),
             Value::Object(fields) => {
                 let mut map = serializer.serialize_map(Some(fields.len()))?;
-                for (k, v) in fields.iter() {
+                for (k, v) in fields.iter_sorted() {
                     match k {
                         Value::String(_) => map.serialize_entry(k, v)?,
                         _ => {
@@ -779,7 +780,7 @@ impl From<BTreeSet<Value>> for Value {
     /// # Ok(())
     /// # }
     fn from(s: BTreeSet<Value>) -> Self {
-        Value::Set(Rc::new(s))
+        Value::Set(Rc::new(Set::from(s)))
     }
 }
 
@@ -800,7 +801,7 @@ impl From<BTreeMap<Value, Value>> for Value {
     /// # Ok(())
     /// # }
     fn from(s: BTreeMap<Value, Value>) -> Self {
-        Value::Object(Rc::new(s))
+        Value::Object(Rc::new(Object::from(s)))
     }
 }
 
@@ -1237,7 +1238,7 @@ impl Value {
         }
     }
 
-    /// Cast value to [`& BTreeSet<Value>`] if [`Value::Set`].
+    /// Cast value to [`&Set`] if [`Value::Set`].
     /// ```
     /// # use regorus::*;
     /// # use std::collections::BTreeSet;
@@ -1251,14 +1252,14 @@ impl Value {
     /// assert_eq!(v.as_set()?.first(), Some(&Value::from("Hello")));
     /// # Ok(())
     /// # }
-    pub fn as_set(&self) -> Result<&BTreeSet<Value>> {
+    pub fn as_set(&self) -> Result<&Set> {
         match self {
             Value::Set(s) => Ok(s),
             _ => Err(anyhow!("not a set")),
         }
     }
 
-    /// Cast value to [`&mut BTreeSet<Value>`] if [`Value::Set`].
+    /// Cast value to [`&mut Set`] if [`Value::Set`].
     /// ```
     /// # use regorus::*;
     /// # use std::collections::BTreeSet;
@@ -1272,14 +1273,14 @@ impl Value {
     /// v.as_set_mut()?.insert(Value::from("World"));
     /// # Ok(())
     /// # }
-    pub fn as_set_mut(&mut self) -> Result<&mut BTreeSet<Value>> {
+    pub fn as_set_mut(&mut self) -> Result<&mut Set> {
         match self {
             Value::Set(s) => Ok(Rc::make_mut(s)),
             _ => Err(anyhow!("not a set")),
         }
     }
 
-    /// Cast value to [`& BTreeMap<Value, Value>`] if [`Value::Object`].
+    /// Cast value to [`&Object`] if [`Value::Object`].
     /// ```
     /// # use regorus::*;
     /// # use std::collections::BTreeMap;
@@ -1296,14 +1297,14 @@ impl Value {
     /// );
     /// # Ok(())
     /// # }
-    pub fn as_object(&self) -> Result<&BTreeMap<Value, Value>> {
+    pub fn as_object(&self) -> Result<&Object> {
         match self {
             Value::Object(m) => Ok(m),
             _ => Err(anyhow!("not an object")),
         }
     }
 
-    /// Cast value to [`&mut BTreeMap<Value, Value>`] if [`Value::Object`].
+    /// Cast value to [`&mut Object`] if [`Value::Object`].
     /// ```
     /// # use regorus::*;
     /// # use std::collections::BTreeMap;
@@ -1317,7 +1318,7 @@ impl Value {
     /// v.as_object_mut()?.insert(Value::from("Good"), Value::from("Bye"));
     /// # Ok(())
     /// # }
-    pub fn as_object_mut(&mut self) -> Result<&mut BTreeMap<Value, Value>> {
+    pub fn as_object_mut(&mut self) -> Result<&mut Object> {
         match self {
             Value::Object(m) => Ok(Rc::make_mut(m)),
             _ => Err(anyhow!("not an object")),

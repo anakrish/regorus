@@ -1693,7 +1693,7 @@ impl Interpreter {
                         // TODO: clean this assumption between Undefined vs Object.
                         obj.get_or_insert_with(p, Value::new_object);
                     } else {
-                        let existing = obj.get_or_insert_with(p, || value.clone());
+                        let existing = obj.insert_if_absent(p, value.clone());
                         if *existing != value {
                             bail!(span.error("complete rules should not produce multiple outputs"))
                         }
@@ -1823,7 +1823,7 @@ impl Interpreter {
                 // Non-set rule.
                 let key = Value::from_array(comps);
                 let obj_mut = ctx_mut.rule_value.as_object_mut()?;
-                let existing = obj_mut.get_or_insert_with(key, || output.clone());
+                let existing = obj_mut.insert_if_absent(key, output.clone());
                 if *existing != output {
                     bail!(rule_ref
                         .span()

@@ -24,7 +24,7 @@ use core::str::FromStr;
 
 use anyhow::{anyhow, bail, Result};
 use serde::de::{self, Deserializer, Error as DeError, MapAccess, SeqAccess, Visitor};
-use serde::ser::{SerializeMap, Serializer};
+use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 
 use crate::*;
@@ -87,26 +87,15 @@ impl Serialize for Value {
     where
         S: Serializer,
     {
-        use serde::ser::Error;
         match self {
             Value::Null => serializer.serialize_unit(),
             Value::Bool(b) => serializer.serialize_bool(*b),
             Value::String(s) => serializer.serialize_str(s.as_ref()),
             Value::Number(n) => n.serialize(serializer),
             Value::Array(a) => a.serialize(serializer),
-            Value::Object(fields) => {
-                let mut map = serializer.serialize_map(Some(fields.len()))?;
-                for (k, v) in fields.iter_sorted() {
-                    match k {
-                        Value::String(_) => map.serialize_entry(k, v)?,
-                        _ => {
-                            let key_str = serde_json::to_string(k).map_err(Error::custom)?;
-                            map.serialize_entry(&key_str, v)?
-                        }
-                    }
-                }
-                map.end()
-            }
+            // Delegate to the Object/Set serializers — single canonical path,
+            // handles non-string-key stringification internally.
+            Value::Object(fields) => fields.serialize(serializer),
 
             // display set as an array
             Value::Set(s) => s.serialize(serializer),
@@ -1241,13 +1230,12 @@ impl Value {
     /// Cast value to [`&Set`] if [`Value::Set`].
     /// ```
     /// # use regorus::*;
-    /// # use std::collections::BTreeSet;
     /// # fn main() -> anyhow::Result<()> {
     /// let v = Value::from(
     ///    [Value::from("Hello")]
     ///        .iter()
     ///        .cloned()
-    ///        .collect::<BTreeSet<Value>>(),
+    ///        .collect::<Set>(),
     /// );
     /// assert_eq!(v.as_set()?.first(), Some(&Value::from("Hello")));
     /// # Ok(())
@@ -1262,13 +1250,12 @@ impl Value {
     /// Cast value to [`&mut Set`] if [`Value::Set`].
     /// ```
     /// # use regorus::*;
-    /// # use std::collections::BTreeSet;
     /// # fn main() -> anyhow::Result<()> {
     /// let mut v = Value::from(
     ///    [Value::from("Hello")]
     ///        .iter()
     ///        .cloned()
-    ///        .collect::<BTreeSet<Value>>(),
+    ///        .collect::<Set>(),
     /// );
     /// v.as_set_mut()?.insert(Value::from("World"));
     /// # Ok(())
@@ -1283,13 +1270,12 @@ impl Value {
     /// Cast value to [`&Object`] if [`Value::Object`].
     /// ```
     /// # use regorus::*;
-    /// # use std::collections::BTreeMap;
     /// # fn main() -> anyhow::Result<()> {
     /// let v = Value::from(
     ///    [(Value::from("Hello"), Value::from("World"))]
     ///        .iter()
     ///        .cloned()
-    ///        .collect::<BTreeMap<Value, Value>>(),
+    ///        .collect::<Object>(),
     /// );
     /// assert_eq!(
     ///    v.as_object()?.iter().next(),
@@ -1307,13 +1293,12 @@ impl Value {
     /// Cast value to [`&mut Object`] if [`Value::Object`].
     /// ```
     /// # use regorus::*;
-    /// # use std::collections::BTreeMap;
     /// # fn main() -> anyhow::Result<()> {
     /// let mut v = Value::from(
     ///    [(Value::from("Hello"), Value::from("World"))]
     ///        .iter()
     ///        .cloned()
-    ///        .collect::<BTreeMap<Value, Value>>(),
+    ///        .collect::<Object>(),
     /// );
     /// v.as_object_mut()?.insert(Value::from("Good"), Value::from("Bye"));
     /// # Ok(())

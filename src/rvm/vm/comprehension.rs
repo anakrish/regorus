@@ -55,7 +55,7 @@ impl RegoVM {
                     } else {
                         // Build sorted snapshot of keys for deterministic iteration
                         let mut buf: Vec<Value> = Vec::new();
-                        for k in obj.keys_sorted() {
+                        for k in obj.keys() {
                             crate::utils::limits::check_memory_limit_if_needed()
                                 .map_err(anyhow::Error::msg)?;
                             buf.push(k.clone());
@@ -70,7 +70,7 @@ impl RegoVM {
                     } else {
                         // Build sorted snapshot of values for deterministic iteration
                         let mut buf: Vec<Value> = Vec::new();
-                        for v in set.iter_sorted() {
+                        for v in set.iter() {
                             crate::utils::limits::check_memory_limit_if_needed()
                                 .map_err(anyhow::Error::msg)?;
                             buf.push(v.clone());
@@ -152,7 +152,7 @@ impl RegoVM {
                     } else {
                         // Build sorted snapshot of keys for deterministic iteration
                         let mut buf: Vec<Value> = Vec::new();
-                        for k in obj.keys_sorted() {
+                        for k in obj.keys() {
                             crate::utils::limits::check_memory_limit_if_needed()
                                 .map_err(anyhow::Error::msg)?;
                             buf.push(k.clone());
@@ -167,7 +167,7 @@ impl RegoVM {
                     } else {
                         // Build sorted snapshot of values for deterministic iteration
                         let mut buf: Vec<Value> = Vec::new();
-                        for v in set.iter_sorted() {
+                        for v in set.iter() {
                             crate::utils::limits::check_memory_limit_if_needed()
                                 .map_err(anyhow::Error::msg)?;
                             buf.push(v.clone());

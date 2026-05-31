@@ -194,7 +194,7 @@ fn set_nested_inner(obj: &mut ObjMap, segments: &[&str], value: Value, lowercase
     // Descend directly into the BTreeMap, avoiding ObjMap round-trip.
     if let Some(Value::Object(inner_rc)) = obj.get_mut(&*seg) {
         let inner_btree = Rc::make_mut(inner_rc);
-        set_nested_in_btree(
+        set_nested(
             inner_btree,
             segments.get(1..).unwrap_or_default(),
             value,
@@ -208,7 +208,7 @@ fn set_nested_inner(obj: &mut ObjMap, segments: &[&str], value: Value, lowercase
 ///
 /// This avoids the `btree_to_obj_map` / `obj_map_to_btree` round-trip that
 /// would clone every sibling entry at each nesting level.
-pub fn set_nested_in_btree(obj: &mut Object, segments: &[&str], value: Value, lowercase: bool) {
+pub fn set_nested(obj: &mut Object, segments: &[&str], value: Value, lowercase: bool) {
     let Some(&first) = segments.first() else {
         return;
     };
@@ -232,7 +232,7 @@ pub fn set_nested_in_btree(obj: &mut Object, segments: &[&str], value: Value, lo
 
     if let Some(Value::Object(inner_rc)) = obj.get_mut(&key_val) {
         let inner = Rc::make_mut(inner_rc);
-        set_nested_in_btree(
+        set_nested(
             inner,
             segments.get(1..).unwrap_or_default(),
             value,
@@ -347,19 +347,14 @@ fn remove_field_at_depth(obj: &mut ObjMap, array_chain: &[Vec<String>], depth: u
         for elem in inner.iter_mut() {
             if let Value::Object(obj_rc) = elem {
                 let inner_btree = Rc::make_mut(obj_rc);
-                remove_field_at_depth_in_btree(
-                    inner_btree,
-                    array_chain,
-                    depth.saturating_add(1),
-                    field,
-                );
+                remove_field_at_depth_obj(inner_btree, array_chain, depth.saturating_add(1), field);
             }
         }
     }
 }
 
 /// Object-native recursion for element-level field removal.
-fn remove_field_at_depth_in_btree(
+fn remove_field_at_depth_obj(
     obj: &mut Object,
     array_chain: &[Vec<String>],
     depth: usize,
@@ -372,7 +367,7 @@ fn remove_field_at_depth_in_btree(
                 obj.remove(&Value::from(seg));
             }
         } else if segments.len() > 1 {
-            remove_at_dotted_path_in_btree(obj, &segments);
+            remove_at_dotted_path_obj(obj, &segments);
         }
         return;
     };
@@ -410,19 +405,14 @@ fn remove_field_at_depth_in_btree(
         for elem in inner.iter_mut() {
             if let Value::Object(obj_rc) = elem {
                 let inner_btree = Rc::make_mut(obj_rc);
-                remove_field_at_depth_in_btree(
-                    inner_btree,
-                    array_chain,
-                    depth.saturating_add(1),
-                    field,
-                );
+                remove_field_at_depth_obj(inner_btree, array_chain, depth.saturating_add(1), field);
             }
         }
     }
 }
 
 /// Remove the leaf segment at a dotted path directly in an Object.
-fn remove_at_dotted_path_in_btree(obj: &mut Object, segments: &[&str]) {
+fn remove_at_dotted_path_obj(obj: &mut Object, segments: &[&str]) {
     let Some((&leaf, parent_segs)) = segments.split_last() else {
         return;
     };

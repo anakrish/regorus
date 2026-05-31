@@ -10,8 +10,8 @@ use crate::collections::Object;
 use crate::Value;
 
 use super::super::obj_map::{
-    obj_get, obj_get_mut, obj_insert, set_nested_in_btree, set_nested_lowercased,
-    set_nested_verbatim, ObjMap,
+    obj_get, obj_get_mut, obj_insert, set_nested, set_nested_lowercased, set_nested_verbatim,
+    ObjMap,
 };
 use super::super::types::PrecomputedRemap;
 
@@ -194,7 +194,7 @@ fn remap_deep_field_in_btree(btree: &mut Object, source: &str, target: &str, low
         }
         return;
     }
-    set_nested_in_btree(btree, &segments, val, lowercase);
+    set_nested(btree, &segments, val, lowercase);
 }
 
 /// Read a value at a dotted path from a BTreeMap.

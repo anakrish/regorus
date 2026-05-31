@@ -145,9 +145,7 @@ mod tests {
         assert!(collected.contains(&(Value::from("a"), Value::from(1))));
         assert!(collected.contains(&(Value::from("b"), Value::from(2))));
         assert!(collected.contains(&(Value::from("c"), Value::from(3))));
-        assert!(!collected
-            .iter()
-            .any(|(k, _)| k == &Value::from("d")));
+        assert!(!collected.iter().any(|(k, _)| k == &Value::from("d")));
 
         // The original source Value (untouched) is also unchanged.
         let src_obj = source.as_object().expect("object");

@@ -251,10 +251,7 @@ fn set_value_cow_make_mut_isolates_clones() {
     let a = Value::new_set();
     let b = a.clone();
     let mut b_owned = b;
-    b_owned
-        .as_set_mut()
-        .expect("set")
-        .insert(Value::from("x"));
+    b_owned.as_set_mut().expect("set").insert(Value::from("x"));
     assert_eq!(a.as_set().expect("set").len(), 0);
     assert_eq!(b_owned.as_set().expect("set").len(), 1);
 }
@@ -339,10 +336,7 @@ fn object_accessor_coverage() {
     assert_eq!(keys_sorted.len(), 4);
     assert_eq!(keys_sorted[0], &val(0));
 
-    let values_sum: u64 = obj
-        .values()
-        .map(|v| v.as_u64().unwrap_or(0))
-        .sum();
+    let values_sum: u64 = obj.values().map(|v| v.as_u64().unwrap_or(0)).sum();
     // 0 + 2 + 999 + 6 = 1007
     assert_eq!(values_sum, 1007);
 

@@ -10,7 +10,7 @@
 //! observations into the program's metadata so the runtime can inspect
 //! them without re-analysing the AST.
 
-use alloc::collections::BTreeSet;
+use crate::collections::Set;
 use alloc::string::{String, ToString as _};
 
 use crate::languages::azure_policy::ast::{
@@ -232,7 +232,7 @@ impl Compiler {
 
         // Parameter names.
         if !defn.parameters.is_empty() {
-            let set: BTreeSet<Value> = defn
+            let set: Set = defn
                 .parameters
                 .iter()
                 .map(|p| Value::String(p.name.as_str().into()))
@@ -272,10 +272,10 @@ impl Compiler {
 fn insert_string_set_annotation(
     annot: &mut alloc::collections::BTreeMap<String, Value>,
     key: &str,
-    observed: &BTreeSet<String>,
+    observed: &alloc::collections::BTreeSet<String>,
 ) {
     if !observed.is_empty() {
-        let set: BTreeSet<Value> = observed
+        let set: Set = observed
             .iter()
             .map(|s| Value::String(s.as_str().into()))
             .collect();

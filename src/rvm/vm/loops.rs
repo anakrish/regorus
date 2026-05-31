@@ -510,7 +510,8 @@ impl RegoVM {
                 }
             }
             IterationState::Object { ref pairs, ref pos } => {
-                if let Some((key, value)) = pairs.get(*pos) {
+                if let Some(pair) = pairs.get(*pos) {
+                    let (key, value) = (&pair.0, &pair.1);
                     if key_reg != value_reg {
                         self.set_register(key_reg, key.clone())?;
                     }

@@ -99,6 +99,14 @@ pub(super) struct ComprehensionContext {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::unreachable,
+    clippy::pattern_type_mismatch,
+    clippy::shadow_unrelated,
+    clippy::panic
+)]
 mod tests {
     use super::*;
     use crate::collections::Object;
@@ -116,7 +124,7 @@ mod tests {
         let source = Value::Object(Rc::new(obj));
 
         // Build the snapshot exactly as loops.rs / comprehension.rs do.
-        let pairs: Rc<[(Value, Value)]> = match &source {
+        let snapshot_pairs: Rc<[(Value, Value)]> = match &source {
             Value::Object(o) => o
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
@@ -125,7 +133,7 @@ mod tests {
             _ => unreachable!(),
         };
         let state = IterationState::Object {
-            pairs: Rc::clone(&pairs),
+            pairs: Rc::clone(&snapshot_pairs),
             pos: 0,
         };
 
@@ -145,7 +153,7 @@ mod tests {
         assert!(collected.contains(&(Value::from("a"), Value::from(1))));
         assert!(collected.contains(&(Value::from("b"), Value::from(2))));
         assert!(collected.contains(&(Value::from("c"), Value::from(3))));
-        assert!(!collected.iter().any(|(k, _)| k == &Value::from("d")));
+        assert!(!collected.iter().any(|kv| kv.0 == Value::from("d")));
 
         // The original source Value (untouched) is also unchanged.
         let src_obj = source.as_object().expect("object");

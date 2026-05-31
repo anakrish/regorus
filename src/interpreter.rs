@@ -28,7 +28,6 @@ use crate::{Expression, Extension, Location, QueryResult, QueryResults};
 use crate::query::traversal::traverse;
 
 use crate::Rc;
-use alloc::collections::btree_map::Entry as BTreeMapEntry;
 use alloc::collections::{BTreeMap, BTreeSet};
 use anyhow::{anyhow, bail, Result};
 use core::ops::Bound::*;
@@ -1312,10 +1311,10 @@ impl Interpreter {
                                 *obj = Value::new_object();
                             }
 
-                            obj = obj
-                                .as_object_mut()?
-                                .entry(Value::String(p.to_string().into()))
-                                .or_insert(Value::new_object());
+                            obj = obj.as_object_mut()?.get_or_insert_with(
+                                Value::String(p.to_string().into()),
+                                Value::new_object,
+                            );
                         }
                         *obj = value;
                         // Mark modified rules as processed.
@@ -1682,8 +1681,7 @@ impl Interpreter {
                     let set = obj
                         .as_object_mut()
                         .map_err(|_| anyhow!(span.error("previous value is not an object")))?
-                        .entry(p)
-                        .or_insert(Value::new_set())
+                        .get_or_insert_with(p, Value::new_set)
                         .as_set_mut()
                         .map_err(|_| anyhow!(span.error("previous value is not a set")))?;
                     set.append(value.as_set_mut()?);
@@ -1691,21 +1689,15 @@ impl Interpreter {
                     let obj = obj
                         .as_object_mut()
                         .map_err(|_| anyhow!(span.error("previous value is not an object")))?;
-                    match obj.entry(p) {
-                        BTreeMapEntry::Vacant(v) => {
-                            if value != Value::Undefined {
-                                v.insert(value);
-                            } else {
-                                // TODO: clean this assumption between Undefined vs Object.
-                                v.insert(Value::new_object());
-                            }
+                    if let Some(existing) = obj.get(&p) {
+                        if existing != &value && value != Value::Undefined {
+                            bail!(span.error("complete rules should not produce multiple outputs"))
                         }
-                        BTreeMapEntry::Occupied(o) => {
-                            if o.get() != &value && value != Value::Undefined {
-                                bail!(span
-                                    .error("complete rules should not produce multiple outputs"))
-                            }
-                        }
+                    } else if value != Value::Undefined {
+                        obj.insert(p, value);
+                    } else {
+                        // TODO: clean this assumption between Undefined vs Object.
+                        obj.insert(p, Value::new_object());
                     }
                 }
                 break;
@@ -1713,8 +1705,7 @@ impl Interpreter {
                 obj = obj
                     .as_object_mut()
                     .map_err(|_| anyhow!(span.error("previous value is not an object")))?
-                    .entry(p)
-                    .or_insert(Value::new_object());
+                    .get_or_insert_with(p, Value::new_object);
             }
         }
         Ok(())
@@ -1822,8 +1813,7 @@ impl Interpreter {
                     let set = ctx_mut
                         .rule_value
                         .as_object_mut()?
-                        .entry(Value::from_array(comps))
-                        .or_insert(Value::new_set());
+                        .get_or_insert_with(Value::from_array(comps), Value::new_set);
                     if output != Value::Undefined {
                         set.as_set_mut()?.insert(output);
                         return Ok(true);
@@ -1832,20 +1822,17 @@ impl Interpreter {
                 }
 
                 // Non-set rule.
-                match ctx_mut
-                    .rule_value
-                    .as_object_mut()?
-                    .entry(Value::from_array(comps))
-                {
-                    BTreeMapEntry::Vacant(v) => {
-                        v.insert(output);
+                let key = Value::from_array(comps);
+                let obj_mut = ctx_mut.rule_value.as_object_mut()?;
+                if let Some(existing) = obj_mut.get(&key) {
+                    if existing != &output {
+                        bail!(rule_ref
+                            .span()
+                            .error("rules must not produce multiple outputs"));
                     }
-                    BTreeMapEntry::Occupied(o) if o.get() != &output => bail!(rule_ref
-                        .span()
-                        .error("rules must not produce multiple outputs")),
-                    _ => {
-                        // Rule produced same value.
-                    }
+                    // Rule produced same value.
+                } else {
+                    obj_mut.insert(key, output);
                 }
 
                 return Ok(true);

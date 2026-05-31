@@ -13,6 +13,7 @@
 
 use crate::number::Number;
 
+use crate::collections::{Object, Set};
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use core::fmt;
@@ -59,11 +60,11 @@ pub enum Value {
     /// A set of values.
     /// No JSON equivalent.
     /// Sets are serialized as arrays in JSON.
-    Set(Rc<BTreeSet<Value>>),
+    Set(Rc<Set>),
 
     /// An object.
     /// Unlike JSON, keys can be any value, not just string.
-    Object(Rc<BTreeMap<Value, Value>>),
+    Object(Rc<Object>),
 
     /// Undefined value.
     /// Used to indicate the absence of a value.
@@ -95,7 +96,7 @@ impl Serialize for Value {
             Value::Array(a) => a.serialize(serializer),
             Value::Object(fields) => {
                 let mut map = serializer.serialize_map(Some(fields.len()))?;
-                for (k, v) in fields.iter() {
+                for (k, v) in fields.iter_sorted() {
                     match k {
                         Value::String(_) => map.serialize_entry(k, v)?,
                         _ => {
@@ -779,7 +780,7 @@ impl From<BTreeSet<Value>> for Value {
     /// # Ok(())
     /// # }
     fn from(s: BTreeSet<Value>) -> Self {
-        Value::Set(Rc::new(s))
+        Value::Set(Rc::new(Set::from(s)))
     }
 }
 
@@ -800,7 +801,7 @@ impl From<BTreeMap<Value, Value>> for Value {
     /// # Ok(())
     /// # }
     fn from(s: BTreeMap<Value, Value>) -> Self {
-        Value::Object(Rc::new(s))
+        Value::Object(Rc::new(Object::from(s)))
     }
 }
 
@@ -1251,14 +1252,14 @@ impl Value {
     /// assert_eq!(v.as_set()?.first(), Some(&Value::from("Hello")));
     /// # Ok(())
     /// # }
-    pub fn as_set(&self) -> Result<&BTreeSet<Value>> {
+    pub fn as_set(&self) -> Result<&Set> {
         match self {
             Value::Set(s) => Ok(s),
             _ => Err(anyhow!("not a set")),
         }
     }
 
-    /// Cast value to [`&mut BTreeSet<Value>`] if [`Value::Set`].
+    /// Cast value to [`&mut Set`] if [`Value::Set`].
     /// ```
     /// # use regorus::*;
     /// # use std::collections::BTreeSet;
@@ -1272,7 +1273,7 @@ impl Value {
     /// v.as_set_mut()?.insert(Value::from("World"));
     /// # Ok(())
     /// # }
-    pub fn as_set_mut(&mut self) -> Result<&mut BTreeSet<Value>> {
+    pub fn as_set_mut(&mut self) -> Result<&mut Set> {
         match self {
             Value::Set(s) => Ok(Rc::make_mut(s)),
             _ => Err(anyhow!("not a set")),
@@ -1296,14 +1297,14 @@ impl Value {
     /// );
     /// # Ok(())
     /// # }
-    pub fn as_object(&self) -> Result<&BTreeMap<Value, Value>> {
+    pub fn as_object(&self) -> Result<&Object> {
         match self {
             Value::Object(m) => Ok(m),
             _ => Err(anyhow!("not an object")),
         }
     }
 
-    /// Cast value to [`&mut BTreeMap<Value, Value>`] if [`Value::Object`].
+    /// Cast value to [`&mut Object`] if [`Value::Object`].
     /// ```
     /// # use regorus::*;
     /// # use std::collections::BTreeMap;
@@ -1317,11 +1318,65 @@ impl Value {
     /// v.as_object_mut()?.insert(Value::from("Good"), Value::from("Bye"));
     /// # Ok(())
     /// # }
-    pub fn as_object_mut(&mut self) -> Result<&mut BTreeMap<Value, Value>> {
+    pub fn as_object_mut(&mut self) -> Result<&mut Object> {
         match self {
             Value::Object(m) => Ok(Rc::make_mut(m)),
             _ => Err(anyhow!("not an object")),
         }
+    }
+}
+
+impl Value {
+    /// Convenience: shortcut for [`Object::len`] when self is an object.
+    pub fn object_len(&self) -> Option<usize> {
+        match self {
+            Value::Object(o) => Some(o.len()),
+            _ => None,
+        }
+    }
+
+    /// Convenience: shortcut for [`Object::get`].
+    pub fn object_get(&self, key: &Value) -> Option<&Value> {
+        match self {
+            Value::Object(o) => o.get(key),
+            _ => None,
+        }
+    }
+
+    /// Convenience: shortcut for [`Object::get_str`].
+    pub fn object_get_str(&self, key: &str) -> Option<&Value> {
+        match self {
+            Value::Object(o) => o.get_str(key),
+            _ => None,
+        }
+    }
+
+    /// Convenience: shortcut for [`Object::contains_key`].
+    pub fn object_contains_key(&self, key: &Value) -> bool {
+        matches!(self, Value::Object(o) if o.contains_key(key))
+    }
+
+    /// Convenience: shortcut for [`Set::len`] when self is a set.
+    pub fn set_len(&self) -> Option<usize> {
+        match self {
+            Value::Set(s) => Some(s.len()),
+            _ => None,
+        }
+    }
+
+    /// Convenience: shortcut for [`Set::contains`].
+    pub fn set_contains(&self, value: &Value) -> bool {
+        matches!(self, Value::Set(s) if s.contains(value))
+    }
+
+    /// Build a [`Value::Object`] from an iterator of `(Value, Value)`.
+    pub fn object_from_iter<I: IntoIterator<Item = (Value, Value)>>(iter: I) -> Value {
+        Value::Object(Rc::new(Object::from_iter(iter)))
+    }
+
+    /// Build a [`Value::Set`] from an iterator of `Value`.
+    pub fn set_from_iter<I: IntoIterator<Item = Value>>(iter: I) -> Value {
+        Value::Set(Rc::new(Set::from_iter(iter)))
     }
 }
 

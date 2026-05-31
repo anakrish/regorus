@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- `Value::Object` payload changed from `Rc<BTreeMap<Value, Value>>` to
+  `Rc<Object>`. `Value::Set` payload changed from `Rc<BTreeSet<Value>>` to
+  `Rc<Set>`. The new types live in `regorus::collections` and expose the same
+  shape (`get`, `insert`, `iter`, `contains_key`, etc.). Most call sites
+  compile unchanged; pattern-match bindings see `&Rc<Object>` / `&Rc<Set>`
+  instead of `&Rc<BTreeMap>` / `&Rc<BTreeSet>`. See
+  [`docs/migration-collections.md`](docs/migration-collections.md).
+- `Value::as_object`, `Value::as_object_mut`, `Value::as_set`,
+  `Value::as_set_mut` return types changed from `&BTreeMap` / `&BTreeSet`
+  (etc.) to `&Object` / `&Set` (etc.). Method names are unchanged.
+- `Object` / `Set` iteration: `iter()` / `keys()` are
+  implementation-defined order (today: sorted, because storage is
+  `BTreeMap`/`BTreeSet`; future variants may differ). Use `iter_sorted()` /
+  `keys_sorted()` for canonical/user-visible output. Both execution backends
+  (interpreter, RVM) use `iter()` / `keys()` for evaluation iteration to
+  preserve dual-path equivalence.
+
 ## [0.10.1](https://github.com/microsoft/regorus/compare/regorus-v0.10.0...regorus-v0.10.1) - 2026-05-22
 
 ### Fixed

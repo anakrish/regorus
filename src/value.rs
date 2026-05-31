@@ -1327,60 +1327,6 @@ impl Value {
 }
 
 impl Value {
-    /// Convenience: shortcut for [`Object::len`] when self is an object.
-    pub fn object_len(&self) -> Option<usize> {
-        match self {
-            Value::Object(o) => Some(o.len()),
-            _ => None,
-        }
-    }
-
-    /// Convenience: shortcut for [`Object::get`].
-    pub fn object_get(&self, key: &Value) -> Option<&Value> {
-        match self {
-            Value::Object(o) => o.get(key),
-            _ => None,
-        }
-    }
-
-    /// Convenience: shortcut for [`Object::get_str`].
-    pub fn object_get_str(&self, key: &str) -> Option<&Value> {
-        match self {
-            Value::Object(o) => o.get_str(key),
-            _ => None,
-        }
-    }
-
-    /// Convenience: shortcut for [`Object::contains_key`].
-    pub fn object_contains_key(&self, key: &Value) -> bool {
-        matches!(self, Value::Object(o) if o.contains_key(key))
-    }
-
-    /// Convenience: shortcut for [`Set::len`] when self is a set.
-    pub fn set_len(&self) -> Option<usize> {
-        match self {
-            Value::Set(s) => Some(s.len()),
-            _ => None,
-        }
-    }
-
-    /// Convenience: shortcut for [`Set::contains`].
-    pub fn set_contains(&self, value: &Value) -> bool {
-        matches!(self, Value::Set(s) if s.contains(value))
-    }
-
-    /// Build a [`Value::Object`] from an iterator of `(Value, Value)`.
-    pub fn object_from_iter<I: IntoIterator<Item = (Value, Value)>>(iter: I) -> Value {
-        Value::Object(Rc::new(Object::from_iter(iter)))
-    }
-
-    /// Build a [`Value::Set`] from an iterator of `Value`.
-    pub fn set_from_iter<I: IntoIterator<Item = Value>>(iter: I) -> Value {
-        Value::Set(Rc::new(Set::from_iter(iter)))
-    }
-}
-
-impl Value {
     pub(crate) fn make_or_get_value_mut<'a>(&'a mut self, paths: &[&str]) -> Result<&'a mut Value> {
         if paths.is_empty() {
             return Ok(self);

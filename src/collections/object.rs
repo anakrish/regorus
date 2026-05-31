@@ -167,17 +167,6 @@ impl Object {
     pub fn into_value(self) -> Value {
         Value::Object(crate::Rc::new(self))
     }
-
-    /// Take ownership of the inner map, leaving an empty one behind.
-    ///
-    /// `pub(crate)` because the inner type is an implementation detail; the
-    /// only consumer is the Python binding's drain path. External callers
-    /// should use `IntoIterator` (consumes `self`) or iterate by reference.
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn take_inner(&mut self) -> BTreeMap<Value, Value> {
-        core::mem::take(&mut self.inner)
-    }
 }
 
 impl fmt::Debug for Object {

@@ -160,15 +160,6 @@ impl Set {
     pub fn into_value(self) -> Value {
         Value::Set(crate::Rc::new(self))
     }
-
-    /// Take ownership of the inner set, leaving an empty one behind.
-    ///
-    /// `pub(crate)` — see `Object::take_inner` for rationale.
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn take_inner(&mut self) -> BTreeSet<Value> {
-        core::mem::take(&mut self.inner)
-    }
 }
 
 impl Extend<Value> for Set {

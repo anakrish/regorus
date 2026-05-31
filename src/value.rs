@@ -1238,7 +1238,7 @@ impl Value {
         }
     }
 
-    /// Cast value to [`& BTreeSet<Value>`] if [`Value::Set`].
+    /// Cast value to [`&Set`] if [`Value::Set`].
     /// ```
     /// # use regorus::*;
     /// # use std::collections::BTreeSet;
@@ -1280,7 +1280,7 @@ impl Value {
         }
     }
 
-    /// Cast value to [`& BTreeMap<Value, Value>`] if [`Value::Object`].
+    /// Cast value to [`&Object`] if [`Value::Object`].
     /// ```
     /// # use regorus::*;
     /// # use std::collections::BTreeMap;

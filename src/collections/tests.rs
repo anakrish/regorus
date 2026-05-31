@@ -408,3 +408,204 @@ fn set_into_iterator_ref() {
     }
     assert_eq!(count, 4);
 }
+
+// ---- Cursor tests --------------------------------------------------------
+
+#[test]
+fn object_cursor_yields_every_entry_once() {
+    for &n in SIZES {
+        let pairs = make_pairs(n);
+        let obj: Object = pairs.clone().into_iter().collect();
+        let mut cursor = obj.cursor();
+        let mut collected: Vec<(Value, Value)> = Vec::new();
+        while let Some((k, v)) = obj.next(&mut cursor) {
+            collected.push((k.clone(), v.clone()));
+        }
+        assert_eq!(collected.len(), n as usize, "size {n}");
+        let mut sorted_pairs = pairs;
+        sorted_pairs.sort();
+        let mut sorted_collected = collected.clone();
+        sorted_collected.sort();
+        assert_eq!(sorted_collected, sorted_pairs, "size {n}");
+        // No further entries.
+        assert!(obj.next(&mut cursor).is_none());
+    }
+}
+
+#[test]
+fn object_cursor_sorted_yields_in_value_ord_order() {
+    let obj: Object = make_pairs(16).into_iter().collect();
+    let mut cursor = obj.cursor_sorted();
+    let mut last: Option<Value> = None;
+    let mut count = 0;
+    while let Some((k, _)) = obj.next_sorted(&mut cursor) {
+        if let Some(ref prev) = last {
+            assert!(prev < k);
+        }
+        last = Some(k.clone());
+        count += 1;
+    }
+    assert_eq!(count, 16);
+}
+
+#[test]
+fn object_cursor_resumable_fresh_cursor_restarts() {
+    let obj: Object = make_pairs(8).into_iter().collect();
+    let mut c1 = obj.cursor();
+    let _ = obj.next(&mut c1);
+    let _ = obj.next(&mut c1);
+    drop(c1);
+    let mut c2 = obj.cursor();
+    let mut count = 0;
+    while obj.next(&mut c2).is_some() {
+        count += 1;
+    }
+    assert_eq!(count, 8);
+}
+
+#[test]
+fn object_cursor_snapshot_independence_via_rc() {
+    use crate::Rc;
+    let mut obj = Object::new();
+    obj.insert(Value::from("a"), Value::from(1));
+    obj.insert(Value::from("b"), Value::from(2));
+    obj.insert(Value::from("c"), Value::from(3));
+    let rc_obj = Rc::new(obj);
+
+    // Aliased Rc — cursor borrows from rc_obj.
+    let alias = Rc::clone(&rc_obj);
+    let mut cursor = rc_obj.cursor();
+    let _ = rc_obj.next(&mut cursor); // consume one
+
+    // Mutate the alias via make_mut: allocates a new BTreeMap, leaves the
+    // cursor's source (rc_obj) untouched.
+    let mut alias_for_mut = alias;
+    Rc::make_mut(&mut alias_for_mut).insert(Value::from("d"), Value::from(4));
+    Rc::make_mut(&mut alias_for_mut).remove(&Value::from("a"));
+
+    // Original still has 3 entries, cursor still sees the rest.
+    assert_eq!(rc_obj.len(), 3);
+    let mut remaining = 0;
+    while rc_obj.next(&mut cursor).is_some() {
+        remaining += 1;
+    }
+    assert_eq!(remaining, 2);
+}
+
+#[test]
+fn object_cursor_empty_returns_none_immediately() {
+    let obj = Object::new();
+    let mut cursor = obj.cursor();
+    assert!(obj.next(&mut cursor).is_none());
+    let mut cursor_s = obj.cursor_sorted();
+    assert!(obj.next_sorted(&mut cursor_s).is_none());
+}
+
+#[test]
+fn set_cursor_yields_every_element_once() {
+    for &n in SIZES {
+        let vals: Vec<Value> = (0..n).map(val).collect();
+        let s: Set = vals.clone().into_iter().collect();
+        let mut cursor = s.cursor();
+        let mut collected: Vec<Value> = Vec::new();
+        while let Some(v) = s.next(&mut cursor) {
+            collected.push(v.clone());
+        }
+        let mut a = collected;
+        a.sort();
+        let mut b = vals;
+        b.sort();
+        assert_eq!(a, b, "size {n}");
+    }
+}
+
+#[test]
+fn set_cursor_sorted_yields_in_order() {
+    let s: Set = (0..16_u64).map(val).collect();
+    let mut cursor = s.cursor_sorted();
+    let mut last: Option<Value> = None;
+    while let Some(v) = s.next_sorted(&mut cursor) {
+        if let Some(ref prev) = last {
+            assert!(prev < v);
+        }
+        last = Some(v.clone());
+    }
+}
+
+#[test]
+fn set_cursor_empty_returns_none_immediately() {
+    let s = Set::new();
+    let mut c = s.cursor();
+    assert!(s.next(&mut c).is_none());
+    let mut cs = s.cursor_sorted();
+    assert!(s.next_sorted(&mut cs).is_none());
+}
+
+// ---- insert_if_absent ----------------------------------------------------
+
+#[test]
+fn object_insert_if_absent_inserts_when_absent() {
+    let mut obj = Object::new();
+    let v = obj.insert_if_absent(val(7), val(42));
+    assert_eq!(*v, val(42));
+    *v = val(43);
+    assert_eq!(obj.get(&val(7)), Some(&val(43)));
+}
+
+#[test]
+fn object_insert_if_absent_returns_existing_when_present() {
+    let mut obj = Object::new();
+    obj.insert(val(7), val(1));
+    let v = obj.insert_if_absent(val(7), val(999));
+    assert_eq!(*v, val(1));
+}
+
+// ---- Hand-written Ord consistency ---------------------------------------
+
+#[test]
+fn object_ord_invariant_to_insertion_order() {
+    let mut a = Object::new();
+    let mut b = Object::new();
+    for i in 0..16_u64 {
+        a.insert(val(i), val(i));
+    }
+    for i in (0..16_u64).rev() {
+        b.insert(val(i), val(i));
+    }
+    assert_eq!(a.cmp(&b), core::cmp::Ordering::Equal);
+}
+
+#[test]
+fn object_ord_lexicographic_on_sorted_entries() {
+    let a: Object = [(val(0), val(0)), (val(1), val(1))].into_iter().collect();
+    let b: Object = [(val(0), val(0)), (val(2), val(2))].into_iter().collect();
+    assert!(a < b);
+}
+
+#[test]
+fn set_ord_invariant_to_insertion_order() {
+    let mut a = Set::new();
+    let mut b = Set::new();
+    for i in 0..16_u64 {
+        a.insert(val(i));
+    }
+    for i in (0..16_u64).rev() {
+        b.insert(val(i));
+    }
+    assert_eq!(a.cmp(&b), core::cmp::Ordering::Equal);
+}
+
+// ---- Non-string key serialization ---------------------------------------
+
+#[test]
+fn object_serialize_non_string_key_roundtrips_via_value_path() {
+    use crate::Rc;
+    let mut obj = Object::new();
+    obj.insert(val(1), Value::from("one"));
+    obj.insert(val(2), Value::from("two"));
+    let v = Value::Object(Rc::new(obj));
+    let json = serde_json::to_string(&v).expect("ser");
+    // Keys must be stringified to JSON strings.
+    assert!(json.contains("\"1\""), "json: {json}");
+    assert!(json.contains("\"2\""), "json: {json}");
+}

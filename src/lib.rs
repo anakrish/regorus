@@ -165,7 +165,7 @@ pub use {
     target::Target,
 };
 
-pub use collections::{Object, Set};
+pub use collections::{Object, ObjectCursor, ObjectCursorSorted, Set, SetCursor, SetCursorSorted};
 pub use compile::{compile_policy_with_entrypoint, PolicyModule};
 pub use compiled_policy::CompiledPolicy;
 pub use engine::Engine;

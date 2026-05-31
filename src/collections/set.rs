@@ -3,9 +3,12 @@
 
 //! See [`Set`].
 
-use alloc::collections::BTreeSet;
+use alloc::collections::{btree_set, BTreeSet};
 use alloc::string::ToString as _;
+use core::cmp::Ordering;
 use core::fmt;
+use core::iter::FusedIterator;
+use core::ops::Bound;
 
 use serde::de::{Deserialize, Deserializer, Error as _, SeqAccess, Visitor};
 use serde::ser::{Serialize, Serializer};
@@ -14,11 +17,12 @@ use crate::value::Value;
 
 /// Opaque, ordered set of [`Value`]s.
 ///
-/// The current storage is `BTreeSet<Value>`. The inner field is private so
-/// the backing representation can change without touching call sites.
+/// The current backing storage is `BTreeSet<Value>`. The inner field is
+/// private so the representation can change without touching call sites.
 ///
-/// See the module-level docs for iteration order semantics.
-#[derive(Default, Clone, Eq, PartialEq, PartialOrd, Ord)]
+/// See the module-level docs for iteration order semantics, and
+/// [`Set::cursor`] / [`Set::cursor_sorted`] for resumable iteration.
+#[derive(Default, Clone, Eq, PartialEq)]
 pub struct Set {
     inner: BTreeSet<Value>,
 }
@@ -29,15 +33,6 @@ impl Set {
         Self {
             inner: BTreeSet::new(),
         }
-    }
-
-    /// Create an empty `Set` with a capacity hint.
-    ///
-    /// The hint is ignored by the current `BTreeSet`-backed storage. See
-    /// [`Object::with_capacity`](super::Object::with_capacity) for rationale.
-    #[inline]
-    pub const fn with_capacity(_capacity: usize) -> Self {
-        Self::new()
     }
 
     #[inline]
@@ -72,16 +67,20 @@ impl Set {
         self.iter_sorted().next_back()
     }
 
-    /// Iteration in implementation-defined order.
+    /// Iteration in implementation-defined order. Non-resumable.
     #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = &Value> + '_ {
-        self.inner.iter()
+    pub fn iter(&self) -> Iter<'_> {
+        Iter {
+            inner: self.inner.iter(),
+        }
     }
 
-    /// Iteration in sorted order (by `Value::Ord`).
+    /// Iteration in sorted order (by `Value::Ord`). Non-resumable.
     #[inline]
-    pub fn iter_sorted(&self) -> impl DoubleEndedIterator<Item = &Value> + '_ {
-        self.inner.iter()
+    pub fn iter_sorted(&self) -> Iter<'_> {
+        Iter {
+            inner: self.inner.iter(),
+        }
     }
 
     /// Insert `value`. Returns `true` if the value was newly inserted.
@@ -160,6 +159,93 @@ impl Set {
     pub fn into_value(self) -> Value {
         Value::Set(crate::Rc::new(self))
     }
+
+    /// Create a resumable cursor over elements in implementation-defined
+    /// order. Stable for the lifetime of `&self`. O(1).
+    #[inline]
+    pub const fn cursor(&self) -> SetCursor {
+        SetCursor {
+            inner: SetCursorInner::BTree(None),
+        }
+    }
+
+    /// Advance `cursor` and yield the next element.
+    pub fn next<'a>(&'a self, cursor: &mut SetCursor) -> Option<&'a Value> {
+        let SetCursorInner::BTree(ref mut last) = cursor.inner;
+        let next = last.as_ref().map_or_else(
+            || self.inner.iter().next(),
+            |prev| {
+                self.inner
+                    .range((Bound::Excluded(prev.clone()), Bound::Unbounded))
+                    .next()
+            },
+        );
+        let v = next?;
+        *last = Some(v.clone());
+        Some(v)
+    }
+
+    /// Create a resumable cursor over elements in sorted order. Stable for
+    /// the lifetime of `&self`.
+    #[inline]
+    pub const fn cursor_sorted(&self) -> SetCursorSorted {
+        SetCursorSorted {
+            inner: SetCursorSortedInner::BTree(None),
+        }
+    }
+
+    /// Advance the sorted cursor and yield the next element.
+    pub fn next_sorted<'a>(&'a self, cursor: &mut SetCursorSorted) -> Option<&'a Value> {
+        let SetCursorSortedInner::BTree(ref mut last) = cursor.inner;
+        let next = last.as_ref().map_or_else(
+            || self.inner.iter().next(),
+            |prev| {
+                self.inner
+                    .range((Bound::Excluded(prev.clone()), Bound::Unbounded))
+                    .next()
+            },
+        );
+        let v = next?;
+        *last = Some(v.clone());
+        Some(v)
+    }
+}
+
+/// Opaque resumable cursor over a [`Set`]'s elements in implementation-defined order.
+#[derive(Debug, Clone)]
+pub struct SetCursor {
+    inner: SetCursorInner,
+}
+
+#[derive(Debug, Clone)]
+enum SetCursorInner {
+    BTree(Option<Value>),
+}
+
+/// Opaque resumable cursor over a [`Set`]'s elements in sorted order.
+#[derive(Debug, Clone)]
+pub struct SetCursorSorted {
+    inner: SetCursorSortedInner,
+}
+
+#[derive(Debug, Clone)]
+enum SetCursorSortedInner {
+    BTree(Option<Value>),
+}
+
+// ---- Hand-written Ord/PartialOrd ----------------------------------------
+
+impl Ord for Set {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.iter_sorted().cmp(other.iter_sorted())
+    }
+}
+
+impl PartialOrd for Set {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl Extend<Value> for Set {
@@ -176,21 +262,95 @@ impl FromIterator<Value> for Set {
     }
 }
 
+// ---- Opaque iterator types ----------------------------------------------
+
+/// Owned iterator over `Value` elements.
+#[derive(Debug)]
+pub struct IntoIter {
+    inner: btree_set::IntoIter<Value>,
+}
+
+impl Iterator for IntoIter {
+    type Item = Value;
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl DoubleEndedIterator for IntoIter {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner.next_back()
+    }
+}
+
+impl ExactSizeIterator for IntoIter {
+    #[inline]
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+impl FusedIterator for IntoIter {}
+
+/// Borrowed iterator over `&Value` elements.
+#[derive(Debug, Clone)]
+pub struct Iter<'a> {
+    inner: btree_set::Iter<'a, Value>,
+}
+
+impl<'a> Iterator for Iter<'a> {
+    type Item = &'a Value;
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<'a> DoubleEndedIterator for Iter<'a> {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner.next_back()
+    }
+}
+
+impl<'a> ExactSizeIterator for Iter<'a> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+impl<'a> FusedIterator for Iter<'a> {}
+
 impl IntoIterator for Set {
     type Item = Value;
-    type IntoIter = alloc::collections::btree_set::IntoIter<Value>;
+    type IntoIter = IntoIter;
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
-        self.inner.into_iter()
+        IntoIter {
+            inner: self.inner.into_iter(),
+        }
     }
 }
 
 impl<'a> IntoIterator for &'a Set {
     type Item = &'a Value;
-    type IntoIter = alloc::collections::btree_set::Iter<'a, Value>;
+    type IntoIter = Iter<'a>;
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
-        self.inner.iter()
+        Iter {
+            inner: self.inner.iter(),
+        }
     }
 }
 
@@ -216,8 +376,8 @@ impl fmt::Debug for Set {
 
 impl Serialize for Set {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        // Sets serialize as JSON arrays (matches existing Value::Set behavior).
-        // Use sorted iteration for canonical output.
+        // Sets serialize as JSON arrays. Use sorted iteration for canonical
+        // output.
         serializer.collect_seq(self.iter_sorted())
     }
 }

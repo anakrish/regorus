@@ -119,6 +119,7 @@ mimalloc::assign_global!();
 
 mod ast;
 mod builtins;
+mod collections;
 mod compile;
 mod compiled_policy;
 mod compiler;
@@ -164,6 +165,7 @@ pub use {
     target::Target,
 };
 
+pub use collections::{Object, Set};
 pub use compile::{compile_policy_with_entrypoint, PolicyModule};
 pub use compiled_policy::CompiledPolicy;
 pub use engine::Engine;
@@ -205,10 +207,10 @@ pub use alloc::sync::Arc as Rc;
 pub use alloc::rc::Rc;
 
 #[cfg(feature = "std")]
-use std::collections::{hash_map::Entry as MapEntry, HashMap as Map, HashSet as Set};
+use std::collections::{hash_map::Entry as MapEntry, HashMap as Map, HashSet as MapSet};
 
 #[cfg(not(feature = "std"))]
-use alloc::collections::{btree_map::Entry as MapEntry, BTreeMap as Map, BTreeSet as Set};
+use alloc::collections::{btree_map::Entry as MapEntry, BTreeMap as Map, BTreeSet as MapSet};
 
 use alloc::{
     borrow::ToOwned as _,

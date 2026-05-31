@@ -2448,7 +2448,7 @@ impl Interpreter {
             }
             Value::Set(set) => {
                 s.push('{');
-                for (idx, e) in set.iter().enumerate() {
+                for (idx, e) in set.iter_sorted().enumerate() {
                     if idx > 0 {
                         s.push_str(", ");
                     }
@@ -2458,7 +2458,7 @@ impl Interpreter {
             }
             Value::Object(map) => {
                 s.push('{');
-                for (idx, (k, entry_value)) in map.iter().enumerate() {
+                for (idx, (k, entry_value)) in map.iter_sorted().enumerate() {
                     if idx > 0 {
                         s.push_str(", ");
                     }

@@ -63,13 +63,13 @@ impl Set {
     /// First element in sorted order.
     #[inline]
     pub fn first(&self) -> Option<&Value> {
-        self.inner.iter().next()
+        self.iter_sorted().next()
     }
 
     /// Last element in sorted order.
     #[inline]
     pub fn last(&self) -> Option<&Value> {
-        self.inner.iter().next_back()
+        self.iter_sorted().next_back()
     }
 
     /// Iteration in implementation-defined order.

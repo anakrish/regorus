@@ -151,8 +151,8 @@ impl Object {
         self.inner.append(&mut other.inner);
     }
 
-    /// Get a mutable reference to the entry for `key`, inserting `default()`
-    /// if absent.
+    /// Gets a mutable reference to the value associated with `key`, inserting
+    /// the result of `default()` if absent. Single O(log n) probe.
     pub fn get_or_insert_with<F: FnOnce() -> Value>(
         &mut self,
         key: Value,

@@ -1689,15 +1689,14 @@ impl Interpreter {
                     let obj = obj
                         .as_object_mut()
                         .map_err(|_| anyhow!(span.error("previous value is not an object")))?;
-                    if let Some(existing) = obj.get(&p) {
-                        if existing != &value && value != Value::Undefined {
+                    if value == Value::Undefined {
+                        // TODO: clean this assumption between Undefined vs Object.
+                        obj.get_or_insert_with(p, Value::new_object);
+                    } else {
+                        let existing = obj.get_or_insert_with(p, || value.clone());
+                        if *existing != value {
                             bail!(span.error("complete rules should not produce multiple outputs"))
                         }
-                    } else if value != Value::Undefined {
-                        obj.insert(p, value);
-                    } else {
-                        // TODO: clean this assumption between Undefined vs Object.
-                        obj.insert(p, Value::new_object());
                     }
                 }
                 break;
@@ -1824,15 +1823,11 @@ impl Interpreter {
                 // Non-set rule.
                 let key = Value::from_array(comps);
                 let obj_mut = ctx_mut.rule_value.as_object_mut()?;
-                if let Some(existing) = obj_mut.get(&key) {
-                    if existing != &output {
-                        bail!(rule_ref
-                            .span()
-                            .error("rules must not produce multiple outputs"));
-                    }
-                    // Rule produced same value.
-                } else {
-                    obj_mut.insert(key, output);
+                let existing = obj_mut.get_or_insert_with(key, || output.clone());
+                if *existing != output {
+                    bail!(rule_ref
+                        .span()
+                        .error("rules must not produce multiple outputs"));
                 }
 
                 return Ok(true);

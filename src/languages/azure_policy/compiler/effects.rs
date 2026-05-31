@@ -834,8 +834,7 @@ pub(super) fn build_object_from_keys(
             .clone();
         template.insert(key_val, Value::Undefined);
     }
-    let template_idx =
-        compiler.add_literal_u16(Value::Object(crate::Rc::new(Object::from_iter(template))))?;
+    let template_idx = compiler.add_literal_u16(Value::Object(crate::Rc::new(template)))?;
 
     // Sort keys by literal value (BTreeMap order).  All indices were
     // validated in the loop above (which returns Err for out-of-bounds),

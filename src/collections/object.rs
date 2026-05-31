@@ -57,13 +57,14 @@ impl Object {
         self.inner.get(key)
     }
 
-    /// Look up by string key without allocating a `Value::String`.
+    /// Look up by string key.
+    ///
+    /// Currently equivalent to `self.get(&Value::String(Rc::from(key)))` — the
+    /// probe `Value::String` is constructed eagerly, so this allocates an
+    /// `Rc<str>` per call. A future storage variant (e.g. hash-backed) may
+    /// implement this as an allocation-free lookup; today it is a
+    /// convenience wrapper, not a hot-path fast path.
     pub fn get_str(&self, key: &str) -> Option<&Value> {
-        // BTreeMap requires Borrow<K>; Value isn't Borrow<str>. The narrow
-        // hot path callers want here is "find a string-keyed entry", so we
-        // fall back to building a tiny temporary key. The future hash-backed
-        // variant can implement this without an allocation by hashing the
-        // string directly.
         let probe = Value::String(key.into());
         self.inner.get(&probe)
     }

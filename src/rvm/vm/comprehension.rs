@@ -1,10 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use crate::collections::Object;
 use crate::rvm::instructions::{ComprehensionBeginParams, ComprehensionMode};
 use crate::value::Value;
 use crate::Rc;
-use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -34,7 +34,7 @@ impl RegoVM {
         let initial_result = match params.mode {
             ComprehensionMode::Set => Value::new_set(),
             ComprehensionMode::Array => Value::new_array(),
-            ComprehensionMode::Object => Value::Object(Rc::new(BTreeMap::new())),
+            ComprehensionMode::Object => Value::Object(Rc::new(Object::new())),
         };
         self.set_register(params.result_reg, initial_result.clone())?;
 
@@ -53,22 +53,30 @@ impl RegoVM {
                     if obj.is_empty() {
                         None
                     } else {
-                        Some(IterationState::Object {
-                            obj,
-                            current_key: None,
-                            first_iteration: true,
-                        })
+                        // Snapshot (key, value) pairs for iteration.
+                        let mut buf: Vec<(Value, Value)> = Vec::new();
+                        for (k, v) in obj.iter() {
+                            crate::utils::limits::check_memory_limit_if_needed()
+                                .map_err(anyhow::Error::msg)?;
+                            buf.push((k.clone(), v.clone()));
+                        }
+                        let pairs: Rc<[(Value, Value)]> = buf.into();
+                        Some(IterationState::Object { pairs, pos: 0 })
                     }
                 }
                 Value::Set(set) => {
                     if set.is_empty() {
                         None
                     } else {
-                        Some(IterationState::Set {
-                            items: set,
-                            current_item: None,
-                            first_iteration: true,
-                        })
+                        // Build snapshot of values for iteration
+                        let mut buf: Vec<Value> = Vec::new();
+                        for v in set.iter() {
+                            crate::utils::limits::check_memory_limit_if_needed()
+                                .map_err(anyhow::Error::msg)?;
+                            buf.push(v.clone());
+                        }
+                        let values: Rc<[Value]> = buf.into();
+                        Some(IterationState::Set { values, pos: 0 })
                     }
                 }
                 Value::Undefined => None,
@@ -123,7 +131,7 @@ impl RegoVM {
         let initial_result = match params.mode {
             ComprehensionMode::Set => Value::new_set(),
             ComprehensionMode::Array => Value::new_array(),
-            ComprehensionMode::Object => Value::Object(Rc::new(BTreeMap::new())),
+            ComprehensionMode::Object => Value::Object(Rc::new(Object::new())),
         };
         self.set_register(params.result_reg, initial_result.clone())?;
 
@@ -142,22 +150,30 @@ impl RegoVM {
                     if obj.is_empty() {
                         None
                     } else {
-                        Some(IterationState::Object {
-                            obj,
-                            current_key: None,
-                            first_iteration: true,
-                        })
+                        // Snapshot (key, value) pairs for iteration.
+                        let mut buf: Vec<(Value, Value)> = Vec::new();
+                        for (k, v) in obj.iter() {
+                            crate::utils::limits::check_memory_limit_if_needed()
+                                .map_err(anyhow::Error::msg)?;
+                            buf.push((k.clone(), v.clone()));
+                        }
+                        let pairs: Rc<[(Value, Value)]> = buf.into();
+                        Some(IterationState::Object { pairs, pos: 0 })
                     }
                 }
                 Value::Set(set) => {
                     if set.is_empty() {
                         None
                     } else {
-                        Some(IterationState::Set {
-                            items: set,
-                            current_item: None,
-                            first_iteration: true,
-                        })
+                        // Build snapshot of values for iteration
+                        let mut buf: Vec<Value> = Vec::new();
+                        for v in set.iter() {
+                            crate::utils::limits::check_memory_limit_if_needed()
+                                .map_err(anyhow::Error::msg)?;
+                            buf.push(v.clone());
+                        }
+                        let values: Rc<[Value]> = buf.into();
+                        Some(IterationState::Set { values, pos: 0 })
                     }
                 }
                 Value::Undefined => None,
@@ -292,29 +308,6 @@ impl RegoVM {
         self.set_register(result_reg, current_result)?;
 
         if let Some(iter_state) = comprehension_context.iteration_state.as_mut() {
-            match *iter_state {
-                IterationState::Object {
-                    ref mut current_key,
-                    ..
-                } => {
-                    let tracked_key =
-                        if comprehension_context.key_reg != comprehension_context.value_reg {
-                            self.get_register(comprehension_context.key_reg)?.clone()
-                        } else {
-                            self.get_register(comprehension_context.value_reg)?.clone()
-                        };
-                    *current_key = Some(tracked_key);
-                }
-                IterationState::Set {
-                    ref mut current_item,
-                    ..
-                } => {
-                    *current_item =
-                        Some(self.get_register(comprehension_context.value_reg)?.clone());
-                }
-                IterationState::Array { .. } | IterationState::Single { .. } => {}
-            }
-
             iter_state.advance();
             let has_next = self.setup_next_iteration(
                 iter_state,
@@ -352,16 +345,7 @@ impl RegoVM {
                 pc: self.pc,
             })?;
 
-        let (
-            value_to_add,
-            key_value,
-            mode,
-            result_reg_idx,
-            key_reg_idx,
-            value_reg_idx,
-            iteration_key,
-            iteration_value,
-        ) = {
+        let (value_to_add, key_value, mode, result_reg_idx, key_reg_idx, value_reg_idx) = {
             let frame =
                 self.execution_stack
                     .get(comprehension_index)
@@ -382,8 +366,6 @@ impl RegoVM {
 
                 let result_reg_idx = context.result_reg;
                 let mode = context.mode.clone();
-                let iteration_key = self.get_register(context.key_reg)?.clone();
-                let iteration_value = self.get_register(context.value_reg)?.clone();
 
                 (
                     value_to_add,
@@ -392,8 +374,6 @@ impl RegoVM {
                     result_reg_idx,
                     context.key_reg,
                     context.value_reg,
-                    iteration_key,
-                    iteration_value,
                 )
             } else {
                 return Err(VmError::InvalidIteration {
@@ -450,27 +430,6 @@ impl RegoVM {
             } = &mut frame.kind
             {
                 if let Some(iter_state) = context.iteration_state.as_mut() {
-                    match *iter_state {
-                        IterationState::Object {
-                            ref mut current_key,
-                            ..
-                        } => {
-                            let tracked_key = if context.key_reg != context.value_reg {
-                                iteration_key.clone()
-                            } else {
-                                iteration_value.clone()
-                            };
-                            *current_key = Some(tracked_key);
-                        }
-                        IterationState::Set {
-                            ref mut current_item,
-                            ..
-                        } => {
-                            *current_item = Some(iteration_value.clone());
-                        }
-                        IterationState::Array { .. } | IterationState::Single { .. } => {}
-                    }
-
                     iter_state.advance();
                 }
 
@@ -554,11 +513,6 @@ impl RegoVM {
         context: &mut ComprehensionContext,
     ) -> Result<()> {
         if let Some(iter_state) = context.iteration_state.as_mut() {
-            self.capture_comprehension_iteration_position(
-                iter_state,
-                context.key_reg,
-                context.value_reg,
-            )?;
             iter_state.advance();
             let has_next =
                 self.setup_next_iteration(iter_state, context.key_reg, context.value_reg)?;
@@ -570,36 +524,6 @@ impl RegoVM {
             }
         } else {
             self.pc = usize::from(context.comprehension_end.saturating_sub(1));
-        }
-
-        Ok(())
-    }
-
-    fn capture_comprehension_iteration_position(
-        &mut self,
-        iter_state: &mut IterationState,
-        key_reg: u8,
-        value_reg: u8,
-    ) -> Result<()> {
-        match *iter_state {
-            IterationState::Object {
-                ref mut current_key,
-                ..
-            } => {
-                let tracked_key = if key_reg != value_reg {
-                    self.get_register(key_reg)?.clone()
-                } else {
-                    self.get_register(value_reg)?.clone()
-                };
-                *current_key = Some(tracked_key);
-            }
-            IterationState::Set {
-                ref mut current_item,
-                ..
-            } => {
-                *current_item = Some(self.get_register(value_reg)?.clone());
-            }
-            IterationState::Array { .. } | IterationState::Single { .. } => {}
         }
 
         Ok(())

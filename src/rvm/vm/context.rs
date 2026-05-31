@@ -4,7 +4,6 @@
 use crate::rvm::instructions::{ComprehensionMode, LoopMode};
 use crate::value::Value;
 use crate::Rc;
-use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 /// Loop execution context for managing iteration state
@@ -32,14 +31,12 @@ pub enum IterationState {
         index: usize,
     },
     Object {
-        obj: Rc<BTreeMap<Value, Value>>,
-        current_key: Option<Value>,
-        first_iteration: bool,
+        pairs: Rc<[(Value, Value)]>,
+        pos: usize,
     },
     Set {
-        items: Rc<BTreeSet<Value>>,
-        current_item: Option<Value>,
-        first_iteration: bool,
+        values: Rc<[Value]>,
+        pos: usize,
     },
     /// Virtual single-element iteration for non-collection values.
     /// Used by Azure Policy's `[*]` on scalar/null fields: presents a single
@@ -56,15 +53,8 @@ impl IterationState {
             Self::Array { ref mut index, .. } => {
                 *index = index.saturating_add(1);
             }
-            Self::Object {
-                ref mut first_iteration,
-                ..
-            }
-            | Self::Set {
-                ref mut first_iteration,
-                ..
-            } => {
-                *first_iteration = false;
+            Self::Object { ref mut pos, .. } | Self::Set { ref mut pos, .. } => {
+                *pos = pos.saturating_add(1);
             }
             Self::Single {
                 ref mut consumed, ..
@@ -106,4 +96,68 @@ pub(super) struct ComprehensionContext {
     pub(super) iteration_state: Option<IterationState>,
     /// Resume location for the parent frame once this comprehension completes
     pub(super) resume_pc: usize,
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::unreachable,
+    clippy::pattern_type_mismatch,
+    clippy::shadow_unrelated,
+    clippy::panic
+)]
+mod tests {
+    use super::*;
+    use crate::collections::Object;
+
+    /// IterationState::Object snapshots (key, value) pairs at construction
+    /// time. Mutating the source Value::Object (via Rc::make_mut on a clone)
+    /// while the iteration is in flight must not affect the snapshot.
+    #[test]
+    fn iteration_state_object_is_snapshot_independent_of_source() {
+        let mut obj = Object::new();
+        obj.insert(Value::from("a"), Value::from(1));
+        obj.insert(Value::from("b"), Value::from(2));
+        obj.insert(Value::from("c"), Value::from(3));
+
+        let source = Value::Object(Rc::new(obj));
+
+        // Build the snapshot exactly as loops.rs / comprehension.rs do.
+        let snapshot_pairs: Rc<[(Value, Value)]> = match &source {
+            Value::Object(o) => o
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect::<Vec<_>>()
+                .into(),
+            _ => unreachable!(),
+        };
+        let state = IterationState::Object {
+            pairs: Rc::clone(&snapshot_pairs),
+            pos: 0,
+        };
+
+        // Mutate a clone of the source mid-iteration.
+        let mut alias = source.clone();
+        let inner = alias.as_object_mut().expect("object");
+        inner.insert(Value::from("a"), Value::from(999));
+        inner.insert(Value::from("d"), Value::from(4));
+        inner.remove(&Value::from("b"));
+
+        // Snapshot must still report the original 3 entries with original values.
+        let collected: Vec<(Value, Value)> = match &state {
+            IterationState::Object { pairs, .. } => pairs.to_vec(),
+            _ => unreachable!(),
+        };
+        assert_eq!(collected.len(), 3);
+        assert!(collected.contains(&(Value::from("a"), Value::from(1))));
+        assert!(collected.contains(&(Value::from("b"), Value::from(2))));
+        assert!(collected.contains(&(Value::from("c"), Value::from(3))));
+        assert!(!collected.iter().any(|kv| kv.0 == Value::from("d")));
+
+        // The original source Value (untouched) is also unchanged.
+        let src_obj = source.as_object().expect("object");
+        assert_eq!(src_obj.len(), 3);
+        assert_eq!(src_obj.get(&Value::from("a")), Some(&Value::from(1)));
+    }
 }

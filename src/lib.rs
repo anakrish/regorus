@@ -177,7 +177,7 @@ pub use utils::limits::{
     global_memory_limit, set_global_memory_limit, set_thread_flush_threshold_override,
     thread_memory_flush_threshold,
 };
-pub use value::Value;
+pub use value::{Object, Value};
 
 /// Compiled-pattern caches for the `regex.*` and `glob.*` Rego builtins.
 ///

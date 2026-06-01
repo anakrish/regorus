@@ -10,7 +10,7 @@ use crate::lexer::Span;
 use crate::value::Value;
 use crate::*;
 
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::collections::BTreeSet;
 
 use anyhow::{bail, Result};
 
@@ -80,7 +80,7 @@ fn reachable(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) ->
 }
 
 fn visit(
-    graph: &BTreeMap<Value, Value>,
+    graph: &Object,
     visited: &mut BTreeSet<Value>,
     node: &Value,
     path: &mut Vec<Value>,
@@ -211,7 +211,7 @@ fn walk_visit(path: &mut Vec<Value>, value: &Value, paths: &mut Vec<Value>) -> R
             }
         }
         Value::Object(obj) => {
-            for (key, value) in obj.iter() {
+            for (key, value) in obj.iter_sorted() {
                 path.push(key.clone());
                 // Guard path stack growth while traversing object entries.
                 enforce_limit()?;

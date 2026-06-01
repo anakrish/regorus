@@ -9,7 +9,7 @@ use crate::Rc;
 use crate::Value;
 use crate::*;
 
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::collections::BTreeSet;
 
 use anyhow::{bail, Result};
 
@@ -168,7 +168,7 @@ pub fn ensure_set(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<BTreeSet<Value>>
     })
 }
 
-pub fn ensure_object(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<BTreeMap<Value, Value>>> {
+pub fn ensure_object(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<Object>> {
     Ok(match v {
         Value::Object(o) => o,
         _ => {

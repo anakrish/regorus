@@ -62,11 +62,8 @@ impl RegoVM {
                     if set.is_empty() {
                         None
                     } else {
-                        Some(IterationState::Set {
-                            items: set,
-                            current_item: None,
-                            first_iteration: true,
-                        })
+                        let cursor = set.cursor();
+                        Some(IterationState::Set { set, cursor })
                     }
                 }
                 Value::Undefined => None,
@@ -148,11 +145,8 @@ impl RegoVM {
                     if set.is_empty() {
                         None
                     } else {
-                        Some(IterationState::Set {
-                            items: set,
-                            current_item: None,
-                            first_iteration: true,
-                        })
+                        let cursor = set.cursor();
+                        Some(IterationState::Set { set, cursor })
                     }
                 }
                 Value::Undefined => None,

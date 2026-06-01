@@ -199,7 +199,7 @@ fn to_string(v: &Value, unescape: bool) -> String {
         }
         Value::Set(s) => {
             "{".to_owned()
-                + &s.iter()
+                + &s.iter_sorted()
                     .map(|e| to_string(e, true))
                     .collect::<Vec<String>>()
                     .join(", ")

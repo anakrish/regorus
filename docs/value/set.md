@@ -77,3 +77,101 @@ aliases for `BTreeSet`/`BTreeMap` in `lib.rs` were renamed to
 for the new public type. Future Array and String abstractions follow the
 same shape — see `docs/value/array.md` and `docs/value/string.md` when
 they land.
+
+## Upgrade notes (0.11.0)
+
+`Value::Set`'s payload changed from `Rc<BTreeSet<Value>>` to
+`Rc<Set>`. `Set` mirrors the shape of `BTreeSet<Value>` so most call
+sites compile unchanged; only the return types of `Value::as_set` /
+`as_set_mut` differ:
+
+```rust
+// Before
+let s: &BTreeSet<Value> = v.as_set()?;
+// After
+let s: &Set = v.as_set()?;
+s.contains(&item);     // same
+s.iter();              // same
+s.is_subset(&other);   // same
+```
+
+The `_mut` sibling still goes through `Rc::make_mut` (copy-on-write).
+
+### Constructing a `Value::Set` from a literal
+
+```rust
+// Before
+Value::Set(Rc::new(BTreeSet::from_iter(items)))
+// After
+Set::from_iter(items).into()
+// or, equivalently:
+Set::from_iter(items).into_value()
+```
+
+### Pattern-matching `Value::Set(rc)`
+
+`rc` is now `&Rc<Set>` instead of `&Rc<BTreeSet>`. All the methods you
+used on the inner collection (`len`, `is_empty`, `contains`, `iter`,
+`insert`, `remove`, `retain`, `clear`, `append`, `extend`,
+`IntoIterator`, plus the algebra: `union`, `intersection`,
+`difference`, `symmetric_difference`, `is_subset`, `is_superset`,
+`is_disjoint`) exist on `Set` with identical signatures and semantics.
+
+### Removed surface
+
+The full `BTreeSet` surface is *not* re-exposed. In particular these
+methods are gone — file an issue with your use case if you need them:
+
+- `BTreeSet::range`
+- `BTreeSet::split_off`
+- `BTreeSet::pop_first`, `BTreeSet::pop_last`
+
+The `IntoIter`, `Iter` types returned by `into_iter()` / `iter()` are
+now opaque newtypes rather than `btree_set::Iter`. Callers that named
+the concrete type need to switch to `impl Iterator<Item = ...>` or the
+new wrapper types.
+
+### Iteration-order semantics
+
+| Method                | Order                  | Use for                       |
+| --------------------- | ---------------------- | ----------------------------- |
+| `iter()`              | implementation-defined | Rego evaluation iteration     |
+| `iter_sorted()`       | sorted by `Value::Ord` | canonical / user-visible output|
+
+Today the BTree-backed storage means `iter()` happens to return sorted
+order, but **callers must not depend on that**. Both execution backends
+(interpreter and RVM) use `iter()` for evaluation iteration; sites that
+produce canonical output (`Serialize`, `Debug`, `to_printable`,
+`Set::first` / `Set::last`, sprintf `%v`, the RVM binary value
+serializer) use `iter_sorted()` explicitly.
+
+### Resumable iteration: `cursor()` / `next()`
+
+Use the cursor API when your caller must yield mid-iteration and resume
+later (the RVM's `IterationState` does this for loops and
+comprehensions):
+
+```rust
+let mut cursor = set.cursor();
+while let Some(item) = set.next(&mut cursor) {
+    // ...possibly yield to the outer scheduler, then resume later.
+}
+```
+
+- `cursor()` / `next()` — implementation-defined order; cheapest per-step cost.
+- `cursor_sorted()` / `next_sorted()` — sorted order, for canonical resumable iteration.
+
+For one-shot consumption use `iter()` / `iter_sorted()`; reach for
+cursors only when the iteration must suspend.
+
+### Things that did not change
+
+- Equality, ordering, and hashing of `Set` are unchanged (`Ord` is now
+  hand-written against `iter_sorted()` so it is consistent across
+  storage variants, but produces the same result on the BTree backend).
+- `Serialize` / `Deserialize` for `Value::Set` produce the same JSON as
+  before. (`Value`'s `Serialize` impl now delegates to `Set` so there
+  is a single canonical path.)
+- The set algebra surface is preserved.
+- `Rc::make_mut` copy-on-write semantics for `Value::as_set_mut` are
+  unchanged.

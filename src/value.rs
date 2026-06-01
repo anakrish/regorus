@@ -13,7 +13,7 @@
 
 use crate::number::Number;
 
-use crate::collections::Object;
+use crate::collections::{Object, Set};
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use core::fmt;
@@ -60,7 +60,7 @@ pub enum Value {
     /// A set of values.
     /// No JSON equivalent.
     /// Sets are serialized as arrays in JSON.
-    Set(Rc<BTreeSet<Value>>),
+    Set(Rc<Set>),
 
     /// An object.
     /// Unlike JSON, keys can be any value, not just string.
@@ -769,7 +769,7 @@ impl From<BTreeSet<Value>> for Value {
     /// # Ok(())
     /// # }
     fn from(s: BTreeSet<Value>) -> Self {
-        Value::Set(Rc::new(s))
+        Value::Set(Rc::new(Set::from(s)))
     }
 }
 
@@ -1227,42 +1227,40 @@ impl Value {
         }
     }
 
-    /// Cast value to [`& BTreeSet<Value>`] if [`Value::Set`].
+    /// Cast value to [`&Set`] if [`Value::Set`].
     /// ```
     /// # use regorus::*;
-    /// # use std::collections::BTreeSet;
     /// # fn main() -> anyhow::Result<()> {
     /// let v = Value::from(
     ///    [Value::from("Hello")]
     ///        .iter()
     ///        .cloned()
-    ///        .collect::<BTreeSet<Value>>(),
+    ///        .collect::<Set>(),
     /// );
     /// assert_eq!(v.as_set()?.first(), Some(&Value::from("Hello")));
     /// # Ok(())
     /// # }
-    pub fn as_set(&self) -> Result<&BTreeSet<Value>> {
+    pub fn as_set(&self) -> Result<&Set> {
         match self {
             Value::Set(s) => Ok(s),
             _ => Err(anyhow!("not a set")),
         }
     }
 
-    /// Cast value to [`&mut BTreeSet<Value>`] if [`Value::Set`].
+    /// Cast value to [`&mut Set`] if [`Value::Set`].
     /// ```
     /// # use regorus::*;
-    /// # use std::collections::BTreeSet;
     /// # fn main() -> anyhow::Result<()> {
     /// let mut v = Value::from(
     ///    [Value::from("Hello")]
     ///        .iter()
     ///        .cloned()
-    ///        .collect::<BTreeSet<Value>>(),
+    ///        .collect::<Set>(),
     /// );
     /// v.as_set_mut()?.insert(Value::from("World"));
     /// # Ok(())
     /// # }
-    pub fn as_set_mut(&mut self) -> Result<&mut BTreeSet<Value>> {
+    pub fn as_set_mut(&mut self) -> Result<&mut Set> {
         match self {
             Value::Set(s) => Ok(Rc::make_mut(s)),
             _ => Err(anyhow!("not a set")),

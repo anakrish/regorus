@@ -706,7 +706,7 @@ impl RegoVM {
                     if any_undefined {
                         self.set_register(params.dest, Value::Undefined)?;
                     } else {
-                        let mut set = alloc::collections::BTreeSet::new();
+                        let mut set = crate::collections::Set::new();
                         for &reg in params.element_registers() {
                             set.insert(self.get_register(reg)?.clone());
                         }

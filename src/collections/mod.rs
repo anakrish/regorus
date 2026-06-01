@@ -37,8 +37,6 @@ pub use object::Object;
 pub use set::Set;
 
 #[cfg(feature = "rvm")]
-#[allow(unused_imports)] // surface for downstream PRs
 pub use object::ObjectCursor;
 #[cfg(feature = "rvm")]
-#[allow(unused_imports)] // surface for downstream PRs
 pub use set::SetCursor;

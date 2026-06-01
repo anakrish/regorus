@@ -4,7 +4,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.11.0]
+
+### Breaking
+
+- `Value::Object` payload changed from `Rc<BTreeMap<Value, Value>>` to
+  `Rc<Object>`. `Value::Set` payload changed from `Rc<BTreeSet<Value>>` to
+  `Rc<Set>`. The new types are re-exported at the crate root and expose the
+  same shape (`get`, `insert`, `iter`, `contains_key`, etc.). Most call sites
+  compile unchanged; pattern-match bindings see `&Rc<Object>` / `&Rc<Set>`
+  instead of `&Rc<BTreeMap>` / `&Rc<BTreeSet>`. See
+  [`docs/migration-collections.md`](docs/migration-collections.md).
+- `Value::as_object`, `Value::as_object_mut`, `Value::as_set`,
+  `Value::as_set_mut` return types changed from `&BTreeMap` / `&BTreeSet`
+  (etc.) to `&Object` / `&Set` (etc.). Method names are unchanged.
+- `Object` / `Set` iteration: `iter()` / `keys()` are
+  implementation-defined order (today: sorted, because storage is
+  `BTreeMap`/`BTreeSet`; future variants may differ). Use `iter_sorted()` /
+  `keys_sorted()` for canonical/user-visible output. Both execution backends
+  (interpreter, RVM) use `iter()` / `keys()` for evaluation iteration to
+  preserve dual-path equivalence.
+- `Object::with_capacity` / `Set::with_capacity` were removed: the BTree
+  backend ignored the hint, making them a footgun. A future hash-backed
+  variant can reintroduce them when actually honored.
+- The iterator types returned by `Object::iter`, `Object::iter_mut`,
+  `Object::into_iter` (and the `Set` siblings) are now opaque newtypes,
+  not `btree_map::Iter` / `btree_set::Iter`. Callers that named the concrete
+  std types must switch to `impl Iterator` or to the new wrapper types.
+
+### Added
+
+- `Object::cursor` / `Object::next` and `Object::cursor_sorted` /
+  `Object::next_sorted` (and `Set` siblings) — opaque resumable cursors used
+  by the RVM `IterationState` and available to embedders that need
+  yield-and-resume iteration. The cursor types are re-exported at the crate
+  root.
+- `Object::insert_if_absent(key, value)` — eager-value sibling of
+  `get_or_insert_with(key, default)` for the common "insert this value if
+  the slot is empty, return &mut to whatever is there" pattern.
+
+### Performance
+
+- RVM `IterationState` for objects and sets now holds an `Rc<Object>` /
+  `Rc<Set>` plus an opaque cursor instead of snapshotting all entries into
+  an `Rc<[(Value, Value)]>` / `Rc<[Value]>` on every loop entry. This
+  removes the O(N) setup cost, the O(N) memory floor, and the O(N)
+  per-element memory-limit checks that were introduced with the v7 payload
+  swap. Snapshot independence is preserved via the shared `Rc` (copy-on-
+  write).
 
 ## [0.10.1](https://github.com/microsoft/regorus/compare/regorus-v0.10.0...regorus-v0.10.1) - 2026-05-22
 

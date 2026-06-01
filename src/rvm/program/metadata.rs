@@ -11,7 +11,7 @@
 //! values are converted through [`MetadataValue`] — a postcard/bincode-safe
 //! enum that avoids `deserialize_any`.
 
-use crate::collections::Object;
+use crate::collections::{Object, Set};
 use crate::Rc;
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
@@ -198,7 +198,7 @@ impl MetadataValue {
         match *self {
             MetadataValue::String(ref s) => Value::String(s.as_str().into()),
             MetadataValue::StringSet(ref set) => {
-                let mut bset = BTreeSet::new();
+                let mut bset = Set::new();
                 for s in set {
                     bset.insert(Value::String(s.as_str().into()));
                 }
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn round_trip_string_set() {
-        let mut set = BTreeSet::new();
+        let mut set = Set::new();
         set.insert(Value::String("a".into()));
         set.insert(Value::String("b".into()));
         let v = Value::Set(Rc::new(set));
@@ -325,7 +325,7 @@ mod tests {
 
     #[test]
     fn mixed_set_uses_list() {
-        let mut set = BTreeSet::new();
+        let mut set = Set::new();
         set.insert(Value::String("a".into()));
         set.insert(Value::from(1_i64));
         let v = Value::Set(Rc::new(set));

@@ -5,8 +5,7 @@
 use regorus::languages::rego::compiler::Compiler;
 use regorus::rvm::instructions::GuardMode;
 use regorus::rvm::Instruction;
-use regorus::{Engine, Rc, Value};
-use std::collections::BTreeSet;
+use regorus::{Engine, Rc, Set, Value};
 
 /// Compile a single-rule Rego module and return the program.
 fn compile_rule(module: &str) -> std::sync::Arc<regorus::rvm::program::Program> {
@@ -72,10 +71,7 @@ fn constant_set_is_hoisted() {
     );
     assert_no_collection_create(&program);
     let expected_set = Value::Set(Rc::new(
-        [1, 2, 3]
-            .into_iter()
-            .map(Value::from)
-            .collect::<BTreeSet<_>>(),
+        [1, 2, 3].into_iter().map(Value::from).collect::<Set>(),
     ));
     assert_literal_exists(&program, &expected_set);
 }

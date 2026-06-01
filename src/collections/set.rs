@@ -133,6 +133,11 @@ impl Set {
         self.inner.is_subset(&other.inner)
     }
 
+    #[inline]
+    pub fn into_value(self) -> Value {
+        Value::Set(crate::Rc::new(self))
+    }
+
     /// Create a resumable cursor over elements in implementation-defined
     /// order. Stable for the lifetime of `&self`. O(1).
     #[inline]
@@ -295,6 +300,13 @@ impl From<BTreeSet<Value>> for Set {
     #[inline]
     fn from(set: BTreeSet<Value>) -> Self {
         Self { inner: set }
+    }
+}
+
+impl From<Set> for Value {
+    #[inline]
+    fn from(s: Set) -> Self {
+        s.into_value()
     }
 }
 

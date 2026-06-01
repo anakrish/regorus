@@ -8,12 +8,11 @@
 
 use super::{Compiler, Register, Result};
 use crate::ast::{Expr, ExprRef};
-use crate::collections::Object;
+use crate::collections::{Object, Set};
 use crate::lexer::Span;
 use crate::rvm::instructions::{ArrayCreateParams, ObjectCreateParams, SetCreateParams};
 use crate::rvm::Instruction;
 use crate::{Rc, Value};
-use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
 /// Try to evaluate an expression as a compile-time constant.
@@ -39,7 +38,7 @@ pub(in crate::languages::rego::compiler) fn try_eval_const(expr: &Expr) -> Optio
         Expr::Set { items, .. } => items
             .iter()
             .map(|i| try_eval_const(i.as_ref()))
-            .collect::<Option<BTreeSet<_>>>()
+            .collect::<Option<Set>>()
             .map(|s| Value::Set(Rc::new(s))),
         Expr::Object { fields, .. } => fields
             .iter()
@@ -88,8 +87,7 @@ impl<'a> Compiler<'a> {
         items: &[ExprRef],
         span: &Span,
     ) -> Result<Register> {
-        let all_const: Option<BTreeSet<_>> =
-            items.iter().map(|i| try_eval_const(i.as_ref())).collect();
+        let all_const: Option<Set> = items.iter().map(|i| try_eval_const(i.as_ref())).collect();
         if let Some(values) = all_const {
             let dest = self.alloc_register();
             let literal_idx = self.add_literal(Value::Set(Rc::new(values)));

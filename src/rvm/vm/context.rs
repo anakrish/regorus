@@ -1,11 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use crate::collections::{Object, ObjectCursor};
+use crate::collections::{Object, ObjectCursor, Set, SetCursor};
 use crate::rvm::instructions::{ComprehensionMode, LoopMode};
 use crate::value::Value;
 use crate::Rc;
-use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
 /// Loop execution context for managing iteration state
@@ -27,16 +26,11 @@ pub struct LoopContext {
 
 /// Iterator state for different collection types.
 ///
-/// Snapshot independence for `Object` is provided by the shared
-/// `Rc<Object>` — `Rc::make_mut` on an aliased Rc allocates a new
-/// collection, leaving the iterator's Rc pointing at the original
-/// pre-mutation state. The `ObjectCursor` is opaque and resumes in
-/// O(log n) for the BTree backend.
-///
-/// `Set` continues to use the pre-existing snapshot-by-cloned-key
-/// approach (`current_item` + `first_iteration`); migration of `Set`
-/// to a cursor-based iterator ships with the `Set` storage abstraction
-/// in a follow-up PR.
+/// Snapshot independence is provided by the shared `Rc<Object>` /
+/// `Rc<Set>` / `Rc<Vec<Value>>` — `Rc::make_mut` on an aliased Rc allocates
+/// a new collection, leaving the iterator's Rc pointing at the original
+/// pre-mutation state. The cursor for `Object` / `Set` is opaque and resumes
+/// in O(log n) for the BTree backend.
 #[derive(Debug, Clone)]
 pub enum IterationState {
     Array {
@@ -48,9 +42,8 @@ pub enum IterationState {
         cursor: ObjectCursor,
     },
     Set {
-        items: Rc<BTreeSet<Value>>,
-        current_item: Option<Value>,
-        first_iteration: bool,
+        set: Rc<Set>,
+        cursor: SetCursor,
     },
     /// Virtual single-element iteration for non-collection values.
     /// Used by Azure Policy's `[*]` on scalar/null fields: presents a single
@@ -67,16 +60,10 @@ impl IterationState {
             Self::Array { ref mut index, .. } => {
                 *index = index.saturating_add(1);
             }
-            // For Object the cursor advances inside `setup_next_iteration`
-            // when it pulls the next item via `Object::next`, so `advance`
-            // is a no-op for the cursor-backed Object variant.
-            Self::Object { .. } => {}
-            Self::Set {
-                ref mut first_iteration,
-                ..
-            } => {
-                *first_iteration = false;
-            }
+            // For Object/Set the cursor advances inside `setup_next_iteration`
+            // when it pulls the next item via `Object::next` / `Set::next`,
+            // so `advance` is a no-op for cursor-backed variants.
+            Self::Object { .. } | Self::Set { .. } => {}
             Self::Single {
                 ref mut consumed, ..
             } => {

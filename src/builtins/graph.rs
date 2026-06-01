@@ -127,7 +127,7 @@ fn visit(
                 arr.len()
             }
             Some(Value::Set(set)) => {
-                for n in set.iter().rev() {
+                for n in set.iter_sorted().rev() {
                     visit(graph, visited, n, path, paths)?;
                 }
                 set.len()
@@ -173,7 +173,7 @@ fn reachable_paths(
             }
         }
         Value::Set(set) => {
-            for node in set.iter() {
+            for node in set.iter_sorted() {
                 visit(&graph, &mut visited, node, &mut path, &mut paths)?;
             }
         }

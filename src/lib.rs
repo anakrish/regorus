@@ -119,6 +119,7 @@ mimalloc::assign_global!();
 
 mod ast;
 mod builtins;
+mod collections;
 mod compile;
 mod compiled_policy;
 mod compiler;
@@ -164,6 +165,7 @@ pub use {
     target::Target,
 };
 
+pub use collections::Object;
 pub use compile::{compile_policy_with_entrypoint, PolicyModule};
 pub use compiled_policy::CompiledPolicy;
 pub use engine::Engine;

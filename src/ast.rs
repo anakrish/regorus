@@ -460,6 +460,8 @@ pub struct Import {
 #[derive(Debug)]
 #[cfg_attr(feature = "ast", derive(serde::Serialize))]
 pub struct Module {
+    #[cfg_attr(feature = "ast", serde(skip_serializing))]
+    pub source: Source,
     pub package: Package,
     pub imports: Vec<Import>,
     #[cfg_attr(feature = "ast", serde(rename(serialize = "rules")))]
@@ -474,6 +476,28 @@ pub struct Module {
     pub num_statements: u32,
     // Number of queries in the module.
     pub num_queries: u32,
+}
+
+impl Module {
+    /// Helper method to get text from a span
+    pub fn span_text(&self, span: &Span) -> &str {
+        span.text(&self.source)
+    }
+
+    /// Helper method to get source string from a span
+    pub fn span_source_str(&self, span: &Span) -> SourceStr {
+        span.source_str(&self.source)
+    }
+
+    /// Helper method to create an error from a span
+    pub fn span_error(&self, span: &Span, msg: &str) -> anyhow::Error {
+        span.error(&self.source, msg)
+    }
+
+    /// Helper method to create a message from a span
+    pub fn span_message(&self, span: &Span, kind: &str, msg: &str) -> String {
+        span.message(&self.source, kind, msg)
+    }
 }
 
 pub type ExprRef = Ref<Expr>;

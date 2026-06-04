@@ -231,8 +231,6 @@ impl Source {
 #[derive(Clone)]
 #[cfg_attr(feature = "ast", derive(serde::Serialize))]
 pub struct Span {
-    #[cfg_attr(feature = "ast", serde(skip_serializing))]
-    pub source: Source,
     pub line: u32,
     pub col: u32,
     pub start: u32,
@@ -240,36 +238,28 @@ pub struct Span {
 }
 
 impl Span {
-    pub fn text(&self) -> &str {
-        &self.source.contents()[self.start as usize..self.end as usize]
+    pub fn text<'a>(&self, source: &'a Source) -> &'a str {
+        &source.contents()[self.start as usize..self.end as usize]
     }
 
-    pub fn source_str(&self) -> SourceStr {
-        SourceStr::new(self.source.clone(), self.start, self.end)
+    pub fn source_str(&self, source: &Source) -> SourceStr {
+        SourceStr::new(source.clone(), self.start, self.end)
     }
 
-    pub fn message(&self, kind: &str, msg: &str) -> String {
-        self.source.message(self.line, self.col, kind, msg)
+    pub fn message(&self, source: &Source, kind: &str, msg: &str) -> String {
+        source.message(self.line, self.col, kind, msg)
     }
 
-    pub fn error(&self, msg: &str) -> anyhow::Error {
-        self.source.error(self.line, self.col, msg)
+    pub fn error(&self, source: &Source, msg: &str) -> anyhow::Error {
+        source.error(self.line, self.col, msg)
     }
 }
 
 impl Debug for Span {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
-        let t = self.text().escape_debug().to_string();
-        let max = 32;
-        let (txt, trailer) = if t.len() > max {
-            (&t[0..max], "...")
-        } else {
-            (t.as_str(), "")
-        };
-
         f.write_fmt(format_args!(
-            "{}:{}:{}:{}, \"{}{}\"",
-            self.line, self.col, self.start, self.end, txt, trailer
+            "{}:{}:{}:{}",
+            self.line, self.col, self.start, self.end
         ))
     }
 }
@@ -359,7 +349,6 @@ impl<'source> Lexer<'source> {
         Ok(Token(
             TokenKind::Ident,
             Span {
-                source: self.source.clone(),
                 line: self.line,
                 col,
                 start: start as u32,
@@ -443,7 +432,6 @@ impl<'source> Lexer<'source> {
         Ok(Token(
             TokenKind::Number,
             Span {
-                source: self.source.clone(),
                 line: self.line,
                 col,
                 start: start as u32,
@@ -480,7 +468,6 @@ impl<'source> Lexer<'source> {
         Ok(Token(
             TokenKind::RawString,
             Span {
-                source: self.source.clone(),
                 line,
                 col,
                 start: start as u32,
@@ -563,7 +550,6 @@ impl<'source> Lexer<'source> {
         Ok(Token(
             TokenKind::String,
             Span {
-                source: self.source.clone(),
                 line,
                 col: col + 1,
                 start: start as u32,
@@ -645,7 +631,6 @@ impl<'source> Lexer<'source> {
 		self.col += 1;
 		self.iter.next();
 		Ok(Token(TokenKind::Symbol, Span {
-		    source: self.source.clone(),
 		    line: self.line,
 		    col,
 		    start: start as u32,
@@ -662,7 +647,6 @@ impl<'source> Lexer<'source> {
 		    end += 1;
 		}
 		Ok(Token(TokenKind::Symbol, Span {
-		    source: self.source.clone(),
 		    line: self.line,
 		    col,
 		    start: start as u32,
@@ -678,7 +662,6 @@ impl<'source> Lexer<'source> {
 		    self.iter.next();
 		};
 		Ok(Token(TokenKind::Symbol, Span {
-		    source: self.source.clone(),
 		    line: self.line,
 		    col,
 		    start: start as u32,
@@ -690,7 +673,6 @@ impl<'source> Lexer<'source> {
 		self.iter.next();
 		self.iter.next();
 		Ok(Token(TokenKind::Symbol, Span {
-		    source: self.source.clone(),
 		    line: self.line,
 		    col,
 		    start: start as u32,
@@ -700,7 +682,6 @@ impl<'source> Lexer<'source> {
 	    '"' => self.read_string(),
 	    '`' => self.read_raw_string(),
 	    '\x00' => Ok(Token(TokenKind::Eof, Span {
-		source: self.source.clone(),
 		line:self.line,
 		col,
 		start: start as u32,
@@ -709,7 +690,7 @@ impl<'source> Lexer<'source> {
 	    _ if chr.is_ascii_digit() => self.read_number(),
 	    _ if chr.is_ascii_alphabetic() || chr == '_' => {
 		let mut ident = self.read_ident()?;
-		if ident.1.text() == "set" && self.peek().1 == '(' {
+		if ident.1.text(&self.source) == "set" && self.peek().1 == '(' {
 		    // set immediately followed by ( is treated as set( if
 		    // the next token is ).
 		    let state = (self.iter.clone(), self.line, self.col);
@@ -717,7 +698,7 @@ impl<'source> Lexer<'source> {
 
 		    // Check it next token is ).
 		    let next_tok = self.next_token()?;
-		    let is_setp = next_tok.1.text() == ")";
+		    let is_setp = next_tok.1.text(&self.source) == ")";
 
 		    // Restore state
 		    (self.iter, self.line, self.col) = state;
@@ -734,7 +715,6 @@ impl<'source> Lexer<'source> {
 		self.col += 1;
 		self.iter.next();
 		Ok(Token(TokenKind::Symbol, Span {
-		    source: self.source.clone(),
 		    line: self.line,
 		    col,
 		    start: start as u32,

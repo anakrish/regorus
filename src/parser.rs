@@ -83,7 +83,7 @@ impl<'source> Parser<'source> {
     pub fn token_text(&self) -> &str {
         match self.tok.0 {
             TokenKind::Symbol | TokenKind::Number | TokenKind::Ident | TokenKind::Eof => {
-                self.tok.1.text()
+                self.tok.1.text(&self.source)
             }
             TokenKind::String | TokenKind::RawString => "",
         }
@@ -132,7 +132,7 @@ impl<'source> Parser<'source> {
                 span.col,
                 format!(
                     "this import shadows previous import of `{kw}` defined at:{}",
-                    s.message("", "this import is shadowed.")
+                    s.message(&self.source, "", "this import is shadowed.")
                 )
                 .as_str(),
             )),
@@ -147,43 +147,43 @@ impl<'source> Parser<'source> {
         }
     }
 
-    pub fn get_path_ref_components_into(refr: &Ref<Expr>, comps: &mut Vec<Span>) -> Result<()> {
+    pub fn get_path_ref_components_into(refr: &Ref<Expr>, comps: &mut Vec<Span>, source: &Source) -> Result<()> {
         match refr.as_ref() {
             Expr::RefDot { refr, field, .. } => {
-                Self::get_path_ref_components_into(refr, comps)?;
+                Self::get_path_ref_components_into(refr, comps, source)?;
                 comps.push(field.0.clone());
             }
             Expr::RefBrack { refr, index, .. } => {
-                Self::get_path_ref_components_into(refr, comps)?;
-                Self::get_path_ref_components_into(index, comps)?;
+                Self::get_path_ref_components_into(refr, comps, source)?;
+                Self::get_path_ref_components_into(index, comps, source)?;
             }
             Expr::Var { span: v, .. } => comps.push(v.clone()),
             Expr::String { span: s, .. } => comps.push(s.clone()),
             Expr::Bool { span: s, .. } | Expr::Null { span: s, .. } => comps.push(s.clone()),
             Expr::Number { span, value, .. } => {
                 // Ensure that the span will be the serialized representation.
-                if span.text() == value.to_json_str()? {
+                if span.text(source) == value.to_json_str()? {
                     comps.push(span.clone());
                 } else {
-                    bail!(refr.span().error("not a valid ref"));
+                    bail!(refr.span().error(source, "not a valid ref"));
                 }
             }
 
-            _ => bail!(refr.span().error("not a valid ref")),
+            _ => bail!(refr.span().error(source, "not a valid ref")),
         }
         Ok(())
     }
 
-    pub fn get_path_ref_components(refr: &Ref<Expr>) -> Result<Vec<Span>> {
+    pub fn get_path_ref_components(refr: &Ref<Expr>, source: &Source) -> Result<Vec<Span>> {
         let mut comps = vec![];
-        Self::get_path_ref_components_into(refr, &mut comps)?;
+        Self::get_path_ref_components_into(refr, &mut comps, source)?;
         Ok(comps)
     }
 
     fn handle_import_future_keywords(&mut self, comps: &[Span]) -> Result<bool> {
-        if comps.len() >= 2 && comps[0].text() == "future" && comps[1].text() == "keywords" {
+        if comps.len() >= 2 && comps[0].text(&self.source) == "future" && comps[1].text(&self.source) == "keywords" {
             match comps.len() - 2 {
-                1 => self.set_future_keyword(comps[2].text(), &Some(comps[2].clone()))?,
+                1 => self.set_future_keyword(comps[2].text(&self.source), &Some(comps[2].clone()))?,
                 0 => {
                     let span = &comps[1];
                     for kw in FUTURE_KEYWORDS.iter() {
@@ -198,7 +198,7 @@ impl<'source> Parser<'source> {
                 }
             }
             Ok(true)
-        } else if !comps.is_empty() && comps[0].text() == "future" {
+        } else if !comps.is_empty() && comps[0].text(&self.source) == "future" {
             let s = &comps[0];
             Err(self
                 .source
@@ -250,10 +250,10 @@ impl<'source> Parser<'source> {
     fn parse_ident(&mut self) -> Result<Span> {
         let span = self.tok.1.clone();
         match self.tok.0 {
-            TokenKind::Ident if self.is_keyword(span.text()) => Err(self.source.error(
+            TokenKind::Ident if self.is_keyword(span.text(&self.source)) => Err(self.source.error(
                 self.tok.1.line,
                 self.tok.1.col,
-                &format!("unexpected keyword `{}`", span.text()),
+                &format!("unexpected keyword `{}`", span.text(&self.source)),
             )),
             TokenKind::Ident => {
                 self.next_token()?;
@@ -269,15 +269,15 @@ impl<'source> Parser<'source> {
         let span = self.tok.1.clone();
         match self.tok.0 {
             TokenKind::Ident
-                if self.is_keyword(span.text())
-                    || (self.is_imported_future_keyword(span.text())
+                if self.is_keyword(span.text(&self.source))
+                    || (self.is_imported_future_keyword(span.text(&self.source))
 		    // contains can be the name of a builtin even when a keyword
-		    && span.text() != "contains") =>
+		    && span.text(&self.source) != "contains") =>
             {
                 Err(self.source.error(
                     self.tok.1.line,
                     self.tok.1.col,
-                    &format!("unexpected keyword `{}`", span.text()),
+                    &format!("unexpected keyword `{}`", span.text(&self.source)),
                 ))
             }
             TokenKind::Ident => {
@@ -291,13 +291,13 @@ impl<'source> Parser<'source> {
     }
 
     fn read_number(&mut self, span: Span) -> Result<Expr> {
-        match Number::from_str(span.text()) {
+        match Number::from_str(span.text(&self.source)) {
             Ok(v) => Ok(Expr::Number {
                 span,
                 value: Value::Number(v),
                 eidx: self.next_eidx(),
             }),
-            Err(_) => bail!(span.error("could not parse number")),
+            Err(_) => bail!(span.error(&self.source, "could not parse number")),
         }
     }
 
@@ -306,10 +306,10 @@ impl<'source> Parser<'source> {
         let node = match &self.tok.0 {
             TokenKind::Number => self.read_number(span)?,
             TokenKind::String => {
-                let v = match serde_json::from_str::<Value>(format!("\"{}\"", span.text()).as_str())
+                let v = match serde_json::from_str::<Value>(format!("\"{}\"", span.text(&self.source)).as_str())
                 {
                     Ok(v) => v,
-                    Err(e) => bail!(span.error(format!("invalid string literal. {e}").as_str())),
+                    Err(e) => bail!(span.error(&self.source, format!("invalid string literal. {e}").as_str())),
                 };
                 Expr::String {
                     span,
@@ -318,7 +318,7 @@ impl<'source> Parser<'source> {
                 }
             }
             TokenKind::RawString => {
-                let v = Value::from(span.text().to_string());
+                let v = Value::from(span.text(&self.source).to_string());
                 Expr::RawString {
                     span,
                     value: v,
@@ -1752,7 +1752,7 @@ impl<'source> Parser<'source> {
                     bail!(span.error("rule must have a body or assignment"));
                 }
                 RuleHead::Set { refr, key, .. } if key.is_none() => {
-                    if Self::get_path_ref_components(refr)?.len() == 2 {
+                    if Self::get_path_ref_components(refr, &self.source)?.len() == 2 {
                         bail!(span.error("`contains` keyword is required for partial set rules"));
                     } else {
                         bail!(span.error("rule must have a body or assignment"));
@@ -1777,8 +1777,8 @@ impl<'source> Parser<'source> {
     }
 
     fn check_and_add_import(&self, import: Import, imports: &mut Vec<Import>) -> Result<()> {
-        let ref_comps = Self::get_path_ref_components(&import.refr)?;
-        let comps: Vec<&str> = ref_comps.iter().map(|s| s.text()).collect();
+        let ref_comps = Self::get_path_ref_components(&import.refr, &self.source)?;
+        let comps: Vec<&str> = ref_comps.iter().map(|s| s.text(&self.source)).collect();
 
         if comps.len() >= 2 && comps[0] == "future" && comps[1] == "keywords" {
             imports.push(import);
@@ -1786,11 +1786,11 @@ impl<'source> Parser<'source> {
         }
 
         for imp in imports.iter() {
-            let imp_comps = Self::get_path_ref_components(&imp.refr)?;
-            let imp_comps: Vec<&str> = imp_comps.iter().map(|s| s.text()).collect();
+            let imp_comps = Self::get_path_ref_components(&imp.refr, &self.source)?;
+            let imp_comps: Vec<&str> = imp_comps.iter().map(|s| s.text(&self.source)).collect();
 
             let shadow = match (&imp.r#as, &import.r#as) {
-                (Some(i1), Some(i2)) if i1.text() == i2.text() => true,
+                (Some(i1), Some(i2)) if i1.text(&self.source) == i2.text(&self.source) => true,
                 (None, None) if imp_comps == comps => true,
                 _ => false,
             };
@@ -1824,9 +1824,9 @@ impl<'source> Parser<'source> {
             self.next_token()?;
             let refr = Ref::new(self.parse_path_ref()?);
 
-            let comps = Self::get_path_ref_components(&refr)?;
+            let comps = Self::get_path_ref_components(&refr, &self.source)?;
             span.end = self.end;
-            if !matches!(comps[0].text(), "data" | "future" | "input" | "rego") {
+            if !matches!(comps[0].text(&self.source), "data" | "future" | "input" | "rego") {
                 return Err(self.source.error(
                     comps[0].line,
                     comps[0].col,
@@ -1835,7 +1835,7 @@ impl<'source> Parser<'source> {
             }
 
             let is_future_kw =
-                if comps.len() == 2 && comps[0].text() == "rego" && comps[1].text() == "v1" {
+                if comps.len() == 2 && comps[0].text(&self.source) == "rego" && comps[1].text(&self.source) == "v1" {
                     self.turn_on_rego_v1(&Some(span.clone()))?;
                     true
                 } else {
@@ -1947,6 +1947,7 @@ impl<'source> Parser<'source> {
         }
 
         let m = Module {
+            source: self.source.clone(),
             package,
             imports,
             target,

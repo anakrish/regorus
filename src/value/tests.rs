@@ -15,9 +15,10 @@
 
 use alloc::collections::BTreeMap;
 use alloc::format;
+use alloc::vec;
 use alloc::vec::Vec;
 
-use super::Object;
+use super::{Array, Object};
 use crate::value::Value;
 
 fn val(i: u64) -> Value {
@@ -561,4 +562,198 @@ fn object_insert_returns_previous_value() {
     assert_eq!(obj.insert(val(0), val(1)), None);
     assert_eq!(obj.insert(val(0), val(2)), Some(val(1)));
     assert_eq!(obj.get(&val(0)), Some(&val(2)));
+}
+
+// ---- Array storage abstraction -------------------------------------------
+
+fn make_values(n: u64) -> Vec<Value> {
+    (0..n).map(val).collect()
+}
+
+#[test]
+fn array_constructors_equality_and_ordering() {
+    let empty = Array::new();
+    assert!(empty.is_empty());
+    assert_eq!(empty.len(), 0);
+
+    let mut with_capacity = Array::with_capacity(2);
+    with_capacity.push(val(1));
+    with_capacity.push(val(2));
+
+    let from_vec = Array::from(vec![val(1), val(2)]);
+    let from_iter = Array::from_iter([val(1), val(2)]);
+    assert_eq!(with_capacity, from_vec);
+    assert_eq!(from_vec, from_iter);
+    assert!(Array::from(vec![val(1), val(2)]) < Array::from(vec![val(1), val(3)]));
+}
+
+#[test]
+fn array_mutators_and_accessors() {
+    let mut array = Array::new();
+    array.push(val(1));
+    array.push(val(3));
+    assert_eq!(array.insert(1, val(2)), Some(()));
+
+    assert_eq!(array.len(), 3);
+    assert_eq!(array.get(0), Some(&val(1)));
+    assert_eq!(array[1], val(2));
+    assert_eq!(array.first(), Some(&val(1)));
+    assert_eq!(array.last(), Some(&val(3)));
+    assert_eq!(array.as_slice(), &[val(1), val(2), val(3)]);
+
+    if let Some(v) = array.get_mut(1) {
+        *v = val(20);
+    }
+    assert_eq!(array.remove(1), Some(val(20)));
+    array.extend_from_slice(&[val(4), val(5)]);
+    array.truncate(3);
+    assert_eq!(array.as_slice(), &[val(1), val(3), val(4)]);
+    assert_eq!(array.pop(), Some(val(4)));
+    array.clear();
+    assert!(array.is_empty());
+}
+
+#[test]
+fn array_out_of_range_access_is_safe() {
+    let mut array = Array::from_iter([val(1), val(2)]);
+
+    // Index never panics — returns Value::Undefined for out-of-range.
+    assert_eq!(array[0], val(1));
+    assert_eq!(array[2], Value::Undefined);
+    assert_eq!(array[usize::MAX], Value::Undefined);
+
+    // insert past the end returns None instead of panicking.
+    assert_eq!(array.insert(99, val(0)), None);
+    assert_eq!(array.len(), 2);
+
+    // remove past the end returns None instead of panicking.
+    assert_eq!(array.remove(99), None);
+    assert_eq!(array.len(), 2);
+
+    // insert at exactly len is valid (append-like).
+    assert_eq!(array.insert(2, val(3)), Some(()));
+    assert_eq!(array.as_slice(), &[val(1), val(2), val(3)]);
+}
+
+#[test]
+fn array_iteration_surfaces() {
+    let mut array = Array::from(make_values(4));
+    let borrowed: Vec<Value> = array.iter().cloned().collect();
+    assert_eq!(borrowed, make_values(4));
+
+    for v in &mut array {
+        *v = val(9);
+    }
+    assert_eq!(array.iter().cloned().collect::<Vec<_>>(), vec![val(9); 4]);
+
+    for v in array.iter_mut() {
+        *v = val(7);
+    }
+    let by_ref: Vec<Value> = (&array).into_iter().cloned().collect();
+    assert_eq!(by_ref, vec![val(7); 4]);
+
+    let owned: Vec<Value> = array.into_iter().collect();
+    assert_eq!(owned, vec![val(7); 4]);
+}
+
+#[cfg(feature = "rvm")]
+#[test]
+fn array_cursor_full_traversal_and_resumability() {
+    let array = Array::from(make_values(5));
+    let mut cursor = array.cursor();
+    assert_eq!(array.next(&mut cursor), Some((0, &val(0))));
+    assert_eq!(array.next(&mut cursor), Some((1, &val(1))));
+
+    let mut remaining = Vec::new();
+    while let Some((idx, v)) = array.next(&mut cursor) {
+        remaining.push((idx, v.clone()));
+    }
+    assert_eq!(remaining, vec![(2, val(2)), (3, val(3)), (4, val(4))]);
+    assert!(array.next(&mut cursor).is_none());
+}
+
+#[cfg(feature = "rvm")]
+#[test]
+fn array_cursor_empty_and_single_element() {
+    let empty = Array::new();
+    let mut empty_cursor = empty.cursor();
+    assert!(empty.next(&mut empty_cursor).is_none());
+
+    let single = Array::from(vec![val(42)]);
+    let mut single_cursor = single.cursor();
+    assert_eq!(single.next(&mut single_cursor), Some((0, &val(42))));
+    assert!(single.next(&mut single_cursor).is_none());
+}
+
+#[test]
+fn array_sort_dedup_and_reverse() {
+    let mut array = Array::from(vec![val(3), val(1), val(2), val(2)]);
+    array.sort();
+    assert_eq!(array.as_slice(), &[val(1), val(2), val(2), val(3)]);
+    array.dedup();
+    assert_eq!(array.as_slice(), &[val(1), val(2), val(3)]);
+    array.sort_by(|left, right| right.cmp(left));
+    assert_eq!(array.as_slice(), &[val(3), val(2), val(1)]);
+    array.reverse();
+    assert_eq!(array.as_slice(), &[val(1), val(2), val(3)]);
+}
+
+#[test]
+fn array_conversions_to_value() {
+    let array = Array::from_iter([val(1), val(2), val(3)]);
+    let expected = Value::Array(crate::Rc::new(vec![val(1), val(2), val(3)]));
+    let value_from_impl = Value::from(array.clone());
+    assert_eq!(value_from_impl, expected);
+
+    let value_from_method = array.into_value();
+    assert_eq!(
+        value_from_method,
+        Value::Array(crate::Rc::new(vec![val(1), val(2), val(3)]))
+    );
+}
+
+#[test]
+fn array_serde_roundtrip_json() {
+    let array = Array::from(vec![Value::Null, Value::Bool(true), val(7)]);
+    let json = serde_json::to_string(&array).expect("ser");
+    assert_eq!(json, "[null,true,7]");
+    let back: Array = serde_json::from_str(&json).expect("de");
+    assert_eq!(array, back);
+}
+
+#[test]
+fn array_ord_matches_std_vec_ordering() {
+    let cases = [
+        (vec![], vec![val(0)]),
+        (vec![val(1)], vec![val(1), val(0)]),
+        (vec![val(1), val(2)], vec![val(1), val(3)]),
+        (vec![val(2)], vec![val(1), val(999)]),
+    ];
+
+    for (left, right) in cases {
+        let left_array = Array::from(left.clone());
+        let right_array = Array::from(right.clone());
+        assert_eq!(left_array.cmp(&right_array), left.cmp(&right));
+        assert_eq!(left_array.partial_cmp(&right_array), Some(left.cmp(&right)));
+    }
+}
+
+#[test]
+fn array_iterators_are_double_ended_exact_and_fused() {
+    let array = Array::from(make_values(4));
+    let mut iter = array.iter();
+    assert_eq!(iter.len(), 4);
+    assert_eq!(iter.size_hint(), (4, Some(4)));
+    assert_eq!(iter.next(), Some(&val(0)));
+    assert_eq!(iter.next_back(), Some(&val(3)));
+    assert_eq!(iter.len(), 2);
+    while iter.next().is_some() {}
+    assert!(iter.next().is_none());
+    assert!(iter.next_back().is_none());
+
+    let mut owned = array.into_iter();
+    assert_eq!(owned.len(), 4);
+    assert_eq!(owned.next(), Some(val(0)));
+    assert_eq!(owned.next_back(), Some(val(3)));
+    assert_eq!(owned.collect::<Vec<_>>(), vec![val(1), val(2)]);
 }

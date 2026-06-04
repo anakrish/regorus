@@ -96,7 +96,8 @@ impl CompiledPolicy {
     /// # // Register a target for the example
     /// # #[cfg(feature = "azure_policy")]
     /// # {
-    /// #    let target = regorus::target::Target::from_json_file("tests/interpreter/cases/target/definitions/sample_target.json")?;
+    /// #    let target_json = std::fs::read_to_string("tests/interpreter/cases/target/definitions/sample_target.json")?;
+    /// #    let target = regorus::target::Target::from_json_str(&target_json)?;
     /// #    regorus::registry::targets::register(std::sync::Arc::new(target))?;
     /// # }
     ///

@@ -1402,7 +1402,7 @@ impl Engine {
     /// let ast = engine.get_ast_as_json()?;
     /// let value = Value::from_json_str(&ast)?;
     ///
-    /// assert_eq!(value[0]["ast"]["package"]["refr"]["Var"][1].as_string()?.as_ref(), "test");
+    /// assert_eq!(value[0]["ast"]["package"]["refr"]["Var"]["value"].as_string()?.as_ref(), "test");
     /// # Ok(())
     /// # }
     /// ```

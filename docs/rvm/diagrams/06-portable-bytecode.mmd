@@ -1,0 +1,54 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '13px'}}}%%
+graph TB
+    subgraph CompileTime["Compile Time"]
+        Source["Policy Source<br/><i>Rego / Cedar / Azure Policy</i>"]
+        Compiler["Compiler"]
+        Source --> Compiler
+    end
+
+    subgraph Artifact["📦 Program Artifact (Binary)"]
+        direction TB
+        Header["🏷️ Header<br/><code>REGO</code> magic + version 3"]
+        
+        subgraph Stable["Stable Section (always preserved)"]
+            EP["Entry Points<br/><i>data.pkg.rule → PC</i>"]
+            Sources["Original Sources<br/><i>for recompilation</i>"]
+            RV["rego_v0 flag"]
+        end
+
+        subgraph Exec["Execution Section (regeneratable)"]
+            Instructions["Instructions<br/><i>Fixed-width 32-bit opcodes</i>"]
+            LitPool["Literal Pool<br/><i>BinaryValueSlice encoding</i>"]
+            ParamTables["Param Tables<br/><i>Loop, Call, Comprehension,<br/>PolicyOp params</i>"]
+            RuleTree["Rule Tree<br/><i>Conflict detection</i>"]
+            BuiltinTable["Builtin Info<br/><i>Resolved at load time</i>"]
+        end
+
+        Header --> Stable
+        Stable --> Exec
+    end
+
+    subgraph LoadTime["Load Time"]
+        Deserialize["Deserialize &<br/>Validate"]
+        ResolveBuiltins["Resolve Builtins<br/><i>Host plugs in fn ptrs</i>"]
+        
+        Deserialize --> ResolveBuiltins
+        
+        subgraph Fallback["Partial Load Fallback"]
+            Recompile["Recompile from<br/>stable sources ♻️"]
+        end
+    end
+
+    Compiler --> Artifact
+    Artifact --> Deserialize
+    Deserialize -.->|"exec section fails"| Recompile
+
+    ResolveBuiltins --> VM["⚙️ RegoVM<br/>Ready to execute"]
+
+    style CompileTime fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
+    style Artifact fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px
+    style Stable fill:#c8e6c9,stroke:#388e3c,stroke-width:2px
+    style Exec fill:#dcedc8,stroke:#689f38,stroke-width:2px
+    style LoadTime fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    style Fallback fill:#fff9c4,stroke:#f57f17,stroke-width:1px,stroke-dasharray:5
+    style VM fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px

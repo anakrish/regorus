@@ -890,7 +890,7 @@ when {
         },
         "policyRule": {
             "if": {
-                "field": "tags.costCenter",
+                "field": "tags['costCenter']",
                 "exists": "false"
             },
             "then": {
@@ -1284,576 +1284,500 @@ when {
                                                 language: 'azure'
                                         }
                                 ],
-                                'Azure Policy (Complex)': [
+                                'Azure Policy (E2E)': [
                                         {
-                                                name: "Require HTTPS (Storage)",
-                                                description: "Deny storage accounts that allow HTTP",
+                                                name: "NSG: Block Internet SSH",
+                                                description: "Real Azure built-in: SSH from Internet should be blocked. Uses deeply nested template expressions with port-range arithmetic (int, split, first, last, contains).",
                                                 policy: `{
-    "properties": {
-        "displayName": "Require HTTPS for storage accounts",
-        "policyType": "Custom",
-        "mode": "Indexed",
-        "description": "Deny storage accounts that allow HTTP traffic.",
-        "metadata": {
-            "version": "1.0.0",
-            "category": "Complex"
-        },
-        "version": "1.0.0",
-        "policyRule": {
-            "if": {
-                "allOf": [
-                    {
-                        "field": "type",
-                        "equals": "Microsoft.Storage/storageAccounts"
-                    },
-                    {
-                        "field": "properties.supportsHttpsTrafficOnly",
-                        "notEquals": true
-                    }
-                ]
-            },
-            "then": { "effect": "deny" }
-        }
-    },
-    "name": "require-https-storage",
-    "type": "Microsoft.Authorization/policyDefinitions"
-}`,
-                                                input: `{
-    "resource": {
-        "name": "storage-http",
-        "type": "Microsoft.Storage/storageAccounts",
-        "location": "westus2",
-        "properties": {
-            "supportsHttpsTrafficOnly": false
-        }
-    },
-    "context": {},
-    "parameters": {}
-}`,
-                                                language: 'azure'
-                                        },
-                                        {
-                                                name: "Allowed Locations (Parameterized)",
-                                                description: "Use parameters to enforce approved regions",
-                                                policy: `{
-    "properties": {
-        "displayName": "Allowed locations (parameterized)",
-        "policyType": "Custom",
-        "mode": "Indexed",
-        "description": "Restrict deployments to approved regions with a parameterized effect.",
-        "metadata": {
-            "version": "1.0.0",
-            "category": "Complex"
-        },
-        "version": "1.0.0",
-        "parameters": {
-            "allowedLocations": {
-                "type": "Array",
-                "metadata": {
-                    "displayName": "Allowed locations"
-                }
-            },
-            "effect": {
-                "type": "String",
-                "metadata": {
-                    "displayName": "Effect"
-                }
-            }
-        },
-        "policyRule": {
-            "if": {
-                "allOf": [
-                    {
-                        "field": "location",
-                        "notIn": "[parameters('allowedLocations')]"
-                    },
-                    {
-                        "field": "location",
-                        "notEquals": "global"
-                    },
-                    {
-                        "field": "type",
-                        "notEquals": "Microsoft.AzureActiveDirectory/b2cDirectories"
-                    }
-                ]
-            },
-            "then": {
-                "effect": "[parameters('effect')]"
-            }
-        }
-    },
-    "name": "allowed-locations-parameterized",
-    "type": "Microsoft.Authorization/policyDefinitions"
-}`,
-                                                input: `{
-    "resource": {
-        "name": "vm-north",
-        "type": "Microsoft.Compute/virtualMachines",
-        "location": "northeurope",
-        "properties": {}
-    },
-    "context": {},
+  "properties": {
+    "displayName": "[Deprecated]: SSH access from the Internet should be blocked",
+    "policyType": "BuiltIn",
+    "mode": "All",
     "parameters": {
-        "allowedLocations": ["eastus", "westus"],
-        "effect": "deny"
-    }
-}`,
-                                                language: 'azure'
-                                        },
-                                        {
-                                                name: "Require Environment Tag",
-                                                description: "Use concat() to check dynamic tag names",
-                                                policy: `{
-    "properties": {
-        "displayName": "Require environment tag",
-        "policyType": "Custom",
-        "mode": "Indexed",
-        "description": "Require a specific tag using a parameterized tag name.",
-        "metadata": {
-            "version": "1.0.0",
-            "category": "Complex"
-        },
-        "version": "1.0.0",
-        "parameters": {
-            "tagName": {
-                "type": "String",
-                "metadata": {
-                    "displayName": "Tag name"
-                }
-            }
-        },
-        "policyRule": {
-            "if": {
-                "allOf": [
-                    {
-                        "field": "type",
-                        "notEquals": "Microsoft.Resources/subscriptions"
+      "effect": {
+        "type": "string",
+        "defaultValue": "Audit",
+        "allowedValues": ["Audit", "Disabled"]
+      }
+    },
+    "policyRule": {
+      "if": {
+        "allOf": [
+          {
+            "field": "type",
+            "equals": "Microsoft.Network/networkSecurityGroups/securityRules"
+          },
+          {
+            "allOf": [
+              {
+                "field": "Microsoft.Network/networkSecurityGroups/securityRules/access",
+                "equals": "Allow"
+              },
+              {
+                "field": "Microsoft.Network/networkSecurityGroups/securityRules/direction",
+                "equals": "Inbound"
+              },
+              {
+                "anyOf": [
+                  {
+                    "field": "Microsoft.Network/networkSecurityGroups/securityRules/destinationPortRange",
+                    "equals": "*"
+                  },
+                  {
+                    "field": "Microsoft.Network/networkSecurityGroups/securityRules/destinationPortRange",
+                    "equals": "22"
+                  },
+                  {
+                    "value": "[if(and(not(empty(field('Microsoft.Network/networkSecurityGroups/securityRules/destinationPortRange'))), contains(field('Microsoft.Network/networkSecurityGroups/securityRules/destinationPortRange'),'-')), and(lessOrEquals(int(first(split(field('Microsoft.Network/networkSecurityGroups/securityRules/destinationPortRange'), '-'))),22),greaterOrEquals(int(last(split(field('Microsoft.Network/networkSecurityGroups/securityRules/destinationPortRange'), '-'))),22)), 'false')]",
+                    "equals": "true"
+                  },
+                  {
+                    "count": {
+                      "field": "Microsoft.Network/networkSecurityGroups/securityRules/destinationPortRanges[*]",
+                      "where": {
+                        "value": "[if(and(not(empty(first(field('Microsoft.Network/networkSecurityGroups/securityRules/destinationPortRanges[*]')))), contains(first(field('Microsoft.Network/networkSecurityGroups/securityRules/destinationPortRanges[*]')),'-')), and(lessOrEquals(int(first(split(first(field('Microsoft.Network/networkSecurityGroups/securityRules/destinationPortRanges[*]')), '-'))),22),greaterOrEquals(int(last(split(first(field('Microsoft.Network/networkSecurityGroups/securityRules/destinationPortRanges[*]')), '-'))),22)) , 'false')]",
+                        "equals": "true"
+                      }
                     },
-                    {
-                        "field": "[concat('tags[', parameters('tagName'), ']')]",
-                        "exists": false
+                    "greater": 0
+                  },
+                  {
+                    "not": {
+                      "field": "Microsoft.Network/networkSecurityGroups/securityRules/destinationPortRanges[*]",
+                      "notEquals": "*"
                     }
-                ]
-            },
-            "then": {
-                "effect": "deny",
-                "details": {
-                    "message": "Required tag is missing"
-                }
-            }
-        }
-    },
-    "name": "require-tag-environment",
-    "type": "Microsoft.Authorization/policyDefinitions"
-}`,
-                                                input: `{
-    "resource": {
-        "name": "vm-no-tags",
-        "type": "Microsoft.Compute/virtualMachines",
-        "location": "westus2",
-        "tags": {},
-        "properties": {}
-    },
-    "context": {},
-    "parameters": {
-        "tagName": "environment"
-    }
-}`,
-                                                language: 'azure'
-                                        },
-                                        {
-                                                name: "Deny Risky NSG Rules",
-                                                description: "Block inbound NSG rules with risky ports",
-                                                policy: `{
-    "properties": {
-        "displayName": "Deny risky inbound NSG rules",
-        "policyType": "Custom",
-        "mode": "All",
-        "description": "Deny inbound NSG rules that expose risky ports to the internet.",
-        "metadata": {
-            "version": "1.0.0",
-            "category": "Complex"
-        },
-        "version": "1.0.0",
-        "policyRule": {
-            "if": {
-                "allOf": [
-                    {
-                        "field": "type",
-                        "equals": "Microsoft.Network/networkSecurityGroups/securityRules"
-                    },
-                    {
-                        "field": "properties.direction",
-                        "equals": "Inbound"
-                    },
-                    {
-                        "field": "properties.access",
-                        "equals": "Allow"
-                    },
-                    {
-                        "anyOf": [
-                            {
-                                "field": "properties.destinationPortRange",
-                                "in": ["22", "3389", "*"]
-                            },
-                            {
-                                "field": "properties.sourceAddressPrefix",
-                                "in": ["*", "Internet", "0.0.0.0/0"]
-                            }
-                        ]
+                  },
+                  {
+                    "not": {
+                      "field": "Microsoft.Network/networkSecurityGroups/securityRules/destinationPortRanges[*]",
+                      "notEquals": "22"
                     }
+                  }
                 ]
-            },
-            "then": {
-                "effect": "deny",
-                "details": {
-                    "message": "Risky inbound NSG rules are not allowed"
-                }
-            }
-        }
-    },
-    "name": "deny-risky-nsg",
-    "type": "Microsoft.Authorization/policyDefinitions"
-}`,
-                                                input: `{
-    "resource": {
-        "name": "nsg-rule",
-        "type": "Microsoft.Network/networkSecurityGroups/securityRules",
-        "properties": {
-            "direction": "Inbound",
-            "access": "Allow",
-            "destinationPortRange": "22",
-            "sourceAddressPrefix": "*"
-        }
-    },
-    "context": {},
-    "parameters": {}
-}`,
-                                                language: 'azure'
-                                        },
-                                        {
-                                                name: "Modify: Add Missing Tags",
-                                                description: "Use modify operations to add required tags",
-                                                policy: `{
-    "properties": {
-        "displayName": "Modify - add tags",
-        "policyType": "Custom",
-        "mode": "Indexed",
-        "description": "Add missing environment and costCenter tags.",
-        "metadata": {
-            "version": "1.0.0",
-            "category": "Complex"
-        },
-        "version": "1.0.0",
-        "policyRule": {
-            "if": {
-                "allOf": [
-                    {
-                        "field": "type",
-                        "equals": "Microsoft.Compute/virtualMachines"
-                    },
-                    {
-                        "anyOf": [
-                            { "field": "tags.environment", "exists": false },
-                            { "field": "tags.costCenter", "exists": false }
-                        ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "field": "Microsoft.Network/networkSecurityGroups/securityRules/sourceAddressPrefix",
+                    "equals": "*"
+                  },
+                  {
+                    "field": "Microsoft.Network/networkSecurityGroups/securityRules/sourceAddressPrefix",
+                    "equals": "Internet"
+                  },
+                  {
+                    "not": {
+                      "field": "Microsoft.Network/networkSecurityGroups/securityRules/sourceAddressPrefixes[*]",
+                      "notEquals": "*"
                     }
-                ]
-            },
-            "then": {
-                "effect": "modify",
-                "details": {
-                    "roleDefinitionIds": [
-                        "/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c"
-                    ],
-                    "operations": [
-                        {
-                            "operation": "addOrReplace",
-                            "field": "tags['environment']",
-                            "value": "[if(empty(field('tags.environment')), 'unknown', field('tags.environment'))]"
-                        },
-                        {
-                            "operation": "addOrReplace",
-                            "field": "tags['costCenter']",
-                            "value": "[if(empty(field('tags.costCenter')), 'unassigned', field('tags.costCenter'))]"
-                        }
-                    ]
-                }
-            }
-        }
-    },
-    "name": "modify-add-tags",
-    "type": "Microsoft.Authorization/policyDefinitions"
-}`,
-                                                input: `{
-    "resource": {
-        "name": "vm-tags",
-        "type": "Microsoft.Compute/virtualMachines",
-        "tags": {
-            "environment": "prod"
-        },
-        "properties": {}
-    },
-    "context": {},
-    "parameters": {}
-}`,
-                                                language: 'azure'
-                                        },
-                                        {
-                                                name: "Count: Open NSG Rules",
-                                                description: "Use count/where to block open inbound rules",
-                                                policy: `{
-    "properties": {
-        "displayName": "Deny excessive open NSG rules",
-        "policyType": "Custom",
-        "mode": "All",
-        "description": "Deny NSGs with inbound allow rules from any source.",
-        "metadata": {
-            "version": "1.0.0",
-            "category": "Complex"
-        },
-        "version": "1.0.0",
-        "policyRule": {
-            "if": {
-                "allOf": [
-                    {
-                        "field": "type",
-                        "equals": "Microsoft.Network/networkSecurityGroups"
-                    },
-                    {
-                        "count": {
-                            "field": "securityRules[*]",
-                            "where": {
-                                "allOf": [
-                                    {
-                                        "field": "securityRules[*].access",
-                                        "equals": "Allow"
-                                    },
-                                    {
-                                        "field": "securityRules[*].direction",
-                                        "equals": "Inbound"
-                                    },
-                                    {
-                                        "field": "securityRules[*].sourceAddressPrefix",
-                                        "equals": "*"
-                                    }
-                                ]
-                            }
-                        },
-                        "greater": 0
+                  },
+                  {
+                    "not": {
+                      "field": "Microsoft.Network/networkSecurityGroups/securityRules/sourceAddressPrefixes[*]",
+                      "notEquals": "Internet"
                     }
+                  }
                 ]
-            },
-            "then": { "effect": "deny" }
-        }
-    },
-    "name": "deny-open-nsg",
-    "type": "Microsoft.Authorization/policyDefinitions"
-}`,
-                                                input: `{
-    "resource": {
-        "name": "nsg-open",
-        "type": "Microsoft.Network/networkSecurityGroups",
-        "securityRules": [
-            {
-                "access": "Allow",
-                "direction": "Inbound",
-                "sourceAddressPrefix": "*"
-            }
+              }
+            ]
+          }
         ]
-    },
-    "context": {},
-    "parameters": {}
-}`,
-                                                language: 'azure'
-                                        },
-                                        {
-                                                name: "Required Tags (Value Count)",
-                                                description: "Count required tags using value + current()",
-                                                policy: `{
-    "properties": {
-        "displayName": "Required tags (value count)",
-        "policyType": "Custom",
-        "mode": "Indexed",
-        "description": "Require all tags from the required list to be present.",
-        "metadata": {
-            "version": "1.0.0",
-            "category": "Complex"
-        },
-        "version": "1.0.0",
-        "parameters": {
-            "requiredTags": {
-                "type": "Array",
-                "metadata": {
-                    "displayName": "Required tags"
-                }
-            }
-        },
-        "policyRule": {
-            "if": {
-                "allOf": [
-                    {
-                        "field": "type",
-                        "notEquals": "Microsoft.Resources/subscriptions"
-                    },
-                    {
-                        "count": {
-                            "value": "[parameters('requiredTags')]",
-                            "name": "tagName",
-                            "where": {
-                                "field": "[concat('tags[', current('tagName'), ']')]",
-                                "exists": true
-                            }
-                        },
-                        "notEquals": "[length(parameters('requiredTags'))]"
-                    }
-                ]
-            },
-            "then": {
-                "effect": "deny",
-                "details": {
-                    "message": "Not all required tags are present"
-                }
-            }
-        }
-    },
-    "name": "required-tags-value-count",
-    "type": "Microsoft.Authorization/policyDefinitions"
-}`,
-                                                input: `{
-    "resource": {
-        "name": "vm-tags",
-        "type": "Microsoft.Compute/virtualMachines",
-        "tags": {
-            "environment": "prod",
-            "costCenter": "12345"
-        },
-        "properties": {}
-    },
-    "context": {},
-    "parameters": {
-        "requiredTags": ["environment", "costCenter", "owner"]
+      },
+      "then": {
+        "effect": "[parameters('effect')]"
+      }
     }
+  }
+}`,
+                                                input: `{
+  "resource": {
+    "name": "allow-ssh-internet",
+    "type": "Microsoft.Network/networkSecurityGroups/securityRules",
+    "properties": {
+      "access": "Allow",
+      "direction": "Inbound",
+      "destinationPortRange": "22",
+      "sourceAddressPrefix": "Internet"
+    }
+  },
+  "context": {},
+  "parameters": {}
 }`,
                                                 language: 'azure'
                                         },
                                         {
-                                                name: "Multi-Type With Not",
-                                                description: "Combine not/anyOf with allowed locations",
+                                                name: "NIC: No Public IPs",
+                                                description: "Real Azure built-in: Network interfaces should not have public IPs. Uses double-negation pattern (not + notLike) with a wildcard array alias.",
                                                 policy: `{
-    "properties": {
-        "displayName": "Multi-resource type with not",
-        "policyType": "Custom",
-        "mode": "All",
-        "description": "Deny resources outside allowed locations unless excluded types.",
-        "metadata": {
-            "version": "1.0.0",
-            "category": "Complex"
-        },
-        "version": "1.0.0",
-        "parameters": {
-            "allowedLocations": {
-                "type": "Array",
-                "metadata": {
-                    "displayName": "Allowed locations"
-                }
-            },
-            "effect": {
-                "type": "String",
-                "metadata": {
-                    "displayName": "Effect"
-                }
+  "properties": {
+    "displayName": "Network interfaces should not have public IPs",
+    "policyType": "BuiltIn",
+    "mode": "Indexed",
+    "parameters": {},
+    "policyRule": {
+      "if": {
+        "allOf": [
+          {
+            "field": "type",
+            "equals": "Microsoft.Network/networkInterfaces"
+          },
+          {
+            "not": {
+              "field": "Microsoft.Network/networkInterfaces/ipConfigurations[*].publicIPAddress.id",
+              "notLike": "*"
             }
-        },
-        "policyRule": {
-            "if": {
-                "allOf": [
-                    {
-                        "not": {
-                            "anyOf": [
-                                { "field": "type", "equals": "Microsoft.Resources/subscriptions" },
-                                { "field": "type", "equals": "Microsoft.Resources/subscriptions/resourceGroups" },
-                                { "field": "type", "equals": "Microsoft.Authorization/roleAssignments" }
-                            ]
-                        }
-                    },
-                    {
-                        "field": "location",
-                        "notIn": "[parameters('allowedLocations')]"
-                    }
-                ]
-            },
-            "then": {
-                "effect": "[parameters('effect')]",
-                "details": {
-                    "message": "Resource location is not in the allowed list"
-                }
-            }
-        }
-    },
-    "name": "multi-type-with-not",
-    "type": "Microsoft.Authorization/policyDefinitions"
-}`,
-                                                input: `{
-    "resource": {
-        "name": "vm-sea",
-        "type": "Microsoft.Compute/virtualMachines",
-        "location": "southeastasia",
-        "properties": {}
-    },
-    "context": {},
-    "parameters": {
-        "allowedLocations": ["eastus", "westus", "centralus"],
+          }
+        ]
+      },
+      "then": {
         "effect": "deny"
+      }
     }
+  }
+}`,
+                                                input: `{
+  "resource": {
+    "name": "nic-public",
+    "type": "Microsoft.Network/networkInterfaces",
+    "properties": {
+      "ipConfigurations": [
+        {
+          "properties": {
+            "privateIPAddress": "10.0.0.4",
+            "publicIPAddress": {
+              "id": "/subscriptions/sub1/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/pip1"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "context": {},
+  "parameters": {}
 }`,
                                                 language: 'azure'
                                         },
                                         {
-                                                name: "Exists + Value Checks",
-                                                description: "Mix exists with value comparisons",
+                                                name: "Cosmos DB: Require Firewall",
+                                                description: "Real Azure built-in: Cosmos DB accounts should have firewall rules. Features 4-level nested allOf/anyOf with 3 separate count expressions.",
                                                 policy: `{
-    "properties": {
-        "displayName": "Exists and value checks",
-        "policyType": "Custom",
-        "mode": "Indexed",
-        "description": "Deny when networkAcls exist but default action is not Deny.",
-        "metadata": {
-            "version": "1.0.0",
-            "category": "Complex"
-        },
-        "version": "1.0.0",
-        "policyRule": {
-            "if": {
-                "allOf": [
-                    { "field": "type", "equals": "Microsoft.Storage/storageAccounts" },
-                    { "field": "properties.networkAcls", "exists": true },
-                    { "field": "properties.networkAcls.defaultAction", "notEquals": "Deny" }
-                ]
-            },
-            "then": { "effect": "deny" }
-        }
+  "properties": {
+    "displayName": "Azure Cosmos DB accounts should have firewall rules",
+    "policyType": "BuiltIn",
+    "mode": "All",
+    "parameters": {
+      "effect": {
+        "type": "String",
+        "allowedValues": ["Audit", "Deny", "Disabled"],
+        "defaultValue": "Deny"
+      }
     },
-    "name": "exists-and-value-check",
-    "type": "Microsoft.Authorization/policyDefinitions"
+    "policyRule": {
+      "if": {
+        "allOf": [
+          {
+            "field": "type",
+            "equals": "Microsoft.DocumentDB/databaseAccounts"
+          },
+          {
+            "anyOf": [
+              {
+                "field": "Microsoft.DocumentDB/databaseAccounts/publicNetworkAccess",
+                "exists": "false"
+              },
+              {
+                "field": "Microsoft.DocumentDB/databaseAccounts/publicNetworkAccess",
+                "equals": "Enabled"
+              }
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "field": "Microsoft.DocumentDB/databaseAccounts/isVirtualNetworkFilterEnabled",
+                "exists": "false"
+              },
+              {
+                "field": "Microsoft.DocumentDB/databaseAccounts/isVirtualNetworkFilterEnabled",
+                "equals": "false"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "anyOf": [
+                  {
+                    "field": "Microsoft.DocumentDB/databaseAccounts/ipRules",
+                    "exists": "false"
+                  },
+                  {
+                    "count": {
+                      "field": "Microsoft.DocumentDB/databaseAccounts/ipRules[*]"
+                    },
+                    "equals": 0
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "field": "Microsoft.DocumentDB/databaseAccounts/ipRangeFilter",
+                    "exists": "false"
+                  },
+                  {
+                    "field": "Microsoft.DocumentDB/databaseAccounts/ipRangeFilter",
+                    "equals": ""
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "count": {
+                      "field": "Microsoft.DocumentDB/databaseAccounts/privateEndpointConnections[*]",
+                      "where": {
+                        "field": "Microsoft.DocumentDB/databaseAccounts/privateEndpointConnections[*].privateLinkServiceConnectionState.status",
+                        "equals": "Approved"
+                      }
+                    },
+                    "less": 1
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "then": {
+        "effect": "[parameters('effect')]"
+      }
+    }
+  }
 }`,
                                                 input: `{
-    "resource": {
-        "name": "storage-allow",
-        "type": "Microsoft.Storage/storageAccounts",
-        "properties": {
-            "networkAcls": {
-                "defaultAction": "Allow"
-            }
-        }
+  "resource": {
+    "name": "cosmos-open",
+    "type": "Microsoft.DocumentDB/databaseAccounts",
+    "properties": {
+      "publicNetworkAccess": "Enabled",
+      "isVirtualNetworkFilterEnabled": false,
+      "ipRules": [],
+      "ipRangeFilter": "",
+      "privateEndpointConnections": []
+    }
+  },
+  "context": {},
+  "parameters": {}
+}`,
+                                                language: 'azure'
+                                        },
+                                        {
+                                                name: "Cosmos DB: Allowed Locations",
+                                                description: "Real Azure built-in: Cosmos DB allowed locations. Uses count/where with chained template functions: replace(toLower(first(field(...))), ' ', '') to normalize location names.",
+                                                policy: `{
+  "properties": {
+    "displayName": "Azure Cosmos DB allowed locations",
+    "policyType": "BuiltIn",
+    "mode": "Indexed",
+    "parameters": {
+      "listOfAllowedLocations": {
+        "type": "Array",
+        "metadata": {
+          "displayName": "Allowed locations",
+          "strongType": "location"
+        },
+        "defaultValue": ["eastus", "westus2"]
+      },
+      "policyEffect": {
+        "type": "String",
+        "allowedValues": ["audit", "Audit", "deny", "Deny", "disabled", "Disabled"],
+        "defaultValue": "Deny"
+      }
     },
-    "context": {},
-    "parameters": {}
+    "policyRule": {
+      "if": {
+        "allOf": [
+          {
+            "field": "type",
+            "equals": "Microsoft.DocumentDB/databaseAccounts"
+          },
+          {
+            "count": {
+              "field": "Microsoft.DocumentDB/databaseAccounts/Locations[*]",
+              "where": {
+                "value": "[replace(toLower(first(field('Microsoft.DocumentDB/databaseAccounts/Locations[*].locationName'))), ' ', '')]",
+                "in": "[parameters('listOfAllowedLocations')]"
+              }
+            },
+            "notEquals": "[length(field('Microsoft.DocumentDB/databaseAccounts/Locations[*]'))]"
+          }
+        ]
+      },
+      "then": {
+        "effect": "[parameters('policyEffect')]"
+      }
+    }
+  }
+}`,
+                                                input: `{
+  "resource": {
+    "name": "cosmos-bad-location",
+    "type": "Microsoft.DocumentDB/databaseAccounts",
+    "properties": {
+      "Locations": [
+        { "locationName": "East US" },
+        { "locationName": "North Europe" }
+      ]
+    }
+  },
+  "context": {},
+  "parameters": {}
+}`,
+                                                language: 'azure'
+                                        },
+                                        {
+                                                name: "Tags: Inherit from Resource Group",
+                                                description: "Real Azure built-in: Inherit a tag from the resource group. Uses modify effect, resourceGroup() template function, and concat() to build a dynamic tag field path.",
+                                                policy: `{
+  "properties": {
+    "displayName": "Inherit a tag from the resource group",
+    "policyType": "BuiltIn",
+    "mode": "Indexed",
+    "parameters": {
+      "tagName": {
+        "type": "String",
+        "metadata": {
+          "displayName": "Tag Name",
+          "description": "Name of the tag, such as 'environment'"
+        },
+        "defaultValue": "environment"
+      }
+    },
+    "policyRule": {
+      "if": {
+        "allOf": [
+          {
+            "field": "[concat('tags[', parameters('tagName'), ']')]",
+            "notEquals": "[resourceGroup().tags[parameters('tagName')]]"
+          },
+          {
+            "value": "[resourceGroup().tags[parameters('tagName')]]",
+            "notEquals": ""
+          }
+        ]
+      },
+      "then": {
+        "effect": "modify",
+        "details": {
+          "roleDefinitionIds": [
+            "/providers/microsoft.authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c"
+          ],
+          "operations": [
+            {
+              "operation": "addOrReplace",
+              "field": "[concat('tags[', parameters('tagName'), ']')]",
+              "value": "[resourceGroup().tags[parameters('tagName')]]"
+            }
+          ]
+        }
+      }
+    }
+  }
+}`,
+                                                input: `{
+  "resource": {
+    "name": "vm-wrong-env",
+    "type": "Microsoft.Compute/virtualMachines",
+    "tags": {
+      "environment": "dev"
+    },
+    "properties": {}
+  },
+  "context": {
+    "resourceGroup": {
+      "tags": {
+        "environment": "production"
+      }
+    }
+  },
+  "parameters": {}
+}`,
+                                                language: 'azure'
+                                        },
+                                        {
+                                                name: "VM: Require Managed Disks",
+                                                description: "Real Azure built-in: Audit VMs that do not use managed disks. Targets both Microsoft.Compute/virtualMachines (osDisk.uri) and VirtualMachineScaleSets (vhdContainers / imageUrl).",
+                                                policy: `{
+  "properties": {
+    "displayName": "Audit VMs that do not use managed disks",
+    "policyType": "BuiltIn",
+    "mode": "All",
+    "parameters": {},
+    "policyRule": {
+      "if": {
+        "anyOf": [
+          {
+            "allOf": [
+              {
+                "field": "type",
+                "equals": "Microsoft.Compute/virtualMachines"
+              },
+              {
+                "field": "Microsoft.Compute/virtualMachines/osDisk.Uri",
+                "exists": "True"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "field": "type",
+                "equals": "Microsoft.Compute/VirtualMachineScaleSets"
+              },
+              {
+                "anyOf": [
+                  {
+                    "field": "Microsoft.Compute/VirtualMachineScaleSets/osDisk.vhdContainers",
+                    "exists": "True"
+                  },
+                  {
+                    "field": "Microsoft.Compute/VirtualMachineScaleSets/osdisk.imageUrl",
+                    "exists": "True"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "then": {
+        "effect": "audit"
+      }
+    }
+  }
+}`,
+                                                input: `{
+  "resource": {
+    "name": "legacy-vm",
+    "type": "Microsoft.Compute/virtualMachines",
+    "location": "eastus",
+    "properties": {
+      "storageProfile": {
+        "osDisk": {
+          "vhd": {
+            "uri": "https://mystorage.blob.core.windows.net/vhds/osdisk.vhd"
+          }
+        }
+      }
+    }
+  },
+  "context": {},
+  "parameters": {}
 }`,
                                                 language: 'azure'
                                         }
                                 ]
-                        }
                         }
                 };
 
@@ -1934,7 +1858,7 @@ when {
         },
         "policyRule": {
             "if": {
-                "field": "tags.costCenter",
+                "field": "tags['costCenter']",
                 "exists": "false"
             },
             "then": {
@@ -2765,6 +2689,11 @@ when {
 
         // Add change listeners
         this.editors.policy.onDidChangeModelContent(() => {
+            // Invalidate the cached program whenever the policy text changes
+            // (covers both manual edits and example loads via applyExample).
+            // Without this, switching examples reuses the stale compiled
+            // program from the previous policy, producing wrong results.
+            this.currentProgram = null;
             if (this.settings.autoEvaluate) {
                 this.debounce(() => this.compile(), 1000);
             }
@@ -3747,8 +3676,10 @@ when {
             throw new Error('Azure Policy resource must be a JSON object');
         }
 
+        const normalizedResource = this.normalizeAzureResource(resolvedResource);
+
         return {
-            resource: this.normalizeAzureResource(resolvedResource),
+            resource: normalizedResource,
             context,
             parameters
         };
@@ -3832,9 +3763,43 @@ when {
             normalized.apiVersion = this.azureDefaultApiVersion;
         }
 
-        const aliases = this.getAzureAliasesForType(resource.type);
-        if (aliases) {
-            this.applyAzureAliasEntries(normalized, resource, aliases, resource.type);
+        // Look up aliases for the resource type.
+        //
+        // The alias catalog is indexed by the directly registered resource type
+        // (e.g. "Microsoft.Network/networkSecurityGroups"). Child resource types
+        // such as "Microsoft.Network/networkSecurityGroups/securityRules" are NOT
+        // separate entries in the catalog; their aliases are stored under the
+        // parent type with fully-qualified names like
+        // "Microsoft.Network/networkSecurityGroups/securityRules/access".
+        //
+        // When a direct lookup returns nothing we try the catalog parent type
+        // and filter to only the aliases matching the child-type prefix. We still
+        // pass the FULL child type as `resourceType` to applyAzureAliasEntries so
+        // that it strips the complete prefix and produces short names like
+        // "access" instead of "securityRules/access".
+        let aliases = this.getAzureAliasesForType(resource.type);
+        let effectiveType = resource.type || '';
+
+        if (!aliases && resource.type) {
+            const parts = resource.type.split('/');
+            // A child resource type has at least 3 segments: namespace/parent/child
+            // e.g. Microsoft.Network / networkSecurityGroups / securityRules
+            if (parts.length >= 3) {
+                const parentType = `${parts[0]}/${parts[1]}`;
+                const parentAliases = this.getAzureAliasesForType(parentType);
+                if (parentAliases) {
+                    const childPrefix = `${resource.type}/`.toLowerCase();
+                    aliases = parentAliases.filter(a =>
+                        (a.name || '').toLowerCase().startsWith(childPrefix)
+                    );
+                    // effectiveType stays as the full child type so the prefix
+                    // stripping in applyAzureAliasEntries produces bare property names.
+                }
+            }
+        }
+
+        if (aliases && aliases.length > 0) {
+            this.applyAzureAliasEntries(normalized, resource, aliases, effectiveType);
         }
 
         return normalized;
@@ -3869,7 +3834,10 @@ when {
             if (value === undefined) {
                 return;
             }
-            this.setNestedValue(target, shortName, value);
+            // The RVM compiler lowercases alias paths (resolve_alias_path calls
+            // .to_lowercase()), so the normalized key must also be lowercase to
+            // match what the compiled program accesses.
+            this.setNestedValue(target, shortName.toLowerCase(), value);
         });
     }
 

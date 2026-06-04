@@ -1,0 +1,20 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '15px'}}}%%
+graph LR
+    subgraph Playground["🎮 RVM Playground — Try Any Policy Language in Your Browser"]
+        direction LR
+        E["✏️ WRITE<br/>━━━━━━━━━━<br/>Monaco Editor<br/>Syntax highlight<br/>Example library"] ==>
+        C["⚡ COMPILE<br/>━━━━━━━━━━<br/>See bytecode<br/>Instruction count<br/>Error reporting"] ==>
+        R["▶️ RUN<br/>━━━━━━━━━━<br/>Custom input<br/>Set data<br/>Instant results"] ==>
+        D["🔍 INSPECT<br/>━━━━━━━━━━<br/>View assembly<br/>Step through<br/>Compare langs"]
+    end
+
+    Power["🦀 Powered by WASM<br/>Full Regorus engine in browser<br/>No server required"]
+
+    Playground ==> Power
+
+    style Playground fill:#e3f2fd,stroke:#1565c0,stroke-width:3px
+    style E fill:#bbdefb,stroke:#1565c0
+    style C fill:#fff9c4,stroke:#f9a825
+    style R fill:#c8e6c9,stroke:#388e3c
+    style D fill:#e1bee7,stroke:#8e24aa
+    style Power fill:#fff3e0,stroke:#ef6c00,stroke-width:2px

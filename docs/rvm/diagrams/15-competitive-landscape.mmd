@@ -1,0 +1,31 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '14px'}}}%%
+graph LR
+    subgraph Others["Traditional Engines"]
+        direction TB
+        OPA["OPA (Go)<br/>━━━━━━━━━━<br/>✅ Rego only<br/>❌ Go runtime overhead<br/>❌ Single language<br/>❌ Not embeddable"]
+        CedarE["Cedar SDK<br/>━━━━━━━━━━<br/>✅ Cedar only<br/>❌ Single language<br/>❌ No bytecode<br/>❌ Tree-walker"]
+        Custom["Custom Engines<br/>━━━━━━━━━━<br/>⚠️ One-off builds<br/>❌ N × maintenance<br/>❌ No shared tooling<br/>❌ Expensive audit"]
+    end
+
+    VS["⚔️<br/>vs"]
+
+    subgraph RVMBlock["⚙️ Regorus / RVM"]
+        direction TB
+        R1["✅ Multi-language: Rego + Cedar + Azure Policy + RBAC"]
+        R2["✅ Compiled register-based bytecode"]
+        R3["✅ Rust core — memory safe, no_std"]
+        R4["✅ 8 language bindings"]
+        R5["✅ WASM playground in browser"]
+        R6["✅ Suspendable execution & debugging"]
+        R7["✅ Portable binary artifacts"]
+        R8["✅ Open source (MIT)"]
+    end
+
+    Others --> VS --> RVMBlock
+
+    style Others fill:#ffebee,stroke:#c62828,stroke-width:2px
+    style VS fill:#fff9c4,stroke:#f57f17,stroke-width:2px
+    style RVMBlock fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px
+    style OPA fill:#ffcdd2,stroke:#c62828
+    style CedarE fill:#ffcdd2,stroke:#c62828
+    style Custom fill:#ffcdd2,stroke:#c62828

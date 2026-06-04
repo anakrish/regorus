@@ -1,0 +1,35 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '15px'}}}%%
+graph LR
+    subgraph Sources["Policy Sources"]
+        direction TB
+        AP["☁️ Azure Policy"]
+        RBAC["🔐 Azure RBAC"]
+        AKS["📦 AKS Admission"]
+        OPA["🦎 OPA / Rego"]
+        CedarL["🌲 Cedar"]
+    end
+
+    Center["⚙️ One Secure, Audited<br/>High-Performance Engine<br/>━━━━━━━━━━━━━━━━━━━<br/>Regorus Virtual Machine"]
+
+    subgraph Deploy["Deployment Targets"]
+        direction TB
+        CloudD["☁️ Cloud Scale"]
+        EdgeD["📱 Edge / IoT"]
+        BrowserD["🌐 Browser WASM"]
+        TEED["🔒 Confidential Compute"]
+    end
+
+    subgraph Langs["Language Bindings"]
+        direction TB
+        R1["Rust · C · C++"]
+        R2["C# · Go · Java"]
+        R3["Python · Ruby · JS"]
+    end
+
+    Sources ==> Center ==> Deploy
+    Center ==> Langs
+
+    style Sources fill:#e3f2fd,stroke:#0078d4,stroke-width:2px
+    style Center fill:#1b5e20,stroke:#1b5e20,stroke-width:3px,color:#fff
+    style Deploy fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    style Langs fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px

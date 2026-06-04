@@ -1,0 +1,37 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '15px'}}}%%
+graph LR
+    subgraph Before["❌ Before: Interpreted"]
+        direction TB
+        B1["🐌 Expensive function calls"]
+        B2["📦 ~18 heap allocs / eval"]
+        B3["🔄 Evaluate ALL conditions"]
+        B4["🏗️ Separate engine per lang"]
+        B5["⏱️ Baseline: 1×"]
+    end
+
+    Arrow["🔄<br/>Transform"]
+
+    subgraph After["✅ After: RVM Compiled"]
+        direction TB
+        A1["⚡ Native register ops"]
+        A2["📦 ZERO heap allocs"]
+        A3["🎯 Short-circuit skip"]
+        A4["🔄 One engine, N front-ends"]
+        A5["⏱️ Up to 100× faster"]
+    end
+
+    subgraph Scale["🏢 At Scale: 1000 resources × 100 policies"]
+        direction TB
+        S1["Most resources fail type check"]
+        S2["⚡ Short-circuit skips 90%+ work"]
+        S3["📊 Multiplicative savings"]
+    end
+
+    Before --> Arrow --> After ==> Scale
+
+    style Before fill:#ffebee,stroke:#c62828,stroke-width:2px
+    style After fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    style Scale fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    style Arrow fill:#fff9c4,stroke:#f57f17,stroke-width:2px
+    style A5 fill:#66bb6a,stroke:#1b5e20,stroke-width:2px,color:#fff
+    style B5 fill:#ef9a9a,stroke:#b71c1c,stroke-width:2px

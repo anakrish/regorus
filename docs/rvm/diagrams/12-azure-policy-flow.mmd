@@ -1,0 +1,25 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '14px'}}}%%
+sequenceDiagram
+    participant Dev as 👩‍💻 Developer
+    participant ARM as ☁️ Azure Resource Manager
+    participant RVM as ⚙️ RVM Engine
+    participant Store as 📁 Policy Store
+
+    Note over Dev,Store: Policy authoring (one-time)
+    Dev->>Store: Write Azure Policy (JSON)
+    Store->>RVM: Compile to bytecode
+    RVM-->>Store: 📦 Portable artifact stored
+
+    Note over Dev,Store: Resource deployment (every request)
+    Dev->>ARM: Create Storage Account
+    ARM->>RVM: Evaluate against all policies
+    
+    Note over RVM: ⚡ Short-circuit evaluation:<br/>Check type first → skip 90%<br/>Zero heap allocations<br/>Cached rule results
+    
+    RVM-->>ARM: ✅ Allow / ❌ Deny
+    ARM-->>Dev: Deployment result
+
+    Note over Dev,Store: Same engine, different language
+    Dev->>Store: Write Cedar policy
+    Store->>RVM: Compile to SAME bytecode
+    RVM-->>Store: 📦 Same format, same engine

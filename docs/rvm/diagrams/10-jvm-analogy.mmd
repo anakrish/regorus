@@ -1,0 +1,29 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '16px'}}}%%
+graph LR
+    subgraph JVM["☕ JVM Model — Apps"]
+        direction LR
+        JL["Java · Kotlin<br/>Scala · Groovy"] --> JC["Compilers"] --> JB["☕ Java<br/>Bytecode"] --> JR["JVM:<br/>Any Platform"]
+    end
+
+    subgraph RVMModel["⚙️ RVM Model — Policy"]
+        direction LR
+        RL["Rego · Cedar<br/>Azure Policy · RBAC"] --> RC["Compilers"] --> RB["⚙️ RVM<br/>Bytecode"] --> RR["RVM:<br/>Any Platform"]
+    end
+
+    subgraph Impact["💡 Why This Matters"]
+        direction TB
+        I1["🔒 One security surface"]
+        I2["⚡ One engine to optimize"]
+        I3["🧪 One test framework"]
+        I4["📦 One artifact to ship"]
+        I5["🌍 Any language, anywhere"]
+    end
+
+    JVM ~~~ RVMModel
+    RVMModel ==> Impact
+
+    style JVM fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
+    style RVMModel fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px
+    style Impact fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    style JB fill:#ffe0b2,stroke:#e65100,stroke-width:2px
+    style RB fill:#a5d6a7,stroke:#2e7d32,stroke-width:2px

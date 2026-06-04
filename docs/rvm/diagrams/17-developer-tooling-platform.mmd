@@ -1,0 +1,70 @@
+%%{ init: { "theme": "base", "themeVariables": { "fontSize": "16px" } } }%%
+graph LR
+    subgraph Languages["Policy Languages"]
+        R[🦎 Rego]
+        C[🌲 Cedar]
+        AP[☁️ Azure Policy]
+        RBAC[🔐 Azure RBAC]
+        Future[🔮 Future DSLs]
+    end
+
+    subgraph RVM["⚙️ RVM Shared Foundation"]
+        Parser["📝 Unified Parser<br/>AST / IR"]
+        Compiler["⚡ Compiler<br/>Bytecode"]
+        Runtime["🚀 Runtime<br/>Registers + Eval"]
+    end
+
+    subgraph Tooling["🛠️ Build Once — Works for ALL Languages"]
+        direction LR
+        subgraph Editor["Editor Experience"]
+            LSP["📡 LSP Server<br/>Any Editor"]
+            VSCode["💡 VS Code Extension<br/>IntelliSense"]
+            Hover["🔍 Hover / Go-to-Def<br/>Autocomplete"]
+        end
+        subgraph Quality["Code Quality"]
+            Linter["🔎 Linter<br/>Best Practices"]
+            Formatter["✨ Formatter<br/>Consistent Style"]
+            StaticAnalysis["🧪 Static Analysis<br/>Dead Rules / Conflicts"]
+        end
+        subgraph DevOps["DevOps & CI"]
+            TestFW["🧪 Test Framework<br/>Coverage Reports"]
+            DocGen["📄 Doc Generator<br/>Policy Catalog"]
+            CICD["🔄 CI/CD Plugin<br/>Policy Gates"]
+        end
+    end
+
+    subgraph Intelligence["🧠 Policy Intelligence — Formal Analysis"]
+        Z3["🔬 Z3-powered<br/>Satisfiability"]
+        Conflict["🔍 Conflict &<br/>Redundancy Detection"]
+        Equiv["🔒 Policy<br/>Equivalence Proofs"]
+        Reach["📊 Coverage &<br/>Reachability Analysis"]
+    end
+
+    R --> Parser
+    C --> Parser
+    AP --> Parser
+    RBAC --> Parser
+    Future --> Parser
+    Parser --> Compiler --> Runtime
+
+    Runtime --> LSP
+    Runtime --> VSCode
+    Runtime --> Hover
+    Runtime --> Linter
+    Runtime --> Formatter
+    Runtime --> StaticAnalysis
+    Runtime --> TestFW
+    Runtime --> DocGen
+    Runtime --> CICD
+    Runtime --> Z3
+    Runtime --> Conflict
+    Runtime --> Equiv
+    Runtime --> Reach
+
+    style Languages fill:#E3F2FD,stroke:#1565C0,stroke-width:2px
+    style RVM fill:#E8F5E9,stroke:#2E7D32,stroke-width:3px
+    style Tooling fill:#FFF3E0,stroke:#EF6C00,stroke-width:2px
+    style Editor fill:#E1BEE7,stroke:#7B1FA2,stroke-width:1px
+    style Quality fill:#FFECB3,stroke:#F57F17,stroke-width:1px
+    style DevOps fill:#B2DFDB,stroke:#00695C,stroke-width:1px
+    style Intelligence fill:#F3E5F5,stroke:#4A148C,stroke-width:2px

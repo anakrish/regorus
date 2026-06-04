@@ -1,0 +1,51 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '14px'}}}%%
+graph LR
+    subgraph Core["Regorus Core (Rust)"]
+        RVM["⚙️ RVM Engine<br/><i>Register-based VM</i><br/><i>no_std compatible</i>"]
+    end
+
+    subgraph FFI["FFI Layer"]
+        CFFI["C ABI"]
+    end
+
+    subgraph Bindings["Language Bindings"]
+        direction TB
+        C["C"]
+        CPP["C++"]
+        CS["C#"]
+        Go["Go"]
+        Java["Java"]
+        Python["Python"]
+        Ruby["Ruby"]
+        JS["JavaScript"]
+    end
+
+    subgraph Targets["Deployment Targets"]
+        direction TB
+        Cloud["☁️ Cloud Services<br/><i>Azure, AWS, GCP</i>"]
+        Browser["🌐 Browser/Edge<br/><i>WASM Playground</i>"]
+        Embedded["🔧 Embedded<br/><i>IoT, TEE, no_std</i>"]
+        Server["🖥️ Server<br/><i>Linux, Windows, macOS</i>"]
+    end
+
+    RVM --> CFFI
+    RVM -->|"WASM"| JS
+
+    CFFI --> C
+    CFFI --> CPP
+    CFFI --> CS
+    CFFI --> Go
+    CFFI --> Java
+    CFFI --> Python
+    CFFI --> Ruby
+
+    Bindings --> Cloud
+    Bindings --> Server
+    JS --> Browser
+    RVM --> Embedded
+
+    style Core fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px
+    style RVM fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
+    style FFI fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
+    style Bindings fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    style Targets fill:#fce4ec,stroke:#c62828,stroke-width:2px

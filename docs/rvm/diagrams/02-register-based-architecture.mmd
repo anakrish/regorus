@@ -1,0 +1,51 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '13px'}}}%%
+graph TB
+    subgraph VM["RegoVM Runtime"]
+        direction TB
+        
+        subgraph Core["Execution Core"]
+            PC["Program Counter<br/>━━━━━━━━━━<br/>pc: usize"]
+            Regs["Register Window<br/>━━━━━━━━━━<br/>r0 r1 r2 r3 r4<br/>r5 r6 r7 r8 ..."]
+            Dispatch["Instruction Dispatcher<br/>━━━━━━━━━━<br/>Load → Arith → Compare<br/>→ Call → Collection<br/>→ Loop → VirtualData"]
+        end
+
+        subgraph Stacks["Control Stacks"]
+            LoopStack["🔄 Loop Stack<br/><i>LoopContext[]</i><br/>Mode: Any|Every|ForEach"]
+            CompStack["📋 Comprehension Stack<br/><i>ComprehensionContext[]</i><br/>Set|Array|Object builders"]
+            CallStack["📞 Call Rule Stack<br/><i>CallRuleContext[]</i><br/>Nested rule evaluation"]
+            RegStack["💾 Register Stack<br/><i>Saved windows for<br/>rule call/return</i>"]
+        end
+
+        subgraph Caches["Caching Layer"]
+            RuleCache["📊 Rule Cache<br/><i>Memoized results<br/>per rule index</i>"]
+            EvalCache["🗂️ Evaluation Cache<br/><i>Virtual document<br/>path results</i>"]
+            RegPool["♻️ Register Pool<br/><i>Recycled windows<br/>minimize allocations</i>"]
+        end
+    end
+
+    subgraph Inputs["Host-Provided Data"]
+        Data["📁 data<br/><i>Policy data document</i>"]
+        Input["📥 input<br/><i>Request/resource</i>"]
+        HostResp["🔗 Host Await Responses<br/><i>External lookups</i>"]
+    end
+
+    subgraph Program["Compiled Program"]
+        InstStream["Instruction Stream"]
+        LitPool["Literal Pool"]
+        InstData["InstructionData<br/><i>Params tables</i>"]
+        Builtins["Resolved Builtins<br/><i>Function pointers</i>"]
+    end
+
+    Program --> Dispatch
+    Inputs --> VM
+    PC --> Dispatch
+    Dispatch --> Regs
+    Dispatch --> Stacks
+    Dispatch --> Caches
+
+    style VM fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px
+    style Core fill:#c8e6c9,stroke:#388e3c,stroke-width:2px
+    style Stacks fill:#fff9c4,stroke:#f9a825,stroke-width:2px
+    style Caches fill:#e1bee7,stroke:#8e24aa,stroke-width:2px
+    style Inputs fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    style Program fill:#fff3e0,stroke:#ef6c00,stroke-width:2px

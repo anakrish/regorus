@@ -1,0 +1,40 @@
+stateDiagram-v2
+    [*] --> Ready : load_program()
+    
+    state "Run-to-Completion Mode" as RTC {
+        state "Running" as RTCRunning
+        state "Instruction Loop" as Loop
+        RTCRunning --> Loop : jump_to(start_pc)
+        Loop --> Loop : execute_instruction()\npc += 1
+        Loop --> RTCDone : Return(value)
+        Loop --> RTCError : VmError
+        Loop --> RTCError : InstructionLimitExceeded
+        state "Done" as RTCDone
+        state "Error" as RTCError
+    }
+
+    state "Suspendable Mode" as Susp {
+        state "Running" as SuspRunning
+        state "Frame Stack" as Frames {
+            state "Main Frame" as MF
+            state "Rule Frame" as RF
+            state "Loop Frame" as LF
+            state "Comprehension Frame" as CF
+            MF --> RF : CallRule
+            RF --> LF : LoopStart
+            LF --> CF : ComprehensionBegin
+        }
+        SuspRunning --> Frames : run_stackless_loop
+        Frames --> Suspended : HostAwait\nBreakpoint\nStep
+        Suspended --> Frames : resume(value)
+        Frames --> SuspDone : stack empty
+        Frames --> SuspError : VmError
+        state "Suspended" as Suspended
+        state "Done" as SuspDone
+        state "Error" as SuspError
+    }
+
+    Ready --> RTCRunning : execute()\n[RunToCompletion]
+    Ready --> SuspRunning : execute()\n[Suspendable]
+    RTCDone --> [*] : Result
+    SuspDone --> [*] : Result

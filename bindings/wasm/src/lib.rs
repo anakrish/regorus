@@ -20,7 +20,10 @@ use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
 #[cfg(feature = "azure_policy")]
-use regorus::languages::azure_policy::{compiler as ap_compiler, parser as ap_parser};
+use regorus::languages::azure_policy::{
+    compiler as ap_compiler,
+    parser as ap_parser,
+};
 
 #[wasm_bindgen]
 /// WASM wrapper for [`regorus::Engine`]
@@ -505,8 +508,25 @@ impl Rvm {
     }
 
     /// Set VM input from JSON.
+    ///
+    /// If the JSON object contains a `"context"` field (as in the Azure Policy
+    /// input envelope `{ "resource": ..., "context": ..., "parameters": ... }`),
+    /// the value of that field is automatically extracted and forwarded to the
+    /// VM's evaluation context (`LoadContext` instruction).  This allows
+    /// callers to pass the full Azure Policy input envelope in a single call
+    /// and have `resourceGroup()`, `subscription()`, and `requestContext()`
+    /// template functions work correctly.
     pub fn setInputJson(&mut self, input_json: String) -> Result<(), JsValue> {
         let input = Value::from_json_str(&input_json).map_err(error_to_jsvalue)?;
+        // Extract and set VM context from the "context" field if present.
+        if let Ok(obj) = input.as_object() {
+            let ctx_key = Value::from("context");
+            if let Some(ctx) = obj.get(&ctx_key) {
+                if !matches!(ctx, Value::Undefined | Value::Null) {
+                    self.vm.set_context(ctx.clone());
+                }
+            }
+        }
         self.vm.set_input(input);
         Ok(())
     }

@@ -274,7 +274,7 @@ vm.setInputJson(JSON.stringify({
 }));
 
 const defaultResult = JSON.parse(vm.execute());
-assert.equal(defaultResult, 'deny', 'default parameter value should be used when missing');
+assert.equal(defaultResult.effect, 'deny', 'default parameter value should be used when missing');
 
 vm.setInputJson(JSON.stringify({
   resource: {
@@ -287,7 +287,7 @@ vm.setInputJson(JSON.stringify({
 }));
 
 const overrideResult = JSON.parse(vm.execute());
-assert.equal(overrideResult, 'audit', 'provided parameter value should override default');
+assert.equal(overrideResult.effect, 'audit', 'provided parameter value should override default');
 }
 
 console.log('WASM JS tests completed successfully.');

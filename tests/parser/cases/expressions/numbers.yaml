@@ -1,0 +1,72 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  # BigInt literal should tolerate separators yet emit canonical digits.
+  - note: bigint-underscores
+    rego: |
+      package test
+
+      big = 1_000_000_000_000_000_000_001
+    num_expressions: 0
+    num_statements: 0
+    num_queries: 0
+    policy:
+      - spec:
+          head:
+            compr:
+              refr:
+                var: big
+                eidx: 1
+              assign:
+                op: "="
+                value:
+                  number: 1000000000000000000001
+                  eidx: 2
+          bodies: []
+
+  # Scientific notation that collapses to BigInt should materialize digits
+  # whereas negative exponents stay as floats.
+  - note: scientific-bigint-and-float
+    rego: |
+      package test
+
+      pos_exp = 1e5
+      neg_exp = 1e-2
+    num_expressions: 0
+    num_statements: 0
+    num_queries: 0
+    policy:
+      - spec:
+          head:
+            compr:
+              refr:
+                var: pos_exp
+                eidx: 1
+              assign:
+                op: "="
+                value:
+                  number: 100000
+                  eidx: 2
+          bodies: []
+      - spec:
+          head:
+            compr:
+              refr:
+                var: neg_exp
+                eidx: 3
+              assign:
+                op: "="
+                value:
+                  number: 0.01
+                  eidx: 4
+          bodies: []
+
+  # Trailing separators must still raise an invalid number error to mirror
+  # Rego's lexer behavior.
+  - note: trailing-underscore-invalid
+    rego: |
+      package test
+
+      bad = 1_
+    error: invalid number

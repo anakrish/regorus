@@ -1,0 +1,36 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  # bits.* should handle operands larger than 64 bits without losing precision.
+  - note: bits-bigint-ops
+    data: {}
+    modules:
+      - |
+        package test
+
+        big = bits.lsh(1, 100)
+        mask = bits.lsh(1, 80) - 1
+        or_val = bits.or(big, mask)
+        and_val = bits.and(or_val, mask)
+        shl_val = bits.lsh(1, 70)
+        shr_val = bits.rsh(shl_val, 70)
+    query: data.test
+    want_result:
+      big: 1267650600228229401496703205376
+      mask: 1208925819614629174706175
+      or_val: 1267651809154049016125877911551
+      and_val: 1208925819614629174706175
+      shl_val: 1180591620717411303424
+      shr_val: 1
+
+  # bits.* shifting with negative counts should still raise meaningful errors.
+  - note: bits-neg-shift-error
+    data: {}
+    modules:
+      - |
+        package test
+
+        result = bits.lsh(1, -1)
+    query: data.test
+    error: "`bits.lsh` expects non-negative integer arguments. Got `-1`"

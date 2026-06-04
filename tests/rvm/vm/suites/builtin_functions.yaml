@@ -406,6 +406,97 @@ cases:
       - "Return { value: 1 }"                   # Return result
     want_result: 42
 
+  # Bitwise Builtin Tests
+  - note: builtin_bits_or_bigint
+    description: Test bits.or with operands larger than 64 bits to ensure BigInt handling
+    example_rego: "bits.or(1 << 100, (1 << 80) - 1)"
+    literals:
+      - 1267650600228229401496703205376   # 1 << 100
+      - 1208925819614629174706175         # (1 << 80) - 1
+    instruction_params:
+      builtin_infos:
+        - name: "bits.or"
+          num_args: 2
+      builtin_call_params:
+        - dest: 2
+          builtin_index: 0
+          args: [0, 1]
+    instructions:
+      - "Load { dest: 0, literal_idx: 0 }"
+      - "Load { dest: 1, literal_idx: 1 }"
+      - "BuiltinCall { params_index: 0 }"
+      - "Return { value: 2 }"
+    want_result: 1267651809154049016125877911551
+
+  - note: builtin_bits_and_bigint
+    description: Test bits.and on a BigInt mask to ensure precision is preserved
+    example_rego: "bits.and(1267651809154049016125877911551, (1 << 80) - 1)"
+    literals:
+      - 1267651809154049016125877911551   # result from previous or
+      - 1208925819614629174706175
+    instruction_params:
+      builtin_infos:
+        - name: "bits.and"
+          num_args: 2
+      builtin_call_params:
+        - dest: 2
+          builtin_index: 0
+          args: [0, 1]
+    instructions:
+      - "Load { dest: 0, literal_idx: 0 }"
+      - "Load { dest: 1, literal_idx: 1 }"
+      - "BuiltinCall { params_index: 0 }"
+      - "Return { value: 2 }"
+    want_result: 1208925819614629174706175
+
+  - note: builtin_bits_shift_roundtrip
+    description: Test bits.lsh followed by bits.rsh to ensure round-trip on large shifts
+    example_rego: "bits.rsh(bits.lsh(1, 70), 70)"
+    literals:
+      - 1
+      - 70
+    instruction_params:
+      builtin_infos:
+        - name: "bits.lsh"
+          num_args: 2
+        - name: "bits.rsh"
+          num_args: 2
+      builtin_call_params:
+        - dest: 2
+          builtin_index: 0
+          args: [0, 1]
+        - dest: 3
+          builtin_index: 1
+          args: [2, 1]
+    instructions:
+      - "Load { dest: 0, literal_idx: 0 }"      # Load 1
+      - "Load { dest: 1, literal_idx: 1 }"      # Load shift amount 70
+      - "BuiltinCall { params_index: 0 }"       # bits.lsh(1, 70)
+      - "BuiltinCall { params_index: 1 }"       # bits.rsh(result, 70)
+      - "Return { value: 3 }"
+    want_result: 1
+
+  - note: builtin_bits_lsh_negative_error
+    description: Test bits.lsh strict error on negative shift counts
+    example_rego: "bits.lsh(1, -1)"
+    literals:
+      - 1
+      - -1
+    instruction_params:
+      builtin_infos:
+        - name: "bits.lsh"
+          num_args: 2
+      builtin_call_params:
+        - dest: 2
+          builtin_index: 0
+          args: [0, 1]
+    instructions:
+      - "Load { dest: 0, literal_idx: 0 }"
+      - "Load { dest: 1, literal_idx: 1 }"
+      - "BuiltinCall { params_index: 0 }"
+      - "Return { value: 2 }"
+    want_error: "`bits.lsh` expects non-negative integer arguments. Got `-1`"
+
   # Set Function Tests - Commented out due to set literal parsing issues
   # TODO: Add proper set tests once set literal parsing is fixed
   # - note: builtin_union_sets

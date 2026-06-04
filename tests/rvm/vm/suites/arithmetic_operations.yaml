@@ -112,6 +112,45 @@ cases:
       - "Return { value: 2 }"
     want_result: -1
 
+  - note: arithmetic_mod_positive_negative
+    description: Test Mod with positive dividend and negative divisor retains positive remainder
+    example_rego: "5 % -2"
+    literals:
+      - 5
+      - -2
+    instructions:
+      - "Load { dest: 0, literal_idx: 0 }"
+      - "Load { dest: 1, literal_idx: 1 }"
+      - "Mod { dest: 2, left: 0, right: 1 }"
+      - "Return { value: 2 }"
+    want_result: 1
+
+  - note: arithmetic_mod_negative_positive
+    description: Test Mod with negative dividend and positive divisor keeps dividend sign
+    example_rego: "-5 % 2"
+    literals:
+      - -5
+      - 2
+    instructions:
+      - "Load { dest: 0, literal_idx: 0 }"
+      - "Load { dest: 1, literal_idx: 1 }"
+      - "Mod { dest: 2, left: 0, right: 1 }"
+      - "Return { value: 2 }"
+    want_result: -1
+
+  - note: arithmetic_mod_negative_negative
+    description: Test Mod with both operands negative keeps dividend sign
+    example_rego: "-5 % -2"
+    literals:
+      - -5
+      - -2
+    instructions:
+      - "Load { dest: 0, literal_idx: 0 }"
+      - "Load { dest: 1, literal_idx: 1 }"
+      - "Mod { dest: 2, left: 0, right: 1 }"
+      - "Return { value: 2 }"
+    want_result: -1
+
   - note: arithmetic_mod_on_float_error
     description: Test Mod on float - should error
     example_rego: "10.5 % 3"
@@ -166,3 +205,16 @@ cases:
       - "Mul { dest: 2, left: 0, right: 1 }"
       - "Return { value: 2 }"
     want_result: 1000000000000
+
+  - note: arithmetic_bigint_add
+    description: Test addition with operands larger than 64 bits to ensure BigInt promotion
+    example_rego: "10000000000000000000000000000000000000000 + 42"
+    literals:
+      - 10000000000000000000000000000000000000000
+      - 42
+    instructions:
+      - "Load { dest: 0, literal_idx: 0 }"
+      - "Load { dest: 1, literal_idx: 1 }"
+      - "Add { dest: 2, left: 0, right: 1 }"
+      - "Return { value: 2 }"
+    want_result: 10000000000000000000000000000000000000042

@@ -1,0 +1,72 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  # Large integer arithmetic should remain precise when operands exceed 64 bits.
+  - note: bigint-arithmetic
+    data: {}
+    modules:
+      - |
+        package test
+
+        big = 10000000000000000000000000000000000000000
+        sum = big + 42
+        diff = big - 42
+        prod = 2 * big
+        neg = 5 - big
+    query: data.test
+    want_result:
+      big: 10000000000000000000000000000000000000000
+      sum: 10000000000000000000000000000000000000042
+      diff: 9999999999999999999999999999999999999958
+      prod: 20000000000000000000000000000000000000000
+      neg: -9999999999999999999999999999999999999995
+
+  # Modulo should track the dividend's sign for every positive/negative combination.
+  - note: modulo-sign-matrix
+    data: {}
+    modules:
+      - |
+        package test
+
+        pos = 5 % 2
+        pos_neg = 5 % -2
+        neg_pos = -5 % 2
+        neg_neg = -5 % -2
+    query: data.test
+    want_result:
+      pos: 1
+      pos_neg: 1
+      neg_pos: -1
+      neg_neg: -1
+
+  # Rounding helpers should fold floats back into integers when the result is whole.
+  - note: normalization-helpers
+    data: {}
+    modules:
+      - |
+        package test
+
+        floor_val = floor(1.75)
+        ceil_val = ceil(-1.25)
+        round_val = round(2.4)
+        round_neg = round(-2.6)
+        abs_val = abs(-10000000000000000000000000000000000000000)
+    query: data.test
+    want_result:
+      floor_val: 1
+      ceil_val: -1
+      round_val: 2
+      round_neg: -3
+      abs_val: 10000000000000000000000000000000000000000
+
+  # Modulo on floats must raise an error to match core number semantics.
+  - note: modulo-float-error
+    data: {}
+    modules:
+      - |
+        package test
+
+        result = 3.5 % 2
+    query: data.test
+    error: "modulo on floating-point number"

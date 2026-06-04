@@ -36,14 +36,12 @@ impl Number {
             return Number::Int(0);
         }
 
-        if value.is_negative() {
-            if let Some(i) = value.to_i64() {
-                return Number::Int(i);
-            }
-        } else if let Some(u) = value.to_u64() {
-            return Number::UInt(u);
-        } else if let Some(i) = value.to_i64() {
+        if let Some(i) = value.to_i64() {
             return Number::Int(i);
+        }
+
+        if let Some(u) = value.to_u64() {
+            return Number::UInt(u);
         }
 
         Number::BigInt(Rc::new(value))
@@ -972,4 +970,214 @@ fn scientific_parts_to_bigint(mantissa: &str, exponent: i32) -> Option<BigInt> {
     }
 
     Some(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::str::FromStr;
+    use num_traits::One;
+
+    fn as_bigint(number: &Number) -> BigInt {
+        number
+            .to_bigint_owned()
+            .expect("expected bigint-compatible value")
+    }
+
+    fn bigint_from_u128(value: u128) -> BigInt {
+        BigInt::from(value)
+    }
+
+    #[test]
+    fn from_bigint_prefers_int_then_uint() {
+        // Signed range stays Int even when positive so downstream code keeps ordering stable.
+        let signed = Number::from(BigInt::from(i64::MAX));
+        assert!(matches!(signed, Number::Int(v) if v == i64::MAX));
+
+        // Unsigned-only range (>= 2^63) is stored as UInt for compactness.
+        let unsigned = Number::from(BigInt::from(u64::MAX));
+        assert!(matches!(unsigned, Number::UInt(v) if v == u64::MAX));
+
+        // Direct access to the helper should mirror the From<BigInt> path.
+        let via_owned = Number::from_bigint_owned(BigInt::from(u64::MAX));
+        assert!(matches!(via_owned, Number::UInt(v) if v == u64::MAX));
+
+        // Anything beyond u64::MAX must remain a BigInt, even via the private helper.
+        let huge = Number::from_bigint_owned(BigInt::from(u128::MAX));
+        assert!(matches!(huge, Number::BigInt(_)));
+
+        let beyond = Number::from(BigInt::from(u64::MAX) + BigInt::from(1u8));
+        assert!(matches!(beyond, Number::BigInt(_)));
+    }
+
+    #[test]
+    fn float_to_small_bigint_respects_safe_bound() {
+        // Only exact whole numbers within ±2^53 should become BigInts via this helper.
+        assert_eq!(
+            Number::float_to_small_bigint(F64_SAFE_INTEGER),
+            Some(BigInt::from(F64_SAFE_INTEGER as u64))
+        );
+        assert!(Number::float_to_small_bigint(F64_SAFE_INTEGER + 2.0).is_none());
+        assert!(Number::float_to_small_bigint(f64::NAN).is_none());
+    }
+
+    #[test]
+    fn normalize_float_collapses_exact_safe_integers() {
+        // Exact integers that can be represented losslessly as BigInt round-trip to Int.
+        let exact = Number::normalize_float(F64_SAFE_INTEGER);
+        assert!(matches!(exact, Number::Int(v) if v as f64 == F64_SAFE_INTEGER));
+
+        // Values just past the safe boundary remain floats to avoid lying about precision.
+        let imprecise = Number::normalize_float(F64_SAFE_INTEGER + 2.0);
+        assert!(matches!(imprecise, Number::Float(v) if v == F64_SAFE_INTEGER + 2.0));
+    }
+
+    #[test]
+    fn addition_and_mixed_promotion() -> Result<()> {
+        // UInt overflow must promote to BigInt rather than wrapping.
+        let sum = Number::from(u64::MAX).add(&Number::from(1u64))?;
+        let expected = BigInt::from(u64::MAX) + BigInt::from(1u8);
+        assert_eq!(as_bigint(&sum), expected);
+
+        // Mixing Int + UInt around zero can land in UInt(0) because we canonicalize non-negative sums as unsigned.
+        let balanced = Number::from(-5i64).add(&Number::from(5u64))?;
+        assert!(matches!(balanced, Number::UInt(0)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn arithmetic_promotes_and_normalizes() {
+        // Float addition that lands on an integer should normalize back to Int.
+        let float_a = Number::Float(1.5);
+        let float_b = Number::Float(0.5);
+        let normalized = float_a.add(&float_b).unwrap();
+        match normalized {
+            Number::Int(v) => assert_eq!(v, 2),
+            other => panic!("expected Int(2), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn division_switches_between_int_and_float() -> Result<()> {
+        // Exact divisibility keeps integers intact.
+        let exact = Number::from(8u64).divide(&Number::from(2u64))?;
+        assert_eq!(exact, Number::UInt(4));
+
+        // Remainders force the operation into floating-point space.
+        let lossy = Number::from(7u64).divide(&Number::from(2u64))?;
+        assert!(matches!(lossy, Number::Float(v) if (v - 3.5).abs() < f64::EPSILON));
+        Ok(())
+    }
+
+    #[test]
+    fn modulo_respects_rego_sign_rules() -> Result<()> {
+        // Remainder carries the dividend's sign, matching Rust/OPA semantics.
+        let neg = Number::from(-5i64).modulo(&Number::from(2i64))?;
+        assert_eq!(neg, Number::Int(-1));
+
+        let mixed = Number::from(5i64).modulo(&Number::from(-2i64))?;
+        assert_eq!(mixed, Number::Int(1));
+
+        let both_neg = Number::from(-5i64).modulo(&Number::from(-2i64))?;
+        assert_eq!(both_neg, Number::Int(-1));
+
+        let pos = Number::from(5i64).modulo(&Number::from(2i64))?;
+        assert_eq!(pos, Number::Int(1));
+
+        // Non-integer inputs must be rejected.
+        assert!(Number::Float(1.5).modulo(&Number::Int(1)).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn bitwise_and_shift_support_large_operands() {
+        // Use a >64-bit mask to ensure BigInt pathways are exercised.
+        let large = Number::from(BigInt::one() << 70);
+        let mask = Number::from(BigInt::from(0xff));
+        let ored = large.or(&mask).expect("bitwise or should succeed");
+        let expected = (BigInt::one() << 70) | BigInt::from(0xff);
+        assert_eq!(as_bigint(&ored), expected);
+
+        // Left/right shift round-trip should recover the original value.
+        let shifted = Number::from(1u64)
+            .lsh(&Number::from(70u64))
+            .expect("lsh should work");
+        assert_eq!(as_bigint(&shifted), BigInt::one() << 70);
+
+        let restored = shifted.rsh(&Number::from(70u64)).expect("rsh should work");
+        assert_eq!(restored, Number::UInt(1));
+
+        // Large BigInts should behave the same under shifts/bitwise ops.
+        let base = bigint_from_u128(1u128 << 100);
+        let big_number = Number::from_bigint_owned(base.clone());
+        let shift_amount = Number::Int(5);
+        let shifted_big = big_number
+            .lsh(&shift_amount)
+            .expect("left shift should succeed");
+        let mut expected_big = base.clone();
+        expected_big <<= 5;
+        assert_eq!(as_bigint(&shifted_big), expected_big);
+
+        let mask_big = bigint_from_u128((1u128 << 100) - 1);
+        let mask_number = Number::from_bigint_owned(mask_big.clone());
+        let anded = shifted_big
+            .and(&mask_number)
+            .expect("bitwise and should succeed");
+        assert_eq!(as_bigint(&anded), expected_big & mask_big);
+    }
+
+    #[test]
+    fn formatting_handles_extreme_values() {
+        // Integer formatting should emit scientific notation consistent with bigint helper.
+        let big = Number::from(BigInt::from(42u8));
+        assert_eq!(big.format_scientific(), "4.2e1");
+
+        // Decimal width rounding must round half away from zero.
+        let rounded = Number::Float(1.2345);
+        assert_eq!(rounded.format_decimal_with_width(2), "1.23");
+
+        // Decimal + scientific formatting should preserve arbitrarily large BigInts.
+        let huge = Number::from_bigint_owned(
+            BigInt::parse_bytes(b"123456789000000000000", 10).unwrap(),
+        );
+        assert_eq!(huge.format_decimal(), "123456789000000000000");
+        assert!(huge.format_scientific().starts_with("1.23456789"));
+
+        // Repeating binary fractions should format deterministically.
+        let float = Number::Float(0.30000000000000004);
+        assert_eq!(float.format_decimal_with_width(2), "0.30");
+    }
+
+    #[test]
+    fn pow_helpers_cover_uint_bigint_and_float() -> Result<()> {
+        // Small exponents should fit in UInt.
+        assert_eq!(Number::two_pow(10)?, Number::UInt(1024));
+
+        // Large exponents spill into BigInt space.
+        let big = Number::two_pow(70)?;
+        assert!(matches!(big, Number::BigInt(_)));
+
+        // Negative exponents return reciprocals as floats.
+        let frac = Number::two_pow(-3)?;
+        assert!(matches!(frac, Number::Float(v) if (v - 0.125).abs() < f64::EPSILON));
+
+        // Base-10 helper should also promote when exceeding u64::MAX.
+        let ten = Number::ten_pow(21)?;
+        assert!(matches!(ten, Number::BigInt(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn parsing_rejects_malformed_literals() {
+        // Obvious malformed cases should surface ParseNumberError.
+        assert!(Number::from_str("").is_err());
+        assert!(Number::from_str("++1").is_err());
+        assert!(Number::from_str("1e").is_err());
+        assert!(Number::from_str("1e-").is_err());
+
+        // Valid scientific notation still parses to BigInt when exponent cancels digits.
+        let value = Number::from_str("1.23e2").expect("scientific literal should parse");
+        assert_eq!(value, Number::Int(123));
+    }
 }

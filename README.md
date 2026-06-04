@@ -130,7 +130,9 @@ It is straight-forward to build these bindings yourself.
 ## Getting Started
 
 [examples/regorus](https://github.com/microsoft/regorus/blob/main/examples/regorus.rs) is an example program that
-shows how to integrate Regorus into your project and evaluate Rego policies.
+shows how to integrate Regorus into your project and evaluate Rego policies. It now demonstrates both interpreter
+and compiler workflows: you can interactively evaluate policies, inspect lexer/parser output, or compile queries to
+Rego Virtual Machine (RVM) bytecode to inspect the generated assembly or serialize the compiled program for later use.
 
 To build and install it, do
 
@@ -146,6 +148,7 @@ Usage: regorus <COMMAND>
 
 Commands:
   ast    Parse a Rego policy and dump AST
+  compile  Compile a Rego query to RVM bytecode and dump assembly
   eval   Evaluate a Rego Query
   lex    Tokenize a Rego policy
   parse  Parse a Rego policy
@@ -156,6 +159,15 @@ Options:
   -V, --version  Print version
 ```
 
+
+Use the `compile` subcommand when you want to inspect or persist the bytecode that the evaluator will run:
+
+```bash
+$ regorus compile -d examples/server/allowed_server.rego data.example --tabular --json-output policy.json
+```
+
+This prints a tabular RVM assembly listing to stdout and writes the serialized bytecode to `policy.json`, which can be
+loaded by the standalone `RegoVM` or any of the language bindings.
 
 First, let's evaluate a simple Rego expression `1*2+3`
 
@@ -189,6 +201,14 @@ Next, evaluate a sample [policy](https://github.com/microsoft/regorus/blob/main/
 
 ```bash
 $ regorus eval -d examples/server/allowed_server.rego -i examples/server/input.json data.example
+```
+
+When you want to execute the same query using the bytecode interpreter, pass the `--engine` flag with either `rvm` or
+`vm` to compile the policy on the fly and run it inside the Rego Virtual Machine (the default remains
+`interpreter` for parity with OPA's text-based evaluator):
+
+```bash
+$ regorus eval -d examples/server/allowed_server.rego -i examples/server/input.json data.example --engine rvm
 ```
 
 Finally, evaluate real-world [policies](tests/aci/) used in Azure Container Instances (ACI)
@@ -290,6 +310,20 @@ See [passing tests suites](https://github.com/microsoft/regorus/blob/main/tests/
 
 The following test suites don't pass fully due to missing builtins:
 - `globsmatch`
+
+## Rego Virtual Machine (RVM)
+
+The Rego Virtual Machine is a compact, register-based execution engine that runs the same policies as the interpreter,
+but operates on compiled bytecode for faster, more predictable performance. The `regorus` example program can emit the
+bytecode in two forms:
+
+- An assembly listing (either linear or tabular) so you can inspect the generated instructions during development.
+- A JSON serialization (`--json-output`) that can be stored, distributed, and loaded directly by the Rust `RegoVM`
+  type or any of the supported FFI bindings.
+
+Running `regorus eval` with `--engine rvm` first compiles the referenced rule, then executes it inside the VM. This is
+handy when you want interpreter parity during development but VM performance in production—compile once, run anywhere
+you have the RegoVM available.
 - `graphql`
 - `invalidkeyerror`
 - `jsonpatch`

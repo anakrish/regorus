@@ -197,13 +197,20 @@ impl Source {
     }
 
     pub fn message(&self, line: u32, col: u32, kind: &str, msg: &str) -> String {
+        if line == 0 || col == 0 {
+            return format!(
+                "{}: invalid source location {}:{} specified (lines/columns start at 1)",
+                self.src.file, line, col
+            );
+        }
+
         if line as usize > self.src.lines.len() {
             return format!("{}: invalid line {} specified", self.src.file, line);
         }
 
         let line_str = format!("{line}");
         let line_num_width = line_str.len() + 1;
-        let col_spaces = col as usize - 1;
+        let col_spaces = col.saturating_sub(1) as usize;
 
         format!(
             "\n--> {}:{}:{}\n{:<line_num_width$}|\n\
@@ -715,7 +722,7 @@ impl<'source> Lexer<'source> {
 	    // negative json number.
 	    // . followed by digit is invalid number.
 	    '-' | '.' if self.peekahead(1).1.is_ascii_digit() => {
-		self.read_number()
+		    self.read_number()
 	    }
 	    // grouping characters
 	    '{' | '}' | '[' | ']' | '(' | ')' |
@@ -723,159 +730,145 @@ impl<'source> Lexer<'source> {
 	    '+' | '-' | '*' | '/' | '%' |
 	    // separators
 	    ',' | ';' | '.' => {
-		self.col += 1;
-		self.iter.next();
-		Ok(Token(TokenKind::Symbol, Span {
-		    source: self.source.clone(),
-		    line: self.line,
-		    col,
-		    start: start as u32,
-		    end: start as u32 + 1,
-		}))
+            self.col += 1;
+            self.iter.next();
+            Ok(Token(TokenKind::Symbol, Span {
+                source: self.source.clone(),
+                line: self.line,
+                col,
+                start: start as u32,
+                end: start as u32 + 1,
+            }))
 	    }
 	    #[cfg(feature = "azure-rbac")]
 	    // RBAC logical AND operator (&&)
 	    '&' if self.enable_rbac_tokens && self.peekahead(1).1 == '&' => {
-		self.col += 2;
-		self.iter.next();
-		self.iter.next();
-		Ok(Token(TokenKind::AzureRbac(AzureRbacTokenKind::LogicalAnd), Span {
-		    source: self.source.clone(),
-		    line: self.line,
-		    col,
-		    start: start as u32,
-		    end: start as u32 + 2,
-		}))
+            self.col += 2;
+            self.iter.next();
+            self.iter.next();
+            Ok(Token(TokenKind::AzureRbac(AzureRbacTokenKind::LogicalAnd), Span {
+                source: self.source.clone(),
+                line: self.line,
+                col,
+                start: start as u32,
+                end: start as u32 + 2,
+            }))
 	    }
 	    #[cfg(feature = "azure-rbac")]
 	    // RBAC logical OR operator (||)
 	    '|' if self.enable_rbac_tokens && self.peekahead(1).1 == '|' => {
 		self.col += 2;
-		self.iter.next();
-		self.iter.next();
-		Ok(Token(TokenKind::AzureRbac(AzureRbacTokenKind::LogicalOr), Span {
-		    source: self.source.clone(),
-		    line: self.line,
-		    col,
-		    start: start as u32,
-		    end: start as u32 + 2,
-		}))
+            self.iter.next();
+            self.iter.next();
+            Ok(Token(TokenKind::AzureRbac(AzureRbacTokenKind::LogicalOr), Span {
+                source: self.source.clone(),
+                line: self.line,
+                col,
+                start: start as u32,
+                end: start as u32 + 2,
+            }))
 	    }
 	    // Generic bin operators (when RBAC tokens not enabled or single & |)
 	    '&' | '|' => {
-		self.col += 1;
-		self.iter.next();
-		Ok(Token(TokenKind::Symbol, Span {
-		    source: self.source.clone(),
-		    line: self.line,
-		    col,
-		    start: start as u32,
-		    end: start as u32 + 1,
-		}))
+            self.col += 1;
+            self.iter.next();
+            Ok(Token(TokenKind::Symbol, Span {
+                source: self.source.clone(),
+                line: self.line,
+                col,
+                start: start as u32,
+                end: start as u32 + 1,
+            }))
 	    }
 	    ':' => {
-		self.col += 1;
-		self.iter.next();
-		let mut end = start as u32 + 1;
-		if self.peek().1 == '=' || (self.peek().1 == ':' && self.double_colon_token) {
-		    self.col += 1;
-		    self.iter.next();
-		    end += 1;
-		}
-		Ok(Token(TokenKind::Symbol, Span {
-		    source: self.source.clone(),
-		    line: self.line,
-		    col,
-		    start: start as u32,
-		    end
-		}))
+            self.col += 1;
+            self.iter.next();
+            let mut end = start as u32 + 1;
+            if self.peek().1 == '=' || (self.peek().1 == ':' && self.double_colon_token) {
+                self.col += 1;
+                self.iter.next();
+                end += 1;
+            }
+            Ok(Token(TokenKind::Symbol, Span {
+                source: self.source.clone(),
+                line: self.line,
+                col,
+                start: start as u32,
+                end
+            }))
 	    }
 	    // < <= > >= = ==
 	    '<' | '>' | '=' => {
-		self.col += 1;
-		self.iter.next();
-		if self.peek().1 == '=' {
-		    self.col += 1;
-		    self.iter.next();
-		};
-		Ok(Token(TokenKind::Symbol, Span {
-		    source: self.source.clone(),
-		    line: self.line,
-		    col,
-		    start: start as u32,
-		    end: self.peek().0 as u32,
-		}))
+            self.col += 1;
+            self.iter.next();
+            if self.peek().1 == '=' {
+                self.col += 1;
+                self.iter.next();
+            };
+            Ok(Token(TokenKind::Symbol, Span {
+                source: self.source.clone(),
+                line: self.line,
+                col,
+                start: start as u32,
+                end: self.peek().0 as u32,
+            }))
 	    }
 	    '!' if self.peekahead(1).1 == '=' => {
 		self.col += 2;
-		self.iter.next();
-		self.iter.next();
-		Ok(Token(TokenKind::Symbol, Span {
-		    source: self.source.clone(),
-		    line: self.line,
-		    col,
-		    start: start as u32,
-		    end: self.peek().0 as u32,
-		}))
+            self.iter.next();
+            self.iter.next();
+            Ok(Token(TokenKind::Symbol, Span {
+                source: self.source.clone(),
+                line: self.line,
+                col,
+                start: start as u32,
+                end: self.peek().0 as u32,
+            }))
 	    }
 	    #[cfg(feature = "azure-rbac")]
-	    // RBAC @ token for attribute references
-	    '@' if self.enable_rbac_tokens => {
-		self.col += 1;
-		self.iter.next();
-		Ok(Token(TokenKind::AzureRbac(AzureRbacTokenKind::At), Span {
-		    source: self.source.clone(),
-		    line: self.line,
-		    col,
-		    start: start as u32,
-		    end: start as u32 + 1,
-		}))
+	        // RBAC @ token for attribute references
+            '@' if self.enable_rbac_tokens => {
+            self.col += 1;
+            self.iter.next();
+            Ok(Token(TokenKind::AzureRbac(AzureRbacTokenKind::At), Span {
+                source: self.source.clone(),
+                line: self.line,
+                col,
+                start: start as u32,
+                end: start as u32 + 1,
+            }))
 	    }
 	    '"' => self.read_string(),
 	    #[cfg(feature = "azure-rbac")]
 	    '\'' if self.allow_single_quoted_strings => self.read_single_quoted_string(),
 	    '`' => self.read_raw_string(),
 	    '\x00' => Ok(Token(TokenKind::Eof, Span {
-		source: self.source.clone(),
-		line:self.line,
-		col,
-		start: start as u32,
-		end: start as u32
+            source: self.source.clone(),
+            line:self.line,
+            col,
+            start: start as u32,
+            end: start as u32
 	    })),
-	    _ if chr.is_ascii_digit() => self.read_number(),
-	    _ if chr.is_ascii_alphabetic() || chr == '_' => {
-		let mut ident = self.read_ident()?;
-		if ident.1.text() == "set" && self.peek().1 == '(' {
-		    // set immediately followed by ( is treated as set( if
-		    // the next token is ).
-		    let state = (self.iter.clone(), self.line, self.col);
-		    self.iter.next();
-
-		    // Check it next token is ).
-		    let next_tok = self.next_token()?;
-		    let is_setp = next_tok.1.text() == ")";
-
-		    // Restore state
-		    (self.iter, self.line, self.col) = state;
-
-		    if is_setp {
-			self.iter.next();
-			self.col += 1;
-			ident.1.end += 1;
-		    }
-		}
-		Ok(ident)
-	    }
+        _ if chr.is_ascii_digit() => self.read_number(),
+        _ if chr.is_ascii_alphabetic() || chr == '_' => {
+            let mut ident = self.read_ident()?;
+            if ident.1.text() == "set" && self.peek().1 == '(' {
+                self.iter.next();
+                self.col += 1;
+                ident.1.end += 1;
+            }
+            Ok(ident)
+        }
 	    _ if self.unknown_char_is_symbol => {
-		self.col += 1;
-		self.iter.next();
-		Ok(Token(TokenKind::Symbol, Span {
-		    source: self.source.clone(),
-		    line: self.line,
-		    col,
-		    start: start as u32,
-		    end: start as u32 + 1,
-		}))
+            self.col += 1;
+            self.iter.next();
+            Ok(Token(TokenKind::Symbol, Span {
+                source: self.source.clone(),
+                line: self.line,
+                col,
+                start: start as u32,
+                end: start as u32 + 1,
+            }))
 	    }
 	    _ => Err(self.source.error(self.line, self.col, "invalid character"))
 	}

@@ -1,0 +1,14 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Corner cases and robustness tests for the parser
+
+cases:
+  # This test attempts to trigger a subtraction underflow in the parser
+  - note: whitespace-before-dot-at-start
+    rego: |
+      package test
+      a.
+      b
+    
+    error: "invalid whitespace before ."

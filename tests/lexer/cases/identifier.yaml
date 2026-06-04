@@ -29,10 +29,10 @@ cases:
       set ()
       # This is lexed as "set(" ")"
       set()
-      # This is lexed as a function call.
+      # This is lexed as "set(" "5" ")" call.
       set(5)
     tokens: [
     "set", "(", ")",
     "set(", ")",
-    "set", "(", "5", ")",    
+    "set(", "5", ")",    
     ""]

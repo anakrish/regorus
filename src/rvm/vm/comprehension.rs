@@ -4,7 +4,6 @@
 use crate::rvm::instructions::{ComprehensionBeginParams, ComprehensionMode};
 use crate::value::Value;
 use crate::Rc;
-use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -34,7 +33,7 @@ impl RegoVM {
         let initial_result = match params.mode {
             ComprehensionMode::Set => Value::new_set(),
             ComprehensionMode::Array => Value::new_array(),
-            ComprehensionMode::Object => Value::Object(Rc::new(BTreeMap::new())),
+            ComprehensionMode::Object => Value::new_object(),
         };
         self.set_register(params.result_reg, initial_result.clone())?;
 
@@ -123,7 +122,7 @@ impl RegoVM {
         let initial_result = match params.mode {
             ComprehensionMode::Set => Value::new_set(),
             ComprehensionMode::Array => Value::new_array(),
-            ComprehensionMode::Object => Value::Object(Rc::new(BTreeMap::new())),
+            ComprehensionMode::Object => Value::new_object(),
         };
         self.set_register(params.result_reg, initial_result.clone())?;
 

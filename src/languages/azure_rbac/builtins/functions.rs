@@ -1,11 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use alloc::collections::BTreeSet;
 use alloc::string::ToString as _;
 use alloc::vec;
 
 use crate::value::Value;
+use crate::collections::Set;
 
 use super::actions;
 use super::common;
@@ -41,15 +41,13 @@ pub(super) fn normalize_set(value: &Value) -> Result<Value, RbacBuiltinError> {
         // Already a set; return as-is.
         Value::Set(_) => Ok(value.clone()),
         Value::Array(ref list) => {
-            // Convert arrays to sets by de-duplicating elements.
-            let set: BTreeSet<Value> = list.iter().cloned().collect();
-            Ok(Value::from(set))
+            let set: Set<Value> = list.iter().cloned().collect();
+            Ok(Value::from_set(set))
         }
         _ => {
-            // Non-collections become singleton sets.
-            let mut set = BTreeSet::new();
+            let mut set: Set<Value> = Set::new();
             set.insert(value.clone());
-            Ok(Value::from(set))
+            Ok(Value::from_set(set))
         }
     }
 }

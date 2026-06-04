@@ -2,9 +2,8 @@
 // Licensed under the MIT License.
 
 use crate::rvm::instructions::{ComprehensionMode, LoopMode};
-use crate::value::Value;
+use crate::value::{ObjectStorage, SetStorage, Value};
 use crate::Rc;
-use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 /// Loop execution context for managing iteration state
@@ -32,12 +31,12 @@ pub enum IterationState {
         index: usize,
     },
     Object {
-        obj: Rc<BTreeMap<Value, Value>>,
+        obj: Rc<ObjectStorage>,
         current_key: Option<Value>,
         first_iteration: bool,
     },
     Set {
-        items: Rc<BTreeSet<Value>>,
+        items: Rc<SetStorage<Value>>,
         current_item: Option<Value>,
         first_iteration: bool,
     },

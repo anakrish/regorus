@@ -4,7 +4,6 @@
 use crate::rvm::instructions::{Instruction, LiteralOrRegister};
 use crate::rvm::program::Program;
 use crate::value::Value;
-use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 use core::mem;
 
@@ -502,7 +501,7 @@ impl RegoVM {
                                 if let Some(literal_key) =
                                     program.literals.get(usize::from(literal_idx))
                                 {
-                                    if key == literal_key {
+                                    if key == *literal_key {
                                         *value = self.get_register(value_reg)?.clone();
                                         current_literal_update = literal_updates.next();
                                     }
@@ -625,7 +624,7 @@ impl RegoVM {
                 }
             }
             SetNew { dest } => {
-                let empty_set = Value::Set(crate::Rc::new(BTreeSet::new()));
+                let empty_set = Value::new_set();
                 self.set_register(dest, empty_set)?;
                 Ok(InstructionOutcome::Continue)
             }
@@ -661,12 +660,13 @@ impl RegoVM {
                     if any_undefined {
                         self.set_register(params.dest, Value::Undefined)?;
                     } else {
-                        let mut set = BTreeSet::new();
-                        for &reg in params.element_registers() {
-                            set.insert(self.get_register(reg)?.clone());
+                        let mut set_value = Value::new_set();
+                        {
+                            let set_mut = set_value.as_set_mut().expect("new_set is a set");
+                            for &reg in params.element_registers() {
+                                set_mut.insert(self.get_register(reg)?.clone());
+                            }
                         }
-
-                        let set_value = Value::Set(crate::Rc::new(set));
                         self.set_register(params.dest, set_value)?;
                     }
                     Ok(InstructionOutcome::Continue)

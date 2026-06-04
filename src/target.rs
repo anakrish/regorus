@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 #![allow(dead_code)]
+use crate::collections::Map;
 use crate::{Rc, Schema, Value, Vec};
-use alloc::collections::BTreeMap;
 use serde::Deserialize;
 
 mod deserialize;
@@ -41,10 +41,10 @@ pub struct Target {
 
     /// Set of effects that policies can produce
     #[serde(deserialize_with = "deserialize_effects")]
-    pub effects: BTreeMap<String, Rc<Schema>>,
+    pub effects: Map<String, Rc<Schema>>,
     /// Lookup table for resource schemas by discrimiator values.
     #[serde(skip)]
-    pub resource_schema_lookup: BTreeMap<Value, Rc<Schema>>,
+    pub resource_schema_lookup: Map<Value, Rc<Schema>>,
 
     /// Resource chemas that cannot be distinguished by the discriminator
     #[serde(skip)]

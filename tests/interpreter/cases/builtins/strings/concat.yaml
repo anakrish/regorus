@@ -14,9 +14,9 @@ cases:
         a3 = concat(",", []) # empty array
         a4 = concat("", []) # empty array and delimiter
 
-        # Sets
-        s1 = concat(", ", {"world", "Hello"})
-        s2 = concat("", {"world", "Hello"}) # empty delimiter
+        # Sets (sort to get deterministic order for concat)
+        s1 = concat(", ", sort({"world", "Hello"}))
+        s2 = concat("", sort({"world", "Hello"})) # empty delimiter
         s3 = concat(",", set()) # empty set
         s4 = concat("", set()) # empty set and delimiter
 

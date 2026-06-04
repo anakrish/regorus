@@ -16,6 +16,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use core::cmp::Ordering;
 use core::fmt::{Debug, Formatter};
+use core::hash::{Hash, Hasher};
 use core::str::FromStr;
 
 use anyhow::{anyhow, bail, Result};
@@ -303,6 +304,23 @@ impl PartialEq for Number {
 }
 
 impl Eq for Number {}
+
+impl Hash for Number {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Match equality semantics: prefer bigint representation when available.
+        if let Some(bi) = self.to_bigint_owned() {
+            bi.hash(state);
+            return;
+        }
+
+        match self {
+            Number::UInt(u) => u.hash(state),
+            Number::Int(i) => i.hash(state),
+            Number::Float(f) => f.to_bits().hash(state),
+            Number::BigInt(bi) => bi.hash(state),
+        }
+    }
+}
 
 impl Ord for Number {
     fn cmp(&self, other: &Self) -> Ordering {

@@ -3,9 +3,9 @@
 
 #![allow(clippy::option_if_let_else, clippy::pattern_type_mismatch)]
 
+use crate::collections::Map;
 use crate::schema::Type;
 use crate::{format, Rc, Schema, Value};
-use alloc::collections::BTreeMap;
 
 type String = Rc<str>;
 
@@ -24,7 +24,7 @@ pub fn populate_target_lookup_fields(target: &mut Target) -> Result<(), TargetEr
     target.default_resource_schema = None;
 
     // Track which schema index corresponds to each constant value
-    let mut value_to_index = BTreeMap::new();
+    let mut value_to_index = Map::new();
 
     // Analyze each schema for constant properties
     for (index, schema) in target.resource_schemas.iter().enumerate() {

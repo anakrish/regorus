@@ -62,7 +62,7 @@ impl Program {
         match *rule_tree {
             Value::Object(ref rule_obj) => {
                 for (key, rule_value) in rule_obj.iter() {
-                    if let Value::String(ref key_str) = *key {
+                    if let Value::String(ref key_str) = key {
                         current_path.push(key_str.to_string());
 
                         let data_value = &data[key];

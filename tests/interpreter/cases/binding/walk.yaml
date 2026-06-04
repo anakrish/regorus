@@ -13,8 +13,8 @@ cases:
       - |
         package test
 
-        result := [[section, role, members] |
+        result := sort([[section, role, members] |
           walk(data.doc, [[section, role], {"members": members}])
-        ]
+        ])
     query: data.test.result
     want_result: [["team", "dev", ["bob"]], ["team", "ops", ["alice"]]]

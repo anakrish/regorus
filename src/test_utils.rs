@@ -81,7 +81,7 @@ pub fn process_value(v: &Value) -> Result<Value> {
             let mut object_value = Value::new_object();
             let object = object_value.as_object_mut()?;
             for (key, value) in fields.iter() {
-                object.insert(process_value(key)?, process_value(value)?);
+                object.insert(process_value(&key)?, process_value(value)?);
             }
             Ok(object_value)
         }

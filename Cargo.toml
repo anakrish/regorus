@@ -121,13 +121,17 @@ serde_yaml = {version = "0.9.16", default-features = false, optional = true }
 # Specify thread_rng for in order to use random_range
 rand = { version = "0.9.0", default-features = false, features = ["thread_rng"], optional = true }
 
+# core collections backend and small inline storage
+hashbrown = { version = "0.15", default-features = false, features = ["serde", "default-hasher", "equivalent"], optional = false }
+smallvec = { version = "1.13", default-features = false, features = ["const_generics", "union"] }
+indexmap = { version = "2.12.1", default-features = false, features = ["serde"], optional = true }
+
 # Causes the project to link with the Spectre-mitigated CRT and libs.
 msvc_spectre_libs = { version = "0.1", features = ["error"], optional = true }
 dashmap = { version = "6.1", default-features = false, optional = true }
 mimalloc = { package = "regorus-mimalloc", path = "mimalloc", version = "2.2.6", optional = true }
 
 # rvm related deps
-indexmap = { version = "2.12.1", default-features = false, features = ["serde"], optional = true }
 bincode = { version = "2.0.1", default-features = false, features = ["alloc", "serde"], optional = true }
 
 [dev-dependencies]

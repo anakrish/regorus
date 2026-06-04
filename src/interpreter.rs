@@ -28,6 +28,7 @@ use crate::{Expression, Extension, Location, QueryResult, QueryResults};
 use crate::query::traversal::traverse;
 
 use crate::Rc;
+use crate::value::ObjectEntry;
 use alloc::collections::btree_map::Entry as BTreeMapEntry;
 use alloc::collections::{BTreeMap, BTreeSet};
 use anyhow::{anyhow, bail, Result};
@@ -1043,7 +1044,7 @@ impl Interpreter {
                     *self.current_scope_mut()? = scope_saved.clone();
 
                     let mut success = if let Some(key_plan) = &key_plan {
-                        self.execute_destructuring_plan(key_plan, key)? == Value::from(true)
+                        self.execute_destructuring_plan(key_plan, &key)? == Value::from(true)
                     } else {
                         true
                     };
@@ -1585,7 +1586,7 @@ impl Interpreter {
                         self.memory_check()?;
                         self.set_loop_var_value(loop_target_expr, v.clone())?;
                         // For objects, index is key.
-                        if self.execute_destructuring_plan(&index_plan, k)? == Value::from(true) {
+                        if self.execute_destructuring_plan(&index_plan, &k)? == Value::from(true) {
                             result = self.eval_stmts_in_loop(stmts, loop_tail)? || result;
                         }
 
@@ -1691,21 +1692,17 @@ impl Interpreter {
                     let obj = obj
                         .as_object_mut()
                         .map_err(|_| anyhow!(span.error("previous value is not an object")))?;
-                    match obj.entry(p) {
-                        BTreeMapEntry::Vacant(v) => {
-                            if value != Value::Undefined {
-                                v.insert(value);
-                            } else {
-                                // TODO: clean this assumption between Undefined vs Object.
-                                v.insert(Value::new_object());
-                            }
+                    // Check if key already exists
+                    if let Some(existing) = obj.get(&p) {
+                        if existing != &value && value != Value::Undefined {
+                            bail!(span
+                                .error("complete rules should not produce multiple outputs"))
                         }
-                        BTreeMapEntry::Occupied(o) => {
-                            if o.get() != &value && value != Value::Undefined {
-                                bail!(span
-                                    .error("complete rules should not produce multiple outputs"))
-                            }
-                        }
+                    } else if value != Value::Undefined {
+                        obj.insert(p, value);
+                    } else {
+                        // TODO: clean this assumption between Undefined vs Object.
+                        obj.insert(p, Value::new_object());
                     }
                 }
                 break;
@@ -1831,20 +1828,17 @@ impl Interpreter {
                 }
 
                 // Non-set rule.
-                match ctx_mut
-                    .rule_value
-                    .as_object_mut()?
-                    .entry(Value::from_array(comps))
-                {
-                    BTreeMapEntry::Vacant(v) => {
-                        v.insert(output);
+                let comps_key = Value::from_array(comps);
+                let obj = ctx_mut.rule_value.as_object_mut()?;
+                if let Some(existing) = obj.get(&comps_key) {
+                    if existing != &output {
+                        bail!(rule_ref
+                            .span()
+                            .error("rules must not produce multiple outputs"))
                     }
-                    BTreeMapEntry::Occupied(o) if o.get() != &output => bail!(rule_ref
-                        .span()
-                        .error("rules must not produce multiple outputs")),
-                    _ => {
-                        // Rule produced same value.
-                    }
+                    // Rule produced same value.
+                } else {
+                    obj.insert(comps_key, output);
                 }
 
                 return Ok(true);
@@ -2248,7 +2242,7 @@ impl Interpreter {
 
     fn eval_set(&mut self, items: &Vec<ExprRef>) -> Result<Value> {
         self.check_execution_time()?;
-        let mut set = BTreeSet::new();
+        let mut set = crate::collections::Set::new();
 
         for item in items {
             let term = self.eval_expr(item)?;
@@ -2468,7 +2462,7 @@ impl Interpreter {
                     if idx > 0 {
                         s.push_str(", ");
                     }
-                    Self::to_printable(k, s);
+                    Self::to_printable(&k, s);
                     s.push_str(": ");
                     Self::to_printable(entry_value, s);
                 }
@@ -3742,7 +3736,7 @@ impl Interpreter {
                         let package_components = self.eval_rule_ref(&module.package.refr)?;
 
                         if value != Value::Undefined {
-                            for (path, value_in_map) in value.as_object()? {
+                            for (path, value_in_map) in value.as_object()?.iter() {
                                 let mut full_path = package_components.clone();
                                 full_path.append(&mut path.as_array()?.clone());
                                 self.check_rule_path(refr, &full_path, value_in_map, is_set)?;

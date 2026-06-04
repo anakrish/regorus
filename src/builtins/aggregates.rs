@@ -103,7 +103,7 @@ fn sort(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Res
             ac.sort();
             Value::from(ac)
         }
-        // Sorting a set produces array.
+        // Sorting a set produces a sorted array.
         Value::Set(a) => {
             let mut items = Vec::with_capacity(a.len());
             for value in a.iter() {
@@ -111,6 +111,7 @@ fn sort(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Res
                 // Guard array growth while materializing the sorted set.
                 enforce_limit()?;
             }
+            items.sort();
             Value::from(items)
         }
         a => {

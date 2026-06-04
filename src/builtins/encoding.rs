@@ -309,7 +309,7 @@ fn urlquery_encode_object(
     {
         let mut pairs = url.query_pairs_mut();
         for (key, value) in obj.iter() {
-            let key = ensure_string(name, &params[0], key)?;
+            let key = ensure_string(name, &params[0], &key)?;
             match value {
                 Value::String(v) => {
                     pairs.append_pair(key.as_ref(), v.as_ref());

@@ -11,7 +11,7 @@
 
 //! Assignment-specific planning utilities.
 
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::collections::BTreeSet;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -26,6 +26,7 @@ use crate::compiler::destructuring_planner::{
     AssignmentPlan, BindingPlan, BindingPlannerError, DestructuringPlan, Result, ScopingMode,
     VariableBindingContext, WildcardSide,
 };
+use crate::collections::Map;
 use crate::lexer::Span;
 use crate::query::traversal::collect_expr_dependencies;
 use crate::value::Value;
@@ -347,7 +348,7 @@ fn collect_object_pairs(
         _ => unreachable!(),
     };
 
-    let mut lhs_map: BTreeMap<Value, ExprRef> = BTreeMap::new();
+    let mut lhs_map: Map<Value, ExprRef> = Map::new();
     for (_, key_expr, val_expr) in lhs_fields {
         if let Some(key_value) = extract_literal_key(key_expr) {
             lhs_map.insert(key_value, val_expr.clone());

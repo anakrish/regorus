@@ -118,6 +118,8 @@ extern crate std;
 mimalloc::assign_global!();
 
 mod ast;
+mod ci_string;
+mod collections;
 mod builtins;
 mod compile;
 mod compiled_policy;
@@ -154,6 +156,10 @@ pub mod test_utils;
 pub mod utils;
 mod value;
 
+pub use collections::{DefaultBuildHasher, IndexMap, IndexSet, Map, Set};
+pub use ci_string::CIString;
+pub use hashbrown::hash_map::Entry as MapEntry;
+
 #[cfg(feature = "azure_policy")]
 pub use {
     compile::compile_policy_for_target,
@@ -173,19 +179,13 @@ pub use utils::limits::{
     global_memory_limit, set_global_memory_limit, set_thread_flush_threshold_override,
     thread_memory_flush_threshold,
 };
-pub use value::Value;
+pub use value::{ObjectEntry, ObjectStorage, SetStorage, Value};
 
 #[cfg(feature = "arc")]
 pub use alloc::sync::Arc as Rc;
 
 #[cfg(not(feature = "arc"))]
 pub use alloc::rc::Rc;
-
-#[cfg(feature = "std")]
-use std::collections::{hash_map::Entry as MapEntry, HashMap as Map, HashSet as Set};
-
-#[cfg(not(feature = "std"))]
-use alloc::collections::{btree_map::Entry as MapEntry, BTreeMap as Map, BTreeSet as Set};
 
 use alloc::{
     borrow::ToOwned as _,

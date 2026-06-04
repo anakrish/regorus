@@ -11,9 +11,10 @@
     clippy::as_conversions
 )] // value helpers index paths directly for performance
 
+use crate::collections::{Map, Set, SMALL_OBJECT_INLINE, SMALL_SET_INLINE};
 use crate::number::Number;
+use crate::CIString;
 
-use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use core::fmt;
 use core::ops;
@@ -27,6 +28,7 @@ use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 
 use crate::*;
+use smallvec::SmallVec;
 
 /// A value in a Rego document.
 ///
@@ -38,7 +40,7 @@ use crate::*;
 ///    - [`Value::Number`] has at least 100 digits of precision for computations.
 ///
 /// Value can be efficiently cloned due to the use of reference counting.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     /// JSON null.
     Null,
@@ -59,11 +61,11 @@ pub enum Value {
     /// A set of values.
     /// No JSON equivalent.
     /// Sets are serialized as arrays in JSON.
-    Set(Rc<BTreeSet<Value>>),
+    Set(Rc<SetStorage<Value>>),
 
     /// An object.
-    /// Unlike JSON, keys can be any value, not just string.
-    Object(Rc<BTreeMap<Value, Value>>),
+    /// Unlike JSON, keys can be any value, not just string (in general mode).
+    Object(Rc<ObjectStorage>),
 
     /// Undefined value.
     /// Used to indicate the absence of a value.
@@ -96,10 +98,10 @@ impl Serialize for Value {
             Value::Object(fields) => {
                 let mut map = serializer.serialize_map(Some(fields.len()))?;
                 for (k, v) in fields.iter() {
-                    match k {
-                        Value::String(_) => map.serialize_entry(k, v)?,
+                    match &k {
+                        Value::String(_) => map.serialize_entry(&k, v)?,
                         _ => {
-                            let key_str = serde_json::to_string(k).map_err(Error::custom)?;
+                            let key_str = serde_json::to_string(&k).map_err(Error::custom)?;
                             map.serialize_entry(&key_str, v)?
                         }
                     }
@@ -117,6 +119,644 @@ impl Serialize for Value {
 }
 
 struct ValueVisitor;
+
+impl<T: Serialize + Eq + core::hash::Hash> Serialize for SetStorage<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use serde::ser::SerializeSeq;
+        let mut seq = serializer.serialize_seq(Some(self.len()))?;
+        for v in self.iter() {
+            seq.serialize_element(v)?;
+        }
+        seq.end()
+    }
+}
+
+#[doc(hidden)]
+impl<'de> Deserialize<'de> for Value {
+    fn deserialize<D>(deserializer: D) -> Result<Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(ValueVisitor)
+    }
+}
+
+impl fmt::Display for Value {
+    /// Display a value.
+    ///
+    /// A value is displayed by serializing it to JSON using serde_json::to_string.
+    ///
+    /// ```
+    /// # use regorus::*;
+    /// # fn main() -> anyhow::Result<()> {
+    /// let v = Value::from("hello");
+    /// assert_eq!(format!("{v}"), "\"hello\"");
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match serde_json::to_string(self) {
+            Ok(s) => write!(f, "{s}"),
+            Err(_e) => Err(fmt::Error),
+        }
+    }
+}
+
+// Storage for objects: small inline map promoted to hash map.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ObjectStorage {
+    General(ObjectStore<Value>),
+    CaseInsensitive(ObjectStore<CIString>),
+}
+
+#[derive(Clone, Debug)]
+pub enum SetStorage<T> {
+    Small(SmallVec<[T; SMALL_SET_INLINE]>),
+    Hash(Set<T>),
+}
+
+impl<T: PartialEq + Eq + core::hash::Hash> PartialEq for SetStorage<T> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+        match (self, other) {
+            (SetStorage::Small(a), SetStorage::Small(b)) => a == b,
+            (SetStorage::Hash(a), SetStorage::Hash(b)) => a == b,
+            // Different variants but same elements
+            _ => {
+                // Compare element by element
+                self.iter().all(|v| other.contains(v))
+            }
+        }
+    }
+}
+
+impl<T: Eq + core::hash::Hash> Eq for SetStorage<T> {}
+
+#[derive(Clone, Debug)]
+pub enum ObjectStore<K> {
+    Small(SmallVec<[(K, Value); SMALL_OBJECT_INLINE]>),
+    Hash(Map<K, Value>),
+}
+
+impl<K: PartialEq + Eq + core::hash::Hash> PartialEq for ObjectStore<K> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+        match (self, other) {
+            (ObjectStore::Small(a), ObjectStore::Small(b)) => a == b,
+            (ObjectStore::Hash(a), ObjectStore::Hash(b)) => a == b,
+            // Different variants: compare key-value pairs
+            _ => {
+                match self {
+                    ObjectStore::Small(sv) => sv.iter().all(|(k, v)| other.get(k) == Some(v)),
+                    ObjectStore::Hash(map) => map.iter().all(|(k, v)| other.get(k) == Some(v)),
+                }
+            }
+        }
+    }
+}
+
+impl<K: Eq + core::hash::Hash> Eq for ObjectStore<K> {}
+
+impl<K> ObjectStore<K> {
+    pub fn len(&self) -> usize {
+        match self {
+            ObjectStore::Small(sv) => sv.len(),
+            ObjectStore::Hash(map) => map.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl<K: Eq + core::hash::Hash> ObjectStore<K> {
+    pub fn get(&self, key: &K) -> Option<&Value> {
+        match self {
+            ObjectStore::Small(sv) => sv.iter().find_map(|(k, v)| if k == key { Some(v) } else { None }),
+            ObjectStore::Hash(map) => map.get(key),
+        }
+    }
+
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut Value> {
+        match self {
+            ObjectStore::Small(sv) => sv.iter_mut().find_map(|(k, v)| if k == key { Some(v) } else { None }),
+            ObjectStore::Hash(map) => map.get_mut(key),
+        }
+    }
+
+    pub fn insert(&mut self, key: K, value: Value) -> Option<Value> {
+        match self {
+            ObjectStore::Small(sv) => {
+                if let Some((_, v)) = sv.iter_mut().find(|(k, _)| k == &key) {
+                    return Some(core::mem::replace(v, value));
+                }
+                if sv.len() < SMALL_OBJECT_INLINE {
+                    sv.push((key, value));
+                    None
+                } else {
+                    let mut map: Map<K, Value> = Map::with_capacity_and_hasher(sv.len(), crate::collections::DefaultBuildHasher::default());
+                    for (k, v) in sv.drain(..) {
+                        map.insert(k, v);
+                    }
+                    let old = map.insert(key, value);
+                    *self = ObjectStore::Hash(map);
+                    old
+                }
+            }
+            ObjectStore::Hash(map) => map.insert(key, value),
+        }
+    }
+
+    pub fn iter(&self) -> ObjectStoreIter<'_, K> {
+        match self {
+            ObjectStore::Small(sv) => ObjectStoreIter::Small(sv.iter()),
+            ObjectStore::Hash(map) => ObjectStoreIter::Hash(map.iter()),
+        }
+    }
+
+    pub fn iter_mut(&mut self) -> ObjectStoreIterMut<'_, K> {
+        match self {
+            ObjectStore::Small(sv) => ObjectStoreIterMut::Small(sv.iter_mut()),
+            ObjectStore::Hash(map) => ObjectStoreIterMut::Hash(map.iter_mut()),
+        }
+    }
+}
+
+pub enum ObjectStoreIter<'a, K> {
+    Small(core::slice::Iter<'a, (K, Value)>),
+    Hash(hashbrown::hash_map::Iter<'a, K, Value>),
+}
+
+impl<'a, K> fmt::Debug for ObjectStoreIter<'a, K> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ObjectStoreIter").finish()
+    }
+}
+
+impl<'a, K> Iterator for ObjectStoreIter<'a, K>
+where
+    K: Clone,
+{
+    type Item = (K, &'a Value);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            ObjectStoreIter::Small(iter) => iter.next().map(|(k, v)| (k.clone(), v)),
+            ObjectStoreIter::Hash(iter) => iter.next().map(|(k, v)| (k.clone(), v)),
+        }
+    }
+}
+
+pub enum ObjectStoreIterMut<'a, K> {
+    Small(core::slice::IterMut<'a, (K, Value)>),
+    Hash(hashbrown::hash_map::IterMut<'a, K, Value>),
+}
+
+impl<'a, K> fmt::Debug for ObjectStoreIterMut<'a, K> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ObjectStoreIterMut").finish()
+    }
+}
+
+impl<'a, K> Iterator for ObjectStoreIterMut<'a, K>
+where
+    K: Clone,
+{
+    type Item = (K, &'a mut Value);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            ObjectStoreIterMut::Small(iter) => iter.next().map(|(k, v)| (k.clone(), v)),
+            ObjectStoreIterMut::Hash(iter) => iter.next().map(|(k, v)| (k.clone(), v)),
+        }
+    }
+}
+
+impl<T> SetStorage<T> {
+    pub fn len(&self) -> usize {
+        match self {
+            SetStorage::Small(sv) => sv.len(),
+            SetStorage::Hash(set) => set.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl<T: Eq + core::hash::Hash> SetStorage<T> {
+    pub fn contains(&self, value: &T) -> bool {
+        match self {
+            SetStorage::Small(sv) => sv.contains(value),
+            SetStorage::Hash(set) => set.contains(value),
+        }
+    }
+
+    pub fn insert(&mut self, value: T) -> bool {
+        match self {
+            SetStorage::Small(sv) => {
+                if sv.contains(&value) {
+                    return false;
+                }
+                if sv.len() < SMALL_SET_INLINE {
+                    sv.push(value);
+                    true
+                } else {
+                    let mut set: Set<T> = Set::with_capacity_and_hasher(sv.len(), crate::collections::DefaultBuildHasher::default());
+                    for v in sv.drain(..) {
+                        set.insert(v);
+                    }
+                    let inserted = set.insert(value);
+                    *self = SetStorage::Hash(set);
+                    inserted
+                }
+            }
+            SetStorage::Hash(set) => set.insert(value),
+        }
+    }
+
+    pub fn iter(&self) -> SetIter<'_, T> {
+        match self {
+            SetStorage::Small(sv) => SetIter::Small(sv.iter()),
+            SetStorage::Hash(set) => SetIter::Hash(set.iter()),
+        }
+    }
+
+    pub fn get(&self, value: &T) -> Option<&T> {
+        match self {
+            SetStorage::Small(sv) => sv.iter().find(|v| *v == value),
+            SetStorage::Hash(set) => set.get(value),
+        }
+    }
+
+    pub fn append(&mut self, other: &mut SetStorage<T>) {
+        match other {
+            SetStorage::Small(sv) => {
+                for v in sv.drain(..) {
+                    self.insert(v);
+                }
+            }
+            SetStorage::Hash(set) => {
+                for v in set.drain() {
+                    self.insert(v);
+                }
+            }
+        }
+    }
+}
+
+pub enum SetIter<'a, T> {
+    Small(core::slice::Iter<'a, T>),
+    Hash(hashbrown::hash_set::Iter<'a, T>),
+}
+
+impl<'a, T> fmt::Debug for SetIter<'a, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SetIter").finish()
+    }
+}
+
+impl<'a, T> Iterator for SetIter<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            SetIter::Small(iter) => iter.next(),
+            SetIter::Hash(iter) => iter.next(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ObjectEntries<'a> {
+    inner: ObjectEntriesInner<'a>,
+}
+
+#[derive(Debug)]
+enum ObjectEntriesInner<'a> {
+    General(ObjectStoreIter<'a, Value>),
+    CaseInsensitive(ObjectStoreIter<'a, CIString>),
+}
+
+impl<'a> Iterator for ObjectEntries<'a> {
+    type Item = (Value, &'a Value);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.inner {
+            ObjectEntriesInner::General(iter) => iter.next().map(|(k, v)| (k, v)),
+            ObjectEntriesInner::CaseInsensitive(iter) => iter
+                .next()
+                .map(|(k, v)| (Value::String(k.as_ref().into()), v)),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ObjectEntriesMut<'a> {
+    inner: ObjectEntriesMutInner<'a>,
+}
+
+#[derive(Debug)]
+enum ObjectEntriesMutInner<'a> {
+    General(ObjectStoreIterMut<'a, Value>),
+    CaseInsensitive(ObjectStoreIterMut<'a, CIString>),
+}
+
+impl<'a> Iterator for ObjectEntriesMut<'a> {
+    type Item = (Value, &'a mut Value);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.inner {
+            ObjectEntriesMutInner::General(iter) => iter.next().map(|(k, v)| (k, v)),
+            ObjectEntriesMutInner::CaseInsensitive(iter) => iter
+                .next()
+                .map(|(k, v)| (Value::String(k.as_ref().into()), v)),
+        }
+    }
+}
+
+impl ObjectStorage {
+    pub fn len(&self) -> usize {
+        match self {
+            ObjectStorage::General(store) => store.len(),
+            ObjectStorage::CaseInsensitive(store) => store.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn contains_key(&self, key: &Value) -> bool {
+        self.get(key).is_some()
+    }
+
+    pub fn get(&self, key: &Value) -> Option<&Value> {
+        match self {
+            ObjectStorage::General(store) => store.get(key),
+            ObjectStorage::CaseInsensitive(store) => match key {
+                Value::String(s) => {
+                    let ci = CIString::from(s.as_ref());
+                    store.get(&ci)
+                }
+                _ => None,
+            },
+        }
+    }
+
+    pub fn get_mut(&mut self, key: &Value) -> Option<&mut Value> {
+        match self {
+            ObjectStorage::General(store) => store.get_mut(key),
+            ObjectStorage::CaseInsensitive(store) => match key {
+                Value::String(s) => {
+                    let ci = CIString::from(s.as_ref());
+                    store.get_mut(&ci)
+                }
+                _ => None,
+            },
+        }
+    }
+
+    pub fn insert(&mut self, key: Value, value: Value) -> Option<Value> {
+        match self {
+            ObjectStorage::General(store) => store.insert(key, value),
+            ObjectStorage::CaseInsensitive(store) => match key {
+                Value::String(s) => {
+                    let ci = CIString::from(s.as_ref());
+                    store.insert(ci, value)
+                }
+                _ => None,
+            },
+        }
+    }
+
+    pub fn iter(&self) -> ObjectEntries<'_> {
+        match self {
+            ObjectStorage::General(store) => ObjectEntries {
+                inner: ObjectEntriesInner::General(store.iter()),
+            },
+            ObjectStorage::CaseInsensitive(store) => ObjectEntries {
+                inner: ObjectEntriesInner::CaseInsensitive(store.iter()),
+            },
+        }
+    }
+
+    pub fn iter_mut(&mut self) -> ObjectEntriesMut<'_> {
+        match self {
+            ObjectStorage::General(store) => ObjectEntriesMut {
+                inner: ObjectEntriesMutInner::General(store.iter_mut()),
+            },
+            ObjectStorage::CaseInsensitive(store) => ObjectEntriesMut {
+                inner: ObjectEntriesMutInner::CaseInsensitive(store.iter_mut()),
+            },
+        }
+    }
+
+    pub fn values(&self) -> ObjectValues<'_> {
+        ObjectValues { inner: self.iter() }
+    }
+
+    pub fn keys(&self) -> ObjectKeys<'_> {
+        ObjectKeys { inner: self.iter() }
+    }
+
+    pub fn retain<F: FnMut(&Value, &Value) -> bool>(&mut self, mut f: F) {
+        match self {
+            ObjectStorage::General(store) => match store {
+                ObjectStore::Small(sv) => sv.retain(|(k, v)| f(k, v)),
+                ObjectStore::Hash(map) => map.retain(|k, v| f(k, v)),
+            },
+            ObjectStorage::CaseInsensitive(store) => match store {
+                ObjectStore::Small(sv) => sv.retain(|(k, v)| {
+                    let key = Value::String(k.as_ref().into());
+                    f(&key, v)
+                }),
+                ObjectStore::Hash(map) => {
+                    map.retain(|k, v| {
+                        let key = Value::String(k.as_ref().into());
+                        f(&key, v)
+                    });
+                }
+            },
+        }
+    }
+
+    pub fn entry(&mut self, key: Value) -> ObjectEntry<'_> {
+        match self {
+            ObjectStorage::General(store) => {
+                match store {
+                    ObjectStore::Small(sv) => {
+                        if let Some(idx) = sv.iter().position(|(k, _)| k == &key) {
+                            ObjectEntry::Occupied(OccupiedObjectEntry { storage: store, key, index: Some(idx) })
+                        } else {
+                            ObjectEntry::Vacant(VacantObjectEntry { storage: store, key })
+                        }
+                    }
+                    ObjectStore::Hash(_) => {
+                        // Check occupancy first then return the right entry
+                        if store.get(&key).is_some() {
+                            ObjectEntry::Occupied(OccupiedObjectEntry { storage: store, key, index: None })
+                        } else {
+                            ObjectEntry::Vacant(VacantObjectEntry { storage: store, key })
+                        }
+                    }
+                }
+            }
+            ObjectStorage::CaseInsensitive(store) => {
+                let ci = match &key {
+                    Value::String(s) => CIString::from(s.as_ref()),
+                    _ => CIString::from(""),
+                };
+                match store {
+                    ObjectStore::Small(sv) => {
+                        if let Some(idx) = sv.iter().position(|(k, _)| k == &ci) {
+                            ObjectEntry::OccupiedCI(OccupiedCIObjectEntry { storage: store, _ci: ci, key, index: Some(idx) })
+                        } else {
+                            ObjectEntry::VacantCI(VacantCIObjectEntry { storage: store, ci, key })
+                        }
+                    }
+                    ObjectStore::Hash(_) => {
+                        if store.get(&ci).is_some() {
+                            ObjectEntry::OccupiedCI(OccupiedCIObjectEntry { storage: store, _ci: ci, key, index: None })
+                        } else {
+                            ObjectEntry::VacantCI(VacantCIObjectEntry { storage: store, ci, key })
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ObjectValues<'a> {
+    inner: ObjectEntries<'a>,
+}
+
+impl<'a> Iterator for ObjectValues<'a> {
+    type Item = &'a Value;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(_, v)| v)
+    }
+}
+
+#[derive(Debug)]
+pub struct ObjectKeys<'a> {
+    inner: ObjectEntries<'a>,
+}
+
+impl<'a> Iterator for ObjectKeys<'a> {
+    type Item = Value;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(k, _)| k)
+    }
+}
+
+// Entry API for ObjectStorage
+#[derive(Debug)]
+pub enum ObjectEntry<'a> {
+    Occupied(OccupiedObjectEntry<'a>),
+    Vacant(VacantObjectEntry<'a>),
+    OccupiedCI(OccupiedCIObjectEntry<'a>),
+    VacantCI(VacantCIObjectEntry<'a>),
+}
+
+#[derive(Debug)]
+pub struct OccupiedObjectEntry<'a> {
+    storage: &'a mut ObjectStore<Value>,
+    key: Value,
+    index: Option<usize>,
+}
+
+impl<'a> OccupiedObjectEntry<'a> {
+    pub fn get(&self) -> &Value {
+        self.storage.get(&self.key).expect("occupied")
+    }
+}
+
+#[derive(Debug)]
+pub struct VacantObjectEntry<'a> {
+    storage: &'a mut ObjectStore<Value>,
+    key: Value,
+}
+
+#[derive(Debug)]
+pub struct OccupiedCIObjectEntry<'a> {
+    storage: &'a mut ObjectStore<CIString>,
+    _ci: CIString,
+    key: Value,
+    index: Option<usize>,
+}
+
+impl<'a> OccupiedCIObjectEntry<'a> {
+    pub fn get(&self) -> &Value {
+        self.storage.get(&self._ci).expect("occupied")
+    }
+}
+
+#[derive(Debug)]
+pub struct VacantCIObjectEntry<'a> {
+    storage: &'a mut ObjectStore<CIString>,
+    ci: CIString,
+    #[allow(dead_code)]
+    key: Value,
+}
+
+impl<'a> ObjectEntry<'a> {
+    pub fn or_insert(self, default: Value) -> &'a mut Value {
+        self.or_insert_with(|| default)
+    }
+
+    pub fn or_insert_with<F: FnOnce() -> Value>(self, default: F) -> &'a mut Value {
+        match self {
+            ObjectEntry::Occupied(e) => {
+                match e.index {
+                    Some(idx) => &mut e.storage.as_small_mut().expect("small")[idx].1,
+                    None => e.storage.get_mut(&e.key).expect("occupied"),
+                }
+            }
+            ObjectEntry::Vacant(e) => {
+                e.storage.insert(e.key.clone(), default());
+                e.storage.get_mut(&e.key).expect("just inserted")
+            }
+            ObjectEntry::OccupiedCI(e) => {
+                match e.index {
+                    Some(idx) => &mut e.storage.as_small_mut().expect("small")[idx].1,
+                    None => {
+                        let ci = match &e.key {
+                            Value::String(s) => CIString::from(s.as_ref()),
+                            _ => CIString::from(""),
+                        };
+                        e.storage.get_mut(&ci).expect("occupied")
+                    }
+                }
+            }
+            ObjectEntry::VacantCI(e) => {
+                e.storage.insert(e.ci.clone(), default());
+                e.storage.get_mut(&e.ci).expect("just inserted")
+            }
+        }
+    }
+}
+
+impl<K> ObjectStore<K> {
+    fn as_small_mut(&mut self) -> Option<&mut SmallVec<[(K, Value); SMALL_OBJECT_INLINE]>> {
+        match self {
+            ObjectStore::Small(sv) => Some(sv),
+            _ => None,
+        }
+    }
+}
+
 
 impl<'de> Visitor<'de> for ValueVisitor {
     type Value = Value;
@@ -228,7 +868,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                     }
                 }
             }
-            let mut map = BTreeMap::new();
+            let mut map = Map::with_capacity(1);
             map.insert(key, value);
             // Enforce allocator limit while expanding a deserialized object.
             enforce_limit_for::<V::Error>()?;
@@ -237,7 +877,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                 // Enforce allocator limit while expanding a deserialized object.
                 enforce_limit_for::<V::Error>()?;
             }
-            Ok(Value::from(map))
+            Ok(Value::from_map_general(map))
         } else {
             Ok(Value::new_object())
         }
@@ -245,37 +885,42 @@ impl<'de> Visitor<'de> for ValueVisitor {
 }
 
 #[doc(hidden)]
-impl<'de> Deserialize<'de> for Value {
-    fn deserialize<D>(deserializer: D) -> Result<Value, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(ValueVisitor)
-    }
-}
-
-impl fmt::Display for Value {
-    /// Display a value.
-    ///
-    /// A value is displayed by serializing it to JSON using serde_json::to_string.
-    ///
-    /// ```
-    /// # use regorus::*;
-    /// # fn main() -> anyhow::Result<()> {
-    /// let v = Value::from("hello");
-    /// assert_eq!(format!("{v}"), "\"hello\"");
-    /// # Ok(())
-    /// # }
-    /// ```
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match serde_json::to_string(self) {
-            Ok(s) => write!(f, "{s}"),
-            Err(_e) => Err(fmt::Error),
-        }
+impl From<Set<Value>> for Value {
+    fn from(s: Set<Value>) -> Self {
+        Value::Set(Rc::new(SetStorage::Hash(s)))
     }
 }
 
 impl Value {
+    pub(crate) fn from_array(a: Vec<Value>) -> Value {
+        Value::from(a)
+    }
+
+    pub(crate) fn from_set(s: Set<Value>) -> Value {
+        Value::from(s)
+    }
+
+    pub(crate) fn from_map_general(m: Map<Value, Value>) -> Value {
+        Value::Object(Rc::new(ObjectStorage::General(ObjectStore::Hash(m))))
+    }
+
+    pub(crate) fn from_map(m: alloc::collections::BTreeMap<Value, Value>) -> Value {
+        let mut map = Map::with_capacity_and_hasher(m.len(), crate::collections::DefaultBuildHasher::default());
+        for (k, v) in m {
+            map.insert(k, v);
+        }
+        Value::from_map_general(map)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn from_map_ci(m: Map<CIString, Value>) -> Value {
+        Value::Object(Rc::new(ObjectStorage::CaseInsensitive(ObjectStore::Hash(m))))
+    }
+
+    pub(crate) fn is_empty_object(&self) -> bool {
+        self == &Value::new_object()
+    }
+
     /// Create an empty [`Value::Array`]
     ///
     /// ```
@@ -287,25 +932,9 @@ impl Value {
     /// # }
     /// ```
     pub fn new_array() -> Value {
-        Value::from(vec![])
+        Value::from(Vec::new())
     }
 
-    /// Create an empty [`Value::Object`]
-    ///
-    /// ```
-    /// # use regorus::*;
-    /// # fn main() -> anyhow::Result<()> {
-    /// let obj = Value::new_object();
-    /// assert_eq!(obj.as_object().expect("not an object").len(), 0);
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn new_object() -> Value {
-        Value::from(BTreeMap::new())
-    }
-
-    /// Create an empty [`Value::Set`]
-    ///
     /// ```
     /// # use regorus::*;
     /// # fn main() -> anyhow::Result<()> {
@@ -315,7 +944,12 @@ impl Value {
     /// # }
     /// ```
     pub fn new_set() -> Value {
-        Value::from(BTreeSet::new())
+        Value::from_set(Set::new())
+    }
+
+    /// Create an empty object.
+    pub fn new_object() -> Value {
+        Value::from_map_general(Map::new())
     }
 }
 
@@ -761,64 +1395,19 @@ impl From<Vec<Value>> for Value {
     }
 }
 
-impl From<BTreeSet<Value>> for Value {
-    /// Create a [`Value::Set`] from a [`BTreeSet<Value>`].
-    /// ```
-    /// # use regorus::*;
-    /// # use std::collections::BTreeSet;
-    /// # fn main() -> anyhow::Result<()> {
-    /// let strings = [ "Hello", "World" ];
-    /// let v = Value::from(strings
-    ///            .iter()
-    ///            .map(|s| Value::from(*s))
-    ///            .collect::<BTreeSet<Value>>());
-    ///
-    /// let mut iter = v.as_set()?.iter();
-    /// assert_eq!(iter.next(), Some(&Value::from(strings[0])));
-    /// assert_eq!(iter.next(), Some(&Value::from(strings[1])));
-    /// # Ok(())
-    /// # }
-    fn from(s: BTreeSet<Value>) -> Self {
-        Value::Set(Rc::new(s))
+impl From<alloc::collections::BTreeSet<Value>> for Value {
+    fn from(s: alloc::collections::BTreeSet<Value>) -> Self {
+        let mut set = Set::with_capacity_and_hasher(s.len(), crate::collections::DefaultBuildHasher::default());
+        for v in s {
+            set.insert(v);
+        }
+        Value::from_set(set)
     }
 }
 
-impl From<BTreeMap<Value, Value>> for Value {
-    /// Create a [`Value::Object`] from a [`BTreeMap<Value>`].
-    /// ```
-    /// # use regorus::*;
-    /// # use std::collections::BTreeMap;
-    /// # fn main() -> anyhow::Result<()> {
-    /// let strings = [ ("Hello", "World") ];
-    /// let v = Value::from(strings
-    ///            .iter()
-    ///            .map(|(k,v)| (Value::from(*k), Value::from(*v)))
-    ///            .collect::<BTreeMap<Value, Value>>());
-    ///
-    /// let mut iter = v.as_object()?.iter();
-    /// assert_eq!(iter.next(), Some((&Value::from(strings[0].0), &Value::from(strings[0].1))));
-    /// # Ok(())
-    /// # }
-    fn from(s: BTreeMap<Value, Value>) -> Self {
-        Value::Object(Rc::new(s))
-    }
-}
-
-impl Value {
-    pub(crate) fn from_array(a: Vec<Value>) -> Value {
-        Value::from(a)
-    }
-
-    pub(crate) fn from_set(s: BTreeSet<Value>) -> Value {
-        Value::from(s)
-    }
-
-    pub(crate) fn from_map(m: BTreeMap<Value, Value>) -> Value {
-        Value::from(m)
-    }
-
-    pub(crate) fn is_empty_object(&self) -> bool {
-        self == &Value::new_object()
+impl From<alloc::collections::BTreeMap<Value, Value>> for Value {
+    fn from(m: alloc::collections::BTreeMap<Value, Value>) -> Self {
+        Value::from_map(m)
     }
 }
 
@@ -1237,87 +1826,85 @@ impl Value {
         }
     }
 
-    /// Cast value to [`& BTreeSet<Value>`] if [`Value::Set`].
+    /// Cast value to [`&SetStorage<Value>`] if [`Value::Set`].
     /// ```
     /// # use regorus::*;
-    /// # use std::collections::BTreeSet;
     /// # fn main() -> anyhow::Result<()> {
     /// let v = Value::from(
     ///    [Value::from("Hello")]
     ///        .iter()
     ///        .cloned()
-    ///        .collect::<BTreeSet<Value>>(),
+    ///        .collect::<Set<Value>>(),
     /// );
-    /// assert_eq!(v.as_set()?.first(), Some(&Value::from("Hello")));
+    /// assert!(matches!(v.as_set()?, SetStorage::Small(_)));
     /// # Ok(())
     /// # }
-    pub fn as_set(&self) -> Result<&BTreeSet<Value>> {
+    pub fn as_set(&self) -> Result<&SetStorage<Value>> {
         match self {
             Value::Set(s) => Ok(s),
             _ => Err(anyhow!("not a set")),
         }
     }
 
-    /// Cast value to [`&mut BTreeSet<Value>`] if [`Value::Set`].
+    /// Cast value to [`&mut SetStorage<Value>`] if [`Value::Set`].
     /// ```
     /// # use regorus::*;
-    /// # use std::collections::BTreeSet;
     /// # fn main() -> anyhow::Result<()> {
     /// let mut v = Value::from(
     ///    [Value::from("Hello")]
     ///        .iter()
     ///        .cloned()
-    ///        .collect::<BTreeSet<Value>>(),
+    ///        .collect::<Set<Value>>(),
     /// );
-    /// v.as_set_mut()?.insert(Value::from("World"));
+    /// if let SetStorage::Small(s) = v.as_set_mut()? {
+    ///     s.push(Value::from("World"));
+    /// }
     /// # Ok(())
     /// # }
-    pub fn as_set_mut(&mut self) -> Result<&mut BTreeSet<Value>> {
+    pub fn as_set_mut(&mut self) -> Result<&mut SetStorage<Value>> {
         match self {
             Value::Set(s) => Ok(Rc::make_mut(s)),
             _ => Err(anyhow!("not a set")),
         }
     }
 
-    /// Cast value to [`& BTreeMap<Value, Value>`] if [`Value::Object`].
+    /// Cast value to [`&ObjectStorage`] if [`Value::Object`].
     /// ```
     /// # use regorus::*;
-    /// # use std::collections::BTreeMap;
     /// # fn main() -> anyhow::Result<()> {
     /// let v = Value::from(
     ///    [(Value::from("Hello"), Value::from("World"))]
     ///        .iter()
     ///        .cloned()
-    ///        .collect::<BTreeMap<Value, Value>>(),
+    ///        .collect::<Map<Value, Value>>(),
     /// );
     /// assert_eq!(
-    ///    v.as_object()?.iter().next(),
-    ///    Some((&Value::from("Hello"), &Value::from("World"))),
+    ///    v.as_object()?.len(),
+    ///    1,
     /// );
     /// # Ok(())
     /// # }
-    pub fn as_object(&self) -> Result<&BTreeMap<Value, Value>> {
+    pub fn as_object(&self) -> Result<&ObjectStorage> {
         match self {
             Value::Object(m) => Ok(m),
             _ => Err(anyhow!("not an object")),
         }
     }
 
-    /// Cast value to [`&mut BTreeMap<Value, Value>`] if [`Value::Object`].
+    /// Cast value to [`&mut ObjectStorage`] if [`Value::Object`].
     /// ```
     /// # use regorus::*;
-    /// # use std::collections::BTreeMap;
     /// # fn main() -> anyhow::Result<()> {
     /// let mut v = Value::from(
     ///    [(Value::from("Hello"), Value::from("World"))]
     ///        .iter()
     ///        .cloned()
-    ///        .collect::<BTreeMap<Value, Value>>(),
+    ///        .collect::<Map<Value, Value>>(),
     /// );
-    /// v.as_object_mut()?.insert(Value::from("Good"), Value::from("Bye"));
+    /// v.as_object_mut()?.len();
     /// # Ok(())
     /// # }
-    pub fn as_object_mut(&mut self) -> Result<&mut BTreeMap<Value, Value>> {
+    pub fn as_object_mut(&mut self) -> Result<&mut ObjectStorage> {
         match self {
             Value::Object(m) => Ok(Rc::make_mut(m)),
             _ => Err(anyhow!("not an object")),
@@ -1371,7 +1958,7 @@ impl Value {
             }
             (Value::Object(map), Value::Object(new)) => {
                 for (k, v) in new.iter() {
-                    match map.get(k) {
+                    match map.get(&k) {
                         Some(pv) if *pv != *v => {
                             bail!(
                                 "value for key `{}` generated multiple times: `{}` and `{}`",
@@ -1446,13 +2033,38 @@ impl ops::Index<&Value> for Value {
     ///`
     fn index(&self, key: &Value) -> &Self::Output {
         match (self, key) {
-            (Value::Object(o), _) => match &o.get(key) {
-                Some(v) => v,
-                _ => &Value::Undefined,
+            (Value::Object(o), _) => match &**o {
+                ObjectStorage::General(store) => match store {
+                    ObjectStore::Small(sv) => sv
+                        .iter()
+                        .find(|(k, _)| k == key)
+                        .map(|(_, v)| v)
+                        .unwrap_or(&Value::Undefined),
+                    ObjectStore::Hash(map) => map.get(key).unwrap_or(&Value::Undefined),
+                },
+                ObjectStorage::CaseInsensitive(store) => match store {
+                    ObjectStore::Small(sv) => sv
+                        .iter()
+                        .find(|(k, _)| match key {
+                            Value::String(s) => CIString::from(s.clone()) == *k,
+                            _ => false,
+                        })
+                        .map(|(_, v)| v)
+                        .unwrap_or(&Value::Undefined),
+                    ObjectStore::Hash(map) => match key {
+                        Value::String(s) => map
+                            .get(&CIString::from(s.clone()))
+                            .unwrap_or(&Value::Undefined),
+                        _ => &Value::Undefined,
+                    },
+                },
             },
-            (Value::Set(s), _) => match s.get(key) {
-                Some(v) => v,
-                _ => &Value::Undefined,
+            (Value::Set(s), _) => match &**s {
+                SetStorage::Small(sv) => sv
+                    .iter()
+                    .find(|v| *v == key)
+                    .unwrap_or(&Value::Undefined),
+                SetStorage::Hash(set) => set.get(key).unwrap_or(&Value::Undefined),
             },
             (Value::Array(a), Value::Number(n)) => match n.as_u64() {
                 Some(index) if (index as usize) < a.len() => &a[index as usize],
@@ -1492,5 +2104,137 @@ where
     /// # }
     fn index(&self, key: T) -> &Self::Output {
         &self[&Value::from(key)]
+    }
+}
+
+impl core::hash::Hash for Value {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
+        match self {
+            Value::Null => {}
+            Value::Bool(b) => b.hash(state),
+            Value::Number(n) => n.hash(state),
+            Value::String(s) => s.hash(state),
+            Value::Array(a) => a.hash(state),
+            Value::Set(s) => s.hash(state),
+            Value::Object(o) => match &**o {
+                ObjectStorage::General(store) => store.hash(state),
+                ObjectStorage::CaseInsensitive(store) => store.hash(state),
+            },
+            Value::Undefined => {}
+        }
+    }
+}
+
+impl<K: core::hash::Hash + Eq> core::hash::Hash for ObjectStore<K> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            ObjectStore::Small(sv) => {
+                let mut acc: u64 = 0;
+                for (k, v) in sv.iter() {
+                    let h1 = crate::collections::hash_with_builder(k);
+                    let h2 = crate::collections::hash_with_builder(v);
+                    acc ^= h1 ^ (h2.rotate_left(1));
+                }
+                acc.hash(state);
+            }
+            ObjectStore::Hash(map) => {
+                let mut acc: u64 = 0;
+                for (k, v) in map.iter() {
+                    let h1 = crate::collections::hash_with_builder(k);
+                    let h2 = crate::collections::hash_with_builder(v);
+                    acc ^= h1 ^ (h2.rotate_left(1));
+                }
+                acc.hash(state);
+            }
+        }
+    }
+}
+
+impl core::hash::Hash for ObjectStorage {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
+        match self {
+            ObjectStorage::General(s) => s.hash(state),
+            ObjectStorage::CaseInsensitive(s) => s.hash(state),
+        }
+    }
+}
+
+impl<T: core::hash::Hash + Eq> core::hash::Hash for SetStorage<T> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            SetStorage::Small(sv) => {
+                let mut acc: u64 = 0;
+                for v in sv.iter() {
+                    acc ^= crate::collections::hash_with_builder(v);
+                }
+                acc.hash(state);
+            }
+            SetStorage::Hash(set) => {
+                let mut acc: u64 = 0;
+                for v in set.iter() {
+                    acc ^= crate::collections::hash_with_builder(v);
+                }
+                acc.hash(state);
+            }
+        }
+    }
+}
+
+// Discriminant order for PartialOrd/Ord: Null < Bool < Number < String < Array < Set < Object < Undefined
+fn variant_order(v: &Value) -> u8 {
+    match v {
+        Value::Null => 0,
+        Value::Bool(_) => 1,
+        Value::Number(_) => 2,
+        Value::String(_) => 3,
+        Value::Array(_) => 4,
+        Value::Set(_) => 5,
+        Value::Object(_) => 6,
+        Value::Undefined => 7,
+    }
+}
+
+impl PartialOrd for Value {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Value {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        use core::cmp::Ordering;
+        let lhs_ord = variant_order(self);
+        let rhs_ord = variant_order(other);
+        if lhs_ord != rhs_ord {
+            return lhs_ord.cmp(&rhs_ord);
+        }
+        match (self, other) {
+            (Value::Null, Value::Null) => Ordering::Equal,
+            (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
+            (Value::Number(a), Value::Number(b)) => a.cmp(b),
+            (Value::String(a), Value::String(b)) => a.as_ref().cmp(b.as_ref()),
+            (Value::Array(a), Value::Array(b)) => a.cmp(b),
+            (Value::Set(a), Value::Set(b)) => {
+                // Compare as sorted vectors for deterministic ordering.
+                let mut va: Vec<&Value> = a.iter().collect();
+                let mut vb: Vec<&Value> = b.iter().collect();
+                va.sort();
+                vb.sort();
+                va.cmp(&vb)
+            }
+            (Value::Object(a), Value::Object(b)) => {
+                // Compare as sorted key-value pairs for deterministic ordering.
+                let mut pa: Vec<(Value, &Value)> = a.iter().collect();
+                let mut pb: Vec<(Value, &Value)> = b.iter().collect();
+                pa.sort_by(|x, y| x.0.cmp(&y.0).then_with(|| x.1.cmp(y.1)));
+                pb.sort_by(|x, y| x.0.cmp(&y.0).then_with(|| x.1.cmp(y.1)));
+                pa.cmp(&pb)
+            }
+            (Value::Undefined, Value::Undefined) => Ordering::Equal,
+            // Unreachable because we handled variant mismatch above.
+            _ => Ordering::Equal,
+        }
     }
 }

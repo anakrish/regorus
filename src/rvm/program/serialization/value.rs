@@ -1,6 +1,5 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -10,7 +9,10 @@ use serde::de::{self, EnumAccess, VariantAccess as _, Visitor};
 use serde::ser::{SerializeSeq as _, SerializeTuple as _};
 use serde::{Deserialize, Serialize};
 
+use alloc::vec;
+
 use crate::number::Number;
+use crate::value::{ObjectStorage, SetStorage};
 use crate::value::Value;
 
 const VARIANT_NULL: u32 = 0;
@@ -117,30 +119,36 @@ impl<'a> Serialize for BinaryValueSlice<'a> {
     }
 }
 
-struct BinarySetRef<'a>(&'a BTreeSet<Value>);
+struct BinarySetRef<'a>(&'a SetStorage<Value>);
 
 impl<'a> Serialize for BinarySetRef<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
-        for value in self.0.iter() {
+        // Sort elements for deterministic binary output.
+        let mut sorted: Vec<&Value> = self.0.iter().collect();
+        sorted.sort();
+        let mut seq = serializer.serialize_seq(Some(sorted.len()))?;
+        for value in sorted {
             seq.serialize_element(&BinaryValueRef(value))?;
         }
         seq.end()
     }
 }
 
-struct BinaryObjectRef<'a>(&'a BTreeMap<Value, Value>);
+struct BinaryObjectRef<'a>(&'a ObjectStorage);
 
 impl<'a> Serialize for BinaryObjectRef<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
-        for (key, value) in self.0.iter() {
+        // Sort entries by key for deterministic binary output.
+        let mut sorted: Vec<(Value, &Value)> = self.0.iter().collect();
+        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut seq = serializer.serialize_seq(Some(sorted.len()))?;
+        for (key, value) in &sorted {
             seq.serialize_element(&BinaryEntryRef(key, value))?;
         }
         seq.end()
@@ -253,19 +261,19 @@ impl<'de> Visitor<'de> for BinaryValueVisitor {
             }
             (BinaryVariant::Set, variant) => {
                 let items: Vec<BinaryValue> = variant.newtype_variant()?;
-                let mut set = BTreeSet::new();
+                let mut set = crate::collections::Set::new();
                 for item in items {
                     set.insert(item.into_value());
                 }
-                Ok(BinaryValue(Value::from(set)))
+                Ok(BinaryValue(Value::from_set(set)))
             }
             (BinaryVariant::Object, variant) => {
                 let entries: Vec<(BinaryValue, BinaryValue)> = variant.newtype_variant()?;
-                let mut map = BTreeMap::new();
+                let mut map = crate::collections::Map::new();
                 for (key, value) in entries {
                     map.insert(key.into_value(), value.into_value());
                 }
-                Ok(BinaryValue(Value::from(map)))
+                Ok(BinaryValue(Value::from_map_general(map)))
             }
             (BinaryVariant::Undefined, variant) => {
                 variant.unit_variant()?;

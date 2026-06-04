@@ -8,11 +8,12 @@
 
 //! Functions responsible for building destructuring plans.
 
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::collections::BTreeSet;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::ast::{Expr, ExprRef};
+use crate::collections::Map;
 use crate::compiler::destructuring_planner::context::OverlayBindingContext;
 use crate::compiler::destructuring_planner::utils::extract_literal_key;
 use crate::compiler::destructuring_planner::{
@@ -80,7 +81,7 @@ pub(crate) fn create_destructuring_plan_with_tracking<T: VariableBindingContext>
 
         // Object destructuring
         Expr::Object { fields, .. } => {
-            let mut field_plans = BTreeMap::new();
+            let mut field_plans = Map::new();
             let mut dynamic_fields = Vec::new();
             for (_, key_expr, value_expr) in fields {
                 if let Some(value_plan) = create_destructuring_plan_with_tracking(

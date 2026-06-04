@@ -9,8 +9,10 @@ use crate::utils::limits::{
     LimitError,
 };
 use crate::value::Value;
+use crate::collections::Map;
 use crate::CompiledPolicy;
-use alloc::collections::{btree_map::Entry, BTreeMap, VecDeque};
+use alloc::collections::VecDeque;
+use hashbrown::hash_map::Entry;
 #[cfg(feature = "allocator-memory-limits")]
 use alloc::format;
 use alloc::string::String;
@@ -98,7 +100,7 @@ pub struct RegoVM {
     pub(super) step_mode: bool,
 
     /// Preloaded responses for HostAwait in run-to-completion execution keyed by identifier
-    pub(super) host_await_responses: BTreeMap<Value, VecDeque<Value>>,
+    pub(super) host_await_responses: Map<Value, VecDeque<Value>>,
 
     /// Current execution mode (run-to-completion vs suspendable)
     pub(super) execution_mode: ExecutionMode,
@@ -110,7 +112,7 @@ pub struct RegoVM {
     pub(super) strict_builtin_errors: bool,
 
     /// Cache for builtin calls that must stay deterministic across a single evaluation
-    pub(super) builtins_cache: BTreeMap<(&'static str, Vec<Value>), Value>,
+    pub(super) builtins_cache: Map<(&'static str, Vec<Value>), Value>,
 
     /// Optional override for the execution timer configuration
     pub(super) execution_timer_config: Option<ExecutionTimerConfig>,
@@ -155,11 +157,11 @@ impl RegoVM {
             execution_state: ExecutionState::Ready,
             breakpoints: BreakpointSet::new(),
             step_mode: false,
-            host_await_responses: BTreeMap::new(),
+            host_await_responses: Map::new(),
             execution_mode: ExecutionMode::RunToCompletion,
             frame_pc_overridden: false,
             strict_builtin_errors: false,
-            builtins_cache: BTreeMap::new(),
+            builtins_cache: Map::new(),
             execution_timer_config: None,
             execution_timer: ExecutionTimer::new(fallback_timer),
             execution_timer_elapsed_at_suspend: None,

@@ -3,9 +3,9 @@
 
 #![allow(clippy::unused_trait_names)]
 
+use crate::collections::Map;
 use crate::registry::instances::{EFFECT_SCHEMA_REGISTRY, RESOURCE_SCHEMA_REGISTRY};
 use crate::{format, Rc, Schema, Vec};
-use alloc::collections::BTreeMap;
 use serde::de::{Deserializer, Error};
 use serde::Deserialize;
 type String = Rc<str>;
@@ -50,14 +50,14 @@ where
 /// If specified as schema names, look them up from EFFECT_SCHEMA_REGISTRY.
 pub fn deserialize_effects<'de, D>(
     deserializer: D,
-) -> Result<BTreeMap<String, Rc<Schema>>, D::Error>
+) -> Result<Map<String, Rc<Schema>>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let object: BTreeMap<String, serde_json::Value> = BTreeMap::deserialize(deserializer)
+    let object: Map<String, serde_json::Value> = Map::deserialize(deserializer)
         .map_err(|e| D::Error::custom(format!("Failed to deserialize effects: {}", e)))?;
 
-    let mut effects = BTreeMap::new();
+    let mut effects = Map::new();
 
     for (key, item) in object.into_iter() {
         if let Some(name) = item.as_str() {

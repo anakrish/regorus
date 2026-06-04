@@ -11,8 +11,7 @@ use crate::ast::ExprRef;
 use crate::lexer::Span;
 use crate::rvm::instructions::{ArrayCreateParams, ObjectCreateParams, SetCreateParams};
 use crate::rvm::Instruction;
-use crate::{Rc, Value};
-use alloc::collections::BTreeMap;
+use crate::Value;
 use alloc::vec::Vec;
 
 impl<'a> Compiler<'a> {
@@ -104,12 +103,15 @@ impl<'a> Compiler<'a> {
             let mut template_keys = literal_keys.clone();
             template_keys.sort();
 
-            let mut template_obj = BTreeMap::new();
-            for key in &template_keys {
-                template_obj.insert(key.clone(), Value::Undefined);
+            let mut template_obj = Value::new_object();
+            {
+                let obj = template_obj.as_object_mut().expect("new_object is object");
+                for key in &template_keys {
+                    obj.insert(key.clone(), Value::Undefined);
+                }
             }
 
-            let template_value = Value::Object(Rc::new(template_obj));
+            let template_value = template_obj;
             self.add_literal(template_value)
         };
 

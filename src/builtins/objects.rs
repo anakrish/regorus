@@ -10,8 +10,8 @@ use crate::lexer::Span;
 use crate::Rc;
 use crate::Value;
 use crate::*;
+use crate::collections::Set;
 
-use alloc::collections::{BTreeMap, BTreeSet};
 use core::iter::Iterator;
 
 use anyhow::{bail, Result};
@@ -50,7 +50,7 @@ fn json_filter_impl(v: &Value, filter: &Value) -> Result<Value> {
                 // The string index must be parseable as a number.
                 // TODO: support integer indexes?
                 if let Value::String(idx) = idx {
-                    if let Ok(idx) = Value::from_json_str(idx) {
+                    if let Ok(idx) = Value::from_json_str(&idx) {
                         let item = json_filter_impl(&v[&idx], filter)?;
                         if item != Value::Undefined {
                             items.push(item);
@@ -64,10 +64,10 @@ fn json_filter_impl(v: &Value, filter: &Value) -> Result<Value> {
         }
 
         Value::Set(s) => {
-            let mut items = BTreeSet::new();
+            let mut items = Set::new();
             for (item, filter) in filters.iter() {
-                if s.contains(item) {
-                    let item = json_filter_impl(item, filter)?;
+                if s.contains(&item) {
+                    let item = json_filter_impl(&item, filter)?;
                     if item != Value::Undefined {
                         items.insert(item);
                         // Guard set growth when preserving matched entries.
@@ -79,17 +79,18 @@ fn json_filter_impl(v: &Value, filter: &Value) -> Result<Value> {
         }
 
         Value::Object(_) => {
-            let mut items = BTreeMap::new();
+            let mut obj = Value::new_object();
+            let obj_mut = obj.as_object_mut()?;
             for (key, filter) in filters.iter() {
-                let item = json_filter_impl(&v[key], filter)?;
+                let item = json_filter_impl(&v[&key], filter)?;
                 if item != Value::Undefined {
-                    items.insert(key.clone(), item);
+                    obj_mut.insert(key.clone(), item);
                     // Guard map growth as filtered keys accumulate.
                     enforce_limit()?;
                 }
             }
 
-            Ok(Value::from_map(items))
+            Ok(obj)
         }
 
         _ => Ok(Value::Undefined),
@@ -129,7 +130,7 @@ fn json_remove_impl(v: &Value, filter: &Value) -> Result<Value> {
         }
 
         Value::Set(s) => {
-            let mut items = BTreeSet::new();
+            let mut items = Set::new();
             for item in s.iter() {
                 if let Some(f) = filters.get(item) {
                     let v = json_remove_impl(item, f)?;
@@ -149,22 +150,23 @@ fn json_remove_impl(v: &Value, filter: &Value) -> Result<Value> {
         }
 
         Value::Object(obj) => {
-            let mut items = BTreeMap::new();
+            let mut result = Value::new_object();
+            let result_obj = result.as_object_mut()?;
             for (key, value) in obj.iter() {
-                if let Some(f) = filters.get(key) {
+                if let Some(f) = filters.get(&key) {
                     let v = json_remove_impl(value, f)?;
                     if v != Value::Undefined {
-                        items.insert(key.clone(), v);
+                        result_obj.insert(key.clone(), v);
                         // Guard map size as filtered properties accumulate.
                         enforce_limit()?;
                     }
                 } else {
-                    items.insert(key.clone(), value.clone());
+                    result_obj.insert(key.clone(), value.clone());
                     // Guard map size while copying retained properties.
                     enforce_limit()?;
                 }
             }
-            Ok(Value::from_map(items))
+            Ok(result)
         }
 
         _ => Ok(Value::Undefined),
@@ -276,7 +278,7 @@ fn filter(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> R
     let obj_ref = Rc::make_mut(&mut obj);
     match &args[1] {
         Value::Array(a) => {
-            let keys: BTreeSet<&Value> = a.iter().collect();
+            let keys: Set<&Value> = a.iter().collect();
             obj_ref.retain(|k, _| keys.contains(k))
         }
         Value::Set(s) => obj_ref.retain(|k, _| s.contains(k)),
@@ -316,7 +318,7 @@ fn keys(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Res
     let name = "object.keys";
     ensure_args_count(span, name, params, args, 1)?;
     let obj = ensure_object(name, &params[0], args[0].clone())?;
-    Ok(Value::from_set(obj.keys().cloned().collect()))
+    Ok(Value::from_set(obj.keys().collect()))
 }
 
 fn remove(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
@@ -326,7 +328,7 @@ fn remove(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> R
     let obj_ref = Rc::make_mut(&mut obj);
     match &args[1] {
         Value::Array(a) => {
-            let keys: BTreeSet<&Value> = a.iter().collect();
+            let keys: Set<&Value> = a.iter().collect();
             obj_ref.retain(|k, _| !keys.contains(k))
         }
         Value::Set(s) => obj_ref.retain(|k, _| !s.contains(k)),
@@ -341,14 +343,14 @@ fn is_subset(sup: &Value, sub: &Value) -> bool {
     match (sup, sub) {
         (Value::Object(sup), Value::Object(sub)) => {
             sub.iter().all(|(k, vsub)| {
-                match sup.get(k) {
+                match sup.get(&k) {
                     //		    Some(vsup @ Value::Object(_)) => is_subset(vsup, vsub),
                     Some(vsup) => is_subset(vsup, vsub),
                     _ => false,
                 }
             })
         }
-        (Value::Set(sup), Value::Set(sub)) => sub.is_subset(sup),
+        (Value::Set(sup), Value::Set(sub)) => sub.iter().all(|v| sup.contains(v)),
         (Value::Array(sup), Value::Array(sub)) => sup.windows(sub.len()).any(|w| w == &sub[..]),
         (Value::Array(sup), Value::Set(_)) => {
             let sup = Value::from_set(sup.iter().cloned().collect());
@@ -372,7 +374,7 @@ fn union(obj1: &Value, obj2: &Value) -> Result<Value> {
             let um = u.as_object_mut()?;
 
             for (key2, value2) in m2.iter() {
-                let vm = match m1.get(key2) {
+                let vm = match m1.get(&key2) {
                     Some(value1) => union(value1, value2)?,
                     _ => value2.clone(),
                 };

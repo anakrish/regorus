@@ -10,8 +10,6 @@ use crate::lexer::Span;
 use crate::value::Value;
 use crate::*;
 
-use alloc::collections::BTreeSet;
-
 use anyhow::{bail, Result};
 
 pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
@@ -24,19 +22,41 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
 pub fn intersection(expr1: &Expr, expr2: &Expr, v1: Value, v2: Value) -> Result<Value> {
     let s1 = ensure_set("intersection", expr1, v1)?;
     let s2 = ensure_set("intersection", expr2, v2)?;
-    Ok(Value::from_set(s1.intersection(&s2).cloned().collect()))
+    let mut result = Value::new_set();
+    let result_set = result.as_set_mut()?;
+    for v in s1.iter() {
+        if s2.contains(v) {
+            result_set.insert(v.clone());
+        }
+    }
+    Ok(result)
 }
 
 pub fn union(expr1: &Expr, expr2: &Expr, v1: Value, v2: Value) -> Result<Value> {
     let s1 = ensure_set("union", expr1, v1)?;
     let s2 = ensure_set("union", expr2, v2)?;
-    Ok(Value::from_set(s1.union(&s2).cloned().collect()))
+    let mut result = Value::new_set();
+    let result_set = result.as_set_mut()?;
+    for v in s1.iter() {
+        result_set.insert(v.clone());
+    }
+    for v in s2.iter() {
+        result_set.insert(v.clone());
+    }
+    Ok(result)
 }
 
 pub fn difference(expr1: &Expr, expr2: &Expr, v1: Value, v2: Value) -> Result<Value> {
     let s1 = ensure_set("difference", expr1, v1)?;
     let s2 = ensure_set("difference", expr2, v2)?;
-    Ok(Value::from_set(s1.difference(&s2).cloned().collect()))
+    let mut result = Value::new_set();
+    let result_set = result.as_set_mut()?;
+    for v in s1.iter() {
+        if !s2.contains(v) {
+            result_set.insert(v.clone());
+        }
+    }
+    Ok(result)
 }
 
 fn binary_set_union(
@@ -49,7 +69,15 @@ fn binary_set_union(
     ensure_args_count(span, name, params, args, 2)?;
     let left = ensure_set(name, &params[0], args[0].clone())?;
     let right = ensure_set(name, &params[1], args[1].clone())?;
-    Ok(Value::from_set(left.union(&right).cloned().collect()))
+    let mut result = Value::new_set();
+    let result_set = result.as_set_mut()?;
+    for v in left.iter() {
+        result_set.insert(v.clone());
+    }
+    for v in right.iter() {
+        result_set.insert(v.clone());
+    }
+    Ok(result)
 }
 
 fn binary_set_intersection(
@@ -62,9 +90,14 @@ fn binary_set_intersection(
     ensure_args_count(span, name, params, args, 2)?;
     let left = ensure_set(name, &params[0], args[0].clone())?;
     let right = ensure_set(name, &params[1], args[1].clone())?;
-    Ok(Value::from_set(
-        left.intersection(&right).cloned().collect(),
-    ))
+    let mut result = Value::new_set();
+    let result_set = result.as_set_mut()?;
+    for v in left.iter() {
+        if right.contains(v) {
+            result_set.insert(v.clone());
+        }
+    }
+    Ok(result)
 }
 
 fn intersection_of_set_of_sets(
@@ -77,7 +110,7 @@ fn intersection_of_set_of_sets(
     ensure_args_count(span, name, params, args, 1)?;
     let set = ensure_set(name, &params[0], args[0].clone())?;
 
-    let mut res = BTreeSet::new();
+    let mut result = Value::new_set();
     let mut first = true;
 
     for s in set.iter() {
@@ -89,14 +122,26 @@ fn intersection_of_set_of_sets(
         };
 
         if first {
-            res.clone_from(s);
+            // Start with a copy of the first set
+            let result_set = result.as_set_mut()?;
+            for v in s.iter() {
+                result_set.insert(v.clone());
+            }
             first = false;
         } else {
-            res = res.intersection(s).cloned().collect();
+            // Intersect: keep only elements in both
+            let mut new_result = Value::new_set();
+            let new_set = new_result.as_set_mut()?;
+            for v in result.as_set()?.iter() {
+                if s.contains(v) {
+                    new_set.insert(v.clone());
+                }
+            }
+            result = new_result;
         }
     }
 
-    Ok(Value::from_set(res))
+    Ok(result)
 }
 
 fn union_of_set_of_sets(
@@ -109,7 +154,7 @@ fn union_of_set_of_sets(
     ensure_args_count(span, name, params, args, 1)?;
     let set = ensure_set(name, &params[0], args[0].clone())?;
 
-    let mut res = BTreeSet::new();
+    let mut result = Value::new_set();
 
     for s in set.iter() {
         let s = match s {
@@ -119,8 +164,11 @@ fn union_of_set_of_sets(
             ),
         };
 
-        res = res.union(s).cloned().collect();
+        let result_set = result.as_set_mut()?;
+        for v in s.iter() {
+            result_set.insert(v.clone());
+        }
     }
 
-    Ok(Value::from_set(res))
+    Ok(result)
 }

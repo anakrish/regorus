@@ -4,11 +4,11 @@
 
 //! Core data structures used by the destructuring planner.
 
-use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::ast::ExprRef;
+use crate::collections::Map;
 use crate::lexer::Span;
 use crate::value::Value;
 
@@ -34,7 +34,7 @@ pub enum DestructuringPlan {
 
     /// Destructure an object.
     Object {
-        field_plans: BTreeMap<Value, DestructuringPlan>,
+        field_plans: Map<Value, DestructuringPlan>,
         dynamic_fields: Vec<(ExprRef, DestructuringPlan)>,
     },
 }

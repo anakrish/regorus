@@ -555,19 +555,20 @@ impl RegoVM {
                         Ok(false)
                     }
                 } else if let Some(ref current) = *current_key {
-                    let mut range_iter = obj.range((
-                        core::ops::Bound::Excluded(current),
-                        core::ops::Bound::Unbounded,
-                    ));
-                    if let Some((key, value)) = range_iter.next() {
-                        if key_reg != value_reg {
-                            self.set_register(key_reg, key.clone())?;
+                    let mut after_current = false;
+                    for (key, value) in obj.iter() {
+                        if after_current {
+                            if key_reg != value_reg {
+                                self.set_register(key_reg, key.clone())?;
+                            }
+                            self.set_register(value_reg, value.clone())?;
+                            return Ok(true);
                         }
-                        self.set_register(value_reg, value.clone())?;
-                        Ok(true)
-                    } else {
-                        Ok(false)
+                        if &key == current {
+                            after_current = true;
+                        }
                     }
+                    Ok(false)
                 } else {
                     Ok(false)
                 }
@@ -588,19 +589,20 @@ impl RegoVM {
                         Ok(false)
                     }
                 } else if let Some(ref current) = *current_item {
-                    let mut range_iter = items.range((
-                        core::ops::Bound::Excluded(current),
-                        core::ops::Bound::Unbounded,
-                    ));
-                    if let Some(item) = range_iter.next() {
-                        if key_reg != value_reg {
-                            self.set_register(key_reg, item.clone())?;
+                    let mut after_current = false;
+                    for item in items.iter() {
+                        if after_current {
+                            if key_reg != value_reg {
+                                self.set_register(key_reg, item.clone())?;
+                            }
+                            self.set_register(value_reg, item.clone())?;
+                            return Ok(true);
                         }
-                        self.set_register(value_reg, item.clone())?;
-                        Ok(true)
-                    } else {
-                        Ok(false)
+                        if item == current {
+                            after_current = true;
+                        }
                     }
+                    Ok(false)
                 } else {
                     Ok(false)
                 }

@@ -7,10 +7,9 @@ use crate::ast::{Expr, Ref};
 use crate::builtins;
 use crate::builtins::utils::{enforce_limit, ensure_args_count, ensure_object};
 use crate::lexer::Span;
-use crate::value::Value;
+use crate::value::{ObjectStorage, Value};
 use crate::*;
-
-use alloc::collections::{BTreeMap, BTreeSet};
+use crate::collections::Set;
 
 use anyhow::{bail, Result};
 
@@ -46,7 +45,7 @@ fn reachable(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) ->
         _ => return Ok(Value::Undefined),
     }
 
-    let mut reachable = BTreeSet::new();
+        let mut reachable: Set<Value> = Set::new();
     while let Some(v) = worklist.pop() {
         if reachable.contains(&v) {
             continue;
@@ -80,11 +79,11 @@ fn reachable(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) ->
 }
 
 fn visit(
-    graph: &BTreeMap<Value, Value>,
-    visited: &mut BTreeSet<Value>,
+    graph: &ObjectStorage,
+    visited: &mut Set<Value>,
     node: &Value,
     path: &mut Vec<Value>,
-    paths: &mut BTreeSet<Value>,
+    paths: &mut Set<Value>,
 ) -> Result<()> {
     if let Value::String(s) = node {
         if s.as_ref() == "" {
@@ -127,7 +126,7 @@ fn visit(
                 arr.len()
             }
             Some(Value::Set(set)) => {
-                for n in set.iter().rev() {
+                for n in set.iter() {
                     visit(graph, visited, n, path, paths)?;
                 }
                 set.len()
@@ -162,9 +161,9 @@ fn reachable_paths(
     ensure_args_count(span, name, params, args, 2)?;
 
     let graph = ensure_object(name, &params[0], args[0].clone())?;
-    let mut visited = BTreeSet::new();
+        let mut visited: Set<Value> = Set::new();
     let mut path = vec![];
-    let mut paths = BTreeSet::new();
+        let mut paths: Set<Value> = Set::new();
 
     match &args[1] {
         Value::Array(arr) => {

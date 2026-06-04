@@ -2,9 +2,8 @@
 // Licensed under the MIT License.
 #![allow(clippy::pattern_type_mismatch)]
 
-use alloc::collections::BTreeSet;
-
 use crate::number::Number;
+use crate::collections::Set;
 use crate::value::Value;
 
 use super::errors::{Result, VmError};
@@ -28,7 +27,12 @@ impl RegoVM {
         match (a, b) {
             (Value::Number(x), Value::Number(y)) => Ok(Value::from(x.sub(y)?)),
             (Value::Set(left), Value::Set(right)) => {
-                let diff: BTreeSet<Value> = left.difference(right).cloned().collect();
+                let mut diff: Set<Value> = Set::new();
+                for item in left.iter() {
+                    if !right.contains(item) {
+                        diff.insert(item.clone());
+                    }
+                }
                 Ok(Value::from_set(diff))
             }
             _ => Err(VmError::InvalidSubtraction {

@@ -16,7 +16,7 @@ use crate::ast::{Expr, Ref};
 use crate::builtins;
 use crate::builtins::utils::{enforce_limit, ensure_args_count};
 use crate::lexer::Span;
-use crate::value::Value;
+use crate::value::{Array, Value};
 
 use anyhow::{anyhow, bail, Result};
 
@@ -153,7 +153,7 @@ fn _cidr_expand(cidr: Arc<str>) -> Result<Value> {
         enforce_limit()?;
     }
 
-    Ok(Value::Array(Arc::from(hosts)))
+    Ok(Value::from(Array::from(hosts)))
 }
 
 #[cfg(test)]

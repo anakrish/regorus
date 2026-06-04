@@ -21,9 +21,9 @@ fn concat(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> R
     let name = "array.concat";
     ensure_args_count(span, name, params, args, 2)?;
     let mut v1 = ensure_array(name, &params[0], args[0].clone())?;
-    let mut v2 = ensure_array(name, &params[1], args[1].clone())?;
+    let v2 = ensure_array(name, &params[1], args[1].clone())?;
 
-    Rc::make_mut(&mut v1).append(Rc::make_mut(&mut v2));
+    Rc::make_mut(&mut v1).extend_from_slice(v2.as_slice());
     Ok(Value::Array(v1))
 }
 
@@ -65,6 +65,6 @@ fn slice(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Re
         return Ok(Value::new_array());
     }
 
-    let slice = &array[start..stop];
+    let slice = array.as_slice().get(start..stop).unwrap_or_default();
     Ok(Value::from(slice.to_vec()))
 }

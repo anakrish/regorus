@@ -349,7 +349,10 @@ fn is_subset(sup: &Value, sub: &Value) -> bool {
             })
         }
         (Value::Set(sup), Value::Set(sub)) => sub.is_subset(sup),
-        (Value::Array(sup), Value::Array(sub)) => sup.windows(sub.len()).any(|w| w == &sub[..]),
+        (Value::Array(sup), Value::Array(sub)) => sup
+            .as_slice()
+            .windows(sub.len())
+            .any(|w| w == sub.as_slice()),
         (Value::Array(sup), Value::Set(_)) => {
             let sup = Value::from_set(sup.iter().cloned().collect());
             is_subset(&sup, sub)

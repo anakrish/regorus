@@ -2,10 +2,11 @@
 // Licensed under the MIT License.
 
 use crate::rvm::instructions::{ComprehensionMode, LoopMode};
-use crate::value::Value;
-use crate::value::{Object, ObjectCursor};
+use crate::value::{Array, ArrayCursor, Object, ObjectCursor, Value};
 use crate::Rc;
 use alloc::collections::BTreeSet;
+
+#[cfg(test)]
 use alloc::vec::Vec;
 
 /// Loop execution context for managing iteration state
@@ -40,8 +41,8 @@ pub struct LoopContext {
 #[derive(Debug, Clone)]
 pub enum IterationState {
     Array {
-        items: Rc<Vec<Value>>,
-        index: usize,
+        arr: Rc<Array>,
+        cursor: ArrayCursor,
     },
     Object {
         obj: Rc<Object>,
@@ -64,21 +65,9 @@ pub enum IterationState {
 impl IterationState {
     pub(super) const fn advance(&mut self) {
         match *self {
-            Self::Array { ref mut index, .. } => {
-                // Array iteration uses `usize` as the cursor and advances via
-                // `saturating_add(1)`. A cursor already at `usize::MAX` here
-                // means a stuck (non-progressing) iteration was emitted by
-                // malformed bytecode; assert in debug to surface it loudly.
-                debug_assert!(
-                    *index < usize::MAX,
-                    "IterationState::Array index already at usize::MAX on advance"
-                );
-                *index = index.saturating_add(1);
-            }
-            // For Object the cursor advances inside `setup_next_iteration`
-            // when it pulls the next item via `Object::next`, so `advance`
-            // is a no-op for the cursor-backed Object variant.
-            Self::Object { .. } => {}
+            // Cursor-backed variants advance inside `setup_next_iteration`
+            // when they pull the next item via `next`.
+            Self::Array { .. } | Self::Object { .. } => {}
             Self::Set {
                 ref mut first_iteration,
                 ..
@@ -144,7 +133,6 @@ pub(super) struct ComprehensionContext {
 )]
 mod tests {
     use super::*;
-    use crate::value::Object;
 
     /// IterationState::Object holds an `Rc<Object>` plus an opaque cursor.
     /// Mutating an aliased Rc via `Rc::make_mut` allocates a new collection
@@ -167,15 +155,12 @@ mod tests {
             cursor: snapshot_obj.cursor(),
         };
 
-        // Mutate a clone of the source mid-iteration.
         let mut alias = source.clone();
         let inner = alias.as_object_mut().expect("object");
         inner.insert(Value::from("a"), Value::from(999));
         inner.insert(Value::from("d"), Value::from(4));
         inner.remove(&Value::from("b"));
 
-        // Drain the snapshot via the cursor — must still report the original
-        // 3 entries with original values.
         let mut collected: Vec<(Value, Value)> = Vec::new();
         if let IterationState::Object {
             ref obj,
@@ -194,9 +179,35 @@ mod tests {
         assert!(collected.contains(&(Value::from("c"), Value::from(3))));
         assert!(!collected.iter().any(|kv| kv.0 == Value::from("d")));
 
-        // The original source Value (untouched) is also unchanged.
         let src_obj = source.as_object().expect("object");
         assert_eq!(src_obj.len(), 3);
         assert_eq!(src_obj.get(&Value::from("a")), Some(&Value::from(1)));
+    }
+
+    #[test]
+    fn iteration_state_array_is_snapshot_independent_of_source() {
+        let source_snapshot = Rc::new(Array::from_iter([Value::from(1), Value::from(2)]));
+        let mut source = Value::Array(Rc::clone(&source_snapshot));
+        let state = IterationState::Array {
+            arr: Rc::clone(&source_snapshot),
+            cursor: source_snapshot.cursor(),
+        };
+
+        if let Value::Array(ref mut source_arr) = source {
+            Rc::make_mut(source_arr).push(Value::from(3));
+        }
+
+        let IterationState::Array {
+            arr: state_arr,
+            mut cursor,
+        } = state
+        else {
+            unreachable!();
+        };
+        assert_eq!(state_arr.len(), 2);
+        assert_eq!(state_arr.next(&mut cursor), Some((0, &Value::from(1))));
+        assert_eq!(state_arr.next(&mut cursor), Some((1, &Value::from(2))));
+        assert_eq!(state_arr.next(&mut cursor), None);
+        assert_eq!(source.as_array().map(Array::len).ok(), Some(3));
     }
 }

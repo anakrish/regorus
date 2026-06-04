@@ -191,7 +191,7 @@ pub(super) const fn is_collection(value: &Value) -> bool {
 // Check membership in an array or set.
 pub(super) fn collection_contains(collection: &Value, needle: &Value) -> bool {
     match *collection {
-        Value::Array(ref list) => list.contains(needle),
+        Value::Array(ref list) => list.iter().any(|item| item == needle),
         Value::Set(ref set) => set.contains(needle),
         _ => false,
     }

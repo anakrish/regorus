@@ -11,8 +11,7 @@ use serde::ser::{SerializeSeq as _, SerializeTuple as _};
 use serde::{Deserialize, Serialize};
 
 use crate::number::Number;
-use crate::value::Object;
-use crate::value::Value;
+use crate::value::{Array, Object, Value};
 
 const VARIANT_NULL: u32 = 0;
 const VARIANT_BOOL: u32 = 1;
@@ -81,7 +80,7 @@ impl<'a> Serialize for BinaryValueRef<'a> {
                 "BinaryValue",
                 VARIANT_ARRAY,
                 "Array",
-                &BinaryValueSlice(items.as_slice()),
+                &BinaryArrayRef(items.as_ref()),
             ),
             Value::Set(ref items) => serializer.serialize_newtype_variant(
                 "BinaryValue",
@@ -99,6 +98,22 @@ impl<'a> Serialize for BinaryValueRef<'a> {
                 serializer.serialize_unit_variant("BinaryValue", VARIANT_UNDEFINED, "Undefined")
             }
         }
+    }
+}
+
+/// Array wrapper allowing zero-copy serialization of value collections.
+pub struct BinaryArrayRef<'a>(pub &'a Array);
+
+impl<'a> Serialize for BinaryArrayRef<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
+        for value in self.0.iter() {
+            seq.serialize_element(&BinaryValueRef(value))?;
+        }
+        seq.end()
     }
 }
 
@@ -249,7 +264,7 @@ impl<'de> Visitor<'de> for BinaryValueVisitor {
             }
             (BinaryVariant::Array, variant) => {
                 let items: Vec<BinaryValue> = variant.newtype_variant()?;
-                let values: Vec<Value> = items.into_iter().map(BinaryValue::into_value).collect();
+                let values: Array = items.into_iter().map(BinaryValue::into_value).collect();
                 Ok(BinaryValue(Value::from(values)))
             }
             (BinaryVariant::Set, variant) => {

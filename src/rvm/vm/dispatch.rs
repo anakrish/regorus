@@ -3,7 +3,7 @@
 
 use crate::rvm::instructions::{GuardMode, Instruction, LiteralOrRegister};
 use crate::rvm::program::Program;
-use crate::value::Value;
+use crate::value::{Array, Value};
 use alloc::vec::Vec;
 use core::mem;
 
@@ -583,7 +583,7 @@ impl RegoVM {
                 }
             }
             ArrayNew { dest } => {
-                let empty_array = Value::Array(crate::Rc::new(Vec::new()));
+                let empty_array = Value::new_array();
                 self.set_register(dest, empty_array)?;
                 Ok(InstructionOutcome::Continue)
             }
@@ -656,7 +656,7 @@ impl RegoVM {
                             .map(|&reg| self.get_register(reg).cloned())
                             .collect::<Result<Vec<_>>>()?;
 
-                        let array_value = Value::Array(crate::Rc::new(elements));
+                        let array_value = Value::from(Array::from(elements));
                         self.set_register(params.dest, array_value)?;
                     }
                     Ok(InstructionOutcome::Continue)
@@ -736,7 +736,7 @@ impl RegoVM {
                         Value::Bool(set_elements.contains(value_to_check))
                     }
                     Value::Array(ref array_items) => {
-                        Value::Bool(array_items.contains(value_to_check))
+                        Value::Bool(array_items.iter().any(|item| item == value_to_check))
                     }
                     Value::Object(ref object_fields) => {
                         Value::Bool(object_fields.values().any(|v| v == value_to_check))

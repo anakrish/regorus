@@ -8,8 +8,7 @@
 use crate::ast::{Expr, Ref};
 use crate::builtins;
 use crate::lexer::Span;
-use crate::value::Object;
-use crate::value::Value;
+use crate::value::{Array, Object, Value};
 use crate::Rc;
 
 use alloc::string::{String, ToString as _};
@@ -90,7 +89,7 @@ fn fn_items(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) 
         entry.insert(Value::from("value"), v.clone());
         result.push(Value::Object(Rc::new(entry)));
     }
-    Ok(Value::Array(Rc::new(result)))
+    Ok(Value::from(Array::from(result)))
 }
 
 // ── indexFromEnd ──────────────────────────────────────────────────────

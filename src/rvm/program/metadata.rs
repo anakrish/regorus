@@ -194,15 +194,15 @@ impl MetadataValue {
 
     /// Convert this `MetadataValue` into a regorus `Value`.
     pub fn to_value(&self) -> crate::value::Value {
-        use crate::value::Value;
+        use crate::value::{Set, Value};
         match *self {
             MetadataValue::String(ref s) => Value::String(s.as_str().into()),
             MetadataValue::StringSet(ref set) => {
-                let mut bset = BTreeSet::new();
+                let mut bset = Set::new();
                 for s in set {
                     bset.insert(Value::String(s.as_str().into()));
                 }
-                Value::Set(Rc::new(bset))
+                Value::from(bset)
             }
             MetadataValue::Bool(b) => Value::Bool(b),
             MetadataValue::Integer(n) => Value::from(n),
@@ -301,7 +301,7 @@ mod tests {
         let mut set = BTreeSet::new();
         set.insert(Value::String("a".into()));
         set.insert(Value::String("b".into()));
-        let v = Value::Set(Rc::new(set));
+        let v = Value::from(set);
         assert_round_trip(&v, &v);
     }
 
@@ -328,7 +328,7 @@ mod tests {
         let mut set = BTreeSet::new();
         set.insert(Value::String("a".into()));
         set.insert(Value::from(1_i64));
-        let v = Value::Set(Rc::new(set));
+        let v = Value::from(set);
         let mv = MetadataValue::from_value(&v);
         assert!(
             matches!(mv, MetadataValue::List(_)),

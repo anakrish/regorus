@@ -156,17 +156,6 @@ impl RegoVM {
                 LoopAction::Continue => {}
             }
 
-            // Snapshot the current value for Set so its next iteration can resume
-            // from `Bound::Excluded(current)`. Object uses a cursor and advances
-            // inside `setup_next_iteration` itself.
-            if let &mut IterationState::Set {
-                ref mut current_item,
-                ..
-            } = &mut loop_ctx.iteration_state
-            {
-                *current_item = Some(self.get_register(loop_ctx.value_reg)?.clone());
-            }
-
             loop_ctx.iteration_state.advance();
             let has_next = self.setup_next_iteration(
                 &mut loop_ctx.iteration_state,
@@ -337,8 +326,6 @@ impl RegoVM {
                         }
                     };
 
-                    let value_value = self.get_register(value_reg)?.clone();
-
                     let frame = self
                         .execution_stack
                         .last_mut()
@@ -347,18 +334,6 @@ impl RegoVM {
                         &mut FrameKind::Loop {
                             ref mut context, ..
                         } => {
-                            // Snapshot the current value for Set so its next
-                            // iteration can resume from `Bound::Excluded(current)`.
-                            // Object uses a cursor and advances inside
-                            // `setup_next_iteration` itself.
-                            if let &mut IterationState::Set {
-                                ref mut current_item,
-                                ..
-                            } = &mut context.iteration_state
-                            {
-                                *current_item = Some(value_value);
-                            }
-
                             context.iteration_state.advance();
                             context.current_iteration_failed = false;
 
@@ -378,20 +353,27 @@ impl RegoVM {
                 let has_next =
                     self.setup_next_iteration(&mut iteration_state, key_reg, value_reg)?;
 
-                // `setup_next_iteration` advances Object's internal cursor;
-                // the owning frame holds the iteration_state, so we must
-                // write the updated state back. (Array/Set are unchanged by
-                // the call, so the writeback is uniform.)
+                // `setup_next_iteration` advances the iteration cursor; the
+                // owning frame holds the iteration_state, so we must write the
+                // updated state back.
                 if let Some(frame) = self.execution_stack.last_mut() {
                     if let FrameKind::Loop {
                         ref mut context, ..
                     } = frame.kind
                     {
-                        context.iteration_state = iteration_state;
+                        context.iteration_state = iteration_state.clone();
                     }
                 }
 
                 if has_next {
+                    if let Some(frame) = self.execution_stack.last_mut() {
+                        if let FrameKind::Loop {
+                            ref mut context, ..
+                        } = frame.kind
+                        {
+                            context.iteration_state = iteration_state;
+                        }
+                    }
                     if let Some(frame) = self.execution_stack.last_mut() {
                         if let FrameKind::Loop { ref context, .. } = frame.kind {
                             frame.pc = context.body_resume_pc;
@@ -483,11 +465,9 @@ impl RegoVM {
                     self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
                     return Ok(None);
                 }
-                Ok(Some(IterationState::Set {
-                    items: set.clone(),
-                    current_item: None,
-                    first_iteration: true,
-                }))
+                let set = set.clone();
+                let cursor = set.cursor();
+                Ok(Some(IterationState::Set { set, cursor }))
             }
             _ => {
                 if self.virtual_element_on_non_collection && *mode == LoopMode::Every {
@@ -568,34 +548,15 @@ impl RegoVM {
                 }
             }
             IterationState::Set {
-                ref items,
-                ref current_item,
-                ref first_iteration,
+                ref set,
+                ref mut cursor,
             } => {
-                if *first_iteration {
-                    if let Some(item) = items.iter().next() {
-                        if key_reg != value_reg {
-                            self.set_register(key_reg, item.clone())?;
-                        }
-                        self.set_register(value_reg, item.clone())?;
-                        Ok(true)
-                    } else {
-                        Ok(false)
+                if let Some(item) = set.next(cursor).cloned() {
+                    if key_reg != value_reg {
+                        self.set_register(key_reg, item.clone())?;
                     }
-                } else if let Some(ref current) = *current_item {
-                    let mut range_iter = items.range((
-                        core::ops::Bound::Excluded(current),
-                        core::ops::Bound::Unbounded,
-                    ));
-                    if let Some(item) = range_iter.next() {
-                        if key_reg != value_reg {
-                            self.set_register(key_reg, item.clone())?;
-                        }
-                        self.set_register(value_reg, item.clone())?;
-                        Ok(true)
-                    } else {
-                        Ok(false)
-                    }
+                    self.set_register(value_reg, item)?;
+                    Ok(true)
                 } else {
                     Ok(false)
                 }

@@ -2,10 +2,8 @@
 // Licensed under the MIT License.
 
 use crate::rvm::instructions::{ComprehensionMode, LoopMode};
-use crate::value::Value;
-use crate::value::{Object, ObjectCursor};
+use crate::value::{Object, ObjectCursor, Set, SetCursor, Value};
 use crate::Rc;
-use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
 /// Loop execution context for managing iteration state
@@ -33,10 +31,9 @@ pub struct LoopContext {
 /// pre-mutation state. The `ObjectCursor` is opaque and resumes in
 /// O(log n) for the BTree backend.
 ///
-/// `Set` continues to use the pre-existing snapshot-by-cloned-key
-/// approach (`current_item` + `first_iteration`); migration of `Set`
-/// to a cursor-based iterator ships with the `Set` storage abstraction
-/// in a follow-up PR.
+/// Snapshot independence for `Set` follows the same pattern: the shared
+/// `Rc<Set>` keeps the iterator on the pre-mutation state while the opaque
+/// `SetCursor` tracks progress.
 #[derive(Debug, Clone)]
 pub enum IterationState {
     Array {
@@ -48,9 +45,8 @@ pub enum IterationState {
         cursor: ObjectCursor,
     },
     Set {
-        items: Rc<BTreeSet<Value>>,
-        current_item: Option<Value>,
-        first_iteration: bool,
+        set: Rc<Set>,
+        cursor: SetCursor,
     },
     /// Virtual single-element iteration for non-collection values.
     /// Used by Azure Policy's `[*]` on scalar/null fields: presents a single
@@ -75,16 +71,9 @@ impl IterationState {
                 );
                 *index = index.saturating_add(1);
             }
-            // For Object the cursor advances inside `setup_next_iteration`
-            // when it pulls the next item via `Object::next`, so `advance`
-            // is a no-op for the cursor-backed Object variant.
-            Self::Object { .. } => {}
-            Self::Set {
-                ref mut first_iteration,
-                ..
-            } => {
-                *first_iteration = false;
-            }
+            // Cursor-backed variants advance inside `setup_next_iteration`
+            // when they pull the next item via `next`.
+            Self::Object { .. } | Self::Set { .. } => {}
             Self::Single {
                 ref mut consumed, ..
             } => {
@@ -144,7 +133,6 @@ pub(super) struct ComprehensionContext {
 )]
 mod tests {
     use super::*;
-    use crate::value::Object;
 
     /// IterationState::Object holds an `Rc<Object>` plus an opaque cursor.
     /// Mutating an aliased Rc via `Rc::make_mut` allocates a new collection
@@ -167,15 +155,12 @@ mod tests {
             cursor: snapshot_obj.cursor(),
         };
 
-        // Mutate a clone of the source mid-iteration.
         let mut alias = source.clone();
         let inner = alias.as_object_mut().expect("object");
         inner.insert(Value::from("a"), Value::from(999));
         inner.insert(Value::from("d"), Value::from(4));
         inner.remove(&Value::from("b"));
 
-        // Drain the snapshot via the cursor — must still report the original
-        // 3 entries with original values.
         let mut collected: Vec<(Value, Value)> = Vec::new();
         if let IterationState::Object {
             ref obj,
@@ -194,9 +179,48 @@ mod tests {
         assert!(collected.contains(&(Value::from("c"), Value::from(3))));
         assert!(!collected.iter().any(|kv| kv.0 == Value::from("d")));
 
-        // The original source Value (untouched) is also unchanged.
         let src_obj = source.as_object().expect("object");
         assert_eq!(src_obj.len(), 3);
         assert_eq!(src_obj.get(&Value::from("a")), Some(&Value::from(1)));
+    }
+
+    #[test]
+    fn iteration_state_set_is_snapshot_independent_of_source() {
+        let original_set: Set = [1, 2, 3].into_iter().map(Value::from).collect();
+        let mut source = Value::from(original_set.clone());
+        let iter_set = Rc::new(original_set);
+        let iter_cursor = iter_set.cursor();
+        let mut state = IterationState::Set {
+            set: Rc::clone(&iter_set),
+            cursor: iter_cursor,
+        };
+
+        let first = match &mut state {
+            IterationState::Set { set, cursor } => set.next(cursor).cloned(),
+            _ => unreachable!(),
+        };
+        assert_eq!(first, Some(Value::from(1)));
+
+        let source_set = source.as_set_mut().expect("set");
+        source_set.remove(&Value::from(2));
+        source_set.insert(Value::from(4));
+
+        let mut remaining = Vec::new();
+        loop {
+            let next = match &mut state {
+                IterationState::Set { set, cursor } => set.next(cursor).cloned(),
+                _ => unreachable!(),
+            };
+            if let Some(value) = next {
+                remaining.push(value);
+            } else {
+                break;
+            }
+        }
+        assert_eq!(remaining, [Value::from(2), Value::from(3)]);
+        assert!(source
+            .as_set()
+            .map(|source_set| source_set.contains(&Value::from(4)))
+            .unwrap_or(false));
     }
 }

@@ -52,11 +52,6 @@ pub use compiled_policy::CompiledPolicy;
 pub use engine::Engine;
 pub use lexer::Source;
 pub use policy_info::PolicyInfo;
-<<<<<<< HEAD
-#[cfg(feature = "azure_policy")]
-pub use schema::{error::ValidationError, validate::SchemaValidator, Schema};
-=======
->>>>>>> 7268ceb (feat: Complete target system with C# bindings and resource inference)
 pub use value::Value;
 
 #[cfg(feature = "arc")]

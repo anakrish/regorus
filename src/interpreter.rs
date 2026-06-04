@@ -3998,18 +3998,12 @@ impl Interpreter {
 
         compiled_policy.data = data;
         compiled_policy.extensions = extensions;
-<<<<<<< HEAD
+
         if let Some(rule) = rule {
             if !compiled_policy.rule_paths.contains(rule.as_ref()) {
                 bail!("not a valid rule path");
             }
             compiled_policy.rule_to_evaluate = rule;
-=======
-        if let Some(rule) = &rule {
-            if !compiled_policy.rule_paths.contains(rule.as_ref()) {
-                bail!("not a valid rule path");
-            }
->>>>>>> 7268ceb (feat: Complete target system with C# bindings and resource inference)
         } else {
             compiled_policy.rule_to_evaluate = "".into();
         }

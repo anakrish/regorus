@@ -156,6 +156,16 @@ name = "regorus_benchmark"
 harness = false
 
 [[bench]]
+name = "engine_evaluation_benchmark"
+path = "benches/evaluation/engine_evaluation_benchmark.rs"
+harness = false
+
+[[bench]]
+name = "compiled_policy_evaluation_benchmark"
+path = "benches/evaluation/compiled_policy_evaluation_benchmark.rs"
+harness = false
+
+[[bench]]
 name = "schema_validation_benchmark"
 harness = false
 required-features = ["azure_policy"]

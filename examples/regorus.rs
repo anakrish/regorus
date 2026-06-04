@@ -2,6 +2,19 @@
 // Licensed under the MIT License.
 
 use anyhow::{anyhow, bail, Result};
+use regorus::languages::rego::compiler::Compiler;
+use regorus::rvm::program::{
+    generate_assembly_listing, generate_tabular_assembly_listing, AssemblyListingConfig,
+};
+use regorus::rvm::RegoVM;
+use std::sync::Arc;
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum EvalEngine {
+    Interpreter,
+    Rvm,
+    Vm,
+}
 
 #[allow(dead_code)]
 fn read_file(path: &String) -> Result<String> {
@@ -34,11 +47,75 @@ fn add_policy_from_file(engine: &mut regorus::Engine, path: String) -> Result<St
 }
 
 #[allow(clippy::too_many_arguments)]
+fn rego_compile(
+    bundles: &[String],
+    files: &[String],
+    rule_name: String,
+    tabular: bool,
+    json_output: Option<String>,
+    v0: bool,
+) -> Result<()> {
+    let mut engine = regorus::Engine::new();
+    engine.set_rego_v0(v0);
+
+    for dir in bundles.iter() {
+        let entries =
+            std::fs::read_dir(dir).or_else(|e| bail!("failed to read bundle {dir}.\n{e}"))?;
+        for entry in entries {
+            let entry = entry.or_else(|e| bail!("failed to unwrap entry. {e}"))?;
+            let path = entry.path();
+            match (path.is_file(), path.extension()) {
+                (true, Some(ext)) if ext == "rego" => {}
+                _ => continue,
+            }
+            let _ = add_policy_from_file(&mut engine, path.display().to_string())?;
+        }
+    }
+
+    for file in files.iter() {
+        if file.ends_with(".rego") {
+            let _ = add_policy_from_file(&mut engine, file.clone())?;
+        } else {
+            let data = if file.ends_with(".json") {
+                read_value_from_json_file(file)?
+            } else if file.ends_with(".yaml") {
+                read_value_from_yaml_file(file)?
+            } else {
+                bail!("Unsupported data file `{file}`. Must be rego, json or yaml.");
+            };
+            engine.add_data(data)?;
+        }
+    }
+
+    let rule_name_rc: regorus::Rc<str> = rule_name.clone().into();
+    let compiled_policy = engine.compile_with_entrypoint(&rule_name_rc)?;
+    let program = Compiler::compile_from_policy(&compiled_policy, &[&rule_name])?;
+
+    let listing = if tabular {
+        generate_tabular_assembly_listing(&program, &AssemblyListingConfig::default())
+    } else {
+        generate_assembly_listing(&program, &AssemblyListingConfig::default())
+    };
+    println!("{listing}");
+
+    if let Some(path) = json_output {
+        let serialized = program
+            .serialize_json()
+            .map_err(|e| anyhow!("json serialization failed: {e}"))?;
+        std::fs::write(&path, serialized.as_bytes())
+            .map_err(|e| anyhow!("failed to write to {path}: {e}"))?;
+        println!("Serialized program written to {path}");
+    }
+
+    Ok(())
+}
+
 fn rego_eval(
     bundles: &[String],
     files: &[String],
     input: Option<String>,
     query: String,
+    engine_choice: EvalEngine,
     enable_tracing: bool,
     non_strict: bool,
     #[cfg(feature = "coverage")] coverage: bool,
@@ -93,7 +170,7 @@ fn rego_eval(
         }
     }
 
-    if let Some(file) = input {
+    let input_data = if let Some(file) = input {
         let input = if file.ends_with(".json") {
             read_value_from_json_file(&file)?
         } else if file.ends_with(".yaml") {
@@ -101,8 +178,11 @@ fn rego_eval(
         } else {
             bail!("Unsupported input file `{file}`. Must be json or yaml.")
         };
-        engine.set_input(input);
-    }
+        engine.set_input(input.clone());
+        Some(input)
+    } else {
+        None
+    };
 
     // Note: The `eval_query` function is used below since it produces output
     // in the same format as OPA. It also allows evaluating arbitrary statements
@@ -112,14 +192,42 @@ fn rego_eval(
     // It is faster since it does not have to parse the query string.
     // It also returns the value of the rule directly and thus is easier
     // to use.
-    let results = engine.eval_query(query, enable_tracing)?;
+    match engine_choice {
+        EvalEngine::Interpreter => {
+            let results = engine.eval_query(query, enable_tracing)?;
+            println!("{}", serde_json::to_string_pretty(&results)?);
 
-    println!("{}", serde_json::to_string_pretty(&results)?);
+            #[cfg(feature = "coverage")]
+            if coverage {
+                let report = engine.get_coverage_report()?;
+                println!("{}", report.to_string_pretty()?);
+            }
+        }
+        EvalEngine::Rvm | EvalEngine::Vm => {
+            let rule_rc: Arc<str> = query.clone().into();
+            let compiled_policy = engine.compile_with_entrypoint(&rule_rc)?;
+            let program = Compiler::compile_from_policy(&compiled_policy, &[&query])?;
 
-    #[cfg(feature = "coverage")]
-    if coverage {
-        let report = engine.get_coverage_report()?;
-        println!("{}", report.to_string_pretty()?);
+            let mut vm = RegoVM::new();
+            vm.load_program(program);
+            vm.set_data(engine.get_data())
+                .map_err(|e| anyhow!("Failed to set data: {e}"))?;
+            if let Some(input_value) = input_data {
+                vm.set_input(input_value);
+            }
+
+            let result = vm.execute()?;
+            let formatted = serde_json::json!({
+                "result": [{
+                    "expressions": [{
+                        "value": result,
+                        "text": query,
+                        "location": { "row": 1, "col": 1 }
+                    }]
+                }]
+            });
+            println!("{}", serde_json::to_string_pretty(&formatted)?);
+        }
     }
 
     Ok(())
@@ -213,6 +321,23 @@ enum RegorusCommand {
         file: String,
     },
 
+    /// Compile a Rego query to RVM bytecode and dump assembly.
+    Compile {
+        #[arg(long, short, value_name = "bundle")]
+        bundles: Vec<String>,
+        #[arg(long, short, value_name = "policy.rego|data.json|data.yaml")]
+        data: Vec<String>,
+        /// Rule name. e.g. data.example.allow
+        rule_name: String,
+        #[arg(long, short)]
+        tabular: bool,
+        /// Path to write JSON serialized program output.
+        #[arg(long, value_name = "file")]
+        json_output: Option<String>,
+        #[arg(long)]
+        v0: bool,
+    },
+
     /// Evaluate a Rego Query.
     Eval {
         /// Directories containing Rego files.
@@ -229,6 +354,10 @@ enum RegorusCommand {
 
         /// Query. Rego query block.
         query: String,
+
+        /// Evaluation engine (interpreter or RVM).
+        #[arg(long, value_enum, default_value = "interpreter")]
+        engine: EvalEngine,
 
         /// Enable tracing.
         #[arg(long, short)]
@@ -282,11 +411,20 @@ fn main() -> Result<()> {
     // Parse and dispatch command.
     let cli = Cli::parse();
     match cli.command {
+        RegorusCommand::Compile {
+            bundles,
+            data,
+            rule_name,
+            tabular,
+            json_output,
+            v0,
+        } => rego_compile(&bundles, &data, rule_name, tabular, json_output, v0),
         RegorusCommand::Eval {
             bundles,
             data,
             input,
             query,
+            engine,
             trace,
             non_strict,
             #[cfg(feature = "coverage")]
@@ -297,6 +435,7 @@ fn main() -> Result<()> {
             &data,
             input,
             query,
+            engine,
             trace,
             non_strict,
             #[cfg(feature = "coverage")]

@@ -6,6 +6,6 @@
 //! This module contains utilities and data structures used during
 //! the compilation phase to prepare policies for efficient execution.
 
-pub mod context;
-pub mod destructuring_planner;
-pub mod hoist;
+pub(crate) mod context;
+pub(crate) mod destructuring_planner;
+pub(crate) mod hoist;

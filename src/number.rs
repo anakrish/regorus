@@ -18,7 +18,7 @@ use serde::Serialize;
 
 use crate::*;
 
-pub type BigInt = NumBigInt;
+pub(super) type BigInt = NumBigInt;
 
 const F64_SAFE_INTEGER: f64 = 9_007_199_254_740_992.0; // 2^53
 
@@ -423,43 +423,43 @@ impl Number {
     }
 
     pub fn add(&self, rhs: &Self) -> Result<Number> {
-        if matches!(self, Number::Float(_)) || matches!(rhs, Number::Float(_)) {
-            return Ok(Number::normalize_float(
-                self.to_f64_lossy() + rhs.to_f64_lossy(),
-            ));
-        }
-
-        match (self, rhs) {
-            (Number::UInt(a), Number::UInt(b)) => {
-                if let Some(sum) = a.checked_add(*b) {
-                    Ok(Number::UInt(sum))
-                } else {
-                    Ok(Number::from_bigint_owned(
-                        BigInt::from(*a) + BigInt::from(*b),
-                    ))
+        #[allow(clippy::arithmetic_side_effects)]
+        {
+            match (self, rhs) {
+                (Number::Float(a), Number::Float(b)) => Ok(Number::normalize_float(*a + *b)),
+                (Number::Float(a), other) | (other, Number::Float(a)) => {
+                    Ok(Number::normalize_float(*a + other.to_f64_lossy()))
+                }
+                (Number::UInt(a), Number::UInt(b)) => {
+                    if let Some(sum) = a.checked_add(*b) {
+                        Ok(Number::UInt(sum))
+                    } else {
+                        Ok(Number::from_bigint_owned(
+                            BigInt::from(*a) + BigInt::from(*b),
+                        ))
+                    }
+                }
+                (Number::Int(a), Number::Int(b)) => {
+                    if let Some(sum) = a.checked_add(*b) {
+                        Ok(Number::Int(sum))
+                    } else {
+                        Ok(Number::from_bigint_owned(
+                            BigInt::from(*a) + BigInt::from(*b),
+                        ))
+                    }
+                }
+                (Number::Int(a), Number::UInt(b)) | (Number::UInt(b), Number::Int(a)) => {
+                    Ok(Number::from_i128(*a as i128 + *b as i128))
+                }
+                (Number::BigInt(a), Number::BigInt(b)) => {
+                    Ok(Number::from_bigint_owned((**a).clone() + (**b).clone()))
+                }
+                (Number::BigInt(a), other) | (other, Number::BigInt(a)) => {
+                    let mut sum = (**a).clone();
+                    sum += other.as_bigint_exact()?;
+                    Ok(Number::from_bigint_owned(sum))
                 }
             }
-            (Number::Int(a), Number::Int(b)) => {
-                if let Some(sum) = a.checked_add(*b) {
-                    Ok(Number::Int(sum))
-                } else {
-                    Ok(Number::from_bigint_owned(
-                        BigInt::from(*a) + BigInt::from(*b),
-                    ))
-                }
-            }
-            (Number::Int(a), Number::UInt(b)) | (Number::UInt(b), Number::Int(a)) => {
-                Ok(Number::from_i128(*a as i128 + *b as i128))
-            }
-            (Number::BigInt(a), Number::BigInt(b)) => {
-                Ok(Number::from_bigint_owned((**a).clone() + (**b).clone()))
-            }
-            (Number::BigInt(a), other) | (other, Number::BigInt(a)) => {
-                let mut sum = (**a).clone();
-                sum += other.as_bigint_exact()?;
-                Ok(Number::from_bigint_owned(sum))
-            }
-            _ => unreachable!(),
         }
     }
 
@@ -469,45 +469,44 @@ impl Number {
     }
 
     pub fn sub(&self, rhs: &Self) -> Result<Number> {
-        if matches!(self, Number::Float(_)) || matches!(rhs, Number::Float(_)) {
-            return Ok(Number::normalize_float(
-                self.to_f64_lossy() - rhs.to_f64_lossy(),
-            ));
-        }
-
-        match (self, rhs) {
-            (Number::UInt(a), Number::UInt(b)) => {
-                if a >= b {
-                    Ok(Number::UInt(a - b))
-                } else {
-                    Ok(Number::from_i128(*a as i128 - *b as i128))
+        #[allow(clippy::arithmetic_side_effects)]
+        {
+            match (self, rhs) {
+                (Number::Float(a), Number::Float(b)) => Ok(Number::normalize_float(*a - *b)),
+                (Number::Float(a), other) => Ok(Number::normalize_float(*a - other.to_f64_lossy())),
+                (other, Number::Float(b)) => Ok(Number::normalize_float(other.to_f64_lossy() - *b)),
+                (Number::UInt(a), Number::UInt(b)) => {
+                    if a >= b {
+                        Ok(Number::UInt(a - b))
+                    } else {
+                        Ok(Number::from_i128(*a as i128 - *b as i128))
+                    }
+                }
+                (Number::Int(a), Number::Int(b)) => {
+                    if let Some(diff) = a.checked_sub(*b) {
+                        Ok(Number::Int(diff))
+                    } else {
+                        Ok(Number::from_bigint_owned(
+                            BigInt::from(*a) - BigInt::from(*b),
+                        ))
+                    }
+                }
+                (Number::Int(a), Number::UInt(b)) => Ok(Number::from_i128(*a as i128 - *b as i128)),
+                (Number::UInt(a), Number::Int(b)) => Ok(Number::from_i128(*a as i128 - *b as i128)),
+                (Number::BigInt(a), Number::BigInt(b)) => {
+                    Ok(Number::from_bigint_owned((**a).clone() - (**b).clone()))
+                }
+                (Number::BigInt(a), other) => {
+                    let mut diff = (**a).clone();
+                    diff -= other.as_bigint_exact()?;
+                    Ok(Number::from_bigint_owned(diff))
+                }
+                (other, Number::BigInt(b)) => {
+                    let mut diff = other.as_bigint_exact()?;
+                    diff -= (**b).clone();
+                    Ok(Number::from_bigint_owned(diff))
                 }
             }
-            (Number::Int(a), Number::Int(b)) => {
-                if let Some(diff) = a.checked_sub(*b) {
-                    Ok(Number::Int(diff))
-                } else {
-                    Ok(Number::from_bigint_owned(
-                        BigInt::from(*a) - BigInt::from(*b),
-                    ))
-                }
-            }
-            (Number::Int(a), Number::UInt(b)) => Ok(Number::from_i128(*a as i128 - *b as i128)),
-            (Number::UInt(a), Number::Int(b)) => Ok(Number::from_i128(*a as i128 - *b as i128)),
-            (Number::BigInt(a), Number::BigInt(b)) => {
-                Ok(Number::from_bigint_owned((**a).clone() - (**b).clone()))
-            }
-            (Number::BigInt(a), other) => {
-                let mut diff = (**a).clone();
-                diff -= other.as_bigint_exact()?;
-                Ok(Number::from_bigint_owned(diff))
-            }
-            (other, Number::BigInt(b)) => {
-                let mut diff = other.as_bigint_exact()?;
-                diff -= (**b).clone();
-                Ok(Number::from_bigint_owned(diff))
-            }
-            _ => unreachable!(),
         }
     }
 
@@ -517,150 +516,158 @@ impl Number {
     }
 
     pub fn mul(&self, rhs: &Self) -> Result<Number> {
-        if matches!(self, Number::Float(_)) || matches!(rhs, Number::Float(_)) {
-            return Ok(Number::normalize_float(
-                self.to_f64_lossy() * rhs.to_f64_lossy(),
-            ));
-        }
-
-        match (self, rhs) {
-            (Number::UInt(a), Number::UInt(b)) => {
-                let product = (*a as u128) * (*b as u128);
-                if let Ok(v) = u64::try_from(product) {
-                    Ok(Number::UInt(v))
-                } else {
-                    Ok(Number::from_bigint_owned(BigInt::from(product)))
+        #[allow(clippy::arithmetic_side_effects)]
+        {
+            match (self, rhs) {
+                (Number::Float(a), Number::Float(b)) => Ok(Number::normalize_float(*a * *b)),
+                (Number::Float(a), other) | (other, Number::Float(a)) => {
+                    Ok(Number::normalize_float(*a * other.to_f64_lossy()))
+                }
+                (Number::UInt(a), Number::UInt(b)) => {
+                    let product = (*a as u128) * (*b as u128);
+                    if let Ok(v) = u64::try_from(product) {
+                        Ok(Number::UInt(v))
+                    } else {
+                        Ok(Number::from_bigint_owned(BigInt::from(product)))
+                    }
+                }
+                (Number::Int(a), Number::Int(b)) => {
+                    if let Some(prod) = a.checked_mul(*b) {
+                        Ok(Number::Int(prod))
+                    } else {
+                        Ok(Number::from_bigint_owned(
+                            BigInt::from(*a) * BigInt::from(*b),
+                        ))
+                    }
+                }
+                (Number::Int(a), Number::UInt(b)) | (Number::UInt(b), Number::Int(a)) => {
+                    let lhs = *a as i128;
+                    let rhs_val = *b as i128;
+                    if let Some(prod) = lhs.checked_mul(rhs_val) {
+                        Ok(Number::from_i128(prod))
+                    } else {
+                        Ok(Number::from_bigint_owned(
+                            BigInt::from(lhs) * BigInt::from(rhs_val),
+                        ))
+                    }
+                }
+                (Number::BigInt(a), Number::BigInt(b)) => {
+                    Ok(Number::from_bigint_owned((**a).clone() * (**b).clone()))
+                }
+                (Number::BigInt(a), other) | (other, Number::BigInt(a)) => {
+                    let product = (**a).clone() * other.as_bigint_exact()?;
+                    Ok(Number::from_bigint_owned(product))
                 }
             }
-            (Number::Int(a), Number::Int(b)) => {
-                if let Some(prod) = a.checked_mul(*b) {
-                    Ok(Number::Int(prod))
-                } else {
-                    Ok(Number::from_bigint_owned(
-                        BigInt::from(*a) * BigInt::from(*b),
-                    ))
-                }
-            }
-            (Number::Int(a), Number::UInt(b)) | (Number::UInt(b), Number::Int(a)) => {
-                let lhs = *a as i128;
-                let rhs_val = *b as i128;
-                if let Some(prod) = lhs.checked_mul(rhs_val) {
-                    Ok(Number::from_i128(prod))
-                } else {
-                    Ok(Number::from_bigint_owned(
-                        BigInt::from(*a) * BigInt::from(*b),
-                    ))
-                }
-            }
-            (Number::BigInt(a), Number::BigInt(b)) => {
-                Ok(Number::from_bigint_owned((**a).clone() * (**b).clone()))
-            }
-            (Number::BigInt(a), other) | (other, Number::BigInt(a)) => {
-                let product = (**a).clone() * other.as_bigint_exact()?;
-                Ok(Number::from_bigint_owned(product))
-            }
-            _ => unreachable!(),
         }
     }
 
+    // BigInt division/modulo are arbitrary-precision; primitive paths use checked ops.
     pub fn divide(self, rhs: &Self) -> Result<Number> {
-        if rhs.is_zero() {
-            bail!("division by zero");
-        }
-
-        if matches!(self, Number::Float(_)) || matches!(rhs, Number::Float(_)) {
-            return Ok(Number::Float(self.to_f64_lossy() / rhs.to_f64_lossy()));
-        }
-
-        match (&self, rhs) {
-            (Number::UInt(a), Number::UInt(b)) => {
-                if *a % *b == 0 {
-                    Ok(Number::UInt(*a / *b))
-                } else {
-                    Ok(Number::Float(self.to_f64_lossy() / rhs.to_f64_lossy()))
-                }
+        #[allow(clippy::arithmetic_side_effects)]
+        {
+            if rhs.is_zero() {
+                bail!("division by zero");
             }
-            (Number::Int(a), Number::Int(b)) => {
-                if *a % *b == 0 {
-                    if let Some(q) = a.checked_div(*b) {
-                        Ok(Number::Int(q))
+
+            if matches!(self, Number::Float(_)) || matches!(rhs, Number::Float(_)) {
+                return Ok(Number::Float(self.to_f64_lossy() / rhs.to_f64_lossy()));
+            }
+
+            match (&self, rhs) {
+                (Number::UInt(a), Number::UInt(b)) => {
+                    if *a % *b == 0 {
+                        Ok(Number::UInt(*a / *b))
                     } else {
-                        let quotient = BigInt::from(*a) / BigInt::from(*b);
-                        Ok(Number::from_bigint_owned(quotient))
+                        Ok(Number::Float(self.to_f64_lossy() / rhs.to_f64_lossy()))
                     }
-                } else {
-                    Ok(Number::Float(self.to_f64_lossy() / rhs.to_f64_lossy()))
                 }
-            }
-            (Number::Int(a), Number::UInt(b)) => {
-                let lhs = *a as i128;
-                let rhs_i = *b as i128;
-                if lhs % rhs_i == 0 {
-                    Ok(Number::from_i128(lhs / rhs_i))
-                } else {
-                    Ok(Number::Float(self.to_f64_lossy() / rhs.to_f64_lossy()))
+                (Number::Int(a), Number::Int(b)) => {
+                    if *a % *b == 0 {
+                        if let Some(q) = a.checked_div(*b) {
+                            Ok(Number::Int(q))
+                        } else {
+                            let quotient = BigInt::from(*a) / BigInt::from(*b);
+                            Ok(Number::from_bigint_owned(quotient))
+                        }
+                    } else {
+                        Ok(Number::Float(self.to_f64_lossy() / rhs.to_f64_lossy()))
+                    }
                 }
-            }
-            (Number::UInt(a), Number::Int(b)) => {
-                let lhs = *a as i128;
-                let rhs_i = *b as i128;
-                if lhs % rhs_i == 0 {
-                    Ok(Number::from_i128(lhs / rhs_i))
-                } else {
-                    Ok(Number::Float(self.to_f64_lossy() / rhs.to_f64_lossy()))
+                (Number::Int(a), Number::UInt(b)) => {
+                    let lhs = *a as i128;
+                    let rhs_i = *b as i128;
+                    if lhs % rhs_i == 0 {
+                        Ok(Number::from_i128(lhs / rhs_i))
+                    } else {
+                        Ok(Number::Float(self.to_f64_lossy() / rhs.to_f64_lossy()))
+                    }
                 }
-            }
-            (Number::BigInt(a), Number::BigInt(b)) => {
-                let remainder = (&**a) % (&**b);
-                if remainder.is_zero() {
-                    let quotient = (&**a) / (&**b);
-                    Ok(Number::from_bigint_owned(quotient))
-                } else {
-                    Ok(Number::Float(self.to_f64_lossy() / rhs.to_f64_lossy()))
+                (Number::UInt(a), Number::Int(b)) => {
+                    let lhs = *a as i128;
+                    let rhs_i = *b as i128;
+                    if lhs % rhs_i == 0 {
+                        Ok(Number::from_i128(lhs / rhs_i))
+                    } else {
+                        Ok(Number::Float(self.to_f64_lossy() / rhs.to_f64_lossy()))
+                    }
                 }
-            }
-            (Number::BigInt(a), _) => {
-                if let Some(b_big) = rhs.to_bigint_owned() {
-                    let remainder = (&**a) % &b_big;
+                (Number::BigInt(a), Number::BigInt(b)) => {
+                    let remainder = (&**a) % (&**b);
                     if remainder.is_zero() {
-                        let quotient = (&**a) / &b_big;
+                        let quotient = (&**a) / (&**b);
                         Ok(Number::from_bigint_owned(quotient))
                     } else {
                         Ok(Number::Float(self.to_f64_lossy() / rhs.to_f64_lossy()))
                     }
-                } else {
-                    Ok(Number::Float(self.to_f64_lossy() / rhs.to_f64_lossy()))
                 }
-            }
-            (_, Number::BigInt(b)) => {
-                if let Some(a_big) = self.to_bigint_owned() {
-                    let remainder = (&a_big) % (&**b);
-                    if remainder.is_zero() {
-                        let quotient = (&a_big) / (&**b);
-                        Ok(Number::from_bigint_owned(quotient))
+                (Number::BigInt(a), _) => {
+                    if let Some(b_big) = rhs.to_bigint_owned() {
+                        let remainder = (&**a) % &b_big;
+                        if remainder.is_zero() {
+                            let quotient = (&**a) / &b_big;
+                            Ok(Number::from_bigint_owned(quotient))
+                        } else {
+                            Ok(Number::Float(self.to_f64_lossy() / rhs.to_f64_lossy()))
+                        }
                     } else {
                         Ok(Number::Float(self.to_f64_lossy() / rhs.to_f64_lossy()))
                     }
-                } else {
-                    Ok(Number::Float(self.to_f64_lossy() / rhs.to_f64_lossy()))
                 }
+                (_, Number::BigInt(b)) => {
+                    if let Some(a_big) = self.to_bigint_owned() {
+                        let remainder = (&a_big) % (&**b);
+                        if remainder.is_zero() {
+                            let quotient = (&a_big) / (&**b);
+                            Ok(Number::from_bigint_owned(quotient))
+                        } else {
+                            Ok(Number::Float(self.to_f64_lossy() / rhs.to_f64_lossy()))
+                        }
+                    } else {
+                        Ok(Number::Float(self.to_f64_lossy() / rhs.to_f64_lossy()))
+                    }
+                }
+                _ => Ok(Number::Float(self.to_f64_lossy() / rhs.to_f64_lossy())),
             }
-            _ => Ok(Number::Float(self.to_f64_lossy() / rhs.to_f64_lossy())),
         }
     }
 
+    // BigInt modulo is arbitrary-precision; primitive inputs are validated first.
     pub fn modulo(self, rhs: &Self) -> Result<Number> {
-        if rhs.is_zero() {
-            bail!("modulo by zero");
-        }
+        #[allow(clippy::arithmetic_side_effects)]
+        {
+            if rhs.is_zero() {
+                bail!("modulo by zero");
+            }
 
-        if !self.is_integer() || !rhs.is_integer() {
-            bail!("modulo on floating-point number");
-        }
+            if !self.is_integer() || !rhs.is_integer() {
+                bail!("modulo on floating-point number");
+            }
 
-        let (a, b) = Number::ints_to_bigint(&self, rhs)?;
-        let rem = a % &b;
-        Ok(Number::from_bigint_owned(rem))
+            let (a, b) = Number::ints_to_bigint(&self, rhs)?;
+            let rem = a % &b;
+            Ok(Number::from_bigint_owned(rem))
+        }
     }
 
     pub fn is_integer(&self) -> bool {
@@ -710,18 +717,26 @@ impl Number {
         Some(Number::from_bigint_owned(a ^ b))
     }
 
+    // Shifts use BigInt; shift amount is bounded by as_u32(), so safe.
     pub fn lsh(&self, rhs: &Self) -> Option<Number> {
-        let shift = rhs.as_u32()? as usize;
-        let mut value = self.ensure_integer()?;
-        value <<= shift;
-        Some(Number::from_bigint_owned(value))
+        #[allow(clippy::arithmetic_side_effects)]
+        {
+            let shift = rhs.as_u32()? as usize;
+            let mut value = self.ensure_integer()?;
+            value <<= shift;
+            Some(Number::from_bigint_owned(value))
+        }
     }
 
+    // Shifts use BigInt; shift amount is bounded by as_u32(), so safe.
     pub fn rsh(&self, rhs: &Self) -> Option<Number> {
-        let shift = rhs.as_u32()? as usize;
-        let mut value = self.ensure_integer()?;
-        value >>= shift;
-        Some(Number::from_bigint_owned(value))
+        #[allow(clippy::arithmetic_side_effects)]
+        {
+            let shift = rhs.as_u32()? as usize;
+            let mut value = self.ensure_integer()?;
+            value >>= shift;
+            Some(Number::from_bigint_owned(value))
+        }
     }
 
     pub fn neg(&self) -> Option<Number> {
@@ -767,20 +782,26 @@ impl Number {
     }
 
     pub fn two_pow(e: i32) -> Result<Number> {
-        if e >= 0 {
-            Ok(two_pow_positive(e as u32))
-        } else {
-            let denom = two_pow_positive((-e) as u32);
-            Number::from(1u64).divide(&denom)
+        #[allow(clippy::arithmetic_side_effects)]
+        {
+            if e >= 0 {
+                Ok(two_pow_positive(e as u32))
+            } else {
+                let denom = two_pow_positive((-e) as u32);
+                Number::from(1u64).divide(&denom)
+            }
         }
     }
 
     pub fn ten_pow(e: i32) -> Result<Number> {
-        if e >= 0 {
-            Ok(ten_pow_positive(e as u32))
-        } else {
-            let denom = ten_pow_positive((-e) as u32);
-            Number::from(1u64).divide(&denom)
+        #[allow(clippy::arithmetic_side_effects)]
+        {
+            if e >= 0 {
+                Ok(ten_pow_positive(e as u32))
+            } else {
+                let denom = ten_pow_positive((-e) as u32);
+                Number::from(1u64).divide(&denom)
+            }
         }
     }
 
@@ -845,16 +866,18 @@ impl Number {
     }
 }
 
+// BigInt pow path is arbitrary-precision and cannot overflow.
 fn two_pow_positive(exp: u32) -> Number {
-    if exp < 64 {
-        Number::UInt(1u64 << exp)
+    if let Some(v) = 1u64.checked_shl(exp) {
+        Number::UInt(v)
     } else {
         let mut value = BigInt::one();
-        value <<= exp as usize;
+        value <<= usize::try_from(exp).unwrap_or(usize::MAX);
         Number::from_bigint_owned(value)
     }
 }
 
+// BigInt pow path is arbitrary-precision and cannot overflow.
 fn pow10_bigint(exp: u32) -> BigInt {
     if exp == 0 {
         return BigInt::one();
@@ -877,6 +900,7 @@ fn pow10_bigint(exp: u32) -> BigInt {
     result
 }
 
+// BigInt pow path is arbitrary-precision and cannot overflow.
 fn ten_pow_positive(exp: u32) -> Number {
     if let Some(value) = 10u64.checked_pow(exp) {
         Number::UInt(value)
@@ -897,7 +921,7 @@ fn bigint_to_scientific(value: &BigInt) -> String {
         return format!("{}{}e0", sign, digits);
     }
 
-    let exponent = digits.len() as i32 - 1;
+    let exponent = digits.len().saturating_sub(1);
     format!("{}{}.{}e{}", sign, &digits[0..1], &digits[1..], exponent)
 }
 
@@ -945,7 +969,7 @@ fn scientific_parts_to_bigint(mantissa: &str, exponent: i32) -> Option<BigInt> {
             '0'..='9' => {
                 digits.push(ch);
                 if seen_dot {
-                    fractional_len += 1;
+                    fractional_len = fractional_len.saturating_add(1);
                 }
             }
             _ => return None,
@@ -958,7 +982,7 @@ fn scientific_parts_to_bigint(mantissa: &str, exponent: i32) -> Option<BigInt> {
 
     while fractional_len > 0 && digits.ends_with('0') {
         digits.pop();
-        fractional_len -= 1;
+        fractional_len = fractional_len.saturating_sub(1);
     }
 
     let adjusted_exponent = exponent.checked_sub(fractional_len)?;
@@ -981,6 +1005,7 @@ fn scientific_parts_to_bigint(mantissa: &str, exponent: i32) -> Option<BigInt> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
     use super::*;
 
     #[test]

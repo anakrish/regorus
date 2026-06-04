@@ -118,12 +118,12 @@ pub struct HoistedLoopsLookup {
 
 impl HoistedLoopsLookup {
     /// Create a new empty lookup table
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Ensure capacity for a given module and statement
-    pub fn ensure_statement_capacity(&mut self, module_idx: u32, stmt_idx: u32) {
+    pub(crate) fn ensure_statement_capacity(&mut self, module_idx: u32, stmt_idx: u32) {
         self.statement_loops.ensure_capacity(module_idx, stmt_idx);
         self.expr_loops.ensure_capacity(module_idx, 0);
         self.expr_binding_plans.ensure_capacity(module_idx, 0);
@@ -131,7 +131,7 @@ impl HoistedLoopsLookup {
     }
 
     /// Ensure capacity for a given module and expression
-    pub fn ensure_expr_capacity(&mut self, module_idx: u32, expr_idx: u32) {
+    pub(crate) fn ensure_expr_capacity(&mut self, module_idx: u32, expr_idx: u32) {
         self.expr_loops.ensure_capacity(module_idx, expr_idx);
         self.statement_loops.ensure_capacity(module_idx, 0);
         self.expr_binding_plans
@@ -140,7 +140,7 @@ impl HoistedLoopsLookup {
     }
 
     /// Ensure capacity for a given module and query
-    pub fn ensure_query_capacity(&mut self, module_idx: u32, query_idx: u32) {
+    pub(crate) fn ensure_query_capacity(&mut self, module_idx: u32, query_idx: u32) {
         self.query_contexts.ensure_capacity(module_idx, query_idx);
         self.statement_loops.ensure_capacity(module_idx, 0);
         self.expr_loops.ensure_capacity(module_idx, 0);
@@ -148,7 +148,7 @@ impl HoistedLoopsLookup {
     }
 
     /// Store hoisted loops for a statement
-    pub fn set_statement_loops(
+    pub(crate) fn set_statement_loops(
         &mut self,
         module_idx: u32,
         stmt_idx: u32,
@@ -160,7 +160,7 @@ impl HoistedLoopsLookup {
     }
 
     /// Get hoisted loops for a statement
-    pub fn get_statement_loops(
+    pub(crate) fn get_statement_loops(
         &self,
         module_idx: u32,
         stmt_idx: u32,
@@ -169,7 +169,7 @@ impl HoistedLoopsLookup {
     }
 
     /// Store hoisted loops for an expression (output expressions)
-    pub fn set_expr_loops(
+    pub(crate) fn set_expr_loops(
         &mut self,
         module_idx: u32,
         expr_idx: u32,
@@ -181,7 +181,7 @@ impl HoistedLoopsLookup {
     }
 
     /// Get hoisted loops for an expression
-    pub fn get_expr_loops(
+    pub(crate) fn get_expr_loops(
         &self,
         module_idx: u32,
         expr_idx: u32,
@@ -190,7 +190,7 @@ impl HoistedLoopsLookup {
     }
 
     /// Store the compilation context for a query
-    pub fn set_query_context(
+    pub(crate) fn set_query_context(
         &mut self,
         module_idx: u32,
         query_idx: u32,
@@ -202,7 +202,7 @@ impl HoistedLoopsLookup {
     }
 
     /// Store a binding plan for an expression
-    pub fn set_expr_binding_plan(
+    pub(crate) fn set_expr_binding_plan(
         &mut self,
         module_idx: u32,
         expr_idx: u32,
@@ -215,7 +215,7 @@ impl HoistedLoopsLookup {
 
     /// Get the compilation context for a query
     #[allow(dead_code)]
-    pub fn get_query_context(
+    pub(crate) fn get_query_context(
         &self,
         module_idx: u32,
         query_idx: u32,
@@ -224,7 +224,7 @@ impl HoistedLoopsLookup {
     }
 
     /// Get the binding plan for an expression
-    pub fn get_expr_binding_plan(
+    pub(crate) fn get_expr_binding_plan(
         &self,
         module_idx: u32,
         expr_idx: u32,
@@ -234,7 +234,7 @@ impl HoistedLoopsLookup {
 
     /// Merge another loop hoisting table into this one
     /// This is used to add query module loops to the existing table
-    pub fn merge_query_loops(&mut self, mut other: HoistedLoopsLookup, module_idx: usize) {
+    pub(crate) fn merge_query_loops(&mut self, mut other: HoistedLoopsLookup, module_idx: usize) {
         while self.statement_loops.module_len() < module_idx {
             self.statement_loops.push_module(Vec::new());
         }
@@ -270,14 +270,14 @@ impl HoistedLoopsLookup {
         }
     }
 
-    pub fn truncate_modules(&mut self, module_count: usize) {
+    pub(crate) fn truncate_modules(&mut self, module_count: usize) {
         self.statement_loops.truncate_modules(module_count);
         self.expr_loops.truncate_modules(module_count);
         self.expr_binding_plans.truncate_modules(module_count);
         self.query_contexts.truncate_modules(module_count);
     }
 
-    pub fn module_len(&self) -> usize {
+    pub(crate) fn module_len(&self) -> usize {
         self.statement_loops.module_len()
     }
 }
@@ -293,7 +293,7 @@ pub struct LoopHoister {
 
 impl LoopHoister {
     /// Create a new loop hoister
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             lookup: HoistedLoopsLookup::new(),
             schedule: None,
@@ -302,7 +302,7 @@ impl LoopHoister {
     }
 
     /// Create a new loop hoister with a schedule
-    pub fn new_with_schedule(schedule: crate::Rc<crate::scheduler::Schedule>) -> Self {
+    pub(crate) fn new_with_schedule(schedule: crate::Rc<crate::scheduler::Schedule>) -> Self {
         Self {
             lookup: HoistedLoopsLookup::new(),
             schedule: Some(schedule),
@@ -312,7 +312,7 @@ impl LoopHoister {
 
     /// Populate loop hoisting information for all modules
     /// Returns the populated lookup table
-    pub fn populate(mut self, modules: &[Ref<Module>]) -> Result<HoistedLoopsLookup> {
+    pub(crate) fn populate(mut self, modules: &[Ref<Module>]) -> Result<HoistedLoopsLookup> {
         self.module_globals = compute_module_globals(modules).map_err(|err| anyhow!(err))?;
         for (module_idx, module) in modules.iter().enumerate() {
             self.populate_module(module_idx as u32, module)?;
@@ -340,7 +340,7 @@ impl LoopHoister {
     /// # Arguments
     /// * `modules` - The modules to populate
     /// * `extra_capacity` - Number of additional module slots to reserve
-    pub fn populate_with_extra_capacity(
+    pub(crate) fn populate_with_extra_capacity(
         mut self,
         modules: &[Ref<Module>],
         extra_capacity: u32,
@@ -365,7 +365,7 @@ impl LoopHoister {
     }
 
     /// Populate loop information for a single module
-    pub fn populate_module(&mut self, module_idx: u32, module: &Module) -> Result<()> {
+    pub(crate) fn populate_module(&mut self, module_idx: u32, module: &Module) -> Result<()> {
         // Process all rules in the module
         for rule in &module.policy {
             self.populate_rule(module_idx, rule)?;
@@ -374,7 +374,7 @@ impl LoopHoister {
     }
 
     /// Finalize and return the populated lookup table
-    pub fn finalize(self) -> HoistedLoopsLookup {
+    pub(crate) fn finalize(self) -> HoistedLoopsLookup {
         self.lookup
     }
 
@@ -387,7 +387,7 @@ impl LoopHoister {
     /// * `query` - The query to populate
     /// * `num_statements` - Total number of statements in the query module
     /// * `num_expressions` - Total number of expressions in the query module
-    pub fn populate_query_snippet(
+    pub(crate) fn populate_query_snippet(
         &mut self,
         module_idx: u32,
         query: &Query,
@@ -590,7 +590,10 @@ impl LoopHoister {
 
         // Process statements in scheduled order
         for &stmt_idx in &stmt_order {
-            let stmt = &query.stmts[stmt_idx];
+            let stmt = query
+                .stmts
+                .get(stmt_idx)
+                .ok_or_else(|| anyhow!("scheduled stmt idx {stmt_idx} out of bounds"))?;
             self.populate_statement(module_idx, stmt.sidx, stmt, &mut context)?;
         }
 

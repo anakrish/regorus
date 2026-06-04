@@ -216,9 +216,5 @@ pub fn collect_expr_dependencies(expr: &ExprRef) -> Option<BTreeSet<String>> {
         return None;
     }
 
-    if valid {
-        Some(deps)
-    } else {
-        None
-    }
+    valid.then_some(deps)
 }

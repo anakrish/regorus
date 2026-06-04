@@ -8,7 +8,7 @@ type String = Rc<str>;
 
 /// Information about a compiled policy, including metadata about modules,
 /// target configuration, and resource types that the policy can evaluate.
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
 pub struct PolicyInfo {
     /// List of module identifiers that were compiled into this policy.
     /// Each module ID represents a unique policy module that contributes

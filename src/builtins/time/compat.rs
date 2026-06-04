@@ -49,7 +49,7 @@ const MINUTE: u64 = 60 * SECOND;
 const HOUR: u64 = 60 * MINUTE;
 
 #[derive(Debug)]
-pub enum ParseDurationError {
+pub(in crate::builtins) enum ParseDurationError {
     InvalidDuration(String),
     UnknownUnit(String),
     Overflow,
@@ -75,7 +75,7 @@ impl fmt::Display for ParseDurationError {
 //
 // Adapted from Go's `time.ParseDuration`:
 // https://github.com/golang/go/blob/8db131082d08e497fd8e9383d0ff7715e1bef478/src/time/format.go#L1584-L1686
-pub fn parse_duration(mut s: &str) -> Result<Duration, ParseDurationError> {
+pub(in crate::builtins) fn parse_duration(mut s: &str) -> Result<Duration, ParseDurationError> {
     // Input is in the format of `[-+]?([0-9]*(\.[0-9]*)?[a-z]+)+`
     let orig = s;
 
@@ -485,16 +485,18 @@ impl<'a> Iterator for GoTimeFormatItems<'a> {
 // Adapted from chrono's `scan::timezone_offset_2822`:
 // https://github.com/chronotope/chrono/blob/baa55d084784e4e88b5332efe8e96af794a52e8a/src/format/scan.rs#L285-L322
 fn parse_legacy_timezone(parsed: &mut Parsed, val: &str) -> ParseResult<()> {
-    let upto = val
-        .as_bytes()
+    let bytes = val.as_bytes();
+    let upto = bytes
         .iter()
         .position(|&c| !c.is_ascii_alphabetic())
-        .unwrap_or(val.len());
+        .unwrap_or(bytes.len());
     if upto == 0 {
         return Ok(());
     }
 
-    let name = &val.as_bytes()[..upto];
+    let Some(name) = bytes.get(..upto) else {
+        return Ok(());
+    };
     if name.eq_ignore_ascii_case(b"gmt") || name.eq_ignore_ascii_case(b"ut") {
         parsed.set_offset(0)
     } else if name.eq_ignore_ascii_case(b"edt") {
@@ -513,7 +515,7 @@ fn parse_legacy_timezone(parsed: &mut Parsed, val: &str) -> ParseResult<()> {
 }
 
 // Parses a date in Go's time format like 'Mon Jan _2 15:04:05 2006'.
-pub fn parse(layout: &str, value: &str) -> ParseResult<DateTime<FixedOffset>> {
+pub(in crate::builtins) fn parse(layout: &str, value: &str) -> ParseResult<DateTime<FixedOffset>> {
     let mut items = GoTimeFormatItems::parse(layout);
     let mut parsed = Parsed::new();
     let remainder = format::parse_and_remainder(
@@ -574,7 +576,7 @@ pub fn parse(layout: &str, value: &str) -> ParseResult<DateTime<FixedOffset>> {
 }
 
 // Formats a date in Go's time format like 'Mon Jan _2 15:04:05 2006'.
-pub fn format<Tz: TimeZone>(date: DateTime<Tz>, fmt: &str) -> String
+pub(in crate::builtins) fn format<Tz: TimeZone>(date: DateTime<Tz>, fmt: &str) -> String
 where
     Tz::Offset: fmt::Display,
 {
@@ -584,6 +586,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
     use chrono::{Datelike, Month, TimeZone, Timelike, Weekday};
     use chrono_tz::PST8PDT;
 

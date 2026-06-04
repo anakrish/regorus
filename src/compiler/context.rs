@@ -13,7 +13,7 @@ use alloc::string::{String, ToString};
 
 /// Type of compilation context for tracking different scenarios
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ContextType {
+pub(crate) enum ContextType {
     /// Rule context (Complete, PartialSet, PartialObject, or Function)
     Rule,
     /// Comprehension context (Array, Set, or Object)
@@ -30,7 +30,7 @@ pub enum ContextType {
 ///
 /// This design is compatible with RVM's CompilationContext for potential future unification.
 #[derive(Debug, Clone)]
-pub struct ScopeContext {
+pub(crate) struct ScopeContext {
     /// Type of context (Rule, Comprehension, Every, Query)
     #[allow(dead_code)]
     pub context_type: ContextType,
@@ -64,7 +64,7 @@ pub struct ScopeContext {
 
 impl ScopeContext {
     /// Create a new context with Query type (default, no output expressions)
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             context_type: ContextType::Query,
             bound_vars: BTreeSet::new(),
@@ -80,7 +80,7 @@ impl ScopeContext {
 
     /// Create a new context with a specific context type
     #[allow(dead_code)]
-    pub fn with_context_type(context_type: ContextType) -> Self {
+    pub(crate) fn with_context_type(context_type: ContextType) -> Self {
         Self {
             context_type,
             bound_vars: BTreeSet::new(),
@@ -96,7 +96,7 @@ impl ScopeContext {
 
     /// Create a new context with output expressions (for rules and comprehensions)
     #[allow(dead_code)]
-    pub fn with_output_exprs(
+    pub(crate) fn with_output_exprs(
         context_type: ContextType,
         key_expr: Option<ExprRef>,
         value_expr: Option<ExprRef>,
@@ -115,7 +115,7 @@ impl ScopeContext {
     }
 
     /// Create a child context that inherits bindings but overrides context type and output expressions
-    pub fn child_with_output_exprs(
+    pub(crate) fn child_with_output_exprs(
         &self,
         context_type: ContextType,
         key_expr: Option<ExprRef>,
@@ -135,7 +135,7 @@ impl ScopeContext {
     }
 
     /// Add a variable to the bound set
-    pub fn bind_variable(&mut self, var_name: &str) {
+    pub(crate) fn bind_variable(&mut self, var_name: &str) {
         if var_name != "_" {
             self.bound_vars.insert(var_name.to_string());
             self.current_scope_bound_vars.insert(var_name.to_string());
@@ -145,7 +145,7 @@ impl ScopeContext {
     }
 
     /// Mark a variable as unbound
-    pub fn add_unbound_variable(&mut self, var_name: &str) {
+    pub(crate) fn add_unbound_variable(&mut self, var_name: &str) {
         if var_name != "_" {
             self.bound_vars.remove(var_name);
             self.current_scope_bound_vars.remove(var_name);
@@ -155,13 +155,13 @@ impl ScopeContext {
     }
 
     /// Check if a variable is known to be unbound
-    pub fn is_unbound(&self, var_name: &str) -> bool {
+    pub(crate) fn is_unbound(&self, var_name: &str) -> bool {
         self.unbound_vars.contains(var_name)
     }
 
     /// Check if we can determine that a variable should be treated as a loop iterator
     /// (either it's unbound or explicitly marked as such)
-    pub fn should_hoist_as_loop(&self, var_name: &str) -> bool {
+    pub(crate) fn should_hoist_as_loop(&self, var_name: &str) -> bool {
         if var_name == "_" {
             return true;
         }

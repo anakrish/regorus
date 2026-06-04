@@ -1,5 +1,7 @@
+#![allow(clippy::panic_in_result_fn)]
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+#![cfg_attr(test, allow(clippy::indexing_slicing))]
 
 use std::env;
 
@@ -18,7 +20,7 @@ mod load_target_definitions {
 
     /// Load and register all target definitions from tests/interpreter/target/definitions
     /// This function is called once and loads all JSON target definition files.
-    pub fn load() -> Result<()> {
+    pub(super) fn load() -> Result<()> {
         INIT.call_once(|| {
             if let Err(e) = load_target_definitions_impl() {
                 eprintln!("Failed to load target definitions: {}", e);
@@ -147,7 +149,7 @@ fn push_query_results(query_results: QueryResults, results: &mut Vec<Value>) {
     }
 }
 
-pub fn eval_file(
+pub(super) fn eval_file(
     regos: &[String],
     data_opt: Option<Value>,
     input_opt: Option<ValueOrVec>,
@@ -228,7 +230,7 @@ pub fn eval_file(
 }
 
 #[cfg(feature = "azure_policy")]
-pub fn eval_file_with_rule_evaluation(
+pub(super) fn eval_file_with_rule_evaluation(
     regos: &[String],
     data_opt: Option<Value>,
     input_opt: Option<ValueOrVec>,

@@ -3,7 +3,7 @@
 
 use crate::ast::{Expr, Ref};
 use crate::builtins;
-use crate::builtins::utils::{ensure_args_count, ensure_numeric, ensure_string};
+use crate::builtins::utils::{ensure_n_args, ensure_numeric, ensure_string};
 use crate::lexer::Span;
 use crate::value::Value;
 use crate::*;
@@ -19,7 +19,7 @@ use chrono_tz::Tz;
 pub(in crate::builtins) mod compat;
 mod diff;
 
-pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
+pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     m.insert("time.add_date", (add_date, 4));
     m.insert("time.clock", (clock, 1));
     m.insert("time.date", (date, 1));
@@ -34,7 +34,7 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
 
 fn add_date(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
     let name = "time.add_date";
-    ensure_args_count(span, name, params, args, 4)?;
+    let (args, params) = ensure_n_args::<4>(span, name, params, args)?;
 
     let (datetime, _) = parse_epoch(name, &params[0], &args[0])?;
     let years = ensure_i32(name, &params[1], &args[1])?;
@@ -70,7 +70,7 @@ fn add_date(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> 
 
 fn clock(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "time.clock";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let (datetime, _) = parse_epoch(name, &params[0], &args[0])?;
 
@@ -84,7 +84,7 @@ fn clock(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Re
 
 fn date(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "time.date";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let (datetime, _) = parse_epoch(name, &params[0], &args[0])?;
 
@@ -98,7 +98,7 @@ fn date(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Res
 
 fn diff(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "time.diff";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
 
     let (datetime1, _) = parse_epoch(name, &params[0], &args[0])?;
     let (datetime2, _) = parse_epoch(name, &params[1], &args[1])?;
@@ -118,7 +118,7 @@ fn diff(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Res
 
 fn format(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "time.format";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let (datetime, format) = parse_epoch(name, &params[0], &args[0])?;
 
@@ -132,7 +132,7 @@ fn format(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> R
 
 fn now_ns(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
     let name = "time.now_ns";
-    ensure_args_count(span, name, params, args, 0)?;
+    let (_args, _params) = ensure_n_args::<0>(span, name, params, args)?;
 
     safe_timestamp_nanos(span, strict, Utc::now().timestamp_nanos_opt())
 }
@@ -144,7 +144,7 @@ fn parse_duration_ns(
     strict: bool,
 ) -> Result<Value> {
     let name = "time.parse_duration_ns";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let value = ensure_string(name, &params[0], &args[0])?;
     let dur = compat::parse_duration(value.as_ref()).map_err(anyhow::Error::msg)?;
@@ -153,7 +153,7 @@ fn parse_duration_ns(
 
 fn parse_ns(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
     let name = "time.parse_ns";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
 
     let layout = ensure_string(name, &params[0], &args[0])?;
     let value = ensure_string(name, &params[1], &args[1])?;
@@ -170,7 +170,7 @@ fn parse_rfc3339_ns(
     strict: bool,
 ) -> Result<Value> {
     let name = "time.parse_rfc3339_ns";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let value = ensure_string(name, &params[0], &args[0])?;
 
@@ -181,7 +181,7 @@ fn parse_rfc3339_ns(
 
 fn weekday(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "time.weekday";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let (datetime, _) = parse_epoch(name, &params[0], &args[0])?;
 

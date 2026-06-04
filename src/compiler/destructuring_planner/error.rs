@@ -93,7 +93,7 @@ pub fn map_binding_error(err: BindingPlannerError) -> Error {
 }
 
 impl BindingPlannerError {
-    pub(crate) fn to_span_message(&self) -> String {
+	pub(crate) fn to_span_message(&self) -> String {
         match self {
 			BindingPlannerError::ColonEqualsRequiresBindableLeft { span } => span
 				.message(

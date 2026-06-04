@@ -774,11 +774,12 @@ impl Engine {
     /// ```
     pub fn eval_bool_query(&mut self, query: String, enable_tracing: bool) -> Result<bool> {
         let results = self.eval_query(query, enable_tracing)?;
-        match results.result.len() {
-            0 => bail!("query did not produce any values"),
-            1 if results.result[0].expressions.len() == 1 => {
-                results.result[0].expressions[0].value.as_bool().copied()
-            }
+        match results.result.as_slice() {
+            [] => bail!("query did not produce any values"),
+            [single] => match single.expressions.as_slice() {
+                [expr] => expr.value.as_bool().copied(),
+                _ => bail!("query produced more than one value"),
+            },
             _ => bail!("query produced more than one value"),
         }
     }
@@ -1337,10 +1338,10 @@ impl Engine {
                     let path = Parser::get_path_ref_components(refr)?;
                     let paths: Vec<&str> = path.iter().map(|s| s.text()).collect();
 
-                    if paths.len() == 2 && paths[0] == "parameters" {
+                    if let ["parameters", name] = paths.as_slice() {
                         // Todo: Fetch fields other than name from rego metadoc for the parameter
                         parameters.push(PolicyParameter {
-                            name: paths[1].to_string(),
+                            name: (*name).to_string(),
                             modifiable: false,
                             required: false,
                         })
@@ -1355,10 +1356,10 @@ impl Engine {
                             let path = Parser::get_path_ref_components(refr)?;
                             let paths: Vec<&str> = path.iter().map(|s| s.text()).collect();
 
-                            if paths.len() == 2 && paths[0] == "parameters" {
+                            if let ["parameters", name] = paths.as_slice() {
                                 // Todo: Fetch fields other than name from rego metadoc for the parameter
                                 modifiers.push(PolicyModifier {
-                                    name: paths[1].to_string(),
+                                    name: (*name).to_string(),
                                 })
                             }
                         }

@@ -3,7 +3,7 @@
 
 use crate::ast::{Expr, Ref};
 use crate::builtins;
-use crate::builtins::utils::{ensure_args_count, ensure_string};
+use crate::builtins::utils::{ensure_n_args, ensure_string};
 use crate::lexer::Span;
 use crate::value::Value;
 use crate::*;
@@ -13,14 +13,14 @@ use alloc::collections::BTreeMap;
 use anyhow::Result;
 use uuid::{Timestamp, Uuid};
 
-pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
+pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     m.insert("uuid.parse", (parse, 1));
     m.insert("uuid.rfc4122", (rfc4122, 1));
 }
 
 fn parse(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "uuid.parse";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let val = ensure_string(name, &params[0], &args[0])?;
     let Some(uuid) = Uuid::parse_str(&val).ok() else {
@@ -86,7 +86,7 @@ fn parse(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Re
 
 fn rfc4122(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "uuid.rfc4122";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
     ensure_string(name, &params[0], &args[0])?;
 
     let uuid = Uuid::new_v4();

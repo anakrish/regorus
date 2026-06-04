@@ -4,7 +4,7 @@
 mod aggregates;
 mod arrays;
 mod bitwise;
-pub mod comparison;
+pub(crate) mod comparison;
 mod conversions;
 
 mod encoding;
@@ -17,7 +17,7 @@ mod http;
 #[cfg(feature = "net")]
 mod net;
 
-pub mod numbers;
+pub(crate) mod numbers;
 mod objects;
 #[cfg(feature = "opa-runtime")]
 mod opa;
@@ -25,12 +25,12 @@ mod opa;
 mod regex;
 #[cfg(feature = "semver")]
 mod semver;
-pub mod sets;
+pub(crate) mod sets;
 mod strings;
 #[cfg(feature = "time")]
 mod time;
 mod tracing;
-pub mod types;
+mod types;
 mod units;
 mod utils;
 #[cfg(feature = "uuid")]
@@ -48,11 +48,11 @@ use crate::Map as BuiltinsMap;
 use anyhow::Result;
 use lazy_static::lazy_static;
 
-pub type BuiltinFcn = (fn(&Span, &[Ref<Expr>], &[Value], bool) -> Result<Value>, u8);
+pub(super) type BuiltinFcn = (fn(&Span, &[Ref<Expr>], &[Value], bool) -> Result<Value>, u8);
 
 #[rustfmt::skip]
 lazy_static! {
-    pub static ref BUILTINS: BuiltinsMap<&'static str, BuiltinFcn> = {
+	pub(super) static ref BUILTINS: BuiltinsMap<&'static str, BuiltinFcn> = {
 	let mut m : BuiltinsMap<&'static str, BuiltinFcn>  = BuiltinsMap::new();
 
 	// comparison functions are directly called.
@@ -103,7 +103,7 @@ lazy_static! {
     };
 }
 
-pub fn must_cache(path: &str) -> Option<&'static str> {
+pub(super) fn must_cache(path: &str) -> Option<&'static str> {
     match path {
         "opa.runtime" => Some("opa.runtime"),
         "rand.intn" => Some("rand.intn"),

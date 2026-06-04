@@ -32,9 +32,9 @@ pub trait VariableBindingContext {
 }
 
 /// Context overlay that tracks newly bound variables on top of an existing context.
-pub(crate) struct OverlayBindingContext<'a, T: VariableBindingContext> {
-    pub(crate) base: &'a T,
-    pub(crate) newly_bound: &'a BTreeSet<String>,
+pub struct OverlayBindingContext<'a, T: VariableBindingContext> {
+    pub base: &'a T,
+    pub newly_bound: &'a BTreeSet<String>,
 }
 
 impl<'a, T: VariableBindingContext> VariableBindingContext for OverlayBindingContext<'a, T> {

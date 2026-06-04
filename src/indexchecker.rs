@@ -12,7 +12,7 @@ use anyhow::{bail, Result};
 
 // Ensures that indexes are unique and continuous, starting from 0.
 #[derive(Default)]
-pub struct IndexChecker {
+pub(super) struct IndexChecker {
     eidx: BTreeSet<u32>,
     sidx: BTreeSet<u32>,
     qidx: BTreeSet<u32>,
@@ -224,17 +224,16 @@ impl IndexChecker {
             return Ok(());
         }
 
-        if idx_set
-            .first()
-            .unwrap_or_else(|| panic!("no {idx_type} indexes collected"))
-            != &0
-        {
+        let Some(first_idx) = idx_set.first() else {
+            bail!("no {idx_type} indexes collected");
+        };
+        if first_idx != &0 {
             bail!("start {idx_type} index must be 0");
         }
 
-        let last_idx = idx_set
-            .last()
-            .unwrap_or_else(|| panic!("no {idx_type} indexes collected"));
+        let Some(last_idx) = idx_set.last() else {
+            bail!("no {idx_type} indexes collected");
+        };
         if last_idx != &(num_idx - 1) {
             bail!(
                 "last {idx_type} index must be {} got {last_idx} instead",
@@ -244,7 +243,7 @@ impl IndexChecker {
 
         Ok(())
     }
-    pub fn check_module(&mut self, module: &Module) -> Result<()> {
+    pub(super) fn check_module(&mut self, module: &Module) -> Result<()> {
         self.check_eidx(module.package.refr.as_ref())?;
         for import in &module.imports {
             self.check_eidx(import.refr.as_ref())?;

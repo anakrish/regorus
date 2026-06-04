@@ -7,7 +7,7 @@ use std::vec::Vec;
 
 use crate::ast::{Expr, Ref};
 use crate::builtins;
-use crate::builtins::utils::ensure_args_count;
+use crate::builtins::utils::ensure_n_args;
 use crate::lexer::Span;
 use crate::value::Value;
 
@@ -15,7 +15,7 @@ use anyhow::{anyhow, bail, Result};
 
 use super::utils::ensure_string;
 
-pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
+pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     m.insert("net.cidr_is_valid", (cidr_is_valid, 1));
     m.insert("net.cidr_contains", (cidr_contains, 2));
     m.insert("net.cidr_expand", (cidr_expand, 1));
@@ -25,13 +25,13 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
 /// `net::IpAddr` type to determine if the string is a valid IP,
 /// and checks to ensure that the mask is in bounds for the parsed
 /// IP address type (v4 or v6).
-pub fn cidr_is_valid(
+    pub(super) fn cidr_is_valid(
     span: &Span,
     params: &[Ref<Expr>],
     args: &[Value],
     _strict: bool,
 ) -> Result<Value> {
-    ensure_args_count(span, "cidr_is_valid", params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, "cidr_is_valid", params, args)?;
     let cidr = ensure_string("cidr_is_valid", &params[0], &args[0])?;
 
     Ok(Value::from(is_valid_cidr(cidr)))
@@ -66,13 +66,13 @@ fn is_valid_cidr(cidr: Arc<str>) -> bool {
 }
 
 /// Checks if a CIDR string contains a given CIDR or individual network address.
-pub fn cidr_contains(
+    pub(super) fn cidr_contains(
     span: &Span,
     params: &[Ref<Expr>],
     args: &[Value],
     strict: bool,
 ) -> Result<Value> {
-    ensure_args_count(span, "cidr_contains", params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, "cidr_contains", params, args)?;
     let cidr = ensure_string("cidr_contains", &params[0], &args[0])?;
     let cidr_or_ip = ensure_string("cidr_contains", &params[1], &args[1])?;
     let contains = _cidr_contains(cidr, cidr_or_ip);
@@ -110,13 +110,13 @@ fn _cidr_contains(cidr: Arc<str>, cidr_or_ip: Arc<str>) -> Result<bool> {
     Ok(net.contains(&subnet))
 }
 
-pub fn cidr_expand(
+    pub(super) fn cidr_expand(
     span: &Span,
     params: &[Ref<Expr>],
     args: &[Value],
     _strict: bool,
 ) -> Result<Value> {
-    ensure_args_count(span, "cidr_expand", params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, "cidr_expand", params, args)?;
     let cidr = ensure_string("cidr_expand", &params[0], &args[0])?;
 
     _cidr_expand(cidr)
@@ -145,6 +145,7 @@ fn _cidr_expand(cidr: Arc<str>) -> Result<Value> {
 
 #[cfg(test)]
 mod net_tests {
+    #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
     use super::*;
 
     #[test]

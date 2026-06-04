@@ -48,7 +48,8 @@ impl BuiltinCallParams {
 
     /// Get argument register numbers as a slice
     pub fn arg_registers(&self) -> &[u8] {
-        &self.args[..self.num_args as usize]
+        let end = usize::min(self.num_args as usize, self.args.len());
+        &self.args[..end]
     }
 }
 
@@ -74,7 +75,8 @@ impl FunctionCallParams {
 
     /// Get argument register numbers as a slice
     pub fn arg_registers(&self) -> &[u8] {
-        &self.args[..self.num_args as usize]
+        let end = usize::min(self.num_args as usize, self.args.len());
+        &self.args[..end]
     }
 }
 

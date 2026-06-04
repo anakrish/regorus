@@ -16,6 +16,7 @@ use crate::ast::ExprRef;
 use crate::lexer::Span;
 use crate::rvm::program::{Program, RuleType, SpanInfo};
 use crate::CompiledPolicy;
+use ::core::fmt;
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec;
@@ -126,6 +127,12 @@ pub struct Compiler<'a> {
     current_call_stack: Vec<u16>,
     entry_points: IndexMap<String, usize>,
     soft_assert_mode: bool,
+}
+
+impl<'a> fmt::Debug for Compiler<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Compiler").finish_non_exhaustive()
+    }
 }
 
 impl<'a> Compiler<'a> {

@@ -13,6 +13,7 @@ use regex::Regex;
 type String = Rc<str>;
 
 /// Validator for checking if a Value conforms to a Schema.
+#[derive(Debug)]
 pub struct SchemaValidator;
 
 impl SchemaValidator {

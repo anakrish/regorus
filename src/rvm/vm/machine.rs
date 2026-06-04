@@ -9,6 +9,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::fmt;
 
 use super::context::{CallRuleContext, ComprehensionContext, LoopContext};
 use super::errors::{Result, VmError};
@@ -101,6 +102,12 @@ pub struct RegoVM {
 
     /// Cache for builtin calls that must stay deterministic across a single evaluation
     pub(super) builtins_cache: BTreeMap<(&'static str, Vec<Value>), Value>,
+}
+
+impl fmt::Debug for RegoVM {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RegoVM").finish_non_exhaustive()
+    }
 }
 
 impl Default for RegoVM {

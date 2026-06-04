@@ -89,43 +89,43 @@ pub(super) struct ExecutionStack {
 }
 
 impl ExecutionStack {
-    pub fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self { frames: Vec::new() }
     }
 
-    pub fn push(&mut self, frame: ExecutionFrame) {
+    pub(super) fn push(&mut self, frame: ExecutionFrame) {
         self.frames.push(frame);
     }
 
-    pub fn pop(&mut self) -> Option<ExecutionFrame> {
+    pub(super) fn pop(&mut self) -> Option<ExecutionFrame> {
         self.frames.pop()
     }
 
-    pub fn last(&self) -> Option<&ExecutionFrame> {
+    pub(super) fn last(&self) -> Option<&ExecutionFrame> {
         self.frames.last()
     }
 
-    pub fn last_mut(&mut self) -> Option<&mut ExecutionFrame> {
+    pub(super) fn last_mut(&mut self) -> Option<&mut ExecutionFrame> {
         self.frames.last_mut()
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(super) fn is_empty(&self) -> bool {
         self.frames.is_empty()
     }
 
-    pub fn len(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         self.frames.len()
     }
 
-    pub fn get(&self, index: usize) -> Option<&ExecutionFrame> {
+    pub(super) fn get(&self, index: usize) -> Option<&ExecutionFrame> {
         self.frames.get(index)
     }
 
-    pub fn get_mut(&mut self, index: usize) -> Option<&mut ExecutionFrame> {
+    pub(super) fn get_mut(&mut self, index: usize) -> Option<&mut ExecutionFrame> {
         self.frames.get_mut(index)
     }
 
-    pub fn clear(&mut self) {
+    pub(super) fn clear(&mut self) {
         self.frames.clear();
     }
 }

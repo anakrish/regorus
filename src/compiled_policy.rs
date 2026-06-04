@@ -14,13 +14,13 @@ use anyhow::Result;
 #[cfg(feature = "azure_policy")]
 use crate::target::Target;
 
-pub(crate) type DefaultRuleInfo = (Ref<Rule>, Option<crate::String>);
+pub type DefaultRuleInfo = (Ref<Rule>, Option<crate::String>);
 
 #[cfg(feature = "azure_policy")]
-pub(crate) type ResourceTypeInfo = (Rc<str>, Rc<Schema>);
+pub type ResourceTypeInfo = (Rc<str>, Rc<Schema>);
 
 #[cfg(feature = "azure_policy")]
-pub(crate) type InferredResourceTypes = BTreeMap<Ref<Query>, ResourceTypeInfo>;
+pub type InferredResourceTypes = BTreeMap<Ref<Query>, ResourceTypeInfo>;
 
 /// Wrapper around CompiledPolicyData that holds an Rc reference.
 #[derive(Debug, Clone)]
@@ -195,40 +195,40 @@ impl CompiledPolicy {
 
 #[cfg(feature = "azure_policy")]
 #[derive(Debug, Clone)]
-pub(crate) struct TargetInfo {
-    pub(crate) target: Rc<Target>,
-    pub(crate) package: String,
-    pub(crate) effect_schema: Rc<Schema>,
-    pub(crate) effect_name: Rc<str>,
-    pub(crate) effect_path: Rc<str>,
+pub struct TargetInfo {
+    pub target: Rc<Target>,
+    pub package: String,
+    pub effect_schema: Rc<Schema>,
+    pub effect_name: Rc<str>,
+    pub effect_path: Rc<str>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CompiledPolicyData {
-    pub(crate) modules: Rc<Vec<Ref<Module>>>,
-    pub(crate) schedule: Option<Rc<Schedule>>,
-    pub(crate) rules: Map<String, Vec<Ref<Rule>>>,
-    pub(crate) default_rules: Map<String, Vec<DefaultRuleInfo>>,
-    pub(crate) imports: BTreeMap<String, Ref<Expr>>,
-    pub(crate) functions: FunctionTable,
-    pub(crate) rule_paths: Set<String>,
+    pub modules: Rc<Vec<Ref<Module>>>,
+    pub schedule: Option<Rc<Schedule>>,
+    pub rules: Map<String, Vec<Ref<Rule>>>,
+    pub default_rules: Map<String, Vec<DefaultRuleInfo>>,
+    pub imports: BTreeMap<String, Ref<Expr>>,
+    pub functions: FunctionTable,
+    pub rule_paths: Set<String>,
     #[cfg(feature = "azure_policy")]
-    pub(crate) target_info: Option<TargetInfo>,
+    pub target_info: Option<TargetInfo>,
     #[cfg(feature = "azure_policy")]
-    pub(crate) inferred_resource_types: Option<InferredResourceTypes>,
+    pub inferred_resource_types: Option<InferredResourceTypes>,
 
     // User-defined rule to evaluate
-    pub(crate) rule_to_evaluate: Rc<str>,
+    pub rule_to_evaluate: Rc<str>,
 
     // User-defined data
-    pub(crate) data: Option<Value>,
+    pub data: Option<Value>,
 
     // Evaluation settings
-    pub(crate) strict_builtin_errors: bool,
+    pub strict_builtin_errors: bool,
 
     // The semantics of extensions ought to be changes to be more Clone friendly.
-    pub(crate) extensions: Map<String, (u8, Rc<Box<dyn Extension>>)>,
+    pub extensions: Map<String, (u8, Rc<Box<dyn Extension>>)>,
 
     // Pre-computed loop hoisting information
-    pub(crate) loop_hoisting_table: HoistedLoopsLookup,
+    pub loop_hoisting_table: HoistedLoopsLookup,
 }

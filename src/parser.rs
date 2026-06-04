@@ -8,6 +8,7 @@ use crate::value::*;
 use crate::*;
 
 use alloc::collections::BTreeMap;
+use core::fmt;
 use core::str::FromStr;
 
 use anyhow::{anyhow, bail, Result};
@@ -33,6 +34,12 @@ pub struct Parser<'source> {
     sidx: u32,
     // The index of the last query that was parsed.
     qidx: u32,
+}
+
+impl<'source> fmt::Debug for Parser<'source> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Parser").finish_non_exhaustive()
+    }
 }
 
 const FUTURE_KEYWORDS: [&str; 4] = ["contains", "every", "if", "in"];
@@ -61,19 +68,19 @@ impl<'source> Parser<'source> {
 
     fn next_eidx(&mut self) -> u32 {
         let eidx = self.eidx;
-        self.eidx += 1;
+        self.eidx = self.eidx.saturating_add(1);
         eidx
     }
 
     fn next_sidx(&mut self) -> u32 {
         let sidx = self.sidx;
-        self.sidx += 1;
+        self.sidx = self.sidx.saturating_add(1);
         sidx
     }
 
     fn next_qidx(&mut self) -> u32 {
         let qidx = self.qidx;
-        self.qidx += 1;
+        self.qidx = self.qidx.saturating_add(1);
         qidx
     }
 
@@ -214,38 +221,34 @@ impl<'source> Parser<'source> {
     }
 
     fn handle_import_future_keywords(&mut self, comps: &[Span]) -> Result<bool> {
-        if comps.len() >= 2 && comps[0].text() == "future" && comps[1].text() == "keywords" {
-            match comps.len().saturating_sub(2) {
-                1 if comps.len() >= 3 => {
-                    self.set_future_keyword(comps[2].text(), &Some(comps[2].clone()))?
-                }
-                0 => {
-                    let span = &comps[1];
-                    for kw in FUTURE_KEYWORDS.iter() {
-                        self.set_future_keyword(kw, &Some(span.clone()))?;
+        match comps {
+            [first, second, rest @ ..]
+                if first.text() == "future" && second.text() == "keywords" =>
+            {
+                match rest {
+                    [one] => self.set_future_keyword(one.text(), &Some(one.clone()))?,
+                    [] => {
+                        for kw in FUTURE_KEYWORDS.iter() {
+                            self.set_future_keyword(kw, &Some(second.clone()))?;
+                        }
+                    }
+                    [_, extra @ ..] => {
+                        let s = extra.first().unwrap_or(second);
+                        return Err(self.source.error(
+                            s.line,
+                            s.col.saturating_sub(1),
+                            "invalid future keyword",
+                        ));
                     }
                 }
-                _ if comps.len() >= 4 => {
-                    let s = &comps[3];
-                    return Err(self.source.error(
-                        s.line,
-                        s.col.saturating_sub(1),
-                        "invalid future keyword",
-                    ));
-                }
-                _ => {
-                    let s = &comps[1];
-                    return Err(self.source.error(s.line, s.col, "invalid future keyword"));
-                }
+                Ok(true)
             }
-            Ok(true)
-        } else if !comps.is_empty() && comps[0].text() == "future" {
-            let s = &comps[0];
-            Err(self
-                .source
-                .error(s.line, s.col, "invalid import, must be `future.keywords`"))
-        } else {
-            Ok(false)
+            [first, ..] if first.text() == "future" => Err(self.source.error(
+                first.line,
+                first.col,
+                "invalid import, must be `future.keywords`",
+            )),
+            _ => Ok(false),
         }
     }
 
@@ -710,12 +713,12 @@ impl<'source> Parser<'source> {
                     span.end = self.end;
 
                     // Disallow any whitespace between . and identifier.
-                    if field.start != sep_pos + 1 {
+                    if field.start != sep_pos.saturating_add(1) {
                         bail!(
                             "{}",
                             self.source.error(
                                 field.line,
-                                field.col - 1,
+                                field.col.saturating_sub(1),
                                 "invalid whitespace between . and identifier"
                             )
                         );
@@ -824,8 +827,8 @@ impl<'source> Parser<'source> {
             let right = if self.token_text().len() > 1 {
                 // Treat the - as a separate token
                 let mut rhs_span = self.tok.1.clone();
-                rhs_span.start += 1;
-                rhs_span.col += 1;
+                rhs_span.start = rhs_span.start.saturating_add(1);
+                rhs_span.col = rhs_span.col.saturating_add(1);
 
                 self.next_token()?;
                 self.read_number(rhs_span)?
@@ -1126,19 +1129,15 @@ impl<'source> Parser<'source> {
                 self.warn_future_keyword();
             }
             // All the refs must be identifiers
-            for (idx, ref_expr) in refs.iter().enumerate() {
-                let span = &vars[idx];
-                match ref_expr.as_ref() {
-                    Expr::Var { .. } => (),
-                    _ => {
-                        return Err(anyhow!(
-                            "{}:{}:{} error: encountered `{}` while expecting identifier",
-                            span.source.file(),
-                            span.line,
-                            span.col,
-                            span.text()
-                        ));
-                    }
+            for (span, ref_expr) in vars.iter().zip(refs.iter()) {
+                if !matches!(ref_expr.as_ref(), Expr::Var { .. }) {
+                    return Err(anyhow!(
+                        "{}:{}:{} error: encountered `{}` while expecting identifier",
+                        span.source.file(),
+                        span.line,
+                        span.col,
+                        span.text()
+                    ));
                 }
             }
 
@@ -1164,9 +1163,9 @@ impl<'source> Parser<'source> {
             ));
         }
 
-        let (key, value) = match refs.len() {
-            2 => (Some(refs[0].clone()), refs[1].clone()),
-            1 => (None, refs[0].clone()),
+        let (key, value) = match refs.as_slice() {
+            [key, value] => (Some(key.clone()), value.clone()),
+            [value] => (None, value.clone()),
             _ => {
                 // We always parse at least one identifier before `in`; guard defensively.
                 // parse_ident rejects `in` when no vars are present, so this is effectively unreachable.
@@ -1367,12 +1366,12 @@ impl<'source> Parser<'source> {
                     span.end = self.end;
 
                     // Disallow any whitespace between . and identifier.
-                    if field.start != sep_pos + 1 {
+                    if field.start != sep_pos.saturating_add(1) {
                         bail!(
                             "{}",
                             self.source.error(
                                 field.line,
-                                field.col - 1,
+                                field.col.saturating_sub(1),
                                 "invalid whitespace between . and identifier"
                             )
                         );
@@ -1470,12 +1469,12 @@ impl<'source> Parser<'source> {
                     span.end = self.end;
 
                     // Disallow any whitespace between . and identifier.
-                    if field.start != sep_pos + 1 {
+                    if field.start != sep_pos.saturating_add(1) {
                         bail!(
                             "{}",
                             self.source.error(
                                 field.line,
-                                field.col - 1,
+                                field.col.saturating_sub(1),
                                 "invalid whitespace between . and identifier"
                             )
                         );
@@ -1559,7 +1558,7 @@ impl<'source> Parser<'source> {
                             if matches!(refr.as_ref(), Expr::Var { .. }) =>
                         {
                             // Adjust the expression counter since we are discarding the RefBrack expression.
-                            self.eidx -= 1;
+                            self.eidx = self.eidx.saturating_sub(1);
                             return Ok(RuleHead::Set {
                                 span,
                                 refr: refr.clone(),
@@ -1867,7 +1866,7 @@ impl<'source> Parser<'source> {
         let ref_comps = Self::get_path_ref_components(&import.refr)?;
         let comps: Vec<&str> = ref_comps.iter().map(|s| s.text()).collect();
 
-        if comps.len() >= 2 && comps[0] == "future" && comps[1] == "keywords" {
+        if matches!(comps.as_slice(), ["future", "keywords", ..]) {
             imports.push(import);
             return Ok(());
         }
@@ -1913,21 +1912,31 @@ impl<'source> Parser<'source> {
 
             let comps = Self::get_path_ref_components(&refr)?;
             span.end = self.end;
-            if !matches!(comps[0].text(), "data" | "future" | "input" | "rego") {
+            let (first, rest) = match comps.split_first() {
+                Some(v) => v,
+                None => {
+                    return Err(self.source.error(
+                        span.line,
+                        span.col,
+                        "import path must begin with one of: {data, future, input, rego}",
+                    ))
+                }
+            };
+            if !matches!(first.text(), "data" | "future" | "input" | "rego") {
                 return Err(self.source.error(
-                    comps[0].line,
-                    comps[0].col,
+                    first.line,
+                    first.col,
                     "import path must begin with one of: {data, future, input, rego}",
                 ));
             }
 
-            let is_future_kw =
-                if comps.len() == 2 && comps[0].text() == "rego" && comps[1].text() == "v1" {
+            let is_future_kw = match rest {
+                [second] if first.text() == "rego" && second.text() == "v1" => {
                     self.turn_on_rego_v1(&Some(span.clone()))?;
                     true
-                } else {
-                    self.handle_import_future_keywords(&comps)?
-                };
+                }
+                _ => self.handle_import_future_keywords(&comps)?,
+            };
 
             let var = if self.token_text() == "as" {
                 if is_future_kw {

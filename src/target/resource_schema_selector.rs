@@ -17,7 +17,7 @@ use super::{Target, TargetError};
 /// - Build a lookup table mapping constant values to schemas
 /// - Collect schemas that don't have the constant property
 /// - Raise an error if duplicate constant values are found
-pub fn populate_target_lookup_fields(target: &mut Target) -> Result<(), TargetError> {
+pub(super) fn populate_target_lookup_fields(target: &mut Target) -> Result<(), TargetError> {
     target.resource_schema_lookup.clear();
     target.default_resource_schema = None;
 

@@ -9,7 +9,7 @@ use crate::*;
 use alloc::collections::BTreeMap;
 
 use anyhow::{bail, Result};
-pub fn get_path_string(refr: &Expr, document: Option<&str>) -> Result<String> {
+pub(super) fn get_path_string(refr: &Expr, document: Option<&str>) -> Result<String> {
     let mut comps: Vec<&str> = vec![];
     let mut expr = Some(refr);
     while expr.is_some() {
@@ -38,7 +38,7 @@ pub fn get_path_string(refr: &Expr, document: Option<&str>) -> Result<String> {
     Ok(comps.join("."))
 }
 
-pub type FunctionTable = BTreeMap<String, (Vec<Ref<Rule>>, u8, Ref<Module>)>;
+pub(super) type FunctionTable = BTreeMap<String, (Vec<Ref<Rule>>, u8, Ref<Module>)>;
 
 fn get_extra_arg_impl(
     expr: &Expr,
@@ -59,14 +59,18 @@ fn get_extra_arg_impl(
                 return Ok(None);
             }
         };
-        if (n_args as usize) + 1 == params.len() {
+        if n_args
+            .checked_add(1)
+            .map(|needed| needed as usize == params.len())
+            .unwrap_or(false)
+        {
             return Ok(params.last().cloned());
         }
     }
     Ok(None)
 }
 
-pub fn get_extra_arg(
+pub(super) fn get_extra_arg(
     expr: &Expr,
     module: Option<&str>,
     functions: &FunctionTable,
@@ -74,7 +78,7 @@ pub fn get_extra_arg(
     get_extra_arg_impl(expr, module, functions).unwrap_or_default()
 }
 
-pub fn gather_functions(modules: &[Ref<Module>]) -> Result<FunctionTable> {
+pub(super) fn gather_functions(modules: &[Ref<Module>]) -> Result<FunctionTable> {
     let mut table = FunctionTable::new();
 
     for module in modules {
@@ -108,7 +112,7 @@ pub fn gather_functions(modules: &[Ref<Module>]) -> Result<FunctionTable> {
     Ok(table)
 }
 
-pub fn get_root_var(mut expr: &Expr) -> Result<SourceStr> {
+pub(super) fn get_root_var(mut expr: &Expr) -> Result<SourceStr> {
     let empty = expr.span().source_str().clone_empty();
     loop {
         match expr {

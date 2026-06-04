@@ -7,14 +7,14 @@
 //! so the compiler can evolve without ambiguity with FFI bindings. Submodules
 //! will be filled in as code is migrated from the legacy `bindings` module.
 
-pub mod assignment;
-pub mod context;
-pub mod destructuring;
-pub mod error;
-pub mod parameters;
-pub mod plans;
-pub mod some_in;
-pub mod utils;
+mod assignment;
+mod context;
+mod destructuring;
+mod error;
+mod parameters;
+pub(crate) mod plans;
+mod some_in;
+mod utils;
 
 pub use assignment::create_assignment_binding_plan;
 pub use context::{ScopingMode, VariableBindingContext};

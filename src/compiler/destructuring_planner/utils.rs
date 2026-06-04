@@ -15,7 +15,7 @@ use crate::lexer::Span;
 use crate::value::Value;
 
 /// Result of statically comparing a destructuring plan with a literal expression.
-pub(crate) enum LiteralStructureCheck {
+pub enum LiteralStructureCheck {
     Match,
     Unknown,
     ArrayMismatch {
@@ -31,7 +31,7 @@ pub(crate) enum LiteralStructureCheck {
 }
 
 impl LiteralStructureCheck {
-    pub(crate) fn into_error(self) -> Option<BindingPlannerError> {
+    pub fn into_error(self) -> Option<BindingPlannerError> {
         match self {
             LiteralStructureCheck::Match | LiteralStructureCheck::Unknown => None,
             LiteralStructureCheck::ArrayMismatch {
@@ -57,10 +57,7 @@ impl LiteralStructureCheck {
 }
 
 /// Compare a destructuring plan against a literal expression.
-pub(crate) fn check_literal_structure(
-    plan: &DestructuringPlan,
-    expr: &ExprRef,
-) -> LiteralStructureCheck {
+pub fn check_literal_structure(plan: &DestructuringPlan, expr: &ExprRef) -> LiteralStructureCheck {
     match (plan, expr.as_ref()) {
         (DestructuringPlan::Array { element_plans }, Expr::Array { items, .. }) => {
             if items.len() != element_plans.len() {
@@ -143,14 +140,14 @@ pub(crate) fn check_literal_structure(
     }
 }
 
-pub(crate) fn ensure_literal_match(plan: &DestructuringPlan, expr: &ExprRef) -> Result<()> {
+pub fn ensure_literal_match(plan: &DestructuringPlan, expr: &ExprRef) -> Result<()> {
     match check_literal_structure(plan, expr).into_error() {
         Some(err) => Err(err),
         None => Ok(()),
     }
 }
 
-pub(crate) fn collect_pattern_var_spans(expr: &ExprRef, spans: &mut Vec<Span>) {
+pub fn collect_pattern_var_spans(expr: &ExprRef, spans: &mut Vec<Span>) {
     match expr.as_ref() {
         Expr::Var { span, .. } => {
             let name = span.text();
@@ -177,7 +174,7 @@ pub(crate) fn collect_pattern_var_spans(expr: &ExprRef, spans: &mut Vec<Span>) {
     }
 }
 
-pub(crate) fn validate_pattern_bindings<T: VariableBindingContext>(
+pub fn validate_pattern_bindings<T: VariableBindingContext>(
     expr: &ExprRef,
     newly_bound: &BTreeSet<String>,
     context: &T,
@@ -198,7 +195,7 @@ pub(crate) fn validate_pattern_bindings<T: VariableBindingContext>(
     Ok(())
 }
 
-pub(crate) fn collect_plan_var_spans(plan: &DestructuringPlan, spans: &mut Vec<Span>) {
+pub fn collect_plan_var_spans(plan: &DestructuringPlan, spans: &mut Vec<Span>) {
     match plan {
         DestructuringPlan::Var(span) => spans.push(span.clone()),
         DestructuringPlan::Array { element_plans } => {
@@ -223,10 +220,7 @@ pub(crate) fn collect_plan_var_spans(plan: &DestructuringPlan, spans: &mut Vec<S
     }
 }
 
-pub(crate) fn ensure_structural_compatibility(
-    lhs_expr: &ExprRef,
-    rhs_expr: &ExprRef,
-) -> Result<()> {
+pub fn ensure_structural_compatibility(lhs_expr: &ExprRef, rhs_expr: &ExprRef) -> Result<()> {
     let lhs_is_array = matches!(lhs_expr.as_ref(), Expr::Array { .. });
     let rhs_is_array = matches!(rhs_expr.as_ref(), Expr::Array { .. });
     let lhs_is_object = matches!(lhs_expr.as_ref(), Expr::Object { .. });
@@ -242,17 +236,11 @@ pub(crate) fn ensure_structural_compatibility(
 }
 
 /// Helper that discards destructuring plans which do not bind any variables.
-pub(crate) fn plan_only_if_binds(plan: Option<DestructuringPlan>) -> Option<DestructuringPlan> {
-    plan.and_then(|plan| {
-        if plan.introduces_binding() || plan.contains_wildcards() {
-            Some(plan)
-        } else {
-            None
-        }
-    })
+pub fn plan_only_if_binds(plan: Option<DestructuringPlan>) -> Option<DestructuringPlan> {
+    plan.and_then(|plan| (plan.introduces_binding() || plan.contains_wildcards()).then_some(plan))
 }
 
-pub(crate) fn extract_literal_key(expr: &ExprRef) -> Option<Value> {
+pub(super) fn extract_literal_key(expr: &ExprRef) -> Option<Value> {
     match expr.as_ref() {
         Expr::String { value, .. } => Some(value.clone()),
         Expr::RawString { value, .. } => Some(value.clone()),
@@ -263,7 +251,7 @@ pub(crate) fn extract_literal_key(expr: &ExprRef) -> Option<Value> {
     }
 }
 
-pub(crate) fn format_literal_key_for_error(value: &Value) -> String {
+pub(super) fn format_literal_key_for_error(value: &Value) -> String {
     match value {
         Value::String(s) => s.as_ref().to_string(),
         _ => value.to_string(),

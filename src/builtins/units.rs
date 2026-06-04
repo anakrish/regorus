@@ -6,7 +6,7 @@ use core::str::FromStr;
 
 use crate::ast::{Expr, Ref};
 use crate::builtins;
-use crate::builtins::utils::{ensure_args_count, ensure_string};
+use crate::builtins::utils::{ensure_n_args, ensure_string};
 use crate::lexer::Span;
 use crate::number::Number;
 use crate::value::Value;
@@ -14,7 +14,7 @@ use crate::*;
 
 use anyhow::{bail, Result};
 
-pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
+pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     m.insert("units.parse", (parse, 1));
     m.insert("units.parse_bytes", (parse_bytes, 1));
 }
@@ -70,7 +70,7 @@ fn two_exp(suffix: &str) -> Option<i32> {
 
 fn parse(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "units.parse";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
     let string = ensure_string(name, &params[0], &args[0])?;
     let string = string.as_ref();
 
@@ -144,7 +144,7 @@ fn tenb_exp(suffix: &str) -> Option<i32> {
 
 fn parse_bytes(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
     let name = "units.parse_bytes";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
     let string = ensure_string(name, &params[0], &args[0])?;
     let string = string.as_ref();
 

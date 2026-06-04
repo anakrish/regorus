@@ -3,7 +3,7 @@
 
 use crate::ast::{Expr, Ref};
 use crate::builtins;
-use crate::builtins::utils::ensure_args_count;
+use crate::builtins::utils::ensure_n_args;
 use crate::*;
 
 use crate::lexer::Span;
@@ -13,13 +13,13 @@ use alloc::collections::BTreeMap;
 
 use anyhow::Result;
 
-pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
+pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     m.insert("opa.runtime", (opa_runtime, 0));
 }
 
 fn opa_runtime(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "opa.runtime";
-    ensure_args_count(span, name, params, args, 0)?;
+    let (_args, _params) = ensure_n_args::<0>(span, name, params, args)?;
     let mut obj = BTreeMap::new();
 
     obj.insert(
@@ -79,16 +79,13 @@ fn opa_runtime(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool)
         "urlquery",
         #[cfg(feature = "yaml")]
         "yaml",
-        "",
     ];
-
-    let features = &features[..features.len() - 1];
     obj.insert(
         Value::String("features".into()),
         Value::from_array(
             features
                 .iter()
-                .map(|f| Value::String(f.to_string().into()))
+                .map(|f| Value::String((*f).into()))
                 .collect(),
         ),
     );

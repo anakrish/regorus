@@ -100,11 +100,7 @@ impl<'a> Compiler<'a> {
             .iter()
             .filter_map(|(rule_path, &rule_index)| {
                 let rule_type = &self.rule_types[rule_index as usize];
-                if *rule_type == RuleType::Complete {
-                    Some((rule_path.clone(), rule_index as usize))
-                } else {
-                    None
-                }
+                (*rule_type == RuleType::Complete).then(|| (rule_path.clone(), rule_index as usize))
             })
             .collect();
 

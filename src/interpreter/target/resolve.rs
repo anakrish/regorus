@@ -7,10 +7,10 @@ use super::super::TargetInfo;
 use super::super::*;
 
 fn format_effect_names(names: &[String]) -> String {
-    match names.len() {
-        0 => String::new(),
-        1 => names[0].clone(),
-        2 => format!("{} or {}", names[0], names[1]),
+    match names {
+        [] => String::new(),
+        [one] => one.clone(),
+        [first, second] => format!("{} or {}", first, second),
         _ => {
             if let Some((last, rest)) = names.split_last() {
                 format!("{} or {}", rest.join(", "), last)
@@ -21,7 +21,7 @@ fn format_effect_names(names: &[String]) -> String {
     }
 }
 
-pub fn resolve_target(interpreter: &mut Interpreter) -> Result<(), TargetCompileError> {
+pub(crate) fn resolve_target(interpreter: &mut Interpreter) -> Result<(), TargetCompileError> {
     use crate::registry::targets;
 
     let mut target_name: Option<String> = None;
@@ -113,7 +113,7 @@ pub fn resolve_target(interpreter: &mut Interpreter) -> Result<(), TargetCompile
     Ok(())
 }
 
-pub fn resolve_effect(interpreter: &mut Interpreter) -> Result<(), TargetCompileError> {
+pub(crate) fn resolve_effect(interpreter: &mut Interpreter) -> Result<(), TargetCompileError> {
     // Check if we have target info from resolve_target
     if let Some(ref target_info) = interpreter.compiled_policy.target_info {
         let target = &target_info.target;
@@ -186,8 +186,8 @@ pub fn resolve_effect(interpreter: &mut Interpreter) -> Result<(), TargetCompile
         }
 
         // Ensure exactly one effect has rules defined
-        match effects_with_rules.len() {
-            0 => {
+        match effects_with_rules.as_slice() {
+            [] => {
                 let all_effect_names: Vec<String> =
                     target.effects.keys().map(|k| k.to_string()).collect();
                 let formatted_names = format_effect_names(&all_effect_names);
@@ -197,10 +197,9 @@ pub fn resolve_effect(interpreter: &mut Interpreter) -> Result<(), TargetCompile
                     effect_names: formatted_names.as_str().into(),
                 });
             }
-            1 => {
+            [effect_name] => {
                 // Exactly one effect has rules - this is correct
                 // Update the target info with the correct effect schema
-                let effect_name = &effects_with_rules[0];
                 let effect_schema = match target.effects.get(effect_name) {
                     Some(schema) => schema.clone(),
                     None => {
@@ -237,7 +236,7 @@ pub fn resolve_effect(interpreter: &mut Interpreter) -> Result<(), TargetCompile
     Ok(())
 }
 
-pub fn resolve_and_apply_target(interpreter: &mut Interpreter) -> Result<(), TargetCompileError> {
+pub(crate) fn resolve_and_apply_target(interpreter: &mut Interpreter) -> Result<(), TargetCompileError> {
     // Resolve the target first
     resolve_target(interpreter)?;
 

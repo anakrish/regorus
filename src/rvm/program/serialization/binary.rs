@@ -64,11 +64,15 @@ impl Program {
             return Err("Data too short for artifact header".to_string());
         }
 
-        if data[0..4] != Self::MAGIC {
+        if data
+            .get(0..4)
+            .filter(|magic| *magic == Self::MAGIC.as_slice())
+            .is_none()
+        {
             return Err("Invalid file format - magic number mismatch".to_string());
         }
 
-        let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        let version = read_u32_le(data, 4, "Data too short for artifact header")?;
 
         match version {
             1 => {
@@ -77,24 +81,35 @@ impl Program {
                 }
 
                 let entry_points_len =
-                    u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
+                    read_u32_le(data, 8, "Data too short for artifact header")? as usize;
                 let sources_len =
-                    u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as usize;
-                let rego_v0 = data[16] != 0;
+                    read_u32_le(data, 12, "Data too short for artifact header")? as usize;
+                let rego_v0 = *data
+                    .get(16)
+                    .ok_or_else(|| "Data too short for artifact header".to_string())?
+                    != 0;
                 let entry_points_start = 17;
                 let sources_start = entry_points_start + entry_points_len;
                 let sources_end = sources_start + sources_len;
 
-                if data.len() < sources_end {
-                    return Err("Data truncated in artifact section".to_string());
-                }
+                let entry_points_bytes = take_range(
+                    data,
+                    entry_points_start,
+                    sources_start,
+                    "Data truncated in artifact section",
+                )?;
+                let sources_bytes = take_range(
+                    data,
+                    sources_start,
+                    sources_end,
+                    "Data truncated in artifact section",
+                )?;
 
-                let entry_points =
-                    decode_from_slice(&data[entry_points_start..sources_start], standard())
-                        .map(|(value, _)| value)
-                        .unwrap_or_else(|_| IndexMap::new());
+                let entry_points = decode_from_slice(entry_points_bytes, standard())
+                    .map(|(value, _)| value)
+                    .unwrap_or_else(|_| IndexMap::new());
 
-                let sources = decode_from_slice(&data[sources_start..sources_end], standard())
+                let sources = decode_from_slice(sources_bytes, standard())
                     .map(|(value, _)| value)
                     .unwrap_or_else(|_| Vec::new());
 
@@ -106,31 +121,41 @@ impl Program {
                 }
 
                 let entry_points_len =
-                    u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
+                    read_u32_le(data, 8, "Data too short for artifact header")? as usize;
                 let sources_len =
-                    u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as usize;
+                    read_u32_le(data, 12, "Data too short for artifact header")? as usize;
                 let literals_len =
-                    u32::from_le_bytes([data[16], data[17], data[18], data[19]]) as usize;
-                let rule_tree_len =
-                    u32::from_le_bytes([data[20], data[21], data[22], data[23]]) as usize;
-                let rego_v0 = data[24] != 0;
+                    read_u32_le(data, 16, "Data too short for artifact header")? as usize;
+                let _rule_tree_len =
+                    read_u32_le(data, 20, "Data too short for artifact header")? as usize;
+                let rego_v0 = *data
+                    .get(24)
+                    .ok_or_else(|| "Data too short for artifact header".to_string())?
+                    != 0;
 
                 let entry_points_start = 25;
                 let sources_start = entry_points_start + entry_points_len;
                 let literals_start = sources_start + sources_len;
-                let rule_tree_start = literals_start + literals_len;
-                let rule_tree_end = rule_tree_start + rule_tree_len;
+                let _rule_tree_start = literals_start + literals_len;
 
-                if data.len() < rule_tree_end {
-                    return Err("Data truncated in artifact section".to_string());
-                }
+                let entry_points_bytes = take_range(
+                    data,
+                    entry_points_start,
+                    sources_start,
+                    "Data truncated in artifact section",
+                )?;
+                let sources_bytes = take_range(
+                    data,
+                    sources_start,
+                    literals_start,
+                    "Data truncated in artifact section",
+                )?;
 
-                let entry_points =
-                    decode_from_slice(&data[entry_points_start..sources_start], standard())
-                        .map(|(value, _)| value)
-                        .unwrap_or_else(|_| IndexMap::new());
+                let entry_points = decode_from_slice(entry_points_bytes, standard())
+                    .map(|(value, _)| value)
+                    .unwrap_or_else(|_| IndexMap::new());
 
-                let sources = decode_from_slice(&data[sources_start..literals_start], standard())
+                let sources = decode_from_slice(sources_bytes, standard())
                     .map(|(value, _)| value)
                     .unwrap_or_else(|_| Vec::new());
 
@@ -146,11 +171,15 @@ impl Program {
             return Err("Data too short for header".to_string());
         }
 
-        if data[0..4] != Self::MAGIC {
+        if data
+            .get(0..4)
+            .filter(|magic| *magic == Self::MAGIC.as_slice())
+            .is_none()
+        {
             return Err("Invalid file format - magic number mismatch".to_string());
         }
 
-        let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        let version = read_u32_le(data, 4, "Data too short for header")?;
         if version > Self::SERIALIZATION_VERSION {
             return Err(format!(
                 "Unsupported version {}. Maximum supported version is {}",
@@ -165,37 +194,23 @@ impl Program {
                     return Err("Data too short for header".to_string());
                 }
 
-                let entry_points_len =
-                    u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
-                let sources_len =
-                    u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as usize;
-                let rego_v0 = data[16] != 0;
+                let entry_points_len = read_u32_le(data, 8, "Data too short for header")? as usize;
+                let sources_len = read_u32_le(data, 12, "Data too short for header")? as usize;
+                let rego_v0 = *data
+                    .get(16)
+                    .ok_or_else(|| "Data too short for header".to_string())?
+                    != 0;
                 let entry_points_start = 17;
                 let sources_start = entry_points_start + entry_points_len;
                 let binary_len_start = sources_start + sources_len;
 
-                if data.len() < binary_len_start + 4 {
-                    return Err("Data too short for binary length".to_string());
-                }
-
-                let binary_len = u32::from_le_bytes([
-                    data[binary_len_start],
-                    data[binary_len_start + 1],
-                    data[binary_len_start + 2],
-                    data[binary_len_start + 3],
-                ]) as usize;
+                let binary_len =
+                    read_u32_le(data, binary_len_start, "Data too short for binary length")?
+                        as usize;
 
                 let json_len_start = binary_len_start + 4 + binary_len;
-                if data.len() < json_len_start + 4 {
-                    return Err("Data too short for JSON length".to_string());
-                }
-
-                let json_len = u32::from_le_bytes([
-                    data[json_len_start],
-                    data[json_len_start + 1],
-                    data[json_len_start + 2],
-                    data[json_len_start + 3],
-                ]) as usize;
+                let json_len =
+                    read_u32_le(data, json_len_start, "Data too short for JSON length")? as usize;
 
                 let total_expected = json_len_start + 4 + json_len;
                 if data.len() < total_expected {
@@ -205,21 +220,24 @@ impl Program {
                 let binary_start = binary_len_start + 4;
                 let json_start = json_len_start + 4;
 
-                let entry_points =
-                    decode_from_slice(&data[entry_points_start..sources_start], standard())
-                        .map(|(value, _)| value)
-                        .map_err(|e| format!("Entry points deserialization failed: {}", e))?;
+                let entry_points_bytes =
+                    take_range(data, entry_points_start, sources_start, "Data truncated")?;
+                let sources_bytes =
+                    take_range(data, sources_start, binary_len_start, "Data truncated")?;
 
-                let sources = decode_from_slice(&data[sources_start..binary_len_start], standard())
+                let entry_points = decode_from_slice(entry_points_bytes, standard())
+                    .map(|(value, _)| value)
+                    .map_err(|e| format!("Entry points deserialization failed: {}", e))?;
+
+                let sources = decode_from_slice(sources_bytes, standard())
                     .map(|(value, _)| value)
                     .map_err(|e| format!("Sources deserialization failed: {}", e))?;
 
                 let mut needs_recompilation = false;
 
-                let mut program = match decode_from_slice::<Program, _>(
-                    &data[binary_start..json_start],
-                    standard(),
-                ) {
+                let program_bytes = take_range(data, binary_start, json_start, "Data truncated")?;
+
+                let mut program = match decode_from_slice::<Program, _>(program_bytes, standard()) {
                     Ok((prog, _)) => prog,
                     Err(_e) => {
                         needs_recompilation = true;
@@ -227,33 +245,35 @@ impl Program {
                     }
                 };
 
-                let (literals, rule_tree) = match serde_json::from_slice::<serde_json::Value>(
-                    &data[json_start..json_start + json_len],
-                ) {
-                    Ok(combined) => {
-                        let literals = combined
-                            .get("literals")
-                            .and_then(|v| serde_json::from_value::<Vec<Value>>(v.clone()).ok())
-                            .unwrap_or_else(|| {
-                                needs_recompilation = true;
-                                Vec::new()
-                            });
+                let json_bytes =
+                    take_range(data, json_start, json_start + json_len, "Data truncated")?;
 
-                        let rule_tree = combined
-                            .get("rule_tree")
-                            .and_then(|v| serde_json::from_value::<Value>(v.clone()).ok())
-                            .unwrap_or_else(|| {
-                                needs_recompilation = true;
-                                Value::new_object()
-                            });
+                let (literals, rule_tree) =
+                    match serde_json::from_slice::<serde_json::Value>(json_bytes) {
+                        Ok(combined) => {
+                            let literals = combined
+                                .get("literals")
+                                .and_then(|v| serde_json::from_value::<Vec<Value>>(v.clone()).ok())
+                                .unwrap_or_else(|| {
+                                    needs_recompilation = true;
+                                    Vec::new()
+                                });
 
-                        (literals, rule_tree)
-                    }
-                    Err(_e) => {
-                        needs_recompilation = true;
-                        (Vec::new(), Value::new_object())
-                    }
-                };
+                            let rule_tree = combined
+                                .get("rule_tree")
+                                .and_then(|v| serde_json::from_value::<Value>(v.clone()).ok())
+                                .unwrap_or_else(|| {
+                                    needs_recompilation = true;
+                                    Value::new_object()
+                                });
+
+                            (literals, rule_tree)
+                        }
+                        Err(_e) => {
+                            needs_recompilation = true;
+                            (Vec::new(), Value::new_object())
+                        }
+                    };
 
                 program.entry_points = entry_points;
                 program.sources = sources;
@@ -279,15 +299,14 @@ impl Program {
                     return Err("Data too short for header".to_string());
                 }
 
-                let entry_points_len =
-                    u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
-                let sources_len =
-                    u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as usize;
-                let literals_len =
-                    u32::from_le_bytes([data[16], data[17], data[18], data[19]]) as usize;
-                let rule_tree_len =
-                    u32::from_le_bytes([data[20], data[21], data[22], data[23]]) as usize;
-                let rego_v0 = data[24] != 0;
+                let entry_points_len = read_u32_le(data, 8, "Data too short for header")? as usize;
+                let sources_len = read_u32_le(data, 12, "Data too short for header")? as usize;
+                let literals_len = read_u32_le(data, 16, "Data too short for header")? as usize;
+                let rule_tree_len = read_u32_le(data, 20, "Data too short for header")? as usize;
+                let rego_v0 = *data
+                    .get(24)
+                    .ok_or_else(|| "Data too short for header".to_string())?
+                    != 0;
 
                 let entry_points_start = 25;
                 let sources_start = entry_points_start + entry_points_len;
@@ -295,16 +314,9 @@ impl Program {
                 let rule_tree_start = literals_start + literals_len;
                 let binary_len_start = rule_tree_start + rule_tree_len;
 
-                if data.len() < binary_len_start + 4 {
-                    return Err("Data too short for binary length".to_string());
-                }
-
-                let binary_len = u32::from_le_bytes([
-                    data[binary_len_start],
-                    data[binary_len_start + 1],
-                    data[binary_len_start + 2],
-                    data[binary_len_start + 3],
-                ]) as usize;
+                let binary_len =
+                    read_u32_le(data, binary_len_start, "Data too short for binary length")?
+                        as usize;
 
                 let binary_start = binary_len_start + 4;
                 let binary_end = binary_start + binary_len;
@@ -313,55 +325,60 @@ impl Program {
                     return Err("Data truncated".to_string());
                 }
 
-                let entry_points =
-                    decode_from_slice(&data[entry_points_start..sources_start], standard())
-                        .map(|(value, _)| value)
-                        .map_err(|e| format!("Entry points deserialization failed: {}", e))?;
+                let entry_points_bytes =
+                    take_range(data, entry_points_start, sources_start, "Data truncated")?;
+                let sources_bytes =
+                    take_range(data, sources_start, literals_start, "Data truncated")?;
 
-                let sources = decode_from_slice(&data[sources_start..literals_start], standard())
+                let entry_points = decode_from_slice(entry_points_bytes, standard())
+                    .map(|(value, _)| value)
+                    .map_err(|e| format!("Entry points deserialization failed: {}", e))?;
+
+                let sources = decode_from_slice(sources_bytes, standard())
                     .map(|(value, _)| value)
                     .map_err(|e| format!("Sources deserialization failed: {}", e))?;
 
                 let mut needs_recompilation = false;
 
-                let literals = match decode_from_slice::<Vec<BinaryValue>, _>(
-                    &data[literals_start..rule_tree_start],
-                    standard(),
-                ) {
-                    Ok((binary_literals, _)) => match binaries_to_values(binary_literals) {
-                        Ok(values) => values,
+                let literals_bytes =
+                    take_range(data, literals_start, rule_tree_start, "Data truncated")?;
+
+                let literals =
+                    match decode_from_slice::<Vec<BinaryValue>, _>(literals_bytes, standard()) {
+                        Ok((binary_literals, _)) => match binaries_to_values(binary_literals) {
+                            Ok(values) => values,
+                            Err(_e) => {
+                                needs_recompilation = true;
+                                Vec::new()
+                            }
+                        },
                         Err(_e) => {
                             needs_recompilation = true;
                             Vec::new()
                         }
-                    },
-                    Err(_e) => {
-                        needs_recompilation = true;
-                        Vec::new()
-                    }
-                };
+                    };
 
-                let rule_tree = match decode_from_slice::<BinaryValue, _>(
-                    &data[rule_tree_start..binary_len_start],
-                    standard(),
-                ) {
-                    Ok((binary_tree, _)) => match binary_to_value(binary_tree) {
-                        Ok(value) => value,
+                let rule_tree_bytes =
+                    take_range(data, rule_tree_start, binary_len_start, "Data truncated")?;
+
+                let rule_tree =
+                    match decode_from_slice::<BinaryValue, _>(rule_tree_bytes, standard()) {
+                        Ok((binary_tree, _)) => match binary_to_value(binary_tree) {
+                            Ok(value) => value,
+                            Err(_e) => {
+                                needs_recompilation = true;
+                                Value::new_object()
+                            }
+                        },
                         Err(_e) => {
                             needs_recompilation = true;
                             Value::new_object()
                         }
-                    },
-                    Err(_e) => {
-                        needs_recompilation = true;
-                        Value::new_object()
-                    }
-                };
+                    };
 
-                let mut program = match decode_from_slice::<Program, _>(
-                    &data[binary_start..binary_end],
-                    standard(),
-                ) {
+                let program_bytes = take_range(data, binary_start, binary_end, "Data truncated")?;
+
+                let mut program = match decode_from_slice::<Program, _>(program_bytes, standard()) {
                     Ok((prog, _)) => prog,
                     Err(_e) => {
                         needs_recompilation = true;
@@ -398,11 +415,18 @@ impl Program {
             return Ok(false);
         }
 
-        if data[0..4] != Self::MAGIC {
+        if data
+            .get(0..4)
+            .filter(|magic| *magic == Self::MAGIC.as_slice())
+            .is_none()
+        {
             return Ok(false);
         }
 
-        let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        let version = match read_u32_le(data, 4, "Data too short for header") {
+            Ok(v) => v,
+            Err(_) => return Ok(false),
+        };
 
         match version {
             1..=3 => Ok(true),
@@ -416,11 +440,15 @@ impl Program {
             return Err("Data too short for header".to_string());
         }
 
-        if data[0..4] != Self::MAGIC {
+        if data
+            .get(0..4)
+            .filter(|magic| *magic == Self::MAGIC.as_slice())
+            .is_none()
+        {
             return Err("Invalid file format".to_string());
         }
 
-        let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        let version = read_u32_le(data, 4, "Data too short for header")?;
 
         match version {
             1 => {
@@ -428,22 +456,13 @@ impl Program {
                     return Err("Data too short for header".to_string());
                 }
 
-                let entry_points_len =
-                    u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
-                let sources_len =
-                    u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as usize;
+                let entry_points_len = read_u32_le(data, 8, "Data too short for header")? as usize;
+                let sources_len = read_u32_le(data, 12, "Data too short for header")? as usize;
                 let binary_len_start = 17 + entry_points_len + sources_len;
 
-                if data.len() < binary_len_start + 4 {
-                    return Err("Data too short for binary length".to_string());
-                }
-
-                let binary_len = u32::from_le_bytes([
-                    data[binary_len_start],
-                    data[binary_len_start + 1],
-                    data[binary_len_start + 2],
-                    data[binary_len_start + 3],
-                ]) as usize;
+                let binary_len =
+                    read_u32_le(data, binary_len_start, "Data too short for binary length")?
+                        as usize;
 
                 Ok((version, binary_len))
             }
@@ -452,31 +471,32 @@ impl Program {
                     return Err("Data too short for header".to_string());
                 }
 
-                let entry_points_len =
-                    u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
-                let sources_len =
-                    u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as usize;
-                let literals_len =
-                    u32::from_le_bytes([data[16], data[17], data[18], data[19]]) as usize;
-                let rule_tree_len =
-                    u32::from_le_bytes([data[20], data[21], data[22], data[23]]) as usize;
+                let entry_points_len = read_u32_le(data, 8, "Data too short for header")? as usize;
+                let sources_len = read_u32_le(data, 12, "Data too short for header")? as usize;
+                let literals_len = read_u32_le(data, 16, "Data too short for header")? as usize;
+                let rule_tree_len = read_u32_le(data, 20, "Data too short for header")? as usize;
                 let binary_len_start =
                     25 + entry_points_len + sources_len + literals_len + rule_tree_len;
 
-                if data.len() < binary_len_start + 4 {
-                    return Err("Data too short for binary length".to_string());
-                }
-
-                let binary_len = u32::from_le_bytes([
-                    data[binary_len_start],
-                    data[binary_len_start + 1],
-                    data[binary_len_start + 2],
-                    data[binary_len_start + 3],
-                ]) as usize;
+                let binary_len =
+                    read_u32_le(data, binary_len_start, "Data too short for binary length")?
+                        as usize;
 
                 Ok((version, binary_len))
             }
             v => Err(format!("Unsupported version {}", v)),
         }
     }
+}
+
+fn read_u32_le(data: &[u8], offset: usize, err: &str) -> Result<u32, String> {
+    let bytes = data
+        .get(offset..offset + 4)
+        .ok_or_else(|| err.to_string())?;
+    let array: [u8; 4] = bytes.try_into().map_err(|_| err.to_string())?;
+    Ok(u32::from_le_bytes(array))
+}
+
+fn take_range<'a>(data: &'a [u8], start: usize, end: usize, err: &str) -> Result<&'a [u8], String> {
+    data.get(start..end).ok_or_else(|| err.to_string())
 }

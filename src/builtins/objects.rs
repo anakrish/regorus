@@ -3,7 +3,7 @@
 
 use crate::ast::{Expr, Ref};
 use crate::builtins;
-use crate::builtins::utils::{ensure_args_count, ensure_array, ensure_object};
+use crate::builtins::utils::{ensure_array, ensure_n_args, ensure_object};
 use crate::lexer::Span;
 use crate::Rc;
 use crate::Value;
@@ -14,7 +14,7 @@ use core::iter::Iterator;
 
 use anyhow::{bail, Result};
 
-pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
+pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     m.insert("json.filter", (json_filter, 2));
     m.insert("json.remove", (json_remove, 2));
     m.insert("object.filter", (filter, 2));
@@ -206,7 +206,7 @@ fn merge_filters(
 
 fn json_filter(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "json.filter";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     ensure_object(name, &params[0], args[0].clone())?;
 
     let filters = match &args[1] {
@@ -226,7 +226,7 @@ fn json_filter(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool)
 
 fn json_remove(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "json.remove";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     ensure_object(name, &params[0], args[0].clone())?;
 
     let filters = match &args[1] {
@@ -240,7 +240,7 @@ fn json_remove(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool)
 
 fn filter(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "object.filter";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     let mut obj = ensure_object(name, &params[0], args[0].clone())?;
     let obj_ref = Rc::make_mut(&mut obj);
     match &args[1] {
@@ -258,7 +258,7 @@ fn filter(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> R
 
 fn get(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "object.get";
-    ensure_args_count(span, name, params, args, 3)?;
+    let (args, params) = ensure_n_args::<3>(span, name, params, args)?;
     let obj = ensure_object(name, &params[0], args[0].clone())?;
     let default = &args[2];
 
@@ -283,14 +283,14 @@ fn get(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Resu
 
 fn keys(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "object.keys";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
     let obj = ensure_object(name, &params[0], args[0].clone())?;
     Ok(Value::from_set(obj.keys().cloned().collect()))
 }
 
 fn remove(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "object.remove";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     let mut obj = ensure_object(name, &params[0], args[0].clone())?;
     let obj_ref = Rc::make_mut(&mut obj);
     match &args[1] {
@@ -329,7 +329,7 @@ fn is_subset(sup: &Value, sub: &Value) -> bool {
 
 fn subset(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "object.subset";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, _params) = ensure_n_args::<2>(span, name, params, args)?;
 
     Ok(Value::Bool(is_subset(&args[0], &args[1])))
 }
@@ -355,7 +355,7 @@ fn union(obj1: &Value, obj2: &Value) -> Result<Value> {
 
 fn object_union(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "object.union";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
 
     let _ = ensure_object(name, &params[0], args[0].clone())?;
     let _ = ensure_object(name, &params[1], args[1].clone())?;
@@ -370,7 +370,7 @@ fn object_union_n(
     strict: bool,
 ) -> Result<Value> {
     let name = "object.union_n";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let arr = ensure_array(name, &params[0], args[0].clone())?;
 
@@ -414,7 +414,7 @@ fn json_verify_schema(
     strict: bool,
 ) -> Result<Value> {
     let name = "json.verify_schema";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     Ok(Value::from_array(
         match compile_json_schema(&params[0], &args[0]) {
@@ -436,7 +436,7 @@ fn json_match_schema(
     strict: bool,
 ) -> Result<Value> {
     let name = "json.match_schema";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
 
     // The following is expected to succeed.
     let document: serde_json::Value = serde_json::from_str(&args[0].to_json_str()?)

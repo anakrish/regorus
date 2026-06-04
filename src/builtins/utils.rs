@@ -8,32 +8,57 @@ use crate::Rc;
 use crate::Value;
 use crate::*;
 
+use core::convert::TryInto;
+
 use alloc::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Result};
 
-pub fn ensure_args_count(
+pub(super) fn ensure_n_args<'a, const N: usize>(
     span: &Span,
     fcn: &'static str,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    expected: usize,
-) -> Result<()> {
-    if args.len() != expected {
-        let span = match args.len() > expected {
-            false => span,
-            true => params[args.len() - 1].span(),
-        };
-        if expected == 1 {
-            bail!(span.error(format!("`{fcn}` expects 1 argument").as_str()))
-        } else {
-            bail!(span.error(format!("`{fcn}` expects {expected} arguments").as_str()))
-        }
+    params: &'a [Ref<Expr>],
+    args: &'a [Value],
+) -> Result<(&'a [Value; N], &'a [Ref<Expr>; N])> {
+    let args_len = args.len();
+    let params_len = params.len();
+
+    if args_len != params_len {
+        let err_span = params
+            .get(args_len.saturating_sub(1))
+            .map(|p| p.span())
+            .unwrap_or(span);
+        let msg = format!("`{fcn}` received {args_len} arguments for {params_len} parameters");
+        bail!(err_span.error(&msg))
     }
-    Ok(())
+
+    if args_len != N {
+        let err_span = if args_len > N {
+            params.get(args_len - 1).map(|p| p.span()).unwrap_or(span)
+        } else {
+            span
+        };
+        let msg = if N == 1 {
+            format!("`{fcn}` expects 1 argument")
+        } else {
+            format!("`{fcn}` expects {N} arguments")
+        };
+        bail!(err_span.error(&msg))
+    }
+
+    let args_arr: &'a [Value; N] = args.try_into().map_err(|_| {
+        let msg = format!("`{fcn}` expects {N} arguments");
+        span.error(&msg)
+    })?;
+    let params_arr: &'a [Ref<Expr>; N] = params.try_into().map_err(|_| {
+        let msg = format!("`{fcn}` expects {N} parameters");
+        span.error(&msg)
+    })?;
+
+    Ok((args_arr, params_arr))
 }
 
-pub fn ensure_numeric(fcn: &str, arg: &Expr, v: &Value) -> Result<Number> {
+pub(super) fn ensure_numeric(fcn: &str, arg: &Expr, v: &Value) -> Result<Number> {
     Ok(match &v {
         Value::Number(n) => n.clone(),
         _ => {
@@ -45,7 +70,7 @@ pub fn ensure_numeric(fcn: &str, arg: &Expr, v: &Value) -> Result<Number> {
     })
 }
 
-pub fn validate_integer_arg(
+pub(super) fn validate_integer_arg(
     fcn: &str,
     param: &Ref<Expr>,
     original_value: &Value,
@@ -89,7 +114,7 @@ pub fn validate_integer_arg(
     Ok(true)
 }
 
-pub fn ensure_string(fcn: &str, arg: &Expr, v: &Value) -> Result<Rc<str>> {
+pub(super) fn ensure_string(fcn: &str, arg: &Expr, v: &Value) -> Result<Rc<str>> {
     Ok(match &v {
         Value::String(s) => s.clone(),
         _ => {
@@ -99,7 +124,7 @@ pub fn ensure_string(fcn: &str, arg: &Expr, v: &Value) -> Result<Rc<str>> {
     })
 }
 
-pub fn ensure_string_element<'a>(
+pub(super) fn ensure_string_element<'a>(
     fcn: &str,
     arg: &Expr,
     v: &'a Value,
@@ -117,7 +142,7 @@ pub fn ensure_string_element<'a>(
     })
 }
 
-pub fn ensure_string_collection<'a>(fcn: &str, arg: &Expr, v: &'a Value) -> Result<Vec<&'a str>> {
+pub(super) fn ensure_string_collection<'a>(fcn: &str, arg: &Expr, v: &'a Value) -> Result<Vec<&'a str>> {
     let mut collection = vec![];
     match &v {
         Value::Array(a) => {
@@ -138,7 +163,7 @@ pub fn ensure_string_collection<'a>(fcn: &str, arg: &Expr, v: &'a Value) -> Resu
     Ok(collection)
 }
 
-pub fn ensure_array(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<Vec<Value>>> {
+pub(super) fn ensure_array(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<Vec<Value>>> {
     Ok(match v {
         Value::Array(a) => a,
         _ => {
@@ -148,7 +173,7 @@ pub fn ensure_array(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<Vec<Value>>> {
     })
 }
 
-pub fn ensure_set(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<BTreeSet<Value>>> {
+pub(super) fn ensure_set(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<BTreeSet<Value>>> {
     Ok(match v {
         Value::Set(s) => s,
         _ => {
@@ -158,7 +183,7 @@ pub fn ensure_set(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<BTreeSet<Value>>
     })
 }
 
-pub fn ensure_object(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<BTreeMap<Value, Value>>> {
+pub(super) fn ensure_object(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<BTreeMap<Value, Value>>> {
     Ok(match v {
         Value::Object(o) => o,
         _ => {

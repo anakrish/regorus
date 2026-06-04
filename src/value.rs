@@ -1284,11 +1284,11 @@ impl Value {
 
 impl Value {
     pub(crate) fn make_or_get_value_mut<'a>(&'a mut self, paths: &[&str]) -> Result<&'a mut Value> {
-        if paths.is_empty() {
+        let Some((head, tail)) = paths.split_first() else {
             return Ok(self);
-        }
+        };
 
-        let key = Value::String(paths[0].into());
+        let key = Value::String((*head).into());
         if self == &Value::Undefined {
             *self = Value::new_object();
         }
@@ -1297,14 +1297,13 @@ impl Value {
                 Rc::make_mut(map).insert(key.clone(), Value::Undefined);
             }
         }
-
         match self {
             Value::Object(map) => match Rc::make_mut(map).get_mut(&key) {
-                Some(v) if paths.len() == 1 => Ok(v),
-                Some(v) => Self::make_or_get_value_mut(v, &paths[1..]),
+                Some(v) if tail.is_empty() => Ok(v),
+                Some(v) => Self::make_or_get_value_mut(v, tail),
                 _ => bail!("internal error: unexpected"),
             },
-            Value::Undefined if paths.len() > 1 => {
+            Value::Undefined if !tail.is_empty() => {
                 *self = Value::new_object();
                 Self::make_or_get_value_mut(self, paths)
             }
@@ -1404,7 +1403,7 @@ impl ops::Index<&Value> for Value {
                 _ => &Value::Undefined,
             },
             (Value::Array(a), Value::Number(n)) => match n.as_u64() {
-                Some(index) if (index as usize) < a.len() => &a[index as usize],
+                Some(index) => a.get(index as usize).unwrap_or(&Value::Undefined),
                 _ => &Value::Undefined,
             },
             _ => &Value::Undefined,

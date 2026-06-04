@@ -3,7 +3,7 @@
 
 use crate::ast::{Expr, Ref};
 use crate::builtins;
-use crate::builtins::utils::{ensure_args_count, ensure_string, ensure_string_collection};
+use crate::builtins::utils::{ensure_n_args, ensure_string, ensure_string_collection};
 use crate::lexer::Span;
 use crate::value::Value;
 use crate::*;
@@ -11,7 +11,7 @@ use crate::*;
 use anyhow::{bail, Result};
 use globset::{GlobBuilder, GlobMatcher};
 
-pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
+pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     m.insert("glob.match", (glob_match, 3));
     m.insert("glob.quote_meta", (quote_meta, 1));
 }
@@ -59,7 +59,7 @@ fn make_glob(pattern: &str, span: &Span) -> Result<GlobMatcher> {
 
 fn glob_match(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "glob.match";
-    ensure_args_count(span, name, params, args, 3)?;
+    let (args, params) = ensure_n_args::<3>(span, name, params, args)?;
 
     let pattern = ensure_string(name, &params[0], &args[0])?;
     let value = ensure_string(name, &params[2], &args[2])?;
@@ -105,7 +105,7 @@ fn glob_match(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) 
 
 fn quote_meta(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "glob.quote_meta";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let pattern = ensure_string(name, &params[0], &args[0])?;
     // Ensure that the glob is valid.

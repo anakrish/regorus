@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+
 use crate::rvm::instructions::{Instruction, LoopMode};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;

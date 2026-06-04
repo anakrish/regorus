@@ -5,7 +5,7 @@ use crate::ast::{Expr, Ref};
 use crate::builtins;
 #[allow(unused)]
 use crate::builtins::utils::{
-    ensure_args_count, ensure_object, ensure_string, ensure_string_collection,
+    ensure_n_args, ensure_object, ensure_string, ensure_string_collection,
 };
 use crate::lexer::Span;
 use crate::value::Value;
@@ -14,7 +14,7 @@ use crate::*;
 #[allow(unused)]
 use anyhow::{anyhow, bail, Context, Result};
 
-pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
+pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     #[cfg(feature = "base64")]
     {
         m.insert("base64.decode", (base64_decode, 1));
@@ -60,7 +60,7 @@ fn base64_decode(
     _strict: bool,
 ) -> Result<Value> {
     let name = "base64.decode";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let encoded_str = ensure_string(name, &params[0], &args[0])?;
     let decoded_bytes = data_encoding::BASE64
@@ -83,7 +83,7 @@ fn base64_encode(
     _strict: bool,
 ) -> Result<Value> {
     let name = "base64.encode";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let string = ensure_string(name, &params[0], &args[0])?;
     Ok(Value::String(
@@ -99,7 +99,7 @@ fn base64_is_valid(
     _strict: bool,
 ) -> Result<Value> {
     let name = "base64.is_valid";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let encoded_str = ensure_string(name, &params[0], &args[0])?;
     Ok(Value::Bool(
@@ -115,7 +115,7 @@ fn base64url_decode(
     _strict: bool,
 ) -> Result<Value> {
     let name = "base64url.decode";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let encoded_str = ensure_string(name, &params[0], &args[0])?;
     let decoded_bytes = match data_encoding::BASE64URL.decode(encoded_str.as_bytes()) {
@@ -147,7 +147,7 @@ fn base64url_encode(
     _strict: bool,
 ) -> Result<Value> {
     let name = "base64url.encode";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let string = ensure_string(name, &params[0], &args[0])?;
     Ok(Value::String(
@@ -163,7 +163,7 @@ fn base64url_encode_no_pad(
     _strict: bool,
 ) -> Result<Value> {
     let name = "base64url.encode_no_pad";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let string = ensure_string(name, &params[0], &args[0])?;
     Ok(Value::String(
@@ -176,7 +176,7 @@ fn base64url_encode_no_pad(
 #[cfg(feature = "hex")]
 fn hex_decode(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "hex.decode";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let encoded_str = ensure_string(name, &params[0], &args[0])?;
     let decoded_bytes = data_encoding::HEXLOWER_PERMISSIVE
@@ -194,7 +194,7 @@ fn hex_decode(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) 
 #[cfg(feature = "hex")]
 fn hex_encode(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "hex.encode";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let string = ensure_string(name, &params[0], &args[0])?;
     Ok(Value::String(
@@ -212,7 +212,7 @@ fn urlquery_decode(
     _strict: bool,
 ) -> Result<Value> {
     let name = "urlquery.decode";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let string = ensure_string(name, &params[0], &args[0])?;
     let url_string = "https://non-existent?".to_owned() + string.as_ref();
@@ -240,7 +240,7 @@ fn urlquery_decode_object(
     _strict: bool,
 ) -> Result<Value> {
     let name = "urlquery.decode_object";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let string = ensure_string(name, &params[0], &args[0])?;
     let url_string = "https://non-existent?".to_owned() + string.as_ref();
@@ -268,7 +268,7 @@ fn urlquery_encode(
     _strict: bool,
 ) -> Result<Value> {
     let name = "urlquery.encode";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let s = ensure_string(name, &params[0], &args[0])?;
     let mut url = match url::Url::parse("https://non-existent") {
@@ -293,7 +293,7 @@ fn urlquery_encode_object(
     _strict: bool,
 ) -> Result<Value> {
     let name = "urlquery.encode_object";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let obj = ensure_object(name, &params[0], args[0].clone())?;
     let mut url = match url::Url::parse("https://non-existent") {
@@ -327,7 +327,7 @@ fn yaml_is_valid(
     _strict: bool,
 ) -> Result<Value> {
     let name = "yaml.is_valid";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let yaml_str = ensure_string(name, &params[0], &args[0])?;
     Ok(Value::Bool(Value::from_yaml_str(&yaml_str).is_ok()))
@@ -336,8 +336,7 @@ fn yaml_is_valid(
 #[cfg(feature = "yaml")]
 fn yaml_marshal(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "yaml.marshal";
-    ensure_args_count(span, name, params, args, 1)?;
-
+    let (args, _params) = ensure_n_args::<1>(span, name, params, args)?;
     let serialized = serde_yaml::to_string(&args[0])
         .map_err(|err| span.error(&format!("could not serialize to yaml: {err}")))?;
 
@@ -352,7 +351,7 @@ fn yaml_unmarshal(
     _strict: bool,
 ) -> Result<Value> {
     let name = "yaml.unmarshal";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
     let yaml_str = ensure_string(name, &params[0], &args[0])?;
     Value::from_yaml_str(&yaml_str).with_context(|| span.error("could not deserialize yaml."))
 }
@@ -364,7 +363,7 @@ fn json_is_valid(
     _strict: bool,
 ) -> Result<Value> {
     let name = "json.is_valid";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let json_str = ensure_string(name, &params[0], &args[0])?;
     Ok(Value::Bool(Value::from_json_str(&json_str).is_ok()))
@@ -372,7 +371,7 @@ fn json_is_valid(
 
 fn json_marshal(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "json.marshal";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, _params) = ensure_n_args::<1>(span, name, params, args)?;
     Ok(Value::from(serde_json::to_string(&args[0]).map_err(
         |e| span.error(&format!("could not serialize to json\nCaused by\n{e}")),
     )?))
@@ -385,7 +384,7 @@ fn json_marshal_with_options(
     _strict: bool,
 ) -> Result<Value> {
     let name = "json.marshal_with_options";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
 
     let options = ensure_object(name, &params[1], args[1].clone())?;
     let (mut pretty, mut indent, mut prefix) = (true, Some("\t".to_owned()), None);
@@ -451,7 +450,7 @@ fn json_unmarshal(
     _strict: bool,
 ) -> Result<Value> {
     let name = "json.unmarshal";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
     let json_str = ensure_string(name, &params[0], &args[0])?;
     Value::from_json_str(&json_str).with_context(|| span.error("could not deserialize json."))
 }

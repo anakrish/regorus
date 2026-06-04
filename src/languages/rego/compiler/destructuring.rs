@@ -11,7 +11,7 @@ use crate::value::Value;
 use anyhow::{bail, Result};
 
 #[derive(Clone, Copy, Debug)]
-pub enum PlanContext {
+pub(super) enum PlanContext {
     ColonAssignment,
     Assignment,
     FunctionParameter,

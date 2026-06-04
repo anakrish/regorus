@@ -3,7 +3,7 @@
 
 use crate::ast::{Expr, Ref};
 use crate::builtins;
-use crate::builtins::utils::{ensure_args_count, ensure_object};
+use crate::builtins::utils::{ensure_n_args, ensure_object};
 use crate::lexer::Span;
 use crate::value::Value;
 use crate::*;
@@ -12,7 +12,7 @@ use alloc::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Result};
 
-pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
+pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     m.insert("graph.reachable", (reachable, 2));
     m.insert("graph.reachable_paths", (reachable_paths, 2));
     m.insert("walk", (walk, 1));
@@ -20,7 +20,7 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
 
 fn reachable(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
     let name = "graph.reachable";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
 
     let graph = ensure_object(name, &params[0], args[0].clone())?;
     let mut worklist = vec![];
@@ -119,7 +119,7 @@ fn reachable_paths(
     strict: bool,
 ) -> Result<Value> {
     let name = "graph.reachable_paths";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
 
     let graph = ensure_object(name, &params[0], args[0].clone())?;
     let mut visited = BTreeSet::new();
@@ -178,7 +178,7 @@ fn walk_visit(path: &mut Vec<Value>, value: &Value, paths: &mut Vec<Value>) -> R
 
 fn walk(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "walk";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, _params) = ensure_n_args::<1>(span, name, params, args)?;
     let mut paths = vec![];
     walk_visit(&mut vec![], &args[0], &mut paths)?;
     Ok(Value::from_array(paths))

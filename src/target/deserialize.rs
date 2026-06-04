@@ -10,7 +10,7 @@ type String = Rc<str>;
 
 /// Deserialize resource schemas from either an array of schemas or schema names.
 /// If specified as schema names, look them up from RESOURCE_SCHEMA_REGISTRY.
-pub fn deserialize_resource_schemas<'de, D>(deserializer: D) -> Result<Vec<Rc<Schema>>, D::Error>
+pub(super) fn deserialize_resource_schemas<'de, D>(deserializer: D) -> Result<Vec<Rc<Schema>>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -46,7 +46,7 @@ where
 
 /// Deserialize effects from either an object of schemas or schema names.
 /// If specified as schema names, look them up from EFFECT_SCHEMA_REGISTRY.
-pub fn deserialize_effects<'de, D>(
+pub(super) fn deserialize_effects<'de, D>(
     deserializer: D,
 ) -> Result<BTreeMap<String, Rc<Schema>>, D::Error>
 where

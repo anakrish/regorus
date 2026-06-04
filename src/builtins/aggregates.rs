@@ -3,7 +3,7 @@
 
 use crate::ast::{Expr, Ref};
 use crate::builtins;
-use crate::builtins::utils::{ensure_args_count, ensure_numeric};
+use crate::builtins::utils::{ensure_n_args, ensure_numeric};
 use crate::lexer::Span;
 use crate::number::Number;
 use crate::value::Value;
@@ -11,7 +11,7 @@ use crate::*;
 
 use anyhow::{bail, Result};
 
-pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
+pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     m.insert("count", (count, 1));
     m.insert("max", (max, 1));
     m.insert("min", (min, 1));
@@ -21,7 +21,7 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
 }
 
 fn count(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
-    ensure_args_count(span, "count", params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, "count", params, args)?;
 
     Ok(Value::from(Number::from(match &args[0] {
         Value::Array(a) => a.len(),
@@ -39,7 +39,7 @@ fn count(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Res
 }
 
 fn max(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
-    ensure_args_count(span, "max", params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, "max", params, args)?;
 
     Ok(match &args[0] {
         Value::Array(a) => match a.iter().max() {
@@ -58,7 +58,7 @@ fn max(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Resu
 }
 
 fn min(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
-    ensure_args_count(span, "min", params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, "min", params, args)?;
 
     Ok(match &args[0] {
         Value::Array(a) => match a.iter().min() {
@@ -77,7 +77,7 @@ fn min(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Resu
 }
 
 fn product(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
-    ensure_args_count(span, "product", params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, "product", params, args)?;
 
     let mut v = Number::from(1_u64);
     Ok(Value::from(match &args[0] {
@@ -102,7 +102,7 @@ fn product(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
 }
 
 fn sort(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
-    ensure_args_count(span, "sort", params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, "sort", params, args)?;
     Ok(match &args[0] {
         Value::Array(a) => {
             let mut ac = (**a).clone();
@@ -119,7 +119,7 @@ fn sort(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Res
 }
 
 fn sum(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
-    ensure_args_count(span, "sum", params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, "sum", params, args)?;
 
     let mut v = Number::from(0_u64);
     Ok(Value::from(match &args[0] {

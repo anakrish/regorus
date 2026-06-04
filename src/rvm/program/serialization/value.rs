@@ -28,7 +28,7 @@ const VARIANT_NUMBER_F64: u32 = 10;
 
 /// Wrapper type for zero-copy binary serialization of a `Value`.
 /// Keeps references into the original data so collections and strings are not cloned.
-pub(crate) struct BinaryValueRef<'a>(pub &'a Value);
+pub struct BinaryValueRef<'a>(pub &'a Value);
 
 impl<'a> Serialize for BinaryValueRef<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -103,7 +103,7 @@ impl<'a> Serialize for BinaryValueRef<'a> {
 }
 
 /// Slice wrapper allowing zero-copy serialization of value collections.
-pub(crate) struct BinaryValueSlice<'a>(pub &'a [Value]);
+pub struct BinaryValueSlice<'a>(pub &'a [Value]);
 
 impl<'a> Serialize for BinaryValueSlice<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -164,7 +164,7 @@ impl<'a> Serialize for BinaryEntryRef<'a> {
 
 /// Owned counterpart used during deserialization.
 #[derive(Debug, Clone)]
-pub(crate) struct BinaryValue(pub Value);
+pub struct BinaryValue(pub Value);
 
 impl BinaryValue {
     fn into_value(self) -> Value {

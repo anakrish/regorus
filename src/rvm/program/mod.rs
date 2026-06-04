@@ -5,7 +5,7 @@ mod core;
 mod listing;
 mod recompile;
 mod rule_tree;
-mod serialization;
+pub(crate) mod serialization;
 mod types;
 
 pub use core::Program;

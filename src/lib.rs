@@ -5,13 +5,124 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(unknown_lints)]
 #![allow(clippy::doc_lazy_continuation)]
+// Fail-fast lints: correctness, safety, and API surface
 #![deny(
+    // Panic sources - catch all ways code can panic
     clippy::panic,
+    clippy::unreachable,
+    clippy::todo,
+    clippy::unimplemented,
     clippy::unwrap_used,
     clippy::expect_used,
-    clippy::dbg_macro
+    clippy::manual_assert,
+    // TODO: restore once indexing in tests avoids panics
+    // clippy::indexing_slicing,
+    // TODO: restore once arithmetic operations use checked variants
+    //clippy::arithmetic_side_effects,
+    clippy::panic_in_result_fn,
+
+    // Rust warnings/upstream
+    dead_code,
+    deprecated,
+    deprecated_in_future,
+    exported_private_dependencies,
+    future_incompatible,
+    invalid_doc_attributes,
+    keyword_idents,
+    macro_use_extern_crate,
+    missing_debug_implementations,
+    // TODO: restore once test modules are documented
+    // missing_docs,
+    non_ascii_idents,
+    nonstandard_style,
+    noop_method_call,
+    trivial_bounds,
+    trivial_casts,
+    unreachable_code,
+    unreachable_patterns,
+    //unreachable_pub,
+    unused_extern_crates,
+    unused_import_braces,
+    absolute_paths_not_starting_with_crate,
+
+    // Unsafe code / low-level hazards
+    clippy::undocumented_unsafe_blocks,
+    // TODO: restore once numeric literal suffixes are underscored
+    // clippy::unseparated_literal_suffix,
+    // TODO: restore once tests stop using stderr for logging
+    // clippy::print_stderr,
+    // TODO: restore once Debug formatting is removed from tests
+    // clippy::use_debug,
+
+    // Documentation & diagnostics
+    // TODO: restore once intra-doc links use backticks
+    // clippy::doc_link_with_quotes,
+    // TODO: restore once doc backtick warnings are fixed
+    // clippy::doc_markdown,
+    // TODO: restore once private items are documented
+    // clippy::missing_docs_in_private_items
+    // TODO: restore once error docs are added
+    // clippy::missing_errors_doc,
+    // TODO: restore once panic docs are added
+    // clippy::missing_panics_doc,
+
+    // API correctness / style
+    // TODO: restore once const candidates are annotated
+    // clippy::missing_const_for_fn,
+    // TODO: restore once option map_or rewrites are done
+    // clippy::option_if_let_else,
+    // TODO: restore once if/else option patterns are simplified
+    // clippy::if_then_some_else_none,
+    // TODO: restore once trailing semicolons are added in tests
+    // clippy::semicolon_if_nothing_returned,
+    // TODO: restore once unused self args are cleaned up
+    // clippy::unused_self,
+    // TODO: restore once underscore bindings are cleaned up
+    // clippy::used_underscore_binding,
+    // TODO: restore once let-if chains are simplified
+    // clippy::useless_let_if_seq,
+    clippy::similar_names,
+    // TODO: restore once shadowing in tests is cleaned up
+    // clippy::shadow_unrelated,
+    clippy::redundant_pub_crate,
+    clippy::wildcard_dependencies,
+    // TODO: restore once wildcard imports in tests are removed
+    // clippy::wildcard_imports,
+
+    // Numeric correctness
+    // TODO: restore once float comparisons use tolerances
+    // clippy::float_cmp,
+    // clippy::float_cmp_const,
+    // clippy::float_equality_without_abs,
+    clippy::suspicious_operation_groupings,
+
+    // no_std hygiene
+    clippy::std_instead_of_core,
+
+    // Misc polish
+    clippy::dbg_macro,
+    clippy::debug_assert_with_mut_call,
+    clippy::empty_line_after_outer_attr,
+    clippy::empty_structs_with_brackets,
 )]
-#![warn(clippy::match_like_matches_macro)]
+// Advisory lints: useful, but not fatal
+#![warn(
+    // TODO: restore once Result assertions are rewritten
+    // clippy::assertions_on_result_states,
+    // TODO: restore once match-like macros are adjusted
+    // clippy::match_like_matches_macro,
+    // TODO: restore once continues are simplified
+    // clippy::needless_continue,
+    // TODO: restore once trait imports are adjusted
+    // clippy::unused_trait_names,
+    clippy::verbose_file_reads,
+    // TODO: restore once arithmetic side effects are reviewed
+    // clippy::arithmetic_side_effects,
+    // TODO: restore once unsafe `as` conversions are fixed
+    // clippy::as_conversions,
+    // TODO: restore once pattern type mismatches in tests are fixed
+    // clippy::pattern_type_mismatch
+)]
 // Use README.md as crate documentation.
 #![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
 // We'll default to building for no_std - use core, alloc instead of std.
@@ -33,11 +144,11 @@ mimalloc::assign_global!();
 mod ast;
 mod builtins;
 mod compile;
-mod compiled_policy;
-mod compiler;
-mod engine;
-mod indexchecker;
-mod interpreter;
+pub(crate) mod compiled_policy;
+pub(crate) mod compiler;
+pub(crate) mod engine;
+pub(crate) mod indexchecker;
+pub(crate) mod interpreter;
 
 pub mod languages {
     #[cfg(feature = "azure-rbac")]
@@ -48,23 +159,23 @@ pub mod languages {
 }
 
 mod lexer;
-mod lookup;
-mod number;
+pub(crate) mod lookup;
+pub(crate) mod number;
 mod parser;
 mod policy_info;
-mod query;
+pub(crate) mod query;
 #[cfg(feature = "azure_policy")]
 pub mod registry;
 #[cfg(feature = "rvm")]
 pub mod rvm;
-mod scheduler;
+pub(crate) mod scheduler;
 #[cfg(feature = "azure_policy")]
 mod schema;
 #[cfg(feature = "azure_policy")]
 pub mod target;
 #[cfg(any(test, all(feature = "yaml", feature = "std")))]
 pub mod test_utils;
-mod utils;
+pub(crate) mod utils;
 mod value;
 
 #[cfg(feature = "azure_policy")]
@@ -422,7 +533,7 @@ impl fmt::Debug for dyn Extension {
 pub mod coverage {
     use crate::*;
 
-    #[derive(Default, serde::Serialize, serde::Deserialize)]
+    #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
     /// Coverage information about a rego policy file.
     pub struct File {
         /// Path of the policy file.
@@ -438,7 +549,7 @@ pub mod coverage {
         pub not_covered: alloc::collections::BTreeSet<u32>,
     }
 
-    #[derive(Default, serde::Serialize, serde::Deserialize)]
+    #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
     /// Policy coverage report.
     pub struct Report {
         /// Coverage information for files.
@@ -463,7 +574,7 @@ pub mod coverage {
 
                 s.push_str(&format!("{}:\n", file.path));
                 for (line, code) in file.code.split('\n').enumerate() {
-                    let line = line as u32 + 1;
+                    let line = (line as u32).saturating_add(1);
                     if file.not_covered.contains(&line) {
                         s.push_str(&format!("\x1b[31m {line:4}  {code}\x1b[0m\n"));
                     } else if file.covered.contains(&line) {
@@ -489,4 +600,5 @@ pub mod unstable {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests;

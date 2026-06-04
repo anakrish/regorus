@@ -208,12 +208,13 @@ fn format_instruction_readable(
     match instruction {
         Instruction::Load { dest, literal_idx } => {
             let base = format!("{}Load         r{} ← L{}", indent, dest, literal_idx);
-            let comment = if *literal_idx < program.literals.len() as u16 {
-                let literal_json = serde_json::to_string(&program.literals[*literal_idx as usize])
-                    .unwrap_or_else(|_| "<invalid>".to_string());
-                format!("Load literal: {}", literal_json)
-            } else {
-                "Load literal: <invalid index>".to_string()
+            let comment = match program.literals.get(*literal_idx as usize) {
+                Some(value) => {
+                    let literal_json =
+                        serde_json::to_string(value).unwrap_or_else(|_| "<invalid>".to_string());
+                    format!("Load literal: {}", literal_json)
+                }
+                None => "Load literal: <invalid index>".to_string(),
             };
             align_comment(&base, &comment, config.comment_column)
         }
@@ -468,15 +469,16 @@ fn format_instruction_readable(
                 "{}IndexLiteral r{} ← r{}[L{}]",
                 indent, dest, container, literal_idx
             );
-            let comment = if *literal_idx < program.literals.len() as u16 {
-                let literal_json = serde_json::to_string(&program.literals[*literal_idx as usize])
-                    .unwrap_or_else(|_| "<invalid>".to_string());
-                format!("Index with literal key: r{}[{}]", container, literal_json)
-            } else {
-                format!(
+            let comment = match program.literals.get(*literal_idx as usize) {
+                Some(value) => {
+                    let literal_json =
+                        serde_json::to_string(value).unwrap_or_else(|_| "<invalid>".to_string());
+                    format!("Index with literal key: r{}[{}]", container, literal_json)
+                }
+                None => format!(
                     "Index with literal: r{}[L{}] (invalid index)",
                     container, literal_idx
-                )
+                ),
             };
             align_comment(&base, &comment, config.comment_column)
         }

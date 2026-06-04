@@ -1,9 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-pub(crate) mod binary;
+pub mod binary;
 mod json;
-pub(crate) mod value;
+pub mod value;
 
 use serde::{Deserialize, Serialize};
 

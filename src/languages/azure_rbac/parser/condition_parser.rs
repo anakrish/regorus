@@ -4,6 +4,7 @@
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::ToString;
+use core::fmt;
 
 use crate::languages::azure_rbac::ast::{
     BinaryExpression, ConditionExpr, ConditionExpression, ConditionOperator, EmptySpan,
@@ -38,6 +39,12 @@ pub fn parse_condition_expression(
 pub struct ConditionParser<'source> {
     pub(super) lexer: Lexer<'source>,
     pub(super) current: Token,
+}
+
+impl<'source> fmt::Debug for ConditionParser<'source> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConditionParser").finish_non_exhaustive()
+    }
 }
 
 impl<'source> ConditionParser<'source> {

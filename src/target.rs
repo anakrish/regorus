@@ -75,5 +75,6 @@ impl Target {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
     mod deserialize;
 }

@@ -9,6 +9,7 @@ use dashmap::DashMap;
 type String = Rc<str>;
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     mod core;
     mod effect;
@@ -62,6 +63,14 @@ pub fn validate_name(name: &str, registry_name: &str) -> Result<(), RegistryErro
 pub struct Registry<T> {
     inner: DashMap<String, Rc<T>>,
     name: String,
+}
+
+impl<T: fmt::Debug> fmt::Debug for Registry<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Registry")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T> Registry<T> {

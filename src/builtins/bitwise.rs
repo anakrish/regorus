@@ -3,14 +3,14 @@
 
 use crate::ast::{Expr, Ref};
 use crate::builtins;
-use crate::builtins::utils::{ensure_args_count, ensure_numeric, validate_integer_arg};
+use crate::builtins::utils::{ensure_n_args, ensure_numeric, validate_integer_arg};
 
 use crate::lexer::Span;
 use crate::value::Value;
 
 use anyhow::Result;
 
-pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
+pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     m.insert("bits.and", (and, 2));
     m.insert("bits.lsh", (lsh, 2));
     m.insert("bits.negate", (negate, 1));
@@ -21,7 +21,7 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
 
 fn and(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
     let name = "bits.and";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
 
     let v1 = ensure_numeric(name, &params[0], &args[0])?;
     let v2 = ensure_numeric(name, &params[1], &args[1])?;
@@ -40,7 +40,7 @@ fn and(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Resul
 
 fn lsh(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
     let name = "bits.lsh";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
 
     let v1 = ensure_numeric(name, &params[0], &args[0])?;
     let v2 = ensure_numeric(name, &params[1], &args[1])?;
@@ -59,7 +59,7 @@ fn lsh(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Resul
 
 fn negate(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
     let name = "bits.negate";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
 
     let v = ensure_numeric(name, &params[0], &args[0])?;
 
@@ -75,7 +75,7 @@ fn negate(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Re
 
 fn or(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
     let name = "bits.or";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
 
     let v1 = ensure_numeric(name, &params[0], &args[0])?;
     let v2 = ensure_numeric(name, &params[1], &args[1])?;
@@ -94,7 +94,7 @@ fn or(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result
 
 fn rsh(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
     let name = "bits.rsh";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
 
     let v1 = ensure_numeric(name, &params[0], &args[0])?;
     let v2 = ensure_numeric(name, &params[1], &args[1])?;
@@ -113,7 +113,7 @@ fn rsh(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Resul
 
 fn xor(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
     let name = "bits.xor";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
 
     let v1 = ensure_numeric(name, &params[0], &args[0])?;
     let v2 = ensure_numeric(name, &params[1], &args[1])?;

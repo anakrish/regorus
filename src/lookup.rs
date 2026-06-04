@@ -11,7 +11,7 @@ use core::fmt;
 
 /// Error indicating that lookup indices are out of bounds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LookupIndexError {
+pub(crate) enum LookupIndexError {
     /// The requested module index exceeds the available modules.
     ModuleOutOfBounds { module_idx: u32, modules: usize },
     /// The requested node index exceeds the available nodes for the module.
@@ -47,13 +47,13 @@ impl fmt::Display for LookupIndexError {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for LookupIndexError {}
+impl core::error::Error for LookupIndexError {}
 
-pub type LookupResult<T> = core::result::Result<T, LookupIndexError>;
+pub(crate) type LookupResult<T> = core::result::Result<T, LookupIndexError>;
 
 /// Generic lookup table that stores data indexed by module and node indices.
 #[derive(Debug, Clone)]
-pub struct Lookup<T: Clone> {
+pub(crate) struct Lookup<T: Clone> {
     /// Array of slots indexed by node index within each module
     slots: Vec<Vec<Option<T>>>,
 }
@@ -66,99 +66,121 @@ impl<T: Clone> Default for Lookup<T> {
 
 impl<T: Clone> Lookup<T> {
     /// Create a new lookup table.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self { slots: Vec::new() }
     }
 
     /// Ensure the lookup table has capacity for the given module and node index.
-    pub fn ensure_capacity(&mut self, module_idx: u32, node_idx: u32) {
+    pub(crate) fn ensure_capacity(&mut self, module_idx: u32, node_idx: u32) {
         let module_idx = module_idx as usize;
         let node_idx = node_idx as usize;
 
         // Ensure we have enough modules
         if self.slots.len() <= module_idx {
-            self.slots.resize(module_idx + 1, Vec::new());
+            let needed = module_idx.saturating_add(1);
+            self.slots.resize(needed, Vec::new());
         }
 
         // Ensure the module has enough capacity for this node index
-        if self.slots[module_idx].len() <= node_idx {
-            self.slots[module_idx].resize(node_idx + 1, None);
+        if let Some(module) = self.slots.get_mut(module_idx) {
+            if module.len() <= node_idx {
+                let needed = node_idx.saturating_add(1);
+                module.resize(needed, None);
+            }
         }
     }
 
     /// Set data using direct indices with bounds checking.
     /// Returns Ok(()) if written, Err if either index is out of bounds.
-    pub fn set_checked(&mut self, module_idx: u32, node_idx: u32, value: T) -> LookupResult<()> {
-        let (m, n) = self.validate_indices(module_idx, node_idx)?;
-        self.slots[m][n] = Some(value);
+    pub(crate) fn set_checked(&mut self, module_idx: u32, node_idx: u32, value: T) -> LookupResult<()> {
+        let slot = self.slot_mut(module_idx, node_idx)?;
+        *slot = Some(value);
         Ok(())
     }
 
     /// Get data using direct indices with bounds checking.
     /// Returns Ok(None) if the entry is unset, Err if indices are out of range.
-    pub fn get_checked(&self, module_idx: u32, node_idx: u32) -> LookupResult<Option<&T>> {
-        let (m, n) = self.validate_indices(module_idx, node_idx)?;
-        Ok(self.slots[m][n].as_ref())
+    pub(crate) fn get_checked(&self, module_idx: u32, node_idx: u32) -> LookupResult<Option<&T>> {
+        self.slot_ref(module_idx, node_idx)
     }
 
     /// Clear data at the given indices by setting it to None.
-    pub fn clear(&mut self, module_idx: u32, node_idx: u32) {
-        if (module_idx as usize) < self.slots.len()
-            && (node_idx as usize) < self.slots[module_idx as usize].len()
-        {
-            self.slots[module_idx as usize][node_idx as usize] = None;
+    pub(crate) fn clear(&mut self, module_idx: u32, node_idx: u32) {
+        if let Ok(slot) = self.slot_mut(module_idx, node_idx) {
+            *slot = None;
         }
     }
 
-    pub fn truncate_modules(&mut self, module_count: usize) {
+    pub(crate) fn truncate_modules(&mut self, module_count: usize) {
         self.slots.truncate(module_count);
     }
 
-    pub fn module_len(&self) -> usize {
+    pub(crate) fn module_len(&self) -> usize {
         self.slots.len()
     }
 
-    pub fn push_module(&mut self, module: Vec<Option<T>>) {
+    pub(crate) fn push_module(&mut self, module: Vec<Option<T>>) {
         self.slots.push(module);
     }
 
-    pub fn remove_module(&mut self, module_idx: usize) -> Option<Vec<Option<T>>> {
-        if module_idx < self.slots.len() {
-            Some(self.slots.remove(module_idx))
-        } else {
-            None
-        }
+    pub(crate) fn remove_module(&mut self, module_idx: usize) -> Option<Vec<Option<T>>> {
+        (module_idx < self.slots.len()).then(|| self.slots.remove(module_idx))
     }
 
     /// Validate indices and return them as usize on success.
     fn validate_indices(&self, module_idx: u32, node_idx: u32) -> LookupResult<(usize, usize)> {
         let m = module_idx as usize;
-        if m >= self.slots.len() {
-            debug_assert!(
-                m < self.slots.len(),
-                "module_idx {m} out of bounds (modules={})",
-                self.slots.len()
-            );
-            return Err(LookupIndexError::ModuleOutOfBounds {
-                module_idx,
-                modules: self.slots.len(),
-            });
-        }
+        let module = match self.slots.get(m) {
+            Some(module) => module,
+            None => {
+                debug_assert!(
+                    m < self.slots.len(),
+                    "module_idx {m} out of bounds (modules={})",
+                    self.slots.len()
+                );
+                return Err(LookupIndexError::ModuleOutOfBounds {
+                    module_idx,
+                    modules: self.slots.len(),
+                });
+            }
+        };
 
         let n = node_idx as usize;
-        if n >= self.slots[m].len() {
+        if n >= module.len() {
             debug_assert!(
-                n < self.slots[m].len(),
+                n < module.len(),
                 "node_idx {n} out of bounds for module {m} (nodes={})",
-                self.slots[m].len()
+                module.len()
             );
             return Err(LookupIndexError::NodeOutOfBounds {
                 module_idx,
                 node_idx,
-                nodes: self.slots[m].len(),
+                nodes: module.len(),
             });
         }
 
         Ok((m, n))
+    }
+
+    fn slot_ref(&self, module_idx: u32, node_idx: u32) -> LookupResult<Option<&T>> {
+        let (m, n) = self.validate_indices(module_idx, node_idx)?;
+        let slot = self.slots.get(m).and_then(|module| module.get(n));
+        Ok(slot.and_then(|value| value.as_ref()))
+    }
+
+    fn slot_mut(&mut self, module_idx: u32, node_idx: u32) -> LookupResult<&mut Option<T>> {
+        let (m, n) = self.validate_indices(module_idx, node_idx)?;
+        let nodes = self.slots.get(m).map_or(0, |module| module.len());
+        if let Some(slot) = self.slots.get_mut(m).and_then(|module| module.get_mut(n)) {
+            return Ok(slot);
+        }
+
+        // Should be unreachable because validate_indices guarantees bounds.
+        debug_assert!(false, "validated indices should be in-bounds");
+        Err(LookupIndexError::NodeOutOfBounds {
+            module_idx,
+            node_idx,
+            nodes,
+        })
     }
 }

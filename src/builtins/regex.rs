@@ -3,7 +3,7 @@
 
 use crate::ast::{Expr, Ref};
 use crate::builtins;
-use crate::builtins::utils::{ensure_args_count, ensure_numeric, ensure_string};
+use crate::builtins::utils::{ensure_n_args, ensure_numeric, ensure_string};
 use crate::lexer::Span;
 use crate::value::Value;
 use crate::*;
@@ -11,7 +11,7 @@ use crate::*;
 use anyhow::{bail, Result};
 use regex::Regex;
 
-pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
+pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     m.insert(
         "regex.find_all_string_submatch_n",
         (find_all_string_submatch_n, 3),
@@ -32,7 +32,7 @@ fn find_all_string_submatch_n(
     _strict: bool,
 ) -> Result<Value> {
     let name = "regex.find_all_string_submatch_n";
-    ensure_args_count(span, name, params, args, 3)?;
+    let (args, params) = ensure_n_args::<3>(span, name, params, args)?;
 
     let pattern = ensure_string(name, &params[0], &args[0])?;
     let value = ensure_string(name, &params[1], &args[1])?;
@@ -74,7 +74,7 @@ fn find_all_string_submatch_n(
 
 fn find_n(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "regex.find_n";
-    ensure_args_count(span, name, params, args, 3)?;
+    let (args, params) = ensure_n_args::<3>(span, name, params, args)?;
 
     let pattern = ensure_string(name, &params[0], &args[0])?;
     let value = ensure_string(name, &params[1], &args[1])?;
@@ -104,19 +104,19 @@ fn find_n(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> R
 
 fn is_valid(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "regex.is_valid";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
     Ok(ensure_string(name, &params[0], &args[0])
         .map_or(Value::Bool(false), |p| Value::Bool(Regex::new(&p).is_ok())))
 }
 
-pub fn regex_match(
+    pub(super) fn regex_match(
     span: &Span,
     params: &[Ref<Expr>],
     args: &[Value],
     _strict: bool,
 ) -> Result<Value> {
     let name = "regex.match";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     let pattern = ensure_string(name, &params[0], &args[0])?;
     let value = ensure_string(name, &params[1], &args[1])?;
 
@@ -132,7 +132,7 @@ fn regex_replace(
     _strict: bool,
 ) -> Result<Value> {
     let name = "regex.replace";
-    ensure_args_count(span, name, params, args, 3)?;
+    let (args, params) = ensure_n_args::<3>(span, name, params, args)?;
 
     let s = ensure_string(name, &params[0], &args[0])?;
     let pattern = ensure_string(name, &params[1], &args[1])?;
@@ -151,7 +151,7 @@ fn regex_replace(
 
 fn regex_split(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "regex.split";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     let pattern = ensure_string(name, &params[0], &args[0])?;
     let value = ensure_string(name, &params[1], &args[1])?;
 
@@ -172,7 +172,7 @@ fn regex_template_match(
     _strict: bool,
 ) -> Result<Value> {
     let name = "regex.template_match";
-    ensure_args_count(span, name, params, args, 4)?;
+    let (args, params) = ensure_n_args::<4>(span, name, params, args)?;
     let template = ensure_string(name, &params[0], &args[0])?;
     let value = ensure_string(name, &params[1], &args[1])?;
     let delimiter_start = ensure_string(name, &params[2], &args[2])?;

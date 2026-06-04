@@ -1,5 +1,7 @@
+#![allow(clippy::panic_in_result_fn)]
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+#![cfg_attr(test, allow(clippy::indexing_slicing))]
 
 use crate::*;
 use crate::{ast::*, lexer::*, parser::*, scheduler::*};
@@ -30,7 +32,7 @@ struct YamlTest {
 
 fn to_string_set<'a, I>(itr: I) -> BTreeSet<String>
 where
-    I: std::iter::Iterator<Item = &'a SourceStr>,
+    I: core::iter::Iterator<Item = &'a SourceStr>,
 {
     itr.map(|s| s.to_string()).collect()
 }

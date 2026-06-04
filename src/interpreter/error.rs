@@ -8,7 +8,7 @@ type String = Rc<str>;
 
 /// Error type for interpreter target resolution operations.
 #[derive(Debug, Clone, Error)]
-pub enum TargetCompileError {
+pub(crate) enum TargetCompileError {
     /// Multiple different targets specified across modules
     #[error("Multiple different targets specified: '{existing}' and '{conflicting}'")]
     ConflictingTargets {

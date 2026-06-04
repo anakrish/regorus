@@ -25,7 +25,7 @@ pub fn create_destructuring_plan<T: VariableBindingContext>(
 }
 
 /// Create a destructuring plan while tracking newly bound variables.
-pub(crate) fn create_destructuring_plan_with_tracking<T: VariableBindingContext>(
+pub fn create_destructuring_plan_with_tracking<T: VariableBindingContext>(
     expr: &ExprRef,
     context: &T,
     scoping: ScopingMode,

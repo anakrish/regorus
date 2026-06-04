@@ -199,9 +199,9 @@ use crate::{format, Box, Rc, Value, Vec};
 
 type String = Rc<str>;
 
-pub mod error;
+pub(super) mod error;
 mod meta;
-pub mod validate;
+pub(super) mod validate;
 
 /// A schema represents a type definition that can be used for validation.
 ///
@@ -988,20 +988,20 @@ mod discriminated_subobject {
 
     #[derive(Debug, Deserialize)]
     #[serde(deny_unknown_fields)]
-    pub struct DiscriminatorValue {
+    pub(super) struct DiscriminatorValue {
         #[serde(rename = "const")]
         pub value: String,
     }
 
     #[derive(Debug, Deserialize)]
     #[serde(deny_unknown_fields)]
-    pub struct DiscriminatorValueSpecification {
+    pub(super) struct DiscriminatorValueSpecification {
         pub properties: BTreeMap<String, DiscriminatorValue>,
     }
 
     #[derive(Debug, Deserialize)]
     #[serde(deny_unknown_fields)]
-    pub struct IfThen {
+    pub(super) struct IfThen {
         #[serde(rename = "if")]
         pub discriminator_spec: DiscriminatorValueSpecification,
         #[serde(rename = "then")]
@@ -1059,6 +1059,7 @@ impl<'de> Deserialize<'de> for DiscriminatedSubobject {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
     mod azure;
     mod suite;
     mod validate {

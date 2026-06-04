@@ -40,7 +40,7 @@ use anyhow::Result;
 /// * `op` - The comparison operation to perform.
 /// * `v1` - The first value.
 /// * `v2` - The second value.
-pub fn compare(op: &BoolOp, v1: &Value, v2: &Value) -> Result<Value> {
+pub(crate) fn compare(op: &BoolOp, v1: &Value, v2: &Value) -> Result<Value> {
     // Rely on generated comparison operators.
     // The variants of Value enum are specified in the order necessary to
     // obtain the desired semantics.

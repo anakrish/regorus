@@ -4,7 +4,7 @@
 use crate::ast::{Expr, Ref};
 use crate::builtins;
 use crate::builtins::utils::{
-    ensure_args_count, ensure_array, ensure_numeric, ensure_object, ensure_string,
+    ensure_array, ensure_n_args, ensure_numeric, ensure_object, ensure_string,
     ensure_string_collection,
 };
 use crate::lexer::Span;
@@ -14,7 +14,7 @@ use crate::*;
 
 use anyhow::{bail, Result};
 
-pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
+pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     m.insert("concat", (concat, 2));
     m.insert("contains", (contains, 2));
     m.insert("endswith", (endswith, 2));
@@ -43,7 +43,7 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
 
 fn concat(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "concat";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     let delimiter = ensure_string(name, &params[0], &args[0])?;
     let collection = ensure_string_collection(name, &params[1], &args[1])?;
     Ok(Value::String(collection.join(&delimiter).into()))
@@ -51,7 +51,7 @@ fn concat(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> R
 
 fn contains(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "contains";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     let s1 = ensure_string(name, &params[0], &args[0])?;
     let s2 = ensure_string(name, &params[1], &args[1])?;
     Ok(Value::Bool(s1.contains(s2.as_ref())))
@@ -59,7 +59,7 @@ fn contains(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) ->
 
 fn endswith(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "endswith";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     let s1 = ensure_string(name, &params[0], &args[0])?;
     let s2 = ensure_string(name, &params[1], &args[1])?;
     Ok(Value::Bool(s1.ends_with(s2.as_ref())))
@@ -67,7 +67,7 @@ fn endswith(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) ->
 
 fn format_int(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
     let name = "format_int";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     let mut n = ensure_numeric(name, &params[0], &args[0])?;
     let mut sign = "";
     if n < Number::from(0u64) {
@@ -98,7 +98,7 @@ fn format_int(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -
 
 fn indexof(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "indexof";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     let s1 = ensure_string(name, &params[0], &args[0])?;
     let s2 = ensure_string(name, &params[1], &args[1])?;
     for (pos, (idx, _)) in s1.char_indices().enumerate() {
@@ -111,7 +111,7 @@ fn indexof(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
 
 fn indexof_n(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "indexof_n";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     let s1 = ensure_string(name, &params[0], &args[0])?;
     let s2 = ensure_string(name, &params[1], &args[1])?;
 
@@ -126,14 +126,14 @@ fn indexof_n(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -
 
 fn lower(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "lower";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
     let s = ensure_string(name, &params[0], &args[0])?;
     Ok(Value::String(s.to_lowercase().into()))
 }
 
 fn replace(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "replace";
-    ensure_args_count(span, name, params, args, 3)?;
+    let (args, params) = ensure_n_args::<3>(span, name, params, args)?;
     let s = ensure_string(name, &params[0], &args[0])?;
     let old = ensure_string(name, &params[1], &args[1])?;
     let new = ensure_string(name, &params[2], &args[2])?;
@@ -142,7 +142,7 @@ fn replace(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
 
 fn split(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "replace";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     let s = ensure_string(name, &params[0], &args[0])?;
     let delimiter = ensure_string(name, &params[1], &args[1])?;
 
@@ -214,7 +214,7 @@ fn apply_width(w: Width, s: String) -> String {
 
 fn sprintf(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "sprintf";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     let fmt = ensure_string(name, &params[0], &args[0])?;
     let args = ensure_array(name, &params[1], args[1].clone())?;
 
@@ -272,11 +272,9 @@ fn sprintf(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
             None => break,
         };
 
-        if args_idx >= args.len() {
-            bail!(args_span
-                .error(format!("no argument specified for format verb {args_idx}").as_str()));
-        }
-        let arg = &args[args_idx];
+        let arg = args.get(args_idx).ok_or_else(|| {
+            args_span.error(&format!("no argument specified for format verb {args_idx}"))
+        })?;
         args_idx += 1;
 
         // Handle Golang flags.
@@ -419,7 +417,7 @@ fn any_prefix_match(
     strict: bool,
 ) -> Result<Value> {
     let name = "strings.any_prefix_match";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
 
     let search = match &args[0] {
         Value::String(s) => vec![s.as_ref()],
@@ -469,7 +467,7 @@ fn any_suffix_match(
     strict: bool,
 ) -> Result<Value> {
     let name = "strings.any_suffix_match";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
 
     let search = match &args[0] {
         Value::String(s) => vec![s.as_ref()],
@@ -519,7 +517,7 @@ fn strings_count(
     _strict: bool,
 ) -> Result<Value> {
     let name = "strings.count";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
 
     let search = ensure_string(name, &params[0], &args[0])?;
     let substring = ensure_string(name, &params[0], &args[1])?;
@@ -535,7 +533,7 @@ fn strings_count(
 
 fn startswith(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "startswith";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     let s1 = ensure_string(name, &params[0], &args[0])?;
     let s2 = ensure_string(name, &params[1], &args[1])?;
     Ok(Value::Bool(s1.starts_with(s2.as_ref())))
@@ -543,7 +541,7 @@ fn startswith(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) 
 
 fn replace_n(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "trim";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     let obj = ensure_object(name, &params[0], args[0].clone())?;
     let mut s = ensure_string(name, &params[1], &args[1])?;
 
@@ -566,14 +564,14 @@ fn replace_n(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -
 
 fn reverse(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "reverse";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
     let s = ensure_string(name, &params[0], &args[0])?;
     Ok(Value::String(s.chars().rev().collect::<String>().into()))
 }
 
 fn substring(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
     let name = "substring";
-    ensure_args_count(span, name, params, args, 3)?;
+    let (args, params) = ensure_n_args::<3>(span, name, params, args)?;
     let s = ensure_string(name, &params[0], &args[0])?;
     let offset = ensure_numeric(name, &params[1], &args[1])?;
     let length = ensure_numeric(name, &params[2], &args[2])?;
@@ -594,7 +592,7 @@ fn substring(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) ->
 
 fn trim(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "trim";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     let s1 = ensure_string(name, &params[0], &args[0])?;
     let s2 = ensure_string(name, &params[1], &args[1])?;
     Ok(Value::String(s1.trim_matches(|c| s2.contains(c)).into()))
@@ -602,7 +600,7 @@ fn trim(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Res
 
 fn trim_left(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "trim_left";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     let s1 = ensure_string(name, &params[0], &args[0])?;
     let s2 = ensure_string(name, &params[1], &args[1])?;
     Ok(Value::String(
@@ -612,7 +610,7 @@ fn trim_left(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -
 
 fn trim_prefix(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "trim_prefix";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     let s1 = ensure_string(name, &params[0], &args[0])?;
     let s2 = ensure_string(name, &params[1], &args[1])?;
     Ok(Value::String(match s1.strip_prefix(s2.as_ref()) {
@@ -623,7 +621,7 @@ fn trim_prefix(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool)
 
 fn trim_right(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "trim_right";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     let s1 = ensure_string(name, &params[0], &args[0])?;
     let s2 = ensure_string(name, &params[1], &args[1])?;
     Ok(Value::String(
@@ -633,14 +631,14 @@ fn trim_right(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) 
 
 fn trim_space(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "trim_space";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
     let s = ensure_string(name, &params[0], &args[0])?;
     Ok(Value::String(s.trim().into()))
 }
 
 fn trim_suffix(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "trim_suffix";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     let s1 = ensure_string(name, &params[0], &args[0])?;
     let s2 = ensure_string(name, &params[1], &args[1])?;
     Ok(Value::String(match s1.strip_suffix(s2.as_ref()) {
@@ -651,7 +649,7 @@ fn trim_suffix(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool)
 
 fn upper(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "upper";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
     let s = ensure_string(name, &params[0], &args[0])?;
     Ok(Value::String(s.to_uppercase().into()))
 }

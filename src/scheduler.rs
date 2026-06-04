@@ -4,11 +4,8 @@
 use crate::ast::Expr::*;
 use crate::ast::*;
 use crate::lexer::*;
-use crate::lookup::*;
-pub use crate::query::traversal::Scope;
-use crate::query::traversal::{
-    gather_assigned_vars, gather_input_vars, gather_loop_vars, gather_vars, traverse,
-};
+use crate::lookup::Lookup;
+use crate::query::{gather_assigned_vars, gather_input_vars, gather_loop_vars, gather_vars, traverse, Scope};
 use crate::utils::*;
 use crate::*;
 
@@ -20,7 +17,7 @@ use core::fmt;
 use anyhow::{anyhow, bail, Result};
 
 #[derive(Debug)]
-pub struct Definition<Str: Clone + cmp::Ord> {
+pub(super) struct Definition<Str: Clone + cmp::Ord> {
     // The variable being defined.
     // This can be an empty string to indicate that
     // no variable is being defined.
@@ -32,14 +29,14 @@ pub struct Definition<Str: Clone + cmp::Ord> {
 }
 
 #[derive(Debug)]
-pub struct StmtInfo<Str: Clone + cmp::Ord> {
+pub(super) struct StmtInfo<Str: Clone + cmp::Ord> {
     // A statement can define multiple variables.
     // A variable can also be defined by multiple statement.
     pub definitions: Vec<Definition<Str>>,
 }
 
 #[derive(Debug)]
-pub enum SortResult {
+pub(super) enum SortResult {
     // The order in which statements must be executed.
     Order(Vec<u16>),
     // List of statements comprising a cycle for a given var.
@@ -47,7 +44,7 @@ pub enum SortResult {
     Cycle(String, Vec<usize>),
 }
 
-pub fn schedule<Str: Clone + cmp::Ord + fmt::Debug>(
+pub(super) fn schedule<Str: Clone + cmp::Ord + fmt::Debug>(
     infos: &mut [StmtInfo<Str>],
     empty: &Str,
 ) -> Result<SortResult> {
@@ -220,12 +217,12 @@ pub fn schedule<Str: Clone + cmp::Ord + fmt::Debug>(
 }
 
 #[derive(Clone, Default, Debug)]
-pub struct QuerySchedule {
+pub(super) struct QuerySchedule {
     pub scope: Scope,
     pub order: Vec<u16>,
 }
 
-pub struct Analyzer {
+pub(super) struct Analyzer {
     packages: BTreeMap<String, Scope>,
     scopes: Vec<Scope>,
     schedule_table: Lookup<QuerySchedule>,
@@ -235,7 +232,7 @@ pub struct Analyzer {
 }
 
 #[derive(Debug, Clone)]
-pub struct Schedule {
+pub(super) struct Schedule {
     pub queries: Lookup<QuerySchedule>,
 }
 
@@ -246,7 +243,7 @@ impl Default for Analyzer {
 }
 
 impl Analyzer {
-    pub fn new() -> Analyzer {
+    pub(super) fn new() -> Analyzer {
         Analyzer {
             packages: BTreeMap::new(),
             schedule_table: Lookup::new(),
@@ -257,7 +254,7 @@ impl Analyzer {
         }
     }
 
-    pub fn analyze(mut self, modules: &[Ref<Module>]) -> Result<Schedule> {
+    pub(super) fn analyze(mut self, modules: &[Ref<Module>]) -> Result<Schedule> {
         self.add_rules_and_aliases(modules)?;
         self.functions = gather_functions(modules)?;
 
@@ -267,7 +264,7 @@ impl Analyzer {
             if m.num_queries > 0 {
                 // Reserve capacity for all queries in this module (0 to num_queries-1)
                 self.schedule_table
-                    .ensure_capacity(module_idx, m.num_queries - 1);
+                    .ensure_capacity(module_idx, m.num_queries.saturating_sub(1));
             }
         }
 
@@ -281,7 +278,7 @@ impl Analyzer {
         })
     }
 
-    pub fn analyze_query_snippet(
+    pub(super) fn analyze_query_snippet(
         mut self,
         modules: &[Ref<Module>],
         query: &Ref<Query>,
@@ -294,7 +291,7 @@ impl Analyzer {
             if m.num_queries > 0 {
                 // Reserve capacity for all queries in this module (0 to num_queries-1)
                 self.schedule_table
-                    .ensure_capacity(module_idx, m.num_queries - 1);
+                    .ensure_capacity(module_idx, m.num_queries.saturating_sub(1));
             }
         }
 
@@ -691,11 +688,11 @@ impl Analyzer {
                     bail!(span.error("mismatch in number of array elements"));
                 }
 
-                for (idx, lhs_elem) in lhs_items.iter().enumerate() {
+                for (lhs_elem, rhs_elem) in lhs_items.iter().zip(rhs_items.iter()) {
                     self.process_assign_expr(
                         op,
                         lhs_elem,
-                        &rhs_items[idx],
+                        rhs_elem,
                         scope,
                         first_use,
                         definitions,
@@ -1127,7 +1124,7 @@ impl Analyzer {
 /// For each module, the globals are:
 /// 1) The set of rule names defined in the package that the module defines
 /// 2) Additionally, the set of aliases imported by the module
-pub fn compute_module_globals(
+pub(super) fn compute_module_globals(
     modules: &[Ref<Module>],
 ) -> Result<Lookup<crate::Rc<BTreeSet<String>>>> {
     let mut result = Lookup::new();

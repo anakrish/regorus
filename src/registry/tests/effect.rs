@@ -1,6 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#![cfg_attr(test, allow(clippy::indexing_slicing))]
+#![cfg_attr(test, allow(clippy::unreachable))]
+
 use super::super::registry::*;
 use crate::{
     registry::{instances::EFFECT_SCHEMA_REGISTRY, schemas::effect},

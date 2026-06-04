@@ -1,5 +1,7 @@
+#![allow(clippy::panic_in_result_fn)]
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+#![cfg_attr(test, allow(clippy::indexing_slicing))]
 
 use crate::scheduler::*;
 use crate::*;

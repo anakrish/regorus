@@ -6,7 +6,7 @@ use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, Timelike};
 
 // Adapted from the official Go implementation:
 // https://github.com/open-policy-agent/opa/blob/eb17a716b97720a27c6569395ba7c4b7409aae87/topdown/time.go#L179-L243
-pub fn diff_between_datetimes(
+pub(super) fn diff_between_datetimes(
     datetime1: DateTime<FixedOffset>,
     datetime2: DateTime<FixedOffset>,
 ) -> Result<(i32, i32, i32, i32, i32, i32)> {

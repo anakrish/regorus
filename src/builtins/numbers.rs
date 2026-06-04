@@ -3,7 +3,7 @@
 
 use crate::ast::{ArithOp, Expr, Ref};
 use crate::builtins;
-use crate::builtins::utils::{ensure_args_count, ensure_numeric};
+use crate::builtins::utils::{ensure_n_args, ensure_numeric};
 use crate::lexer::Span;
 use crate::number::Number;
 use crate::value::Value;
@@ -14,7 +14,7 @@ use anyhow::{bail, Result};
 #[cfg(feature = "std")]
 use rand::Rng;
 
-pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
+pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     m.insert("abs", (abs, 1));
     m.insert("ceil", (ceil, 1));
     m.insert("floor", (floor, 1));
@@ -25,7 +25,7 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
     m.insert("round", (round, 1));
 }
 
-pub fn arithmetic_operation(
+pub(crate) fn arithmetic_operation(
     span: &Span,
     op: &ArithOp,
     expr1: &Expr,
@@ -55,21 +55,21 @@ pub fn arithmetic_operation(
 }
 
 fn abs(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
-    ensure_args_count(span, "abs", params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, "abs", params, args)?;
     Ok(Value::from(
         ensure_numeric("abs", &params[0], &args[0])?.abs(),
     ))
 }
 
 fn ceil(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
-    ensure_args_count(span, "ceil", params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, "ceil", params, args)?;
     Ok(Value::from(
         ensure_numeric("ceil", &params[0], &args[0])?.ceil(),
     ))
 }
 
 fn floor(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
-    ensure_args_count(span, "floor", params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, "floor", params, args)?;
     Ok(Value::from(
         ensure_numeric("floor", &params[0], &args[0])?.floor(),
     ))
@@ -77,7 +77,7 @@ fn floor(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Re
 
 fn range(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
     let name = "numbers.range";
-    ensure_args_count(span, name, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, name, params, args)?;
     let v1 = ensure_numeric(name, &params[0], &args[0].clone())?;
     let v2 = ensure_numeric(name, &params[1], &args[1].clone())?;
 
@@ -112,7 +112,7 @@ fn range(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Res
 
 fn range_step(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
     let name = "numbers.range_step";
-    ensure_args_count(span, name, params, args, 3)?;
+    let (args, params) = ensure_n_args::<3>(span, name, params, args)?;
     let v1 = ensure_numeric(name, &params[0], &args[0].clone())?;
     let v2 = ensure_numeric(name, &params[1], &args[1].clone())?;
     let incr = ensure_numeric(name, &params[2], &args[2].clone())?;
@@ -152,7 +152,7 @@ fn range_step(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -
 
 fn round(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "round";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
     Ok(Value::from(
         ensure_numeric(name, &params[0], &args[0])?.round(),
     ))
@@ -161,7 +161,7 @@ fn round(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Re
 #[cfg(feature = "std")]
 fn intn(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let fcn = "rand.intn";
-    ensure_args_count(span, fcn, params, args, 2)?;
+    let (args, params) = ensure_n_args::<2>(span, fcn, params, args)?;
     let _ = crate::builtins::utils::ensure_string(fcn, &params[0], &args[0])?;
     let n = ensure_numeric(fcn, &params[0], &args[1])?;
 

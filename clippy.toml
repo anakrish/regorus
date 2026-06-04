@@ -1,0 +1,3 @@
+# Clippy configuration
+# Note: Clippy does not support setting lint levels in this file.
+# Configure lint levels via rustflags (e.g., .cargo/config.toml) or crate attributes.

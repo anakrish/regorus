@@ -3,13 +3,13 @@
 
 use crate::ast::{Expr, Ref};
 use crate::builtins;
-use crate::builtins::utils::{ensure_args_count, ensure_string};
+use crate::builtins::utils::{ensure_n_args, ensure_string};
 use crate::lexer::Span;
 use crate::value::Value;
 
 use anyhow::Result;
 
-pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
+pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     m.insert("trace", (trace, 1));
 }
 
@@ -17,7 +17,7 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
 // the trace statement. Scheduler must ensure the above constraint.
 fn trace(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "trace";
-    ensure_args_count(span, name, params, args, 1)?;
+    let (args, params) = ensure_n_args::<1>(span, name, params, args)?;
     let msg = ensure_string(name, &params[0], &args[0])?;
 
     // Unlike rego, trace returns a string instead of bool.

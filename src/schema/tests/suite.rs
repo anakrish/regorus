@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#![cfg_attr(test, allow(clippy::indexing_slicing))]
+
 use super::super::*;
 use crate::{format, vec};
 use serde_json::json;

@@ -81,14 +81,14 @@ pub fn create_assignment_binding_plan<T: VariableBindingContext>(
             let rhs_is_wildcard =
                 matches!(rhs_expr.as_ref(), Expr::Var { span, .. } if span.text() == "_");
 
-            if lhs_is_wildcard || rhs_is_wildcard {
-                let wildcard_side = match (lhs_is_wildcard, rhs_is_wildcard) {
-                    (true, true) => WildcardSide::Both,
-                    (true, false) => WildcardSide::Lhs,
-                    (false, true) => WildcardSide::Rhs,
-                    (false, false) => unreachable!(),
-                };
+            let wildcard_side = match (lhs_is_wildcard, rhs_is_wildcard) {
+                (true, true) => Some(WildcardSide::Both),
+                (true, false) => Some(WildcardSide::Lhs),
+                (false, true) => Some(WildcardSide::Rhs),
+                (false, false) => None,
+            };
 
+            if let Some(wildcard_side) = wildcard_side {
                 AssignmentPlan::WildcardMatch {
                     lhs_expr: lhs_expr.clone(),
                     rhs_expr: rhs_expr.clone(),
@@ -234,7 +234,9 @@ fn flatten_assignment_pairs<T: VariableBindingContext>(
         }
         // Remaining cases are handled by earlier match arms and guard
         (None, None, _, _) => {
-            unreachable!("handled by equality guard above");
+            return Err(BindingPlannerError::IncompatibleDestructuringPatterns {
+                span: lhs_expr.span().clone(),
+            });
         }
     }
 
@@ -242,13 +244,21 @@ fn flatten_assignment_pairs<T: VariableBindingContext>(
 }
 
 fn collect_array_pairs(lhs_expr: &ExprRef, rhs_expr: &ExprRef) -> Result<Vec<(ExprRef, ExprRef)>> {
-    let lhs_items = match lhs_expr.as_ref() {
-        Expr::Array { items, .. } => items,
-        _ => unreachable!(),
+    let Expr::Array {
+        items: lhs_items, ..
+    } = lhs_expr.as_ref()
+    else {
+        return Err(BindingPlannerError::IncompatibleDestructuringPatterns {
+            span: lhs_expr.span().clone(),
+        });
     };
-    let rhs_items = match rhs_expr.as_ref() {
-        Expr::Array { items, .. } => items,
-        _ => unreachable!(),
+    let Expr::Array {
+        items: rhs_items, ..
+    } = rhs_expr.as_ref()
+    else {
+        return Err(BindingPlannerError::IncompatibleDestructuringPatterns {
+            span: rhs_expr.span().clone(),
+        });
     };
 
     if lhs_items.len() != rhs_items.len() {
@@ -295,27 +305,28 @@ fn order_element_pairs<T: VariableBindingContext>(
     let mut ordered = Vec::with_capacity(remaining.len());
 
     while !remaining.is_empty() {
-        let mut progress = false;
+        let mut moved_any = false;
 
-        for idx in 0..remaining.len() {
-            let (_, _, deps, _) = &remaining[idx];
-            let Some(deps) = deps.as_ref() else {
-                continue;
-            };
-            let ready = deps.iter().all(|var| {
-                scheduled.contains(var) || !context.is_var_unbound(var, ScopingMode::RespectParent)
-            });
+        // Move all ready pairs in this pass; keep the rest for the next iteration.
+        remaining.retain(|(value_expr, plan, deps, binds)| {
+            let ready = matches!(deps, Some(deps) if deps.iter().all(|var| {
+                scheduled.contains(var)
+                    || !context.is_var_unbound(var, ScopingMode::RespectParent)
+            }));
 
             if ready {
-                let (value_expr, plan, _deps, binds) = remaining.remove(idx);
-                scheduled.extend(binds.into_iter());
-                ordered.push((value_expr, plan));
-                progress = true;
-                break;
+                scheduled.extend(binds.iter().cloned());
+                ordered.push((value_expr.clone(), plan.clone()));
+                moved_any = true;
+                false
+            } else {
+                true
             }
-        }
+        });
 
-        if !progress {
+        if !moved_any {
+            // TODO: consider surfacing an error when nothing is ready (potential dependency cycle).
+            // No pairs became ready; emit remaining in original order.
             ordered.extend(
                 remaining
                     .into_iter()
@@ -332,13 +343,21 @@ fn collect_object_pairs(
     lhs_expr: &ExprRef,
     rhs_expr: &ExprRef,
 ) -> Result<Option<Vec<(ExprRef, ExprRef)>>> {
-    let lhs_fields = match lhs_expr.as_ref() {
-        Expr::Object { fields, .. } => fields,
-        _ => unreachable!(),
+    let Expr::Object {
+        fields: lhs_fields, ..
+    } = lhs_expr.as_ref()
+    else {
+        return Err(BindingPlannerError::IncompatibleDestructuringPatterns {
+            span: lhs_expr.span().clone(),
+        });
     };
-    let rhs_fields = match rhs_expr.as_ref() {
-        Expr::Object { fields, .. } => fields,
-        _ => unreachable!(),
+    let Expr::Object {
+        fields: rhs_fields, ..
+    } = rhs_expr.as_ref()
+    else {
+        return Err(BindingPlannerError::IncompatibleDestructuringPatterns {
+            span: rhs_expr.span().clone(),
+        });
     };
 
     let mut lhs_map: BTreeMap<Value, ExprRef> = BTreeMap::new();

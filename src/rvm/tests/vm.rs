@@ -1,8 +1,16 @@
+#![allow(clippy::panic_in_result_fn)]
+
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::panic,
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::indexing_slicing
+    )]
     use crate::rvm::tests::instruction_parser::{parse_instruction, parse_loop_mode};
     use crate::rvm::tests::test_utils::test_round_trip_serialization;
     #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -409,14 +417,6 @@ mod tests {
                     loop_end: loop_param_spec.loop_end,
                 };
                 program.add_loop_params(loop_params);
-            }
-
-            // Convert call params
-            // Legacy call_params support removed - use builtin_call_params or function_call_params instead
-            if !params_spec.call_params.is_empty() {
-                // Legacy call parameters are no longer supported
-                // Convert to BuiltinCall or FunctionCall instructions instead
-                panic!("Legacy call_params are no longer supported. Use builtin_call_params or function_call_params instead.");
             }
 
             // Convert builtin info specs to program builtin info table
@@ -878,12 +878,11 @@ mod tests {
                 });
             }
 
-            if expectations.is_empty() {
-                panic!(
-                    "Test case '{}' must specify expectations for at least one mode",
-                    test_case.note
-                );
-            }
+            assert!(
+                !expectations.is_empty(),
+                "Test case '{}' must specify expectations for at least one mode",
+                test_case.note
+            );
 
             for expectation in expectations {
                 let mode_label = if expectation.strict {
@@ -909,12 +908,12 @@ mod tests {
                     expectation.strict,
                 );
 
-                if expectation.want_error.is_some() && expectation.want_result.is_some() {
-                    panic!(
-                        "Test case '{}' cannot specify both want_result and want_error for {} mode",
-                        test_case.note, mode_label
-                    );
-                }
+                assert!(
+                    !(expectation.want_error.is_some() && expectation.want_result.is_some()),
+                    "Test case '{}' cannot specify both want_result and want_error for {} mode",
+                    test_case.note,
+                    mode_label
+                );
 
                 if let Some(expected_error) = expectation.want_error {
                     match execution_result {

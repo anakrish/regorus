@@ -844,6 +844,20 @@ impl Engine {
             .map(CompiledPolicy::new)
     }
 
+    /// Compile without running type analysis. Intended for measuring baseline compiler
+    /// performance in tests.
+    pub fn compile_with_entrypoint_without_analysis(
+        &mut self,
+        rule: &Rc<str>,
+    ) -> Result<CompiledPolicy> {
+        self.prepare_for_eval(false, false)?;
+        self.interpreter.clean_internal_evaluation_state();
+        self.interpreter.set_rego_v0(!self.rego_v1);
+        self.interpreter
+            .compile_without_type_analysis(Some(rule.clone()))
+            .map(CompiledPolicy::new)
+    }
+
     /// Evaluate specified rule(s).
     ///
     /// [`Engine::eval_rule`] is often faster than [`Engine::eval_query`] and should be preferred if

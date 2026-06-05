@@ -1,0 +1,14 @@
+# Compilation vs Type Analysis
+
+Date: 2025-11-02
+
+Why the compiler is doing extra work even though type analysis already has the data:
+
+1. **Rule lookup churn**: `src/rvm/compiler.rs` scans every rule for each `data.*` access (string building, wildcard walking) while `TypeAnalysisResult` already stores a `RuleHeadIndex` with module/expr ids and the full set of rule specialisations reachable from any other rule. Reusing that index and the analyzer’s dependency graph would turn the repeated O(rules) scans into O(1) lookups against the pre-resolved targets.
+2. **Worklist queue inefficiency**: the compiler manages its worklist with `Vec::remove(0)` and linear duplicate checks. Analysis keeps frontiers in sets. Switching to `VecDeque` plus a membership set (or reusing the analyzer's reachability tables) would avoid O(n^2) churn.
+3. **Module discovery per rule**: every compilation pass linearly searches all modules to locate a rule's module index even though the analyzer cached `(module_idx, rule_idx)` for every head.
+4. **Literal table insertion**: `Compiler::add_literal` linearly scans and clones `Value`s to dedupe. The analyzer already produced a deduped `LiteralTableSketch`; compilation should reuse that mapping instead of repeating the search.
+5. **Virtual lookup fallback**: even with `VirtualDataLookup` metadata, the compiler still builds path patterns and scans rules, nullifying the analyzer's work.
+6. **Per-query allocations**: comprehension/object codegen rebuilds vectors and template objects per use, whereas analysis works off cached schedule order and structural sketches.
+
+Action: expose the analyzer's indices (rule heads, literals, virtual paths) through `TypeAnalysisResult` and refactor the compiler to depend on those tables instead of recomputing them.

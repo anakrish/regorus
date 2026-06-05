@@ -1,0 +1,10 @@
+# RVM to Z3 Converter - Python Dependencies
+
+# Core dependencies
+z3-solver>=4.8.0        # Z3 SMT solver Python bindings
+msgpack>=1.0.0          # MessagePack serialization support (optional)
+
+# Development dependencies (optional)
+pytest>=6.0.0           # For testing the converter
+black>=21.0.0           # Code formatting
+mypy>=0.800             # Type checking

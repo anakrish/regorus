@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 use regorus::rvm::test_utils::test_round_trip_serialization;
 use regorus::rvm::{compiler::Compiler, vm::RegoVM};
+use regorus::type_analysis::{TypeAnalysisOptions, TypeAnalyzer};
 use regorus::*;
 
 use std::path::Path;
@@ -49,21 +50,33 @@ fn setup_engine(dir: &Path, case: &TestCase) -> Result<Engine> {
     Ok(engine)
 }
 
-fn eval_test_case_interpreter(dir: &Path, case: &TestCase) -> Result<Value> {
+fn eval_test_case_interpreter(dir: &Path, case: &TestCase) -> Result<(Value, Duration)> {
+    let setup_start = Instant::now();
     let mut engine = setup_engine(dir, case)?;
+    let setup_duration = setup_start.elapsed();
 
     // Use eval_rule instead of eval_query since we're evaluating specific rules
     let result = engine.eval_rule(case.query.clone())?;
 
     // Make result json compatible. (E.g: avoid sets).
-    Value::from_json_str(&result.to_string())
+    let value = Value::from_json_str(&result.to_string())?;
+    Ok((value, setup_duration))
 }
 
 fn eval_test_case_rvm(
     dir: &Path,
     case: &TestCase,
-) -> Result<(Value, Duration, Duration, Duration)> {
+) -> Result<(
+    Value,
+    Duration,
+    Duration,
+    Duration,
+    Duration,
+    Duration,
+)> {
+    let setup_start = Instant::now();
     let mut engine = setup_engine(dir, case)?;
+    let setup_duration = setup_start.elapsed();
 
     // Convert input and data for RVM
     let input = case.input.clone();
@@ -71,13 +84,26 @@ fn eval_test_case_rvm(
 
     // Create CompiledPolicy first (needed for RVM compiler)
     let rule = Rc::from(case.query.as_str());
+    let engine_compile_start = Instant::now();
+    let compiled_policy = engine.compile_with_entrypoint_without_analysis(&rule)?;
+    let engine_compile_duration = engine_compile_start.elapsed();
+
+    // Run type analysis explicitly for measurement (not reused in compilation below)
     let type_analysis_start = Instant::now();
-    let compiled_policy = engine.compile_with_entrypoint(&rule)?;
+    let mut options = TypeAnalysisOptions::default();
+    options.analyze_all_rules = true;
+    let modules = compiled_policy.get_modules();
+    let analyzer = TypeAnalyzer::new(modules, None, options);
+    let analysis_result = Rc::new(analyzer.analyze_modules());
     let type_analysis_duration = type_analysis_start.elapsed();
 
     // Use RVM compiler to create a program
     let compile_start = Instant::now();
-    let program = Compiler::compile_from_policy(&compiled_policy, &[&case.query])?;
+    let program = Compiler::compile_from_policy_with_analysis(
+        &compiled_policy,
+        Some(analysis_result.clone()),
+        &[&case.query],
+    )?;
 
     let compile_duration = compile_start.elapsed();
 
@@ -106,6 +132,8 @@ fn eval_test_case_rvm(
 
     Ok((
         value,
+        setup_duration,
+        engine_compile_duration,
         type_analysis_duration,
         compile_duration,
         execution_duration,
@@ -140,7 +168,8 @@ fn run_aci_tests(dir: &Path, filter: Option<&str>) -> Result<()> {
 
             // Test with interpreter
             let start = Instant::now();
-            let interpreter_results = eval_test_case_interpreter(dir, case)?;
+            let (interpreter_results, interpreter_setup_duration) =
+                eval_test_case_interpreter(dir, case)?;
             let interpreter_duration = start.elapsed();
 
             if interpreter_results != case.want_result {
@@ -161,8 +190,14 @@ fn run_aci_tests(dir: &Path, filter: Option<&str>) -> Result<()> {
 
             // Test with RVM
             let start = Instant::now();
-            let (rvm_results, type_analysis_duration, compile_duration, execution_duration) =
-                eval_test_case_rvm(dir, case)?;
+            let (
+                rvm_results,
+                rvm_setup_duration,
+                engine_compile_duration,
+                type_analysis_duration,
+                compile_duration,
+                execution_duration,
+            ) = eval_test_case_rvm(dir, case)?;
             let rvm_duration = start.elapsed();
 
             if interpreter_results != rvm_results {
@@ -182,8 +217,11 @@ fn run_aci_tests(dir: &Path, filter: Option<&str>) -> Result<()> {
             }
 
             print!(
-                "Interp: {:?}, TypeAnalysis: {:?}, RVMCompile: {:?}, RVMRun: {:?}, RVMTotal: {:?}\n",
+                "Interp: {:?} (setup: {:?}), RVM: {{ setup: {:?}, engine_compile: {:?}, type_analysis: {:?}, compiler: {:?}, run: {:?} }} total: {:?}\n",
                 interpreter_duration,
+                interpreter_setup_duration,
+                rvm_setup_duration,
+                engine_compile_duration,
                 type_analysis_duration,
                 compile_duration,
                 execution_duration,

@@ -1,0 +1,299 @@
+{
+  "builtin_info_table": [],
+  "entry_points": {
+    "data.test.allow": 0
+  },
+  "instruction_data": {
+    "array_create_params": [],
+    "builtin_call_params": [],
+    "chained_index_params": [],
+    "comprehension_begin_params": [],
+    "function_call_params": [],
+    "loop_params": [],
+    "object_create_params": [],
+    "set_create_params": [],
+    "virtual_data_document_lookup_params": []
+  },
+  "instruction_spans": [
+    {
+      "column": 0,
+      "length": 0,
+      "line": 0,
+      "source_index": 0
+    },
+    {
+      "column": 0,
+      "length": 0,
+      "line": 0,
+      "source_index": 0
+    },
+    {
+      "column": 7,
+      "length": 71,
+      "line": 3,
+      "source_index": 0
+    },
+    {
+      "column": 10,
+      "length": 10,
+      "line": 4,
+      "source_index": 0
+    },
+    {
+      "column": 10,
+      "length": 10,
+      "line": 4,
+      "source_index": 0
+    },
+    {
+      "column": 20,
+      "length": 6,
+      "line": 4,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 21,
+      "line": 4,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 21,
+      "line": 4,
+      "source_index": 0
+    },
+    {
+      "column": 10,
+      "length": 9,
+      "line": 5,
+      "source_index": 0
+    },
+    {
+      "column": 17,
+      "length": 2,
+      "line": 5,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 14,
+      "line": 5,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 14,
+      "line": 5,
+      "source_index": 0
+    },
+    {
+      "column": 10,
+      "length": 9,
+      "line": 6,
+      "source_index": 0
+    },
+    {
+      "column": 17,
+      "length": 2,
+      "line": 6,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 14,
+      "line": 6,
+      "source_index": 0
+    },
+    {
+      "column": 5,
+      "length": 14,
+      "line": 6,
+      "source_index": 0
+    },
+    {
+      "column": 1,
+      "length": 77,
+      "line": 3,
+      "source_index": 0
+    },
+    {
+      "column": 1,
+      "length": 77,
+      "line": 3,
+      "source_index": 0
+    },
+    {
+      "column": 7,
+      "length": 71,
+      "line": 3,
+      "source_index": 0
+    }
+  ],
+  "instructions": [
+    {
+      "CallRule": {
+        "dest": 1,
+        "rule_index": 0
+      }
+    },
+    {
+      "Return": {
+        "value": 1
+      }
+    },
+    {
+      "RuleInit": {
+        "result_reg": 0,
+        "rule_index": 0
+      }
+    },
+    {
+      "LoadInput": {
+        "dest": 1
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 1,
+        "dest": 2,
+        "literal_idx": 0
+      }
+    },
+    {
+      "Load": {
+        "dest": 3,
+        "literal_idx": 1
+      }
+    },
+    {
+      "Eq": {
+        "dest": 4,
+        "left": 2,
+        "right": 3
+      }
+    },
+    {
+      "AssertCondition": {
+        "condition": 4
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 1,
+        "dest": 5,
+        "literal_idx": 2
+      }
+    },
+    {
+      "Load": {
+        "dest": 6,
+        "literal_idx": 3
+      }
+    },
+    {
+      "Gt": {
+        "dest": 7,
+        "left": 5,
+        "right": 6
+      }
+    },
+    {
+      "AssertCondition": {
+        "condition": 7
+      }
+    },
+    {
+      "IndexLiteral": {
+        "container": 1,
+        "dest": 8,
+        "literal_idx": 2
+      }
+    },
+    {
+      "Load": {
+        "dest": 9,
+        "literal_idx": 4
+      }
+    },
+    {
+      "Lt": {
+        "dest": 10,
+        "left": 8,
+        "right": 9
+      }
+    },
+    {
+      "AssertCondition": {
+        "condition": 10
+      }
+    },
+    {
+      "LoadBool": {
+        "dest": 11,
+        "value": true
+      }
+    },
+    {
+      "Move": {
+        "dest": 0,
+        "src": 11
+      }
+    },
+    {
+      "RuleReturn": {}
+    }
+  ],
+  "literals": [
+    "type",
+    "Person",
+    "age",
+    20,
+    25
+  ],
+  "metadata": {
+    "compiled_at": "unknown",
+    "compiler_version": "0.5.0",
+    "needs_recompilation": false,
+    "needs_runtime_recursion_check": false,
+    "optimization_level": 0,
+    "rego_v0": false,
+    "source_info": "unknown"
+  },
+  "program_structure": {
+    "dispatch_window_size": 2,
+    "main_entry_point": 0,
+    "max_rule_window_size": 12
+  },
+  "rule_infos": [
+    {
+      "default_literal_index": null,
+      "definitions": [
+        [
+          2
+        ]
+      ],
+      "destructuring_blocks": [
+        null
+      ],
+      "function_info": null,
+      "name": "data.test.allow",
+      "num_registers": 12,
+      "result_reg": 0,
+      "rule_type": "Complete"
+    }
+  ],
+  "rule_tree": {
+    "data": {
+      "test": {
+        "allow": 0
+      }
+    }
+  },
+  "sources": [
+    {
+      "content": "package test\n\nallow if {\n    input.type == \"Person\"\n    input.age > 20\n    input.age < 25\n}",
+      "name": "simple.rego"
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+[console_scripts]
+regorus-smt = regorus_smt.cli:main

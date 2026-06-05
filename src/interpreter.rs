@@ -3493,6 +3493,7 @@ impl Interpreter {
         // Set input and data to undefined as requested by the user
         self.input = Value::Undefined;
         self.data = Value::Undefined;
+        self.ensure_loop_var_values_capacity();
 
         // Get default rules for this rule path
         let default_rules = self.compiled_policy.default_rules.get(rule_path).cloned();
@@ -4204,6 +4205,21 @@ impl Interpreter {
     }
 
     pub fn compile(&mut self, rule: Option<Rc<str>>) -> Result<Rc<CompiledPolicyData>> {
+        self.compile_internal(rule, true)
+    }
+
+    pub fn compile_without_type_analysis(
+        &mut self,
+        rule: Option<Rc<str>>,
+    ) -> Result<Rc<CompiledPolicyData>> {
+        self.compile_internal(rule, false)
+    }
+
+    fn compile_internal(
+        &mut self,
+        rule: Option<Rc<str>>,
+        run_type_analysis: bool,
+    ) -> Result<Rc<CompiledPolicyData>> {
         let data = Some(self.init_data.clone());
         let extensions = self.extensions.clone();
         let compiled_policy = self.compiled_policy_mut();
@@ -4229,24 +4245,27 @@ impl Interpreter {
         let loop_lookup = hoister.populate(compiled_policy.modules.as_ref())?;
         compiled_policy.loop_hoisting_table = loop_lookup;
 
-        // Run type analysis and cache the result alongside the hoist lookup
-        let mut options = TypeAnalysisOptions::default();
-        options.loop_lookup = Some(crate::Rc::new(compiled_policy.loop_hoisting_table.clone()));
+        if run_type_analysis {
+            // Run type analysis and cache the result alongside the hoist lookup
+            let mut options = TypeAnalysisOptions::default();
+            options.loop_lookup = Some(crate::Rc::new(compiled_policy.loop_hoisting_table.clone()));
 
-        if let Some(rule_path) = entry_rule
-            .as_ref()
-            .map(|rc| rc.as_ref())
-            .filter(|path| path.starts_with("data."))
-        {
-            options.entrypoints = Some(vec![rule_path.to_string()]);
+            if let Some(rule_path) = entry_rule
+                .as_ref()
+                .map(|rc| rc.as_ref())
+                .filter(|path| path.starts_with("data."))
+            {
+                options.entrypoints = Some(vec![rule_path.to_string()]);
+            }
+
+            let schedule = compiled_policy
+                .schedule
+                .as_ref()
+                .map(|schedule| schedule.as_ref());
+            let analyzer = TypeAnalyzer::new(compiled_policy.modules.as_ref(), schedule, options);
+            compiled_policy.type_analysis_result =
+                Some(crate::Rc::new(analyzer.analyze_modules()));
         }
-
-        let schedule = compiled_policy
-            .schedule
-            .as_ref()
-            .map(|schedule| schedule.as_ref());
-        let analyzer = TypeAnalyzer::new(compiled_policy.modules.as_ref(), schedule, options);
-        compiled_policy.type_analysis_result = Some(crate::Rc::new(analyzer.analyze_modules()));
 
         Ok(self.compiled_policy.clone())
     }

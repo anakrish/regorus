@@ -1,0 +1,231 @@
+# RVM to Z3 Converter
+
+This directory contains a Python-based converter that translates RVM (Rego Virtual Machine) programs into Z3 SMT-LIB format for formal verification and policy analysis.
+
+## Overview
+
+The converter handles all RVM instructions except `VirtualDataDocumentLookup` (as requested), providing a complete mapping to Z3 SMT solver format. This enables formal verification of Rego policies by converting them to logical constraints that can be analyzed by the Z3 theorem prover.
+
+## Files
+
+- **`converter.py`** - Main converter script and entry point
+- **`instruction_handlers.py`** - Individual RVM instruction conversion logic
+- **`z3_utils.py`** - Z3 sort definitions, register modeling, and utilities
+- **`requirements.txt`** - Python package dependencies
+- **`mod.rs`** - Rust module declaration
+- **`README.md`** - This documentation
+
+## Installation
+
+1. Install Python dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+## Usage
+
+### Basic Usage
+
+Convert an RVM program to Z3 SMT-LIB format:
+
+```bash
+python converter.py program.rvm
+```
+
+### Options
+
+- **`--output, -o`** - Specify output file (default: stdout)
+- **`--format, -f`** - Output format: `smt2` (SMT-LIB) or `python` (Python Z3 API)
+- **`--verbose, -v`** - Enable verbose logging
+- **`--help, -h`** - Show help message
+
+### Examples
+
+```bash
+# Convert to SMT-LIB format and save to file
+python converter.py program.rvm -o program.smt2
+
+# Convert to Python Z3 API format
+python converter.py program.rvm -f python -o program_z3.py
+
+# Verbose conversion with detailed logging
+python converter.py program.rvm -v
+```
+
+## Input Formats
+
+The converter accepts RVM programs in the following formats:
+
+1. **MessagePack** - Binary serialized RVM programs (preferred)
+2. **JSON** - Text-based RVM program representation (fallback)
+
+## Output Formats
+
+### SMT-LIB 2.0 Format (`smt2`)
+
+Generates standard SMT-LIB format that can be consumed by Z3 and other SMT solvers:
+
+```smt2
+; RVM to Z3 Conversion
+(set-logic QF_UF)
+(declare-sort RegoValue 0)
+(declare-fun R0 () RegoValue)
+(declare-fun rego_add (RegoValue RegoValue) RegoValue)
+(assert (= R0 (rego_add R1 R2)))
+(check-sat)
+(get-model)
+```
+
+### Python Z3 API Format (`python`)
+
+Generates Python code using the Z3 Python bindings:
+
+```python
+#!/usr/bin/env python3
+from z3 import *
+
+solver = Solver()
+RegoValue = DeclareSort('RegoValue')
+R0 = Const('R0', RegoValue)
+rego_add = Function('rego_add', RegoValue, RegoValue, RegoValue)
+solver.add(R0 == rego_add(R1, R2))
+
+result = solver.check()
+if result == sat:
+    print(solver.model())
+```
+
+## RVM Instruction Coverage
+
+The converter handles all RVM instructions except `VirtualDataDocumentLookup`:
+
+### Load Instructions
+- `Load` - Load literal values
+- `LoadTrue`, `LoadFalse`, `LoadNull`, `LoadBool` - Load constants
+- `LoadData`, `LoadInput` - Load global data/input
+
+### Arithmetic Operations
+- `Add`, `Sub`, `Mul`, `Div`, `Mod` - Mathematical operations
+
+### Comparison Operations
+- `Eq`, `Ne`, `Lt`, `Le`, `Gt`, `Ge` - Comparison operations
+
+### Logical Operations
+- `And`, `Or`, `Not` - Boolean logic
+
+### Collection Operations
+- `ArrayNew`, `ArrayPush`, `ArrayCreate` - Array operations
+- `SetNew`, `SetAdd`, `SetCreate` - Set operations
+- `ObjectSet`, `ObjectCreate` - Object operations
+- `Index`, `IndexLiteral`, `ChainedIndex` - Indexing operations
+- `Contains`, `Count` - Collection queries
+
+### Control Flow
+- `CallRule`, `RuleInit`, `RuleReturn` - Rule management
+- `BuiltinCall`, `FunctionCall` - Function calls
+- `Return`, `Halt` - Program control
+
+### Assertions and Validation
+- `AssertCondition`, `AssertNotUndefined` - Runtime checks
+- `DestructuringSuccess` - Parameter validation
+
+### Loop Operations
+- `LoopStart`, `LoopNext` - Iteration control
+
+### Data Movement
+- `Move` - Register-to-register movement
+
+## Z3 Modeling
+
+### Rego Value Model
+
+The converter models Rego values using uninterpreted sorts and functions:
+
+- **`RegoValue`** - Base sort for all Rego values
+- **`rego_undefined`** - Special undefined value
+- **`rego_null`**, **`rego_true`**, **`rego_false`** - Basic constants
+
+### Undefined Semantics
+
+Rego's undefined propagation is modeled through axioms:
+
+```smt2
+; Undefined propagates through arithmetic
+(assert (forall ((x RegoValue) (y RegoValue))
+  (=> (or (= x rego_undefined) (= y rego_undefined))
+      (= (rego_add x y) rego_undefined))))
+```
+
+### Register Model
+
+RVM registers are modeled as Z3 constants:
+
+```smt2
+(declare-fun R0 () RegoValue)
+(declare-fun R1 () RegoValue)
+; ... additional registers as needed
+```
+
+## Verification Workflow
+
+1. **Convert RVM to Z3**: Use this converter to translate RVM programs
+2. **Add Properties**: Add assertions about desired policy properties
+3. **Check Satisfiability**: Use Z3 to verify properties or find counterexamples
+4. **Analyze Results**: Interpret Z3 model or proof results
+
+### Example Property Verification
+
+```smt2
+; Convert RVM program
+; ... (generated constraints)
+
+; Add property: policy should never allow unauthorized access  
+(assert (not (= policy_result rego_true)))
+
+; Check if property can be violated
+(check-sat)
+; If SAT: counterexample exists (policy can be bypassed)
+; If UNSAT: property holds (policy is secure)
+```
+
+## Limitations
+
+1. **`VirtualDataDocumentLookup`** - This instruction is intentionally not converted
+2. **Parameter Tables** - Complex parameter lookups are simplified in current implementation
+3. **Builtin Functions** - Specific builtin semantics may need custom modeling
+4. **Performance** - Large RVM programs may generate complex Z3 formulas
+
+## Extension Points
+
+To extend the converter:
+
+1. **Add Instruction Handler** - Implement new conversion in `instruction_handlers.py`
+2. **Add Z3 Functions** - Define new sorts/functions in `z3_utils.py`
+3. **Add Axioms** - Include semantic constraints in `Z3RegoModel`
+
+## Integration with Regorus
+
+This converter is designed to work with RVM programs generated by the Regorus compiler. It can process both MessagePack-serialized programs (using the new serialization features) and JSON representations.
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Missing Dependencies**: Install required packages with `pip install -r requirements.txt`
+2. **Import Errors**: Ensure all Python files are in the same directory
+3. **MessagePack Issues**: Falls back to JSON if MessagePack is unavailable
+4. **Z3 Errors**: Check Z3 syntax in generated output with `z3 -smt2 output.smt2`
+
+### Verbose Mode
+
+Use `-v` flag for detailed conversion logging:
+
+```bash
+python converter.py program.rvm -v
+```
+
+This shows:
+- Which instructions are being processed
+- Generated Z3 constraints
+- Register creation
+- Any conversion warnings or errors

@@ -2023,6 +2023,16 @@ impl<'a> Compiler<'a> {
         Self::compile_from_policy_with_analysis(policy, None, entry_points)
     }
 
+    /// Compile without either running or consuming type analysis metadata. Primarily intended
+    /// for tests that want to measure the baseline compiler behaviour without analyzer support.
+    pub fn compile_from_policy_without_analysis(
+        policy: &CompiledPolicy,
+        entry_points: &[&str],
+    ) -> Result<Arc<Program>> {
+        let compiler = Compiler::with_policy(policy);
+        Self::compile_with_entrypoints(compiler, policy, entry_points)
+    }
+
     fn analyze_policy_for_entrypoints(
         policy: &CompiledPolicy,
         entry_points: &[&str],
@@ -3287,9 +3297,58 @@ impl<'a> Compiler<'a> {
                 .map_err(|_| CompilerError::InvalidFunctionExpressionWithPackage)?
         };
 
+        let declared_arity =
+            self.lookup_declared_arg_count(&original_fcn_path, &full_fcn_path);
+
+        let mut output_binding_plan: Option<BindingPlan> = None;
+        let mut equality_check_expr: Option<ExprRef> = None;
+        let mut effective_params = params;
+
+        if let Some(declared_arity) = declared_arity {
+            if params.len() == declared_arity + 1 {
+                let output_expr = params.last().ok_or_else(|| CompilerError::General {
+                    message: format!(
+                        "function '{}' is declared with {} parameters but received {}",
+                        original_fcn_path,
+                        declared_arity,
+                        params.len()
+                    ),
+                })?;
+
+                let binding_plan = self.expect_binding_plan_for_expr(
+                    output_expr,
+                    "function call output argument",
+                )?;
+                let plan_binds_vars = !binding_plan.bound_vars().is_empty();
+                match binding_plan {
+                    BindingPlan::Parameter { .. } => {
+                        output_binding_plan = Some(binding_plan);
+                    }
+                    other => {
+                        if plan_binds_vars {
+                            return Err(CompilerError::UnexpectedBindingPlan {
+                                context: "function call output argument".to_string(),
+                                found: format!("{other:?}"),
+                            });
+                        }
+                        equality_check_expr = Some(output_expr.clone());
+                    }
+                }
+
+                effective_params = &params[..params.len() - 1];
+            }
+        } else if let Some(last_param) = params.last() {
+            if let Some(binding_plan) = self.get_binding_plan_for_expr(last_param) {
+                if matches!(binding_plan, BindingPlan::Parameter { .. }) {
+                    output_binding_plan = Some(binding_plan);
+                    effective_params = &params[..params.len() - 1];
+                }
+            }
+        }
+
         // Compile all parameter expressions first
         let mut arg_regs = Vec::new();
-        for param in params.iter() {
+        for param in effective_params.iter() {
             let param_reg = self.compile_rego_expr_with_span(param, param.span(), false)?;
             arg_regs.push(param_reg);
         }
@@ -3348,7 +3407,51 @@ impl<'a> Compiler<'a> {
             });
         }
 
-        Ok(dest)
+        if let Some(binding_plan) = output_binding_plan {
+            self.apply_binding_plan(&binding_plan, dest, &span)?;
+            let success_register = self.alloc_register();
+            self.emit_instruction(
+                Instruction::LoadBool {
+                    dest: success_register,
+                    value: true,
+                },
+                &span,
+            );
+            Ok(success_register)
+        } else if let Some(equality_expr) = equality_check_expr {
+            let expected_reg =
+                self.compile_rego_expr_with_span(&equality_expr, equality_expr.span(), false)?;
+            let cmp_reg = self.alloc_register();
+            self.emit_instruction(
+                Instruction::Eq {
+                    dest: cmp_reg,
+                    left: dest,
+                    right: expected_reg,
+                },
+                &span,
+            );
+            Ok(cmp_reg)
+        } else {
+            Ok(dest)
+        }
+    }
+
+    fn lookup_declared_arg_count(&self, original_path: &str, full_path: &str) -> Option<usize> {
+        if let Some((_, count, _)) = self.policy.inner.functions.get(full_path) {
+            return Some(*count as usize);
+        }
+
+        if let Some((_, count, _)) = self.policy.inner.functions.get(original_path) {
+            return Some(*count as usize);
+        }
+
+        if original_path == "print" {
+            return None;
+        }
+
+        builtins::BUILTINS
+            .get(original_path)
+            .map(|(_, count)| *count as usize)
     }
 
     /// Evaluate simple literal default rules and store results in literal table

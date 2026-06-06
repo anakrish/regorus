@@ -378,10 +378,9 @@ impl RegoVM {
                 let has_next =
                     self.setup_next_iteration(&mut iteration_state, key_reg, value_reg)?;
 
-                // `setup_next_iteration` advances Object's internal cursor;
-                // the owning frame holds the iteration_state, so we must
-                // write the updated state back. (Array/Set are unchanged by
-                // the call, so the writeback is uniform.)
+                // `setup_next_iteration` advances the iteration cursor; the
+                // owning frame holds the iteration_state, so we must write the
+                // updated state back.
                 if let Some(frame) = self.execution_stack.last_mut() {
                     if let FrameKind::Loop {
                         ref mut context, ..
@@ -445,8 +444,8 @@ impl RegoVM {
                     return Ok(None);
                 }
                 Ok(Some(IterationState::Array {
-                    items: items.clone(),
-                    index: 0,
+                    cursor: items.cursor(),
+                    arr: items.clone(),
                 }))
             }
             Value::Object(ref obj) => {
@@ -530,20 +529,15 @@ impl RegoVM {
     ) -> Result<bool> {
         match *state {
             IterationState::Array {
-                ref items,
-                ref index,
+                ref arr,
+                ref mut cursor,
             } => {
-                if *index < items.len() {
+                if let Some((index, value)) = arr.next(cursor) {
                     if key_reg != value_reg {
-                        let key_value = Value::from(*index);
-                        self.set_register(key_reg, key_value)?;
+                        self.set_register(key_reg, Value::from(index))?;
                     }
-                    if let Some(item_value) = items.get(*index).cloned() {
-                        self.set_register(value_reg, item_value)?;
-                        Ok(true)
-                    } else {
-                        Ok(false)
-                    }
+                    self.set_register(value_reg, value.clone())?;
+                    Ok(true)
                 } else {
                     Ok(false)
                 }

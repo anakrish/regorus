@@ -12,6 +12,7 @@ use core::fmt;
 use core::ops;
 
 use crate::value::Value;
+use crate::Rc;
 
 #[cfg(feature = "rvm")]
 #[allow(unused_imports)] // surface for downstream PRs
@@ -175,7 +176,7 @@ impl Array {
     /// Wrap into a `Value::Array`.
     #[inline]
     pub fn into_value(self) -> Value {
-        Value::Array(crate::Rc::new(self.inner))
+        Value::Array(Rc::new(self))
     }
 
     /// Create a resumable cursor over elements in sequence order. O(1).

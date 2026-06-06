@@ -2,8 +2,7 @@
 // Licensed under the MIT License.
 
 use crate::rvm::instructions::{ComprehensionBeginParams, ComprehensionMode};
-use crate::value::Object;
-use crate::value::Value;
+use crate::value::{Object, Value};
 use crate::Rc;
 use alloc::format;
 use alloc::sync::Arc;
@@ -46,7 +45,10 @@ impl RegoVM {
                     if items.is_empty() {
                         None
                     } else {
-                        Some(IterationState::Array { items, index: 0 })
+                        Some(IterationState::Array {
+                            cursor: items.cursor(),
+                            arr: items,
+                        })
                     }
                 }
                 Value::Object(obj) => {
@@ -133,7 +135,10 @@ impl RegoVM {
                     if items.is_empty() {
                         None
                     } else {
-                        Some(IterationState::Array { items, index: 0 })
+                        Some(IterationState::Array {
+                            cursor: items.cursor(),
+                            arr: items,
+                        })
                     }
                 }
                 Value::Object(obj) => {
@@ -483,16 +488,15 @@ impl RegoVM {
         if let Some(mut state) = iteration_state_snapshot {
             let has_next = self.setup_next_iteration(&mut state, key_reg_idx, value_reg_idx)?;
 
-            // `setup_next_iteration` advances Object's internal cursor; the
+            // `setup_next_iteration` advances the iteration cursor; the
             // owning frame holds the iteration_state, so we must write the
-            // updated state back. (The Array/Set variants are also unchanged
-            // by copy, so the writeback is uniform.)
+            // updated state back.
             if let Some(frame) = self.execution_stack.get_mut(comprehension_index) {
                 if let FrameKind::Comprehension {
                     ref mut context, ..
                 } = frame.kind
                 {
-                    context.iteration_state = Some(state);
+                    context.iteration_state = Some(state.clone());
                 }
             }
 

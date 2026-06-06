@@ -208,7 +208,7 @@ impl MetadataValue {
             MetadataValue::Integer(n) => Value::from(n),
             MetadataValue::List(ref list) => {
                 let values: Vec<Value> = list.iter().map(MetadataValue::to_value).collect();
-                Value::Array(Rc::new(values))
+                Value::from(crate::value::Array::from(values))
             }
             MetadataValue::Map(ref map) => {
                 let mut obj = Object::new();

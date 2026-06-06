@@ -337,7 +337,10 @@ fn push_query_results(query_results: QueryResults, results: &mut Vec<Value>) {
                 results.push(r.bindings.clone());
             } else {
                 results.push(Value::from_array(
-                    r.expressions.iter().map(|e| e.value.clone()).collect(),
+                    r.expressions
+                        .iter()
+                        .map(|e| e.value.clone())
+                        .collect::<Vec<_>>(),
                 ));
             }
         }

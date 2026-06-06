@@ -2260,7 +2260,7 @@ impl Interpreter {
                     let key = self.eval_expr(key)?;
                     collection[&key] == value
                 } else {
-                    array.contains(&value)
+                    array.iter().any(|item| item == &value)
                 }
             }
             Value::Object(object) => {
@@ -3733,7 +3733,7 @@ impl Interpreter {
                         if value != Value::Undefined {
                             for (path, value_in_map) in value.as_object()? {
                                 let mut full_path = package_components.clone();
-                                full_path.append(&mut path.as_array()?.clone());
+                                full_path.extend(path.as_array()?.iter().cloned());
                                 self.check_rule_path(refr, &full_path, value_in_map, is_set)?;
                                 self.update_rule_value(
                                     span,

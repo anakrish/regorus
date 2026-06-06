@@ -59,12 +59,12 @@ fn fn_intersection(
     match *first {
         Value::Array(ref first) => {
             // Intersection of arrays: keep elements from first that appear in all others.
-            let mut result: Vec<Value> = first.as_ref().clone();
+            let mut result: Vec<Value> = first.iter().cloned().collect();
             for arg in rest {
                 let Value::Array(ref other) = *arg else {
                     return Ok(Value::Undefined);
                 };
-                result.retain(|item| other.contains(item));
+                result.retain(|item| other.iter().any(|other_item| other_item == item));
             }
             Ok(Value::from(result))
         }
@@ -149,7 +149,9 @@ fn fn_take(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -
     match *original {
         Value::Array(ref arr) => {
             let n = count.min(arr.len());
-            Ok(Value::from(arr.get(..n).unwrap_or_default().to_vec()))
+            Ok(Value::from(
+                arr.as_slice().get(..n).unwrap_or_default().to_vec(),
+            ))
         }
         Value::String(ref s) => {
             let taken: alloc::string::String = s.chars().take(count).collect();
@@ -172,7 +174,9 @@ fn fn_skip(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -
     match *original {
         Value::Array(ref arr) => {
             let n = count.min(arr.len());
-            Ok(Value::from(arr.get(n..).unwrap_or_default().to_vec()))
+            Ok(Value::from(
+                arr.as_slice().get(n..).unwrap_or_default().to_vec(),
+            ))
         }
         Value::String(ref s) => {
             let skipped: alloc::string::String = s.chars().skip(count).collect();

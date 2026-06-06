@@ -701,14 +701,14 @@ fn array_sort_dedup_and_reverse() {
 #[test]
 fn array_conversions_to_value() {
     let array = Array::from_iter([val(1), val(2), val(3)]);
-    let expected = Value::Array(crate::Rc::new(vec![val(1), val(2), val(3)]));
+    let expected = Value::from(Array::from_iter([val(1), val(2), val(3)]));
     let value_from_impl = Value::from(array.clone());
     assert_eq!(value_from_impl, expected);
 
     let value_from_method = array.into_value();
     assert_eq!(
         value_from_method,
-        Value::Array(crate::Rc::new(vec![val(1), val(2), val(3)]))
+        Value::from(Array::from_iter([val(1), val(2), val(3)]))
     );
 }
 

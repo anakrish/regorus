@@ -41,7 +41,7 @@ impl<'de> Deserialize<'de> for ValueOrVec {
         let value = Value::deserialize(deserializer)?;
 
         match &value["many!"] {
-            Value::Array(arr) => Ok(ValueOrVec::Many(arr.to_vec())),
+            Value::Array(arr) => Ok(ValueOrVec::Many(arr.as_slice().to_vec())),
             _ => Ok(ValueOrVec::Single(value)),
         }
     }

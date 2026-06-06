@@ -188,7 +188,7 @@ fn reachable_paths(
 fn walk_visit(path: &mut Vec<Value>, value: &Value, paths: &mut Vec<Value>) -> Result<()> {
     {
         let path = Value::from_array(path.clone());
-        paths.push(Value::from_array([path, value.clone()].into()));
+        paths.push(Value::from_array(Vec::from([path, value.clone()])));
         // Guard walk result growth when emitting a new path/value pair.
         enforce_limit()?;
     }

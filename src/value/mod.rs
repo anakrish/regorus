@@ -19,6 +19,9 @@ mod tests;
 
 #[allow(unused_imports)] // surface for downstream PRs
 pub use array::Array;
+#[cfg(feature = "rvm")]
+#[allow(unused_imports)] // surface for downstream PRs
+pub use array::Cursor as ArrayCursor;
 #[allow(unused_imports)] // surface for downstream PRs
 pub use object::{IntoIter, Iter, IterMut, Object};
 
@@ -69,7 +72,7 @@ pub enum Value {
     String(Rc<str>),
 
     /// JSON array.
-    Array(Rc<Vec<Value>>),
+    Array(Rc<Array>),
 
     /// A set of values.
     /// No JSON equivalent.
@@ -210,7 +213,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
     where
         V: SeqAccess<'de>,
     {
-        let mut arr = vec![];
+        let mut arr = Array::new();
         while let Some(v) = visitor.next_element()? {
             arr.push(v);
             // Enforce allocator limit while expanding a deserialized array.
@@ -291,7 +294,7 @@ impl Value {
     /// # }
     /// ```
     pub fn new_array() -> Value {
-        Value::from(vec![])
+        Value::from(Array::new())
     }
 
     /// Create an empty [`Value::Object`]
@@ -761,7 +764,7 @@ impl From<Vec<Value>> for Value {
     /// # Ok(())
     /// # }
     fn from(a: Vec<Value>) -> Self {
-        Value::Array(Rc::new(a))
+        Value::Array(Rc::new(Array::from(a)))
     }
 }
 
@@ -809,8 +812,8 @@ impl From<BTreeMap<Value, Value>> for Value {
 }
 
 impl Value {
-    pub(crate) fn from_array(a: Vec<Value>) -> Value {
-        Value::from(a)
+    pub(crate) fn from_array<A: Into<Array>>(a: A) -> Value {
+        Value::from(a.into())
     }
 
     pub(crate) fn from_set(s: BTreeSet<Value>) -> Value {
@@ -1211,7 +1214,7 @@ impl Value {
         }
     }
 
-    /// Cast value to [`& Vec<Value>`] if [`Value::Array`].
+    /// Cast value to [`& Array`] if [`Value::Array`].
     /// ```
     /// # use regorus::*;
     /// # fn main() -> anyhow::Result<()> {
@@ -1219,14 +1222,14 @@ impl Value {
     /// assert_eq!(v.as_array()?[0], Value::from("Hello"));
     /// # Ok(())
     /// # }
-    pub fn as_array(&self) -> Result<&Vec<Value>> {
+    pub fn as_array(&self) -> Result<&Array> {
         match self {
             Value::Array(a) => Ok(a),
             _ => Err(anyhow!("not an array")),
         }
     }
 
-    /// Cast value to [`&mut Vec<Value>`] if [`Value::Array`].
+    /// Cast value to [`&mut Array`] if [`Value::Array`].
     /// ```
     /// # use regorus::*;
     /// # fn main() -> anyhow::Result<()> {
@@ -1234,7 +1237,7 @@ impl Value {
     /// v.as_array_mut()?.push(Value::from("World"));
     /// # Ok(())
     /// # }
-    pub fn as_array_mut(&mut self) -> Result<&mut Vec<Value>> {
+    pub fn as_array_mut(&mut self) -> Result<&mut Array> {
         match self {
             Value::Array(a) => Ok(Rc::make_mut(a)),
             _ => Err(anyhow!("not an array")),

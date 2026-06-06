@@ -12,9 +12,8 @@ use alloc::vec::Vec;
 
 use hashbrown::HashMap;
 
-use crate::value::Object;
+use crate::value::{Array, Object, Value};
 use crate::Rc;
-use crate::Value;
 
 /// A string-keyed map of JSON values.
 ///
@@ -93,7 +92,7 @@ pub fn make_value(map: ObjMap) -> Value {
 
 /// Convert a `Vec<Value>` into a `Value::Array`.
 pub fn make_array(items: Vec<Value>) -> Value {
-    Value::Array(Rc::new(items))
+    Value::from(Array::from(items))
 }
 
 /// Extract a `&str` from a `Value::String`.

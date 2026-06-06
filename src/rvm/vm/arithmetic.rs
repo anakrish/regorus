@@ -7,7 +7,7 @@
 #![allow(clippy::pattern_type_mismatch, clippy::needless_borrowed_reference)]
 
 use crate::number::Number;
-use crate::value::Value;
+use crate::value::{Set, Value};
 
 use super::errors::{Result, VmError};
 use super::machine::RegoVM;
@@ -30,8 +30,7 @@ impl RegoVM {
         match (a, b) {
             (&Value::Number(ref x), &Value::Number(ref y)) => Ok(Value::from(x.sub(y)?)),
             (&Value::Set(ref left), &Value::Set(ref right)) => {
-                let diff: alloc::collections::BTreeSet<Value> =
-                    left.difference(right).cloned().collect();
+                let diff: Set = left.difference(right);
                 Ok(Value::from(diff))
             }
             _ => Err(VmError::InvalidSubtraction {

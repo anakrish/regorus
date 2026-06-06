@@ -158,7 +158,7 @@ impl Set {
     /// Wrap into a `Value::Set`.
     #[inline]
     pub fn into_value(self) -> Value {
-        Value::Set(crate::Rc::new(self.inner))
+        Value::Set(crate::Rc::new(self))
     }
 
     /// Create a resumable cursor over elements in implementation-defined

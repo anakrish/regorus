@@ -11,9 +11,8 @@ use crate::ast::{Expr, ExprRef};
 use crate::lexer::Span;
 use crate::rvm::instructions::{ArrayCreateParams, ObjectCreateParams, SetCreateParams};
 use crate::rvm::Instruction;
-use crate::value::Object;
+use crate::value::{Object, Set};
 use crate::{Rc, Value};
-use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
 /// Try to evaluate an expression as a compile-time constant.
@@ -39,8 +38,8 @@ pub(in crate::languages::rego::compiler) fn try_eval_const(expr: &Expr) -> Optio
         Expr::Set { items, .. } => items
             .iter()
             .map(|i| try_eval_const(i.as_ref()))
-            .collect::<Option<BTreeSet<_>>>()
-            .map(|s| Value::Set(Rc::new(s))),
+            .collect::<Option<Set>>()
+            .map(Value::from),
         Expr::Object { fields, .. } => fields
             .iter()
             .map(|(_, k, v)| Some((try_eval_const(k.as_ref())?, try_eval_const(v.as_ref())?)))
@@ -88,11 +87,10 @@ impl<'a> Compiler<'a> {
         items: &[ExprRef],
         span: &Span,
     ) -> Result<Register> {
-        let all_const: Option<BTreeSet<_>> =
-            items.iter().map(|i| try_eval_const(i.as_ref())).collect();
+        let all_const: Option<Set> = items.iter().map(|i| try_eval_const(i.as_ref())).collect();
         if let Some(values) = all_const {
             let dest = self.alloc_register();
-            let literal_idx = self.add_literal(Value::Set(Rc::new(values)));
+            let literal_idx = self.add_literal(Value::from(values));
             self.emit_instruction(Instruction::Load { dest, literal_idx }, span);
             return Ok(dest);
         }

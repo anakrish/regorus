@@ -7,19 +7,28 @@ mod iter;
 mod serde;
 
 use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::fmt;
 use core::ops::Bound;
+
+use smallvec::SmallVec;
 
 use crate::value::Value;
 
 pub use iter::{IntoIter, Iter, IterMut};
 
+/// Inline capacity for the small-object representation. SARIF workload
+/// averages 1.65 fields per object, so 4 covers the vast majority of objects
+/// without spilling. Above this, we promote to a `BTreeMap`.
+pub(super) const INLINE_CAP: usize = 4;
+
 /// Opaque, ordered key-value map keyed by [`Value`].
 ///
-/// The current backing storage is `BTreeMap<Value, Value>`. The inner field
-/// is private so the representation can change (two-tier inline+hash, lazy,
-/// schema-shared) without touching call sites.
+/// Backed by a two-tier representation: small objects live in an inline
+/// `SmallVec` (kept sorted by `Value::Ord`); larger ones promote to
+/// `BTreeMap`. The representation is private so it can change without
+/// touching call sites.
 ///
 /// # Iteration
 ///
@@ -28,54 +37,81 @@ pub use iter::{IntoIter, Iter, IterMut};
 /// - [`Object::cursor`] / [`Object::next`] — implementation-defined order,
 ///   resumable; cheapest per-step cost. Used by interpreter/RVM when iteration
 ///   must yield mid-flight.
-#[derive(Default, Clone, Eq, PartialEq)]
+#[derive(Default, Clone)]
 pub struct Object {
-    inner: BTreeMap<Value, Value>,
+    repr: Repr,
+}
+
+#[derive(Clone)]
+pub(super) enum Repr {
+    /// Sorted-by-key, deduplicated entries. Kept sorted so iteration and
+    /// `iter_sorted` are the same and binary search is O(log n).
+    Inline(SmallVec<[(Value, Value); INLINE_CAP]>),
+    BTree(BTreeMap<Value, Value>),
+}
+
+impl Default for Repr {
+    #[inline]
+    fn default() -> Self {
+        Repr::Inline(SmallVec::new())
+    }
 }
 
 impl Object {
     /// Create an empty `Object`.
     #[inline]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
-            inner: BTreeMap::new(),
+            repr: Repr::Inline(SmallVec::new()),
         }
     }
 
     #[inline]
     pub fn len(&self) -> usize {
-        self.inner.len()
+        match &self.repr {
+            Repr::Inline(v) => v.len(),
+            Repr::BTree(m) => m.len(),
+        }
     }
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.len() == 0
     }
 
-    #[inline]
     pub fn get(&self, key: &Value) -> Option<&Value> {
-        self.inner.get(key)
+        match &self.repr {
+            Repr::Inline(v) => match v.binary_search_by(|(k, _)| k.cmp(key)) {
+                Ok(i) => Some(&v[i].1),
+                Err(_) => None,
+            },
+            Repr::BTree(m) => m.get(key),
+        }
     }
 
     #[inline]
     pub fn contains_key(&self, key: &Value) -> bool {
-        self.inner.contains_key(key)
+        self.get(key).is_some()
     }
 
-    #[inline]
     pub fn get_mut(&mut self, key: &Value) -> Option<&mut Value> {
-        self.inner.get_mut(key)
+        match &mut self.repr {
+            Repr::Inline(v) => match v.binary_search_by(|(k, _)| k.cmp(key)) {
+                Ok(i) => Some(&mut v[i].1),
+                Err(_) => None,
+            },
+            Repr::BTree(m) => m.get_mut(key),
+        }
     }
 
     /// Iteration in implementation-defined order. Non-resumable.
     ///
-    /// For the current BTree-backed storage this happens to be sorted, but
-    /// callers MUST NOT depend on that. Use [`Object::iter_sorted`] when
+    /// For both current backends this happens to be sorted by `Value::Ord`,
+    /// but callers MUST NOT depend on that. Use [`Object::iter_sorted`] when
     /// deterministic order is required, or [`Object::cursor`] when iteration
     /// must yield and resume.
-    #[inline]
     pub fn iter(&self) -> impl Iterator<Item = (&Value, &Value)> + '_ {
-        self.inner.iter()
+        self.iter_sorted()
     }
 
     /// Iteration in sorted key order (by `Value::Ord`). Non-resumable.
@@ -84,73 +120,132 @@ impl Object {
     /// `object.keys` builtin, etc.
     #[inline]
     pub fn iter_sorted(&self) -> Iter<'_> {
-        // BTree backend iterates sorted natively.
         Iter {
-            inner: self.inner.iter(),
+            inner: match &self.repr {
+                Repr::Inline(v) => iter::IterInner::Inline(v.iter()),
+                Repr::BTree(m) => iter::IterInner::BTree(m.iter()),
+            },
         }
     }
 
-    #[inline]
     pub fn keys(&self) -> impl Iterator<Item = &Value> + '_ {
-        self.inner.keys()
+        self.iter_sorted().map(|(k, _)| k)
     }
 
-    /// Keys in sorted order (by `Value::Ord`). Symmetric with
-    /// [`Object::iter_sorted`].
-    #[inline]
     pub fn keys_sorted(&self) -> impl Iterator<Item = &Value> + '_ {
         self.iter_sorted().map(|(k, _)| k)
     }
 
-    #[inline]
     pub fn values(&self) -> impl Iterator<Item = &Value> + '_ {
-        self.inner.values()
+        self.iter_sorted().map(|(_, v)| v)
     }
 
     #[inline]
     pub fn iter_mut(&mut self) -> IterMut<'_> {
         IterMut {
-            inner: self.inner.iter_mut(),
+            inner: match &mut self.repr {
+                Repr::Inline(v) => iter::IterMutInner::Inline(v.iter_mut()),
+                Repr::BTree(m) => iter::IterMutInner::BTree(m.iter_mut()),
+            },
         }
     }
 
     /// Insert a key-value pair. Returns the previous value if any.
-    #[inline]
     pub fn insert(&mut self, key: Value, value: Value) -> Option<Value> {
-        self.inner.insert(key, value)
+        match &mut self.repr {
+            Repr::Inline(v) => match v.binary_search_by(|(k, _)| k.cmp(&key)) {
+                Ok(i) => Some(core::mem::replace(&mut v[i].1, value)),
+                Err(i) => {
+                    if v.len() < INLINE_CAP {
+                        v.insert(i, (key, value));
+                        None
+                    } else {
+                        // Promote to BTree.
+                        let mut m = BTreeMap::new();
+                        for (k, val) in v.drain(..) {
+                            m.insert(k, val);
+                        }
+                        let prev = m.insert(key, value);
+                        self.repr = Repr::BTree(m);
+                        prev
+                    }
+                }
+            },
+            Repr::BTree(m) => m.insert(key, value),
+        }
     }
 
-    #[inline]
     pub fn remove(&mut self, key: &Value) -> Option<Value> {
-        self.inner.remove(key)
+        match &mut self.repr {
+            Repr::Inline(v) => match v.binary_search_by(|(k, _)| k.cmp(key)) {
+                Ok(i) => Some(v.remove(i).1),
+                Err(_) => None,
+            },
+            Repr::BTree(m) => m.remove(key),
+        }
     }
 
-    #[inline]
-    pub fn retain<F>(&mut self, f: F)
+    pub fn retain<F>(&mut self, mut f: F)
     where
         F: FnMut(&Value, &mut Value) -> bool,
     {
-        self.inner.retain(f);
+        match &mut self.repr {
+            Repr::Inline(v) => v.retain(|(k, val)| f(k, val)),
+            Repr::BTree(m) => m.retain(|k, v| f(k, v)),
+        }
     }
 
     #[inline]
     pub fn clear(&mut self) {
-        self.inner.clear();
+        match &mut self.repr {
+            Repr::Inline(v) => v.clear(),
+            Repr::BTree(m) => m.clear(),
+        }
     }
 
-    #[inline]
     pub fn append(&mut self, other: &mut Object) {
-        self.inner.append(&mut other.inner);
+        let drained: Vec<(Value, Value)> = match &mut other.repr {
+            Repr::Inline(v) => v.drain(..).collect(),
+            Repr::BTree(m) => core::mem::take(m).into_iter().collect(),
+        };
+        for (k, v) in drained {
+            self.insert(k, v);
+        }
     }
 
     /// Gets a mutable reference to the value associated with `key`, inserting
-    /// the result of `default()` if absent. Single O(log n) probe.
+    /// the result of `default()` if absent.
     pub fn get_or_insert_with<F: FnOnce() -> Value>(
         &mut self,
         key: Value,
         default: F,
     ) -> &mut Value {
-        self.inner.entry(key).or_insert_with(default)
+        // Decide whether we need to promote without holding a borrow.
+        let need_promote = match &self.repr {
+            Repr::Inline(v) => {
+                v.binary_search_by(|(k, _)| k.cmp(&key)).is_err() && v.len() >= INLINE_CAP
+            }
+            Repr::BTree(_) => false,
+        };
+        if need_promote {
+            if let Repr::Inline(v) = &mut self.repr {
+                let mut m = BTreeMap::new();
+                for (k, val) in v.drain(..) {
+                    m.insert(k, val);
+                }
+                self.repr = Repr::BTree(m);
+            }
+        }
+        match &mut self.repr {
+            Repr::Inline(v) => match v.binary_search_by(|(k, _)| k.cmp(&key)) {
+                Ok(i) => &mut v[i].1,
+                Err(i) => {
+                    v.insert(i, (key, default()));
+                    &mut v[i].1
+                }
+            },
+            Repr::BTree(m) => m.entry(key).or_insert_with(default),
+        }
     }
 
     /// Wrap into a `Value::Object`.
@@ -161,35 +256,49 @@ impl Object {
 
     /// Create a resumable cursor over entries in implementation-defined
     /// order. Stable for the lifetime of `&self`. O(1).
-    ///
-    /// The cursor is fully self-owned (it stores a clone of the last-seen
-    /// key, not a reference) so it can be stored as a field of a
-    /// long-lived state struct — e.g. an RVM iteration frame that persists
-    /// across instruction dispatches. As a consequence, mutating the
-    /// `Object` between `next()` calls is not rejected by the borrow
-    /// checker; the resulting iteration order in that case is unspecified.
     #[inline]
     pub const fn cursor(&self) -> ObjectCursor {
         ObjectCursor {
-            inner: ObjectCursorInner::BTree(None),
+            inner: ObjectCursorInner::Start,
         }
     }
 
-    /// Advance `cursor` and yield the next entry. O(log n) for the BTree
-    /// backend (range probe); future hash/inline variants may be O(1).
+    /// Advance `cursor` and yield the next entry.
     pub fn next<'a>(&'a self, cursor: &mut ObjectCursor) -> Option<(&'a Value, &'a Value)> {
-        let ObjectCursorInner::BTree(ref mut last) = cursor.inner;
-        let next = last.as_ref().map_or_else(
-            || self.inner.iter().next(),
-            |prev| {
-                self.inner
+        match (&self.repr, &mut cursor.inner) {
+            (Repr::Inline(v), ObjectCursorInner::Start) => {
+                if let Some((k, val)) = v.first() {
+                    cursor.inner = ObjectCursorInner::Key(k.clone());
+                    Some((k, val))
+                } else {
+                    None
+                }
+            }
+            (Repr::Inline(v), ObjectCursorInner::Key(prev)) => {
+                let i = match v.binary_search_by(|(k, _)| k.cmp(prev)) {
+                    Ok(i) => i.saturating_add(1),
+                    Err(i) => i,
+                };
+                if let Some((k, val)) = v.get(i) {
+                    cursor.inner = ObjectCursorInner::Key(k.clone());
+                    Some((k, val))
+                } else {
+                    None
+                }
+            }
+            (Repr::BTree(m), ObjectCursorInner::Start) => {
+                let (k, val) = m.iter().next()?;
+                cursor.inner = ObjectCursorInner::Key(k.clone());
+                Some((k, val))
+            }
+            (Repr::BTree(m), ObjectCursorInner::Key(prev)) => {
+                let (k, val) = m
                     .range((Bound::Excluded(prev.clone()), Bound::Unbounded))
-                    .next()
-            },
-        );
-        let (k, v) = next?;
-        *last = Some(k.clone());
-        Some((k, v))
+                    .next()?;
+                cursor.inner = ObjectCursorInner::Key(k.clone());
+                Some((k, val))
+            }
+        }
     }
 }
 
@@ -205,15 +314,28 @@ pub struct ObjectCursor {
 
 #[derive(Debug, Clone)]
 enum ObjectCursorInner {
-    /// BTree backend cursor: tracks last-seen key. `None` means "before start".
-    BTree(Option<Value>),
+    Start,
+    Key(Value),
 }
 
-// ---- Hand-written Ord/PartialOrd ----------------------------------------
+// ---- Hand-written PartialEq/Eq/Ord -------------------------------------
 //
-// Implemented in terms of `iter_sorted()` so ordering is consistent with the
-// canonical (sorted) view of the entries and is therefore independent of
-// the storage variant.
+// Defined in terms of `iter_sorted()` so equality and ordering are
+// consistent with the canonical (sorted) view of the entries and are
+// therefore independent of the storage variant. A derived PartialEq on
+// `Repr` would incorrectly distinguish `Inline` from `BTree` even when
+// they hold identical entries.
+
+impl PartialEq for Object {
+    fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+        self.iter_sorted().eq(other.iter_sorted())
+    }
+}
+
+impl Eq for Object {}
 
 impl Ord for Object {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -230,30 +352,44 @@ impl PartialOrd for Object {
 
 impl fmt::Debug for Object {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Use sorted iteration so Debug output is stable across storage
-        // variants.
         f.debug_map().entries(self.iter_sorted()).finish()
     }
 }
 
 impl Extend<(Value, Value)> for Object {
     fn extend<I: IntoIterator<Item = (Value, Value)>>(&mut self, iter: I) {
-        self.inner.extend(iter);
+        for (k, v) in iter {
+            self.insert(k, v);
+        }
     }
 }
 
 impl FromIterator<(Value, Value)> for Object {
     fn from_iter<I: IntoIterator<Item = (Value, Value)>>(iter: I) -> Self {
-        Self {
-            inner: BTreeMap::from_iter(iter),
+        let mut o = Object::new();
+        for (k, v) in iter {
+            o.insert(k, v);
         }
+        o
     }
 }
 
 impl From<BTreeMap<Value, Value>> for Object {
-    #[inline]
     fn from(map: BTreeMap<Value, Value>) -> Self {
-        Self { inner: map }
+        if map.len() <= INLINE_CAP {
+            let mut v: SmallVec<[(Value, Value); INLINE_CAP]> = SmallVec::new();
+            // BTreeMap iterates sorted, so the resulting inline is already sorted.
+            for (k, val) in map {
+                v.push((k, val));
+            }
+            Self {
+                repr: Repr::Inline(v),
+            }
+        } else {
+            Self {
+                repr: Repr::BTree(map),
+            }
+        }
     }
 }
 

@@ -2387,7 +2387,10 @@ impl Interpreter {
         self.eval_query(query)?;
 
         match self.contexts.pop() {
-            Some(ctx) => Ok(ctx.value),
+            Some(mut ctx) => {
+                ctx.value.freeze_recursive();
+                Ok(ctx.value)
+            }
             None => bail!("internal error: context already popped"),
         }
     }
@@ -3501,7 +3504,11 @@ impl Interpreter {
 
         Ok(match result {
             true => match &popped_ctx.value {
-                Value::Object(_) => popped_ctx.value,
+                Value::Object(_) => {
+                    let mut value = popped_ctx.value;
+                    value.freeze_recursive();
+                    value
+                }
                 Value::Array(a) if a.len() == 1 => a
                     .first()
                     .cloned()

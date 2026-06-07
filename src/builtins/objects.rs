@@ -289,7 +289,9 @@ fn filter(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> R
         _ => bail!(span.error(format!("`{name}` requires array/object/set argument").as_str())),
     };
 
-    Ok(Value::Object(obj))
+    let mut value = Value::Object(obj);
+    value.freeze_recursive();
+    Ok(value)
 }
 
 fn get(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
@@ -339,7 +341,9 @@ fn remove(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> R
         _ => bail!(span.error(format!("`{name}` requires array/object/set argument").as_str())),
     };
 
-    Ok(Value::Object(obj))
+    let mut value = Value::Object(obj);
+    value.freeze_recursive();
+    Ok(value)
 }
 
 fn is_subset(sup: &Value, sub: &Value) -> bool {
@@ -399,7 +403,9 @@ fn object_union(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool
     let _ = ensure_object(name, &params[0], args[0].clone())?;
     let _ = ensure_object(name, &params[1], args[1].clone())?;
 
-    union(&args[0], &args[1])
+    let mut result = union(&args[0], &args[1])?;
+    result.freeze_recursive();
+    Ok(result)
 }
 
 fn object_union_n(
@@ -426,6 +432,7 @@ fn object_union_n(
         u = union(&u, a)?;
     }
 
+    u.freeze_recursive();
     Ok(u)
 }
 

@@ -397,7 +397,8 @@ impl Engine {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn set_input(&mut self, input: Value) {
+    pub fn set_input(&mut self, mut input: Value) {
+        input.freeze_recursive();
         self.interpreter.set_input(input);
     }
 
@@ -484,7 +485,11 @@ impl Engine {
             // allocating, so validate then deep-merge in place (zero-copy fast path).
             self.interpreter.get_init_data().check_mergeable(&data)?;
             self.prepared = false;
-            self.interpreter.get_init_data_mut().deep_merge(data)
+            self.interpreter.get_init_data_mut().deep_merge(data)?;
+            // Freeze the merged data document so nested objects settle into their compact
+            // storage representation at this value boundary.
+            self.interpreter.get_init_data_mut().freeze_recursive();
+            Ok(())
         }
         #[cfg(feature = "allocator-memory-limits")]
         {
@@ -493,6 +498,7 @@ impl Engine {
             // subtrees are cloned.
             let mut candidate = self.interpreter.get_init_data().clone();
             candidate.deep_merge(data)?;
+            candidate.freeze_recursive();
             *self.interpreter.get_init_data_mut() = candidate;
             self.prepared = false;
             Ok(())

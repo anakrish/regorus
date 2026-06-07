@@ -11,6 +11,7 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 struct Tracking;
 
@@ -18,6 +19,7 @@ static LIVE: AtomicUsize = AtomicUsize::new(0);
 static PEAK: AtomicUsize = AtomicUsize::new(0);
 static TOTAL_ALLOC: AtomicUsize = AtomicUsize::new(0);
 static NALLOC: AtomicUsize = AtomicUsize::new(0);
+static LOCK: Mutex<()> = Mutex::new(());
 
 unsafe impl GlobalAlloc for Tracking {
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
@@ -59,6 +61,7 @@ struct Snap {
 struct ObjectStats {
     inline: usize,
     frozen: usize,
+    empty: usize,
     btree: usize,
     fields: usize,
 }
@@ -77,7 +80,8 @@ impl ObjectStats {
                 }
             }
             regorus::Value::Object(object) => {
-                match object.storage_variant_for_memory_diagnostics() {
+                match regorus::object_storage_variant_for_memory_diagnostics(object) {
+                    "Empty" => self.empty += 1,
                     "Inline" => self.inline += 1,
                     "Frozen" => self.frozen += 1,
                     "BTree" => self.btree += 1,
@@ -93,7 +97,7 @@ impl ObjectStats {
     }
 
     fn object_count(&self) -> usize {
-        self.inline + self.frozen + self.btree
+        self.empty + self.inline + self.frozen + self.btree
     }
 
     fn avg_fields(&self) -> f64 {
@@ -127,6 +131,11 @@ fn mib(b: usize) -> f64 {
 }
 
 fn measure(path: &str, mult: usize) {
+    // The global allocator counters are process-wide; serialize fixtures so
+    // parallel test execution cannot mix measurements.
+    let _guard = LOCK
+        .lock()
+        .expect("corpus memory measurement lock poisoned");
     reset_counters();
     let base = snap();
     let source = std::fs::read_to_string(path).expect("read JSON fixture");
@@ -148,12 +157,13 @@ fn measure(path: &str, mult: usize) {
     println!();
     println!("=== CORPUS_MEMORY path={path} mult={mult} size_bytes={file_size} ===");
     println!(
-        "METRIC path={path} mult={mult} size_bytes={file_size} nalloc={} total_alloc_bytes={} peak_bytes={} live_bytes={} objects={} inline={} frozen={} btree={} avg_fields_per_object={:.3}",
+        "METRIC path={path} mult={mult} size_bytes={file_size} nalloc={} total_alloc_bytes={} peak_bytes={} live_bytes={} objects={} empty={} inline={} frozen={} btree={} avg_fields_per_object={:.3}",
         after_parse.nalloc - base.nalloc,
         after_parse.total - base.total,
         after_parse.peak.saturating_sub(base.peak),
         after_drop_source.live.saturating_sub(base.live),
         stats.object_count(),
+        stats.empty,
         stats.inline,
         stats.frozen,
         stats.btree,
@@ -168,8 +178,8 @@ fn measure(path: &str, mult: usize) {
         stats.avg_fields(),
     );
     println!(
-        "  Object variants after parse: Inline={} Frozen={} BTree={}",
-        stats.inline, stats.frozen, stats.btree,
+        "  Object variants after parse: Empty={} Inline={} Frozen={} BTree={}",
+        stats.empty, stats.inline, stats.frozen, stats.btree,
     );
 
     drop(values);

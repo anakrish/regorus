@@ -325,6 +325,47 @@ impl Value {
     pub fn new_set() -> Value {
         Value::from(BTreeSet::new())
     }
+    /// Recursively compact uniquely-owned containers into their memory-efficient forms.
+    ///
+    /// Subtrees shared through `Rc` are skipped to avoid forcing deep clones merely
+    /// for representation tuning; they can be frozen when reached through a unique
+    /// owner later.
+    pub fn freeze_recursive(&mut self) {
+        match self {
+            Value::Array(values) => {
+                if let Some(values) = Rc::get_mut(values) {
+                    for value in values.iter_mut() {
+                        value.freeze_recursive();
+                    }
+                }
+            }
+            Value::Set(values) => {
+                if let Some(values) = Rc::get_mut(values) {
+                    let old = core::mem::take(values);
+                    *values = old
+                        .into_iter()
+                        .map(|mut value| {
+                            value.freeze_recursive();
+                            value
+                        })
+                        .collect();
+                }
+            }
+            Value::Object(object) => {
+                if let Some(object) = Rc::get_mut(object) {
+                    for (_, value) in object.iter_mut() {
+                        value.freeze_recursive();
+                    }
+                    object.refreeze_in_place();
+                }
+            }
+            Value::Null
+            | Value::Bool(_)
+            | Value::Number(_)
+            | Value::String(_)
+            | Value::Undefined => {}
+        }
+    }
 }
 
 impl Value {
@@ -810,6 +851,12 @@ impl From<BTreeMap<Value, Value>> for Value {
     fn from(s: BTreeMap<Value, Value>) -> Self {
         Object::from(s).into_value()
     }
+}
+
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub const fn object_storage_variant_for_memory_diagnostics(object: &Object) -> &'static str {
+    object.storage_variant_for_memory_diagnostics()
 }
 
 impl Value {

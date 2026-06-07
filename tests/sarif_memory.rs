@@ -25,6 +25,7 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 struct Tracking;
 
@@ -32,6 +33,7 @@ static LIVE: AtomicUsize = AtomicUsize::new(0);
 static PEAK: AtomicUsize = AtomicUsize::new(0);
 static TOTAL_ALLOC: AtomicUsize = AtomicUsize::new(0);
 static NALLOC: AtomicUsize = AtomicUsize::new(0);
+static LOCK: Mutex<()> = Mutex::new(());
 
 unsafe impl GlobalAlloc for Tracking {
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
@@ -72,6 +74,7 @@ struct Snap {
 struct ObjectVariantCounts {
     inline: usize,
     frozen: usize,
+    empty: usize,
     btree: usize,
 }
 
@@ -89,7 +92,8 @@ impl ObjectVariantCounts {
                 }
             }
             regorus::Value::Object(object) => {
-                match object.storage_variant_for_memory_diagnostics() {
+                match regorus::object_storage_variant_for_memory_diagnostics(object) {
+                    "Empty" => self.empty += 1,
                     "Inline" => self.inline += 1,
                     "Frozen" => self.frozen += 1,
                     "BTree" => self.btree += 1,
@@ -134,6 +138,9 @@ fn report(label: &str, s: Snap, base: Snap) {
 
 #[test]
 fn sarif_memory_residency() {
+    // The global allocator counters are process-wide; keep the measurement
+    // serialized even if another test is added to this binary later.
+    let _guard = LOCK.lock().expect("sarif memory measurement lock poisoned");
     let policy =
         std::fs::read_to_string("tests/data/sarif_memory/policy.rego").expect("read policy.rego");
     let input =
@@ -199,8 +206,11 @@ fn sarif_memory_residency() {
     let mut object_variants = ObjectVariantCounts::default();
     object_variants.add_value(&input_value);
     println!(
-        "  Object variants after parse: Inline={} Frozen={} BTree={}",
-        object_variants.inline, object_variants.frozen, object_variants.btree
+        "  Object variants after parse: Empty={} Inline={} Frozen={} BTree={}",
+        object_variants.empty,
+        object_variants.inline,
+        object_variants.frozen,
+        object_variants.btree
     );
 
     drop(input_json);

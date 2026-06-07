@@ -4,6 +4,7 @@
 //! Opaque iterator types for [`Object`].
 
 use alloc::collections::btree_map;
+use alloc::vec::Vec;
 use core::iter::FusedIterator;
 
 use super::{Object, Repr, INLINE_CAP};
@@ -18,6 +19,7 @@ pub struct IntoIter {
 #[derive(Debug)]
 pub(super) enum IntoIterInner {
     Inline(smallvec::IntoIter<[(Value, Value); INLINE_CAP]>),
+    Frozen(alloc::vec::IntoIter<(Value, Value)>),
     BTree(btree_map::IntoIter<Value, Value>),
 }
 
@@ -26,12 +28,14 @@ impl Iterator for IntoIter {
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.inner {
             IntoIterInner::Inline(it) => it.next(),
+            IntoIterInner::Frozen(it) => it.next(),
             IntoIterInner::BTree(it) => it.next(),
         }
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
         match &self.inner {
             IntoIterInner::Inline(it) => it.size_hint(),
+            IntoIterInner::Frozen(it) => it.size_hint(),
             IntoIterInner::BTree(it) => it.size_hint(),
         }
     }
@@ -41,6 +45,7 @@ impl ExactSizeIterator for IntoIter {
     fn len(&self) -> usize {
         match &self.inner {
             IntoIterInner::Inline(it) => it.len(),
+            IntoIterInner::Frozen(it) => it.len(),
             IntoIterInner::BTree(it) => it.len(),
         }
     }
@@ -50,6 +55,7 @@ impl DoubleEndedIterator for IntoIter {
     fn next_back(&mut self) -> Option<Self::Item> {
         match &mut self.inner {
             IntoIterInner::Inline(it) => it.next_back(),
+            IntoIterInner::Frozen(it) => it.next_back(),
             IntoIterInner::BTree(it) => it.next_back(),
         }
     }
@@ -66,6 +72,7 @@ pub struct Iter<'a> {
 #[derive(Debug, Clone)]
 pub(super) enum IterInner<'a> {
     Inline(core::slice::Iter<'a, (Value, Value)>),
+    Frozen(core::slice::Iter<'a, (Value, Value)>),
     BTree(btree_map::Iter<'a, Value, Value>),
 }
 
@@ -73,13 +80,13 @@ impl<'a> Iterator for Iter<'a> {
     type Item = (&'a Value, &'a Value);
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.inner {
-            IterInner::Inline(it) => it.next().map(|(k, v)| (k, v)),
+            IterInner::Inline(it) | IterInner::Frozen(it) => it.next().map(|(k, v)| (k, v)),
             IterInner::BTree(it) => it.next(),
         }
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
         match &self.inner {
-            IterInner::Inline(it) => it.size_hint(),
+            IterInner::Inline(it) | IterInner::Frozen(it) => it.size_hint(),
             IterInner::BTree(it) => it.size_hint(),
         }
     }
@@ -88,7 +95,7 @@ impl<'a> Iterator for Iter<'a> {
 impl<'a> ExactSizeIterator for Iter<'a> {
     fn len(&self) -> usize {
         match &self.inner {
-            IterInner::Inline(it) => it.len(),
+            IterInner::Inline(it) | IterInner::Frozen(it) => it.len(),
             IterInner::BTree(it) => it.len(),
         }
     }
@@ -97,7 +104,7 @@ impl<'a> ExactSizeIterator for Iter<'a> {
 impl<'a> DoubleEndedIterator for Iter<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
         match &mut self.inner {
-            IterInner::Inline(it) => it.next_back().map(|(k, v)| (k, v)),
+            IterInner::Inline(it) | IterInner::Frozen(it) => it.next_back().map(|(k, v)| (k, v)),
             IterInner::BTree(it) => it.next_back(),
         }
     }
@@ -114,6 +121,7 @@ pub struct IterMut<'a> {
 #[derive(Debug)]
 pub(super) enum IterMutInner<'a> {
     Inline(core::slice::IterMut<'a, (Value, Value)>),
+    Frozen(core::slice::IterMut<'a, (Value, Value)>),
     BTree(btree_map::IterMut<'a, Value, Value>),
 }
 
@@ -121,13 +129,13 @@ impl<'a> Iterator for IterMut<'a> {
     type Item = (&'a Value, &'a mut Value);
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.inner {
-            IterMutInner::Inline(it) => it.next().map(|(k, v)| (&*k, v)),
+            IterMutInner::Inline(it) | IterMutInner::Frozen(it) => it.next().map(|(k, v)| (&*k, v)),
             IterMutInner::BTree(it) => it.next(),
         }
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
         match &self.inner {
-            IterMutInner::Inline(it) => it.size_hint(),
+            IterMutInner::Inline(it) | IterMutInner::Frozen(it) => it.size_hint(),
             IterMutInner::BTree(it) => it.size_hint(),
         }
     }
@@ -136,7 +144,7 @@ impl<'a> Iterator for IterMut<'a> {
 impl<'a> ExactSizeIterator for IterMut<'a> {
     fn len(&self) -> usize {
         match &self.inner {
-            IterMutInner::Inline(it) => it.len(),
+            IterMutInner::Inline(it) | IterMutInner::Frozen(it) => it.len(),
             IterMutInner::BTree(it) => it.len(),
         }
     }
@@ -145,7 +153,9 @@ impl<'a> ExactSizeIterator for IterMut<'a> {
 impl<'a> DoubleEndedIterator for IterMut<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
         match &mut self.inner {
-            IterMutInner::Inline(it) => it.next_back().map(|(k, v)| (&*k, v)),
+            IterMutInner::Inline(it) | IterMutInner::Frozen(it) => {
+                it.next_back().map(|(k, v)| (&*k, v))
+            }
             IterMutInner::BTree(it) => it.next_back(),
         }
     }
@@ -159,7 +169,8 @@ impl IntoIterator for Object {
     fn into_iter(self) -> Self::IntoIter {
         IntoIter {
             inner: match self.repr {
-                Repr::Inline(v) => IntoIterInner::Inline(v.into_iter()),
+                Repr::Inline(v) => IntoIterInner::Inline((*v).into_iter()),
+                Repr::Frozen(v) => IntoIterInner::Frozen(Vec::from(v).into_iter()),
                 Repr::BTree(m) => IntoIterInner::BTree(m.into_iter()),
             },
         }

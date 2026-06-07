@@ -801,7 +801,7 @@ impl From<BTreeMap<Value, Value>> for Value {
     /// # Ok(())
     /// # }
     fn from(s: BTreeMap<Value, Value>) -> Self {
-        Value::Object(Rc::new(Object::from(s)))
+        Object::from(s).into_value()
     }
 }
 

@@ -6,6 +6,7 @@
 mod iter;
 mod serde;
 
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
@@ -25,10 +26,11 @@ pub(super) const INLINE_CAP: usize = 4;
 
 /// Opaque, ordered key-value map keyed by [`Value`].
 ///
-/// Backed by a two-tier representation: small objects live in an inline
-/// `SmallVec` (kept sorted by `Value::Ord`); larger ones promote to
-/// `BTreeMap`. The representation is private so it can change without
-/// touching call sites.
+/// Backed by a three-variant representation: mutable small objects build in a
+/// boxed inline `SmallVec` (kept sorted by `Value::Ord`), mutable larger ones
+/// promote to `BTreeMap`, and read-mostly objects freeze to an exact-size boxed
+/// slice. The representation is private so it can change without touching call
+/// sites.
 ///
 /// # Iteration
 ///
@@ -46,14 +48,16 @@ pub struct Object {
 pub(super) enum Repr {
     /// Sorted-by-key, deduplicated entries. Kept sorted so iteration and
     /// `iter_sorted` are the same and binary search is O(log n).
-    Inline(SmallVec<[(Value, Value); INLINE_CAP]>),
+    Inline(Box<SmallVec<[(Value, Value); INLINE_CAP]>>),
+    /// Immutable, sorted, deduplicated entries with no spare capacity.
+    Frozen(Box<[(Value, Value)]>),
     BTree(BTreeMap<Value, Value>),
 }
 
 impl Default for Repr {
     #[inline]
     fn default() -> Self {
-        Repr::Inline(SmallVec::new())
+        Repr::Inline(Box::new(SmallVec::new()))
     }
 }
 
@@ -62,7 +66,7 @@ impl Object {
     #[inline]
     pub fn new() -> Self {
         Self {
-            repr: Repr::Inline(SmallVec::new()),
+            repr: Repr::Inline(Box::new(SmallVec::new())),
         }
     }
 
@@ -70,6 +74,7 @@ impl Object {
     pub fn len(&self) -> usize {
         match &self.repr {
             Repr::Inline(v) => v.len(),
+            Repr::Frozen(v) => v.len(),
             Repr::BTree(m) => m.len(),
         }
     }
@@ -85,6 +90,10 @@ impl Object {
                 Ok(i) => Some(&v[i].1),
                 Err(_) => None,
             },
+            Repr::Frozen(v) => match v.binary_search_by(|(k, _)| k.cmp(key)) {
+                Ok(i) => Some(&v[i].1),
+                Err(_) => None,
+            },
             Repr::BTree(m) => m.get(key),
         }
     }
@@ -95,11 +104,19 @@ impl Object {
     }
 
     pub fn get_mut(&mut self, key: &Value) -> Option<&mut Value> {
+        let thaw = matches!(
+            &self.repr,
+            Repr::Frozen(v) if v.binary_search_by(|(k, _)| k.cmp(key)).is_ok()
+        );
+        if thaw {
+            self.thaw();
+        }
         match &mut self.repr {
             Repr::Inline(v) => match v.binary_search_by(|(k, _)| k.cmp(key)) {
                 Ok(i) => Some(&mut v[i].1),
                 Err(_) => None,
             },
+            Repr::Frozen(_) => None,
             Repr::BTree(m) => m.get_mut(key),
         }
     }
@@ -123,6 +140,7 @@ impl Object {
         Iter {
             inner: match &self.repr {
                 Repr::Inline(v) => iter::IterInner::Inline(v.iter()),
+                Repr::Frozen(v) => iter::IterInner::Frozen(v.iter()),
                 Repr::BTree(m) => iter::IterInner::BTree(m.iter()),
             },
         }
@@ -142,9 +160,11 @@ impl Object {
 
     #[inline]
     pub fn iter_mut(&mut self) -> IterMut<'_> {
+        self.thaw();
         IterMut {
             inner: match &mut self.repr {
                 Repr::Inline(v) => iter::IterMutInner::Inline(v.iter_mut()),
+                Repr::Frozen(v) => iter::IterMutInner::Frozen(v.iter_mut()),
                 Repr::BTree(m) => iter::IterMutInner::BTree(m.iter_mut()),
             },
         }
@@ -152,36 +172,59 @@ impl Object {
 
     /// Insert a key-value pair. Returns the previous value if any.
     pub fn insert(&mut self, key: Value, value: Value) -> Option<Value> {
-        match &mut self.repr {
-            Repr::Inline(v) => match v.binary_search_by(|(k, _)| k.cmp(&key)) {
-                Ok(i) => Some(core::mem::replace(&mut v[i].1, value)),
-                Err(i) => {
-                    if v.len() < INLINE_CAP {
-                        v.insert(i, (key, value));
-                        None
-                    } else {
-                        // Promote to BTree.
-                        let mut m = BTreeMap::new();
-                        for (k, val) in v.drain(..) {
-                            m.insert(k, val);
+        match core::mem::take(&mut self.repr) {
+            Repr::Inline(mut v) => {
+                let prev = match v.binary_search_by(|(k, _)| k.cmp(&key)) {
+                    Ok(i) => Some(core::mem::replace(&mut v[i].1, value)),
+                    Err(i) => {
+                        if v.len() < INLINE_CAP {
+                            v.insert(i, (key, value));
+                            None
+                        } else {
+                            let mut m = BTreeMap::new();
+                            for (k, val) in v.drain(..) {
+                                m.insert(k, val);
+                            }
+                            let prev = m.insert(key, value);
+                            self.repr = Repr::BTree(m);
+                            return prev;
                         }
-                        let prev = m.insert(key, value);
-                        self.repr = Repr::BTree(m);
-                        prev
                     }
-                }
-            },
-            Repr::BTree(m) => m.insert(key, value),
+                };
+                self.repr = Repr::Inline(v);
+                prev
+            }
+            Repr::Frozen(v) => {
+                self.repr = Self::thawed_repr(v);
+                self.insert(key, value)
+            }
+            Repr::BTree(mut m) => {
+                let prev = m.insert(key, value);
+                self.repr = Repr::BTree(m);
+                prev
+            }
         }
     }
 
     pub fn remove(&mut self, key: &Value) -> Option<Value> {
-        match &mut self.repr {
-            Repr::Inline(v) => match v.binary_search_by(|(k, _)| k.cmp(key)) {
-                Ok(i) => Some(v.remove(i).1),
-                Err(_) => None,
-            },
-            Repr::BTree(m) => m.remove(key),
+        match core::mem::take(&mut self.repr) {
+            Repr::Inline(mut v) => {
+                let prev = match v.binary_search_by(|(k, _)| k.cmp(key)) {
+                    Ok(i) => Some(v.remove(i).1),
+                    Err(_) => None,
+                };
+                self.repr = Repr::Inline(v);
+                prev
+            }
+            Repr::Frozen(v) => {
+                self.repr = Self::thawed_repr(v);
+                self.remove(key)
+            }
+            Repr::BTree(mut m) => {
+                let prev = m.remove(key);
+                self.repr = Repr::BTree(m);
+                prev
+            }
         }
     }
 
@@ -189,25 +232,34 @@ impl Object {
     where
         F: FnMut(&Value, &mut Value) -> bool,
     {
-        match &mut self.repr {
-            Repr::Inline(v) => v.retain(|(k, val)| f(k, val)),
-            Repr::BTree(m) => m.retain(|k, v| f(k, v)),
+        match core::mem::take(&mut self.repr) {
+            Repr::Inline(mut v) => {
+                v.retain(|(k, val)| f(k, val));
+                self.repr = Repr::Inline(v);
+            }
+            Repr::Frozen(v) => {
+                self.repr = Self::thawed_repr(v);
+                self.retain(f);
+            }
+            Repr::BTree(mut m) => {
+                m.retain(|k, v| f(k, v));
+                self.repr = Repr::BTree(m);
+            }
         }
     }
 
     #[inline]
     pub fn clear(&mut self) {
-        match &mut self.repr {
-            Repr::Inline(v) => v.clear(),
-            Repr::BTree(m) => m.clear(),
-        }
+        self.repr = Repr::Inline(Box::new(SmallVec::new()));
     }
 
     pub fn append(&mut self, other: &mut Object) {
-        let drained: Vec<(Value, Value)> = match &mut other.repr {
-            Repr::Inline(v) => v.drain(..).collect(),
-            Repr::BTree(m) => core::mem::take(m).into_iter().collect(),
+        let drained: Vec<(Value, Value)> = match core::mem::take(&mut other.repr) {
+            Repr::Inline(v) => (*v).into_iter().collect(),
+            Repr::Frozen(v) => Vec::from(v),
+            Repr::BTree(m) => m.into_iter().collect(),
         };
+        other.repr = Repr::Inline(Box::new(SmallVec::new()));
         for (k, v) in drained {
             self.insert(k, v);
         }
@@ -215,22 +267,24 @@ impl Object {
 
     /// Gets a mutable reference to the value associated with `key`, inserting
     /// the result of `default()` if absent.
+    #[expect(
+        clippy::unreachable,
+        reason = "Frozen is thawed before matching but Rust still requires an exhaustive arm"
+    )]
     pub fn get_or_insert_with<F: FnOnce() -> Value>(
         &mut self,
         key: Value,
         default: F,
     ) -> &mut Value {
-        // Decide whether we need to promote without holding a borrow.
-        let need_promote = match &self.repr {
-            Repr::Inline(v) => {
-                v.binary_search_by(|(k, _)| k.cmp(&key)).is_err() && v.len() >= INLINE_CAP
-            }
-            Repr::BTree(_) => false,
-        };
+        self.thaw();
+        let need_promote = matches!(
+            &self.repr,
+            Repr::Inline(v) if v.binary_search_by(|(k, _)| k.cmp(&key)).is_err() && v.len() >= INLINE_CAP
+        );
         if need_promote {
-            if let Repr::Inline(v) = &mut self.repr {
+            if let Repr::Inline(v) = core::mem::take(&mut self.repr) {
                 let mut m = BTreeMap::new();
-                for (k, val) in v.drain(..) {
+                for (k, val) in *v {
                     m.insert(k, val);
                 }
                 self.repr = Repr::BTree(m);
@@ -245,13 +299,59 @@ impl Object {
                 }
             },
             Repr::BTree(m) => m.entry(key).or_insert_with(default),
+            Repr::Frozen(_) => unreachable!("frozen object was thawed"),
         }
+    }
+
+    /// Convert to the immutable boxed-slice representation.
+    pub fn freeze(mut self) -> Self {
+        self.freeze_in_place();
+        self
     }
 
     /// Wrap into a `Value::Object`.
     #[inline]
     pub fn into_value(self) -> Value {
-        Value::Object(crate::Rc::new(self))
+        Value::Object(crate::Rc::new(self.freeze()))
+    }
+
+    #[doc(hidden)]
+    pub const fn storage_variant_for_memory_diagnostics(&self) -> &'static str {
+        match &self.repr {
+            Repr::Inline(_) => "Inline",
+            Repr::Frozen(_) => "Frozen",
+            Repr::BTree(_) => "BTree",
+        }
+    }
+
+    fn freeze_in_place(&mut self) {
+        match core::mem::take(&mut self.repr) {
+            Repr::Inline(v) => {
+                self.repr = Repr::Frozen((*v).into_vec().into_boxed_slice());
+            }
+            Repr::Frozen(v) => {
+                self.repr = Repr::Frozen(v);
+            }
+            Repr::BTree(m) => {
+                self.repr = Repr::Frozen(m.into_iter().collect::<Vec<_>>().into_boxed_slice());
+            }
+        }
+    }
+
+    fn thawed_repr(v: Box<[(Value, Value)]>) -> Repr {
+        if v.len() <= INLINE_CAP {
+            Repr::Inline(Box::new(Vec::from(v).into_iter().collect()))
+        } else {
+            Repr::BTree(Vec::from(v).into_iter().collect())
+        }
+    }
+
+    fn thaw(&mut self) {
+        let repr = core::mem::take(&mut self.repr);
+        self.repr = match repr {
+            Repr::Frozen(v) => Self::thawed_repr(v),
+            other => other,
+        };
     }
 
     /// Create a resumable cursor over entries in implementation-defined
@@ -266,6 +366,50 @@ impl Object {
     /// Advance `cursor` and yield the next entry.
     pub fn next<'a>(&'a self, cursor: &mut ObjectCursor) -> Option<(&'a Value, &'a Value)> {
         match (&self.repr, &mut cursor.inner) {
+            (Repr::Frozen(v), ObjectCursorInner::Start) => {
+                if let Some((k, val)) = v.first() {
+                    cursor.inner = ObjectCursorInner::Index(1);
+                    Some((k, val))
+                } else {
+                    None
+                }
+            }
+            (Repr::Frozen(v), ObjectCursorInner::Index(i)) => {
+                if let Some((k, val)) = v.get(*i) {
+                    *i = i.saturating_add(1);
+                    Some((k, val))
+                } else {
+                    None
+                }
+            }
+            (Repr::Frozen(v), ObjectCursorInner::Key(prev)) => {
+                let i = match v.binary_search_by(|(k, _)| k.cmp(prev)) {
+                    Ok(i) => i.saturating_add(1),
+                    Err(i) => i,
+                };
+                if let Some((k, val)) = v.get(i) {
+                    cursor.inner = ObjectCursorInner::Index(i.saturating_add(1));
+                    Some((k, val))
+                } else {
+                    None
+                }
+            }
+            (Repr::Inline(v), ObjectCursorInner::Index(i)) => {
+                if let Some((k, val)) = v.get(*i) {
+                    *i = i.saturating_add(1);
+                    Some((k, val))
+                } else {
+                    None
+                }
+            }
+            (Repr::BTree(m), ObjectCursorInner::Index(i)) => {
+                if let Some((k, val)) = m.iter().nth(*i) {
+                    *i = i.saturating_add(1);
+                    Some((k, val))
+                } else {
+                    None
+                }
+            }
             (Repr::Inline(v), ObjectCursorInner::Start) => {
                 if let Some((k, val)) = v.first() {
                     cursor.inner = ObjectCursorInner::Key(k.clone());
@@ -316,6 +460,7 @@ pub struct ObjectCursor {
 enum ObjectCursorInner {
     Start,
     Key(Value),
+    Index(usize),
 }
 
 // ---- Hand-written PartialEq/Eq/Ord -------------------------------------
@@ -383,7 +528,7 @@ impl From<BTreeMap<Value, Value>> for Object {
                 v.push((k, val));
             }
             Self {
-                repr: Repr::Inline(v),
+                repr: Repr::Inline(Box::new(v)),
             }
         } else {
             Self {

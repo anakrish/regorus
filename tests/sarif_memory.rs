@@ -68,6 +68,42 @@ struct Snap {
     nalloc: usize,
 }
 
+#[derive(Default)]
+struct ObjectVariantCounts {
+    inline: usize,
+    frozen: usize,
+    btree: usize,
+}
+
+impl ObjectVariantCounts {
+    fn add_value(&mut self, value: &regorus::Value) {
+        match value {
+            regorus::Value::Array(values) => {
+                for value in values.iter() {
+                    self.add_value(value);
+                }
+            }
+            regorus::Value::Set(values) => {
+                for value in values.iter() {
+                    self.add_value(value);
+                }
+            }
+            regorus::Value::Object(object) => {
+                match object.storage_variant_for_memory_diagnostics() {
+                    "Inline" => self.inline += 1,
+                    "Frozen" => self.frozen += 1,
+                    "BTree" => self.btree += 1,
+                    _ => unreachable!("unknown Object storage variant"),
+                }
+                for (_, value) in object.iter() {
+                    self.add_value(value);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn snap() -> Snap {
     Snap {
         live: LIVE.load(Ordering::Relaxed),
@@ -160,6 +196,12 @@ fn sarif_memory_residency() {
         regorus::Value::from_json_str(&input_json).expect("parse input JSON to Value");
     let after_input_parse = snap();
     report("after Value::from_json_str", after_input_parse, base);
+    let mut object_variants = ObjectVariantCounts::default();
+    object_variants.add_value(&input_value);
+    println!(
+        "  Object variants after parse: Inline={} Frozen={} BTree={}",
+        object_variants.inline, object_variants.frozen, object_variants.btree
+    );
 
     drop(input_json);
     let after_drop_json = snap();

@@ -397,7 +397,8 @@ impl Engine {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn set_input(&mut self, input: Value) {
+    pub fn set_input(&mut self, mut input: Value) {
+        input.freeze_recursive();
         self.interpreter.set_input(input);
     }
 
@@ -465,7 +466,9 @@ impl Engine {
             bail!("data must be object");
         }
         self.prepared = false;
-        self.interpreter.get_init_data_mut().merge(data)
+        self.interpreter.get_init_data_mut().merge(data)?;
+        self.interpreter.get_init_data_mut().freeze_recursive();
+        Ok(())
     }
 
     /// Get the data document.

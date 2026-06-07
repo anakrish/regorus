@@ -88,7 +88,7 @@ fn fn_items(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) 
         let mut entry = Object::new();
         entry.insert(Value::from("key"), k.clone());
         entry.insert(Value::from("value"), v.clone());
-        result.push(Value::Object(Rc::new(entry)));
+        result.push(entry.into_value());
     }
     Ok(Value::Array(Rc::new(result)))
 }

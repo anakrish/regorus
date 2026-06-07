@@ -562,3 +562,137 @@ fn object_insert_returns_previous_value() {
     assert_eq!(obj.insert(val(0), val(2)), Some(val(1)));
     assert_eq!(obj.get(&val(0)), Some(&val(2)));
 }
+
+const CONST_OBJECT_NEW: Object = Object::new();
+
+fn assert_all_objects_frozen(value: &Value) {
+    match value {
+        Value::Array(values) => {
+            for value in values.iter() {
+                assert_all_objects_frozen(value);
+            }
+        }
+        Value::Set(values) => {
+            for value in values.iter() {
+                assert_all_objects_frozen(value);
+            }
+        }
+        Value::Object(object) => {
+            assert_eq!(object.storage_variant_for_memory_diagnostics(), "Frozen");
+            for (_, value) in object.iter() {
+                assert_all_objects_frozen(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn object_new_is_const_context() {
+    assert!(CONST_OBJECT_NEW.is_empty());
+}
+
+#[test]
+fn object_inline_cap_boundary_promotes_on_third_insert() {
+    let mut obj = Object::new();
+    obj.insert(val(1), val(10));
+    obj.insert(val(2), val(20));
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "Inline");
+    obj.insert(val(3), val(30));
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "BTree");
+}
+
+#[test]
+fn object_btree_freeze_mutate_insert_and_refreeze_roundtrip() {
+    let mut obj: Object = make_pairs(3).into_iter().collect();
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "BTree");
+    obj = obj.freeze();
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "Frozen");
+    obj.insert(val(99), val(100));
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "BTree");
+    assert_eq!(obj.get(&val(99)), Some(&val(100)));
+    obj = obj.freeze();
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "Frozen");
+    assert_eq!(obj.get(&val(99)), Some(&val(100)));
+}
+
+#[test]
+fn object_empty_freeze_get_iter_and_cursor() {
+    let obj = Object::new().freeze();
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "Frozen");
+    assert!(obj.get(&val(0)).is_none());
+    assert_eq!(obj.iter().count(), 0);
+    let mut cursor = obj.cursor();
+    assert!(obj.next(&mut cursor).is_none());
+}
+
+#[test]
+fn object_from_large_btreemap_into_value_is_frozen() {
+    let map: BTreeMap<Value, Value> = make_pairs(3).into_iter().collect();
+    let value = Object::from(map).into_value();
+    let object = value.as_object().expect("object");
+    assert_eq!(object.storage_variant_for_memory_diagnostics(), "Frozen");
+}
+
+#[test]
+fn object_cross_variant_partial_eq_ignores_storage() {
+    let empty_inline = Object::from_iter(core::iter::empty()).freeze();
+    assert_eq!(Object::new(), empty_inline);
+
+    let inline: Object = make_pairs(2).into_iter().collect();
+    assert_eq!(inline.storage_variant_for_memory_diagnostics(), "Inline");
+    let frozen = inline.clone().freeze();
+
+    let mut btree: Object = make_pairs(3).into_iter().collect();
+    btree.remove(&val(2));
+    assert_eq!(btree.storage_variant_for_memory_diagnostics(), "BTree");
+
+    assert_eq!(inline, frozen);
+    assert_eq!(inline, btree);
+}
+
+#[test]
+fn object_cursor_frozen_one_entry_yields_once() {
+    let obj = Object::from_iter([(val(1), val(2))]).freeze();
+    let mut cursor = obj.cursor();
+    assert_eq!(obj.next(&mut cursor), Some((&val(1), &val(2))));
+    assert!(obj.next(&mut cursor).is_none());
+}
+
+#[test]
+fn object_iter_mut_on_frozen_persists_changes() {
+    let mut obj = Object::from_iter([(val(1), val(2))]).freeze();
+    for (_, value) in obj.iter_mut() {
+        *value = val(3);
+    }
+    assert_eq!(obj.get(&val(1)), Some(&val(3)));
+}
+
+#[test]
+fn value_freeze_recursive_freezes_nested_objects() {
+    let mut inner = Object::new();
+    inner.insert(val(1), val(2));
+
+    let mut set = alloc::collections::BTreeSet::new();
+    set.insert(inner.clone().into_value());
+
+    let mut outer = Object::new();
+    outer.insert(
+        Value::from("array"),
+        Value::from(Vec::from([inner.into_value()])),
+    );
+    outer.insert(Value::from("set"), Value::from(set));
+
+    let mut value = outer.into_value();
+    value.freeze_recursive();
+    assert_all_objects_frozen(&value);
+}
+
+#[test]
+fn object_hybrid_insert_existing_on_frozen_stays_frozen() {
+    let mut obj = Object::from_iter([(val(1), val(2))]).freeze();
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "Frozen");
+    assert_eq!(obj.insert(val(1), val(9)), Some(val(2)));
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "Frozen");
+    assert_eq!(obj.get(&val(1)), Some(&val(9)));
+}

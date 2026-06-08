@@ -11,13 +11,13 @@ use core::cmp::Ordering;
 use core::fmt;
 use core::ops;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 use crate::value::Value;
 
 #[cfg(feature = "rvm")]
 #[allow(unused_imports)] // surface for downstream PRs
-pub use iter::Cursor;
+pub use iter::ArrayCursor;
 #[allow(unused_imports)] // surface for downstream PRs
 pub use iter::{IntoIter, Iter, IterMut};
 
@@ -32,6 +32,21 @@ pub use iter::{IntoIter, Iter, IterMut};
 /// - [`Array::iter`] — sequence order; non-resumable.
 /// - [`Array::cursor`] / [`Array::next`] — sequence order, resumable. Used by
 ///   interpreter/RVM when iteration must yield mid-flight.
+///
+/// # Memory-limit enforcement
+///
+/// Growth-path methods that take a fallible `Result` return value
+/// ([`Array::push`], [`Array::extend_from_slice`], [`Array::insert`],
+/// [`Array::with_capacity`], [`Array::try_from_vec`], [`Array::try_from_iter`])
+/// consult the configured cooperative memory limit and report
+/// `Err` when it is exceeded; the array is left in a consistent state (any
+/// in-progress mutation that would have crossed the limit is rolled back).
+///
+/// Infallible trait impls ([`Extend`], [`FromIterator`], [`From<Vec<Value>>`])
+/// match the [`crate::value::Object`] convention and **do not** consult the
+/// cooperative limit — they exist for ergonomic / migration use and rely on the
+/// allocator to fail on true OOM. Limit-aware callers must use the explicit
+/// fallible methods above.
 #[derive(Default, Clone, Eq, PartialEq)]
 pub struct Array {
     inner: Vec<Value>,
@@ -46,12 +61,14 @@ impl Array {
 
     /// Create an empty `Array` with space for at least `capacity` elements.
     ///
-    /// Returns `None` if the requested capacity is too large or cannot be
-    /// reserved by the allocator.
+    /// Returns `None` if the requested capacity is too large for the
+    /// allocator, or if reserving it would push memory usage past the
+    /// configured cooperative limit.
     #[inline]
     pub fn with_capacity(capacity: usize) -> Option<Self> {
         let mut inner = Vec::new();
         inner.try_reserve(capacity).ok()?;
+        crate::utils::limits::check_memory_limit_if_needed().ok()?;
         Some(Self { inner })
     }
 
@@ -106,12 +123,18 @@ impl Array {
 
     /// Appends `value` to the end of the array.
     ///
-    /// Returns an error if the configured memory limit is exceeded after the
-    /// growth operation.
+    /// Returns `Err` if the cooperative memory limit would be exceeded by the
+    /// appended element; in that case the value is rolled back (popped) before
+    /// returning, so the array length is unchanged.
     #[inline]
     pub fn push(&mut self, value: Value) -> Result<()> {
         self.inner.push(value);
-        crate::utils::limits::check_memory_limit_if_needed().map_err(anyhow::Error::new)
+        if let Err(err) = crate::utils::limits::check_memory_limit_if_needed() {
+            // Roll back the mutation so the caller observes a consistent state.
+            self.inner.pop();
+            return Err(anyhow::Error::new(err));
+        }
+        Ok(())
     }
 
     #[inline]
@@ -126,15 +149,22 @@ impl Array {
 
     /// Inserts `value` at `index`, shifting existing elements right.
     ///
-    /// Returns `Some(())` on success, or `None` if `index > self.len()`
-    /// (rather than panicking — this is a host-reachable API surface).
+    /// Returns `Err` if `index > self.len()` (rather than panicking — this is
+    /// a host-reachable API surface) or if the cooperative memory limit would
+    /// be exceeded by the appended element; in the limit case the insertion is
+    /// rolled back so the array length is unchanged.
     #[inline]
-    pub fn insert(&mut self, index: usize, value: Value) -> Option<()> {
-        if index > self.inner.len() {
-            return None;
+    pub fn insert(&mut self, index: usize, value: Value) -> Result<()> {
+        let len = self.inner.len();
+        if index > len {
+            bail!("Array::insert: index {index} out of bounds (len={len})");
         }
         self.inner.insert(index, value);
-        Some(())
+        if let Err(err) = crate::utils::limits::check_memory_limit_if_needed() {
+            self.inner.remove(index);
+            return Err(anyhow::Error::new(err));
+        }
+        Ok(())
     }
 
     /// Removes and returns the element at `index`, shifting subsequent
@@ -175,11 +205,17 @@ impl Array {
 
     /// Extends the array by cloning values from `other`.
     ///
-    /// Checks the configured memory limit after each appended element.
-    #[inline]
+    /// Checks the cooperative memory limit after each appended element; on
+    /// failure, all elements appended by this call (including the offending
+    /// one) are rolled back so the array length is unchanged.
     pub fn extend_from_slice(&mut self, other: &[Value]) -> Result<()> {
+        let original_len = self.inner.len();
         for value in other {
-            self.push(value.clone())?;
+            self.inner.push(value.clone());
+            if let Err(err) = crate::utils::limits::check_memory_limit_if_needed() {
+                self.inner.truncate(original_len);
+                return Err(anyhow::Error::new(err));
+            }
         }
         Ok(())
     }
@@ -187,6 +223,27 @@ impl Array {
     #[inline]
     pub fn reverse(&mut self) {
         self.inner.reverse();
+    }
+
+    /// Build an `Array` from an existing `Vec<Value>` with memory-limit
+    /// enforcement. Returns `Err` if the cooperative limit is exceeded after
+    /// taking ownership of `values`.
+    #[inline]
+    pub fn try_from_vec(values: Vec<Value>) -> Result<Self> {
+        let array = Self { inner: values };
+        crate::utils::limits::check_memory_limit_if_needed().map_err(anyhow::Error::new)?;
+        Ok(array)
+    }
+
+    /// Collect an iterator of `Value`s into an `Array` with memory-limit
+    /// enforcement per-element. Rolls back any partially-collected state on
+    /// limit failure (the returned `Err` leaves nothing behind).
+    pub fn try_from_iter<I: IntoIterator<Item = Value>>(iter: I) -> Result<Self> {
+        let mut array = Self::new();
+        for value in iter {
+            array.push(value)?;
+        }
+        Ok(array)
     }
 
     /// Wrap into a `Value::Array`.
@@ -205,13 +262,13 @@ impl Array {
     /// current contents at each stored index.
     #[cfg(feature = "rvm")]
     #[inline]
-    pub const fn cursor(&self) -> Cursor {
-        Cursor { next: 0 }
+    pub const fn cursor(&self) -> ArrayCursor {
+        ArrayCursor { next: 0 }
     }
 
     /// Advance `cursor` and yield the next `(index, value)` pair. O(1).
     #[cfg(feature = "rvm")]
-    pub fn next<'a>(&'a self, cursor: &mut Cursor) -> Option<(usize, &'a Value)> {
+    pub fn next<'a>(&'a self, cursor: &mut ArrayCursor) -> Option<(usize, &'a Value)> {
         let index = cursor.next;
         let value = self.inner.get(index)?;
         cursor.next = index.saturating_add(1);
@@ -256,25 +313,25 @@ impl ops::Index<usize> for Array {
     }
 }
 
-fn abort_on_growth_error(result: Result<()>) {
-    if result.is_err() {
-        alloc::alloc::handle_alloc_error(core::alloc::Layout::new::<Value>());
-    }
-}
+// Bulk-insertion trait impls mirror the [`crate::value::Object`] convention:
+// they delegate directly to the inner container and **do not** consult the
+// cooperative memory limit. Limit-aware callers must use [`Array::push`],
+// [`Array::extend_from_slice`], [`Array::try_from_vec`], or
+// [`Array::try_from_iter`].
 
 impl Extend<Value> for Array {
+    #[inline]
     fn extend<I: IntoIterator<Item = Value>>(&mut self, iter: I) {
-        for value in iter {
-            abort_on_growth_error(self.push(value));
-        }
+        self.inner.extend(iter);
     }
 }
 
 impl FromIterator<Value> for Array {
+    #[inline]
     fn from_iter<I: IntoIterator<Item = Value>>(iter: I) -> Self {
-        let mut array = Self::new();
-        array.extend(iter);
-        array
+        Self {
+            inner: Vec::from_iter(iter),
+        }
     }
 }
 

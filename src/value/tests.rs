@@ -609,7 +609,7 @@ fn array_mutators_and_accessors() {
     let mut array = Array::new();
     array.push(val(1)).expect("push should fit");
     array.push(val(3)).expect("push should fit");
-    assert_eq!(array.insert(1, val(2)), Some(()));
+    array.insert(1, val(2)).expect("insert should succeed");
 
     assert_eq!(array.len(), 3);
     assert_eq!(array.get(0), Some(&val(1)));
@@ -641,8 +641,8 @@ fn array_out_of_range_access_is_safe() {
     assert_eq!(array[2], Value::Undefined);
     assert_eq!(array[usize::MAX], Value::Undefined);
 
-    // insert past the end returns None instead of panicking.
-    assert_eq!(array.insert(99, val(0)), None);
+    // insert past the end errors instead of panicking.
+    assert!(array.insert(99, val(0)).is_err());
     assert_eq!(array.len(), 2);
 
     // remove past the end returns None instead of panicking.
@@ -650,7 +650,9 @@ fn array_out_of_range_access_is_safe() {
     assert_eq!(array.len(), 2);
 
     // insert at exactly len is valid (append-like).
-    assert_eq!(array.insert(2, val(3)), Some(()));
+    array
+        .insert(2, val(3))
+        .expect("insert at len should succeed");
     assert_eq!(array.as_slice(), &[val(1), val(2), val(3)]);
 }
 
@@ -773,4 +775,29 @@ fn array_iterators_are_double_ended_exact_and_fused() {
     assert_eq!(owned.next(), Some(val(0)));
     assert_eq!(owned.next_back(), Some(val(3)));
     assert_eq!(owned.collect::<Vec<_>>(), vec![val(1), val(2)]);
+}
+
+#[test]
+fn array_try_from_vec_and_try_from_iter() {
+    let from_vec = Array::try_from_vec(vec![val(1), val(2), val(3)])
+        .expect("try_from_vec under no limit succeeds");
+    assert_eq!(from_vec.as_slice(), &[val(1), val(2), val(3)]);
+
+    let from_iter = Array::try_from_iter([val(1), val(2), val(3)])
+        .expect("try_from_iter under no limit succeeds");
+    assert_eq!(from_iter, from_vec);
+}
+
+#[test]
+fn array_insert_out_of_bounds_returns_err() {
+    let mut array = Array::from_iter([val(1), val(2)]);
+    let err = array
+        .insert(99, val(0))
+        .expect_err("out-of-bounds insert should error");
+    let msg = alloc::format!("{err}");
+    assert!(
+        msg.contains("out of bounds"),
+        "error should mention out of bounds: {msg}"
+    );
+    assert_eq!(array.as_slice(), &[val(1), val(2)]);
 }

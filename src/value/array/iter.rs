@@ -127,7 +127,7 @@ impl<'a> FusedIterator for IterMut<'a> {}
 /// of a long-lived state struct (e.g. an RVM iteration frame).
 #[cfg(feature = "rvm")]
 #[derive(Debug, Clone, Default)]
-pub struct Cursor {
+pub struct ArrayCursor {
     pub(super) next: usize,
 }
 

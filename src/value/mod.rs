@@ -11,7 +11,7 @@
     clippy::as_conversions
 )] // value helpers index paths directly for performance
 
-pub mod array;
+mod array;
 mod object;
 
 #[cfg(test)]
@@ -22,6 +22,9 @@ pub use array::Array;
 #[allow(unused_imports)] // surface for downstream PRs
 pub use object::{IntoIter, Iter, IterMut, Object};
 
+#[cfg(feature = "rvm")]
+#[allow(unused_imports)] // surface for downstream PRs
+pub use array::ArrayCursor;
 #[cfg(feature = "rvm")]
 #[allow(unused_imports)] // surface for downstream PRs
 pub use object::ObjectCursor;

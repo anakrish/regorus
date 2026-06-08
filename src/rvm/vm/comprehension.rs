@@ -2,9 +2,8 @@
 // Licensed under the MIT License.
 
 use crate::rvm::instructions::{ComprehensionBeginParams, ComprehensionMode};
-use crate::value::Value;
+use crate::value::{Value, ValueMap};
 use crate::Rc;
-use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -34,7 +33,7 @@ impl RegoVM {
         let initial_result = match params.mode {
             ComprehensionMode::Set => Value::new_set(),
             ComprehensionMode::Array => Value::new_array(),
-            ComprehensionMode::Object => Value::Object(Rc::new(BTreeMap::new())),
+            ComprehensionMode::Object => Value::Object(Rc::new(ValueMap::new())),
         };
         self.set_register(params.result_reg, initial_result.clone())?;
 
@@ -53,10 +52,10 @@ impl RegoVM {
                     if obj.is_empty() {
                         None
                     } else {
+                        let items: Vec<(Value, Value)> = obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                         Some(IterationState::Object {
-                            obj,
-                            current_key: None,
-                            first_iteration: true,
+                            items,
+                            index: 0,
                         })
                     }
                 }
@@ -64,10 +63,10 @@ impl RegoVM {
                     if set.is_empty() {
                         None
                     } else {
+                        let items: Vec<Value> = set.iter().cloned().collect();
                         Some(IterationState::Set {
-                            items: set,
-                            current_item: None,
-                            first_iteration: true,
+                            items,
+                            index: 0,
                         })
                     }
                 }
@@ -123,7 +122,7 @@ impl RegoVM {
         let initial_result = match params.mode {
             ComprehensionMode::Set => Value::new_set(),
             ComprehensionMode::Array => Value::new_array(),
-            ComprehensionMode::Object => Value::Object(Rc::new(BTreeMap::new())),
+            ComprehensionMode::Object => Value::Object(Rc::new(ValueMap::new())),
         };
         self.set_register(params.result_reg, initial_result.clone())?;
 
@@ -142,10 +141,10 @@ impl RegoVM {
                     if obj.is_empty() {
                         None
                     } else {
+                        let items: Vec<(Value, Value)> = obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                         Some(IterationState::Object {
-                            obj,
-                            current_key: None,
-                            first_iteration: true,
+                            items,
+                            index: 0,
                         })
                     }
                 }
@@ -153,10 +152,10 @@ impl RegoVM {
                     if set.is_empty() {
                         None
                     } else {
+                        let items: Vec<Value> = set.iter().cloned().collect();
                         Some(IterationState::Set {
-                            items: set,
-                            current_item: None,
-                            first_iteration: true,
+                            items,
+                            index: 0,
                         })
                     }
                 }
@@ -240,7 +239,7 @@ impl RegoVM {
             context
         } else {
             return Err(VmError::InvalidIteration {
-                value: Value::String(Arc::from("No active comprehension")),
+                value: Value::from("No active comprehension"),
                 pc: self.pc,
             });
         };
@@ -273,7 +272,7 @@ impl RegoVM {
                     self.set_register(result_reg, current_result)?;
                     self.comprehension_stack.push(comprehension_context);
                     return Err(VmError::InvalidIteration {
-                        value: Value::String(Arc::from("Object comprehension requires key")),
+                        value: Value::from("Object comprehension requires key"),
                         pc: self.pc,
                     });
                 }
@@ -293,24 +292,11 @@ impl RegoVM {
 
         if let Some(iter_state) = comprehension_context.iteration_state.as_mut() {
             match *iter_state {
-                IterationState::Object {
-                    ref mut current_key,
-                    ..
-                } => {
-                    let tracked_key =
-                        if comprehension_context.key_reg != comprehension_context.value_reg {
-                            self.get_register(comprehension_context.key_reg)?.clone()
-                        } else {
-                            self.get_register(comprehension_context.value_reg)?.clone()
-                        };
-                    *current_key = Some(tracked_key);
+                IterationState::Object { .. } => {
+                    // index-based: advance() handles incrementing
                 }
-                IterationState::Set {
-                    ref mut current_item,
-                    ..
-                } => {
-                    *current_item =
-                        Some(self.get_register(comprehension_context.value_reg)?.clone());
+                IterationState::Set { .. } => {
+                    // index-based: advance() handles incrementing
                 }
                 IterationState::Array { .. } => {}
             }
@@ -348,7 +334,7 @@ impl RegoVM {
                     .is_some_and(|frame| matches!(frame.kind, FrameKind::Comprehension { .. }))
             })
             .ok_or(VmError::InvalidIteration {
-                value: Value::String(Arc::from("No active comprehension")),
+                value: Value::from("No active comprehension"),
                 pc: self.pc,
             })?;
 
@@ -366,7 +352,7 @@ impl RegoVM {
                 self.execution_stack
                     .get(comprehension_index)
                     .ok_or(VmError::InvalidIteration {
-                        value: Value::String(Arc::from("No active comprehension")),
+                        value: Value::from("No active comprehension"),
                         pc: self.pc,
                     })?;
 
@@ -397,7 +383,7 @@ impl RegoVM {
                 )
             } else {
                 return Err(VmError::InvalidIteration {
-                    value: Value::String(Arc::from("No active comprehension")),
+                    value: Value::from("No active comprehension"),
                     pc: self.pc,
                 });
             }
@@ -420,7 +406,7 @@ impl RegoVM {
                 } else {
                     self.set_register(result_reg_idx, current_result)?;
                     return Err(VmError::InvalidIteration {
-                        value: Value::String(Arc::from("Object comprehension requires key")),
+                        value: Value::from("Object comprehension requires key"),
                         pc: self.pc,
                     });
                 }
@@ -438,7 +424,7 @@ impl RegoVM {
         let (iteration_state_snapshot, body_start, comprehension_end) = {
             let frame = self.execution_stack.get_mut(comprehension_index).ok_or(
                 VmError::InvalidIteration {
-                    value: Value::String(Arc::from("No active comprehension")),
+                    value: Value::from("No active comprehension"),
                     pc: self.pc,
                 },
             )?;
@@ -449,22 +435,11 @@ impl RegoVM {
             {
                 if let Some(iter_state) = context.iteration_state.as_mut() {
                     match *iter_state {
-                        IterationState::Object {
-                            ref mut current_key,
-                            ..
-                        } => {
-                            let tracked_key = if context.key_reg != context.value_reg {
-                                iteration_key.clone()
-                            } else {
-                                iteration_value.clone()
-                            };
-                            *current_key = Some(tracked_key);
+                        IterationState::Object { .. } => {
+                            // index-based: advance() handles incrementing
                         }
-                        IterationState::Set {
-                            ref mut current_item,
-                            ..
-                        } => {
-                            *current_item = Some(iteration_value.clone());
+                        IterationState::Set { .. } => {
+                            // index-based: advance() handles incrementing
                         }
                         IterationState::Array { .. } => {}
                     }
@@ -479,7 +454,7 @@ impl RegoVM {
                 )
             } else {
                 return Err(VmError::InvalidIteration {
-                    value: Value::String(Arc::from("No active comprehension")),
+                    value: Value::from("No active comprehension"),
                     pc: self.pc,
                 });
             }
@@ -582,22 +557,11 @@ impl RegoVM {
         value_reg: u8,
     ) -> Result<()> {
         match *iter_state {
-            IterationState::Object {
-                ref mut current_key,
-                ..
-            } => {
-                let tracked_key = if key_reg != value_reg {
-                    self.get_register(key_reg)?.clone()
-                } else {
-                    self.get_register(value_reg)?.clone()
-                };
-                *current_key = Some(tracked_key);
+            IterationState::Object { .. } => {
+                // index-based: advance() handles incrementing
             }
-            IterationState::Set {
-                ref mut current_item,
-                ..
-            } => {
-                *current_item = Some(self.get_register(value_reg)?.clone());
+            IterationState::Set { .. } => {
+                // index-based: advance() handles incrementing
             }
             IterationState::Array { .. } => {}
         }
@@ -609,7 +573,7 @@ impl RegoVM {
         self.comprehension_stack.pop().map_or_else(
             || {
                 Err(VmError::InvalidIteration {
-                    value: Value::String(Arc::from("No active comprehension context")),
+                    value: Value::from("No active comprehension context"),
                     pc: self.pc,
                 })
             },
@@ -629,7 +593,7 @@ impl RegoVM {
                         self.execution_stack.push(restored);
                     }
                     return Err(VmError::InvalidIteration {
-                        value: Value::String(Arc::from("No active comprehension context")),
+                        value: Value::from("No active comprehension context"),
                         pc: self.pc,
                     });
                 }
@@ -685,7 +649,7 @@ impl RegoVM {
                         self.execution_stack.push(restored);
                     }
                     return Err(VmError::InvalidIteration {
-                        value: Value::String(Arc::from(message.into_boxed_str())),
+                        value: Value::from(message.as_str()),
                         pc: self.pc,
                     });
                 }

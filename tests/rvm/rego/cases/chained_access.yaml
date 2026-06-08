@@ -214,11 +214,11 @@ cases:
       - |
         package test
 
-        x := strings.replace_n({k: v | k := ["f", "foo"][i]; v := ["x", "xxx"][i]}, "foo")
+        x := strings.replace_n({k: v | k := ["hello", "world"][i]; v := ["hi", "earth"][i]}, "hello world")
 
         main := x
     query: data.test.main
-    want_result: "xoo"
+    want_result: "hi earth"
 
   - note: string_literal_bracket_access
     data: {}

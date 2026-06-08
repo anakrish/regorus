@@ -18,6 +18,9 @@ use crate::number::Number;
 use crate::value::Value;
 use crate::*;
 
+#[cfg(not(feature = "optimized-value"))]
+use crate::RcStrExt;
+
 use anyhow::{bail, Result};
 
 pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
@@ -185,10 +188,10 @@ fn to_string(v: &Value, unescape: bool) -> String {
         Value::Null => "null".to_owned(),
         Value::Bool(b) => b.to_string(),
         Value::String(s) if unescape => {
-            serde_json::to_string(s.as_ref()).unwrap_or(s.as_ref().to_string())
+            serde_json::to_string(s.as_str()).unwrap_or(s.as_str().to_string())
         }
-        Value::String(s) => s.as_ref().to_string(),
-        Value::Number(n) => n.format_decimal(),
+        Value::String(s) => s.as_str().to_string(),
+        v if v.is_number() => v.to_number().unwrap().format_decimal(),
         Value::Array(a) => {
             "[".to_owned()
                 + &a.iter()
@@ -214,6 +217,7 @@ fn to_string(v: &Value, unescape: bool) -> String {
                 + "}"
         }
         Value::Undefined => "#undefined".to_string(),
+        _ => unreachable!(),
     }
 }
 
@@ -316,16 +320,18 @@ fn sprintf(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
         // Handle Golang printing verbs.
         // https://pkg.go.dev/fmt
         match (verb, arg) {
-            ('s', Value::String(sv)) => s += sv.as_ref(),
+            ('s', Value::String(sv)) => s += sv.as_str(),
             ('s', v) => s += &to_string(v, false),
 
             ('v', _) => s += &to_string(arg, false),
-            ('b', Value::Number(f)) if f.is_integer() => {
-                let (sign, v) = get_sign_value(f);
+            ('b', v) if v.is_number() && v.to_number().unwrap().is_integer() => {
+                let f = v.to_number().unwrap();
+                let (sign, v) = get_sign_value(&f);
                 s += sign;
                 s += v.format_bin().as_str()
             }
-            ('c', Value::Number(f)) if f.is_integer() => {
+            ('c', v) if v.is_number() && v.to_number().unwrap().is_integer() => {
+                let f = v.to_number().unwrap();
                 // TODO: range error
                 let ch_opt = f.as_u64().map(|ival| char::from_u32(ival as u32));
                 match ch_opt {
@@ -338,41 +344,48 @@ fn sprintf(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
                     }
                 }
             }
-            ('d', Value::Number(f)) if f.is_integer() => {
-                let (sign, v) = get_sign_value(f);
+            ('d', v) if v.is_number() && v.to_number().unwrap().is_integer() => {
+                let f = v.to_number().unwrap();
+                let (sign, v) = get_sign_value(&f);
                 s += sign;
                 s += apply_width(width, v.format_decimal()).as_str()
             }
-            ('o', Value::Number(f)) if f.is_integer() => {
-                let (sign, v) = get_sign_value(f);
+            ('o', v) if v.is_number() && v.to_number().unwrap().is_integer() => {
+                let f = v.to_number().unwrap();
+                let (sign, v) = get_sign_value(&f);
                 s += sign;
                 s += apply_width(width, "0O".to_owned() + &v.format_octal()).as_str()
             }
-            ('O', Value::Number(f)) if f.is_integer() => {
-                let (sign, v) = get_sign_value(f);
+            ('O', v) if v.is_number() && v.to_number().unwrap().is_integer() => {
+                let f = v.to_number().unwrap();
+                let (sign, v) = get_sign_value(&f);
                 s += sign;
                 s += apply_width(width, "0o".to_owned() + &v.format_octal()).as_str()
             }
-            ('x', Value::Number(f)) if f.is_integer() => {
-                let (sign, v) = get_sign_value(f);
+            ('x', v) if v.is_number() && v.to_number().unwrap().is_integer() => {
+                let f = v.to_number().unwrap();
+                let (sign, v) = get_sign_value(&f);
                 s += sign;
                 s += apply_width(width, v.format_hex()).as_str()
             }
-            ('X', Value::Number(f)) if f.is_integer() => {
-                let (sign, v) = get_sign_value(f);
+            ('X', v) if v.is_number() && v.to_number().unwrap().is_integer() => {
+                let f = v.to_number().unwrap();
+                let (sign, v) = get_sign_value(&f);
                 s += sign;
                 s += apply_width(width, v.format_big_hex()).as_str()
             }
-            ('e', Value::Number(f)) => s += &f.format_scientific(),
-            ('E', Value::Number(f)) => s += &f.format_scientific().replace('e', "E"),
-            ('f' | 'F', Value::Number(f)) => {
+            ('e', v) if v.is_number() => s += &v.to_number().unwrap().format_scientific(),
+            ('E', v) if v.is_number() => s += &v.to_number().unwrap().format_scientific().replace('e', "E"),
+            ('f' | 'F', v) if v.is_number() => {
+                let f = v.to_number().unwrap();
                 s += &match width {
                     Width::Decimals(d) => f.format_decimal_with_width(d as u32),
                     _ => apply_width(width, f.format_decimal()),
                 }
             }
-            ('g', Value::Number(f)) => {
-                let (sign, v) = get_sign_value(f);
+            ('g', v) if v.is_number() => {
+                let f = v.to_number().unwrap();
+                let (sign, v) = get_sign_value(&f);
                 let v = match v.as_f64() {
                     Some(v) => v,
                     _ => bail!(span.error("cannot print large float using g format specified")),
@@ -387,8 +400,9 @@ fn sprintf(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
                     s += format!("{v}").as_str()
                 }
             }
-            ('G', Value::Number(f)) => {
-                let (sign, v) = get_sign_value(f);
+            ('G', v) if v.is_number() => {
+                let f = v.to_number().unwrap();
+                let (sign, v) = get_sign_value(&f);
                 let v = match v.as_f64() {
                     Some(v) => v,
                     _ => bail!("cannot print large float using g format specified"),
@@ -403,7 +417,7 @@ fn sprintf(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
                     s += format!("{v}").as_str()
                 }
             }
-            (_, Value::Number(_)) => {
+            (_, v) if v.is_number() => {
                 bail!(args_span.error(&format!("number specified for format verb {verb}.")));
             }
 
@@ -571,7 +585,7 @@ fn replace_n(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -
     for item in obj.as_ref().iter() {
         match item {
             (Value::String(k), Value::String(v)) => {
-                s = s.replace(k.as_ref(), v.as_ref()).into();
+                s = s.replace(k.as_str(), v.as_str()).into();
             }
             _ => {
                 bail!(span.error(
@@ -581,7 +595,7 @@ fn replace_n(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -
         }
     }
 
-    Ok(Value::String(s.clone()))
+    Ok(Value::from(s.as_ref()))
 }
 
 fn reverse(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
@@ -635,10 +649,8 @@ fn trim_prefix(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool)
     ensure_args_count(span, name, params, args, 2)?;
     let s1 = ensure_string(name, &params[0], &args[0])?;
     let s2 = ensure_string(name, &params[1], &args[1])?;
-    Ok(Value::String(match s1.strip_prefix(s2.as_ref()) {
-        Some(s) => s.into(),
-        _ => s1,
-    }))
+    let stripped = s1.strip_prefix(s2.as_ref()).unwrap_or(&s1);
+    Ok(Value::from(stripped))
 }
 
 fn trim_right(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
@@ -663,10 +675,8 @@ fn trim_suffix(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool)
     ensure_args_count(span, name, params, args, 2)?;
     let s1 = ensure_string(name, &params[0], &args[0])?;
     let s2 = ensure_string(name, &params[1], &args[1])?;
-    Ok(Value::String(match s1.strip_suffix(s2.as_ref()) {
-        Some(s) => s.into(),
-        _ => s1,
-    }))
+    let stripped = s1.strip_suffix(s2.as_ref()).unwrap_or(&s1);
+    Ok(Value::from(stripped))
 }
 
 fn upper(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {

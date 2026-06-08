@@ -1107,7 +1107,7 @@ impl Engine {
             let path: Vec<&str> = path.iter().map(|s| s.text()).collect();
             let vref =
                 Interpreter::make_or_get_value_mut(self.interpreter.get_data_mut(), &path[..])?;
-            if *vref == Value::Undefined {
+            if vref.is_undefined() {
                 *vref = Value::new_object();
             }
         }
@@ -1133,7 +1133,7 @@ impl Engine {
             let path: Vec<&str> = path.iter().map(|s| s.text()).collect();
             let vref =
                 Interpreter::make_or_get_value_mut(self.interpreter.get_data_mut(), &path[..])?;
-            if *vref == Value::Undefined {
+            if vref.is_undefined() {
                 *vref = Value::new_object();
             }
         }

@@ -35,7 +35,7 @@ impl Program {
         full_path.push(rule_name);
 
         let target = self.rule_tree.make_or_get_value_mut(&full_path)?;
-        *target = Value::Number(rule_index.into());
+        *target = Value::from_number(rule_index.into());
 
         Ok(())
     }
@@ -68,8 +68,8 @@ impl Program {
                         let data_value = &data[key];
 
                         match *rule_value {
-                            Value::Number(_) => {
-                                if data_value != &Value::Undefined {
+                            ref v if v.is_number() => {
+                                if !data_value.is_undefined() {
                                     return Err(crate::rvm::vm::VmError::RuleDataConflict {
                                         message: format!(
                                             "Conflict: rule defines path '{}' but data also provides this path",
@@ -86,7 +86,7 @@ impl Program {
                                         data_value,
                                         current_path,
                                     )?;
-                                } else if data_value != &Value::Undefined {
+                                } else if !data_value.is_undefined() {
                                     return Err(crate::rvm::vm::VmError::RuleDataConflict {
                                         message: format!(
                                             "Conflict: rule defines subpaths under '{}' but data provides a non-object value at this path",

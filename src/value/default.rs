@@ -18,6 +18,15 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::ops;
 
+/// The concrete set type backing [`Value::Set`].
+pub type ValueSet = BTreeSet<Value>;
+
+/// The concrete map type backing [`Value::Object`].
+pub type ValueMap = BTreeMap<Value, Value>;
+
+/// Entry type for [`ValueMap`].
+pub type ValueMapEntry<'a> = alloc::collections::btree_map::Entry<'a, Value, Value>;
+
 use core::convert::AsRef;
 use core::str::FromStr;
 
@@ -1205,6 +1214,30 @@ impl Value {
             Value::Number(n) => Ok(n),
             _ => Err(anyhow!("not a number")),
         }
+    }
+
+    /// Returns `true` if this value is [`Value::Undefined`].
+    #[inline(always)]
+    pub fn is_undefined(&self) -> bool {
+        matches!(self, Value::Undefined)
+    }
+
+    /// Check whether this value is a numeric variant.
+    pub fn is_number(&self) -> bool {
+        matches!(self, Value::Number(_))
+    }
+
+    /// Extract the number payload as a `Number`, if this is a numeric variant.
+    pub fn to_number(&self) -> Option<Number> {
+        match self {
+            Value::Number(n) => Some(n.clone()),
+            _ => None,
+        }
+    }
+
+    /// Construct a Value from a Number.
+    pub fn from_number(n: Number) -> Self {
+        Value::Number(n)
     }
 
     /// Cast value to [`& Vec<Value>`] if [`Value::Array`].

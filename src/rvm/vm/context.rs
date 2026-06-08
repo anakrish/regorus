@@ -4,7 +4,6 @@
 use crate::rvm::instructions::{ComprehensionMode, LoopMode};
 use crate::value::Value;
 use crate::Rc;
-use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 /// Loop execution context for managing iteration state
@@ -32,14 +31,12 @@ pub enum IterationState {
         index: usize,
     },
     Object {
-        obj: Rc<BTreeMap<Value, Value>>,
-        current_key: Option<Value>,
-        first_iteration: bool,
+        items: Vec<(Value, Value)>,
+        index: usize,
     },
     Set {
-        items: Rc<BTreeSet<Value>>,
-        current_item: Option<Value>,
-        first_iteration: bool,
+        items: Vec<Value>,
+        index: usize,
     },
 }
 
@@ -49,15 +46,11 @@ impl IterationState {
             Self::Array { ref mut index, .. } => {
                 *index = index.saturating_add(1);
             }
-            Self::Object {
-                ref mut first_iteration,
-                ..
+            Self::Object { ref mut index, .. } => {
+                *index = index.saturating_add(1);
             }
-            | Self::Set {
-                ref mut first_iteration,
-                ..
-            } => {
-                *first_iteration = false;
+            Self::Set { ref mut index, .. } => {
+                *index = index.saturating_add(1);
             }
         }
     }

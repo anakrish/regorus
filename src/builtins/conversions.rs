@@ -10,6 +10,9 @@ use crate::lexer::Span;
 use crate::value::Value;
 use crate::*;
 
+#[cfg(not(feature = "optimized-value"))]
+use crate::RcStrExt;
+
 use anyhow::{bail, Result};
 
 pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
@@ -25,12 +28,12 @@ fn to_number(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -
         Value::Null => Value::from(0u64),
         Value::Bool(true) => Value::from(1u64),
         Value::Bool(false) => Value::from(0u64),
-        Value::Number(_) => args[0].clone(),
+        v if v.is_number() => args[0].clone(),
         // Eventhough the doc says that strings are converted using strconv.Atoi golang method,
         // in practice strings seems to be read as json numbers. This means that floating point
         // numbers are read and the string representation is limited to what json allows.
-        Value::String(s) => match Value::from_json_str(s) {
-            Ok(Value::Number(n)) => Value::Number(n),
+        Value::String(s) => match Value::from_json_str(s.as_str()) {
+            Ok(v) if v.is_number() => v,
             _ => {
                 bail!(span.error("could not parse string as number"));
             }

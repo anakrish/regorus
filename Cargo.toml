@@ -3,6 +3,7 @@
 members = [
     "tests/ensure_no_std",
   "xtask",
+  "value-compare",
 ]
 
 [package]
@@ -24,6 +25,7 @@ default = ["full-opa", "arc", "rvm"]
 
 arc = []
 ast = []
+optimized-value = ["arc", "dep:hashbrown", "dep:arcstr"]
 azure_policy = ["dep:jsonschema", "arc", "dashmap"]
 azure-rbac = ["regex", "time", "net"]
 base64 = ["dep:data-encoding"]
@@ -127,6 +129,8 @@ dashmap = { version = "6.1", default-features = false, optional = true }
 mimalloc = { package = "regorus-mimalloc", path = "mimalloc", version = "2.2.6", optional = true }
 
 # rvm related deps
+arcstr = { version = "1.2", default-features = false, features = ["serde"], optional = true }
+hashbrown = { version = "0.15", default-features = false, features = ["default-hasher"], optional = true }
 indexmap = { version = "2.12.1", default-features = false, features = ["serde"], optional = true }
 postcard = { version = "1.1.3", default-features = false, features = ["alloc"], optional = true }
 
@@ -193,6 +197,10 @@ harness = false
 name = "rvm_benchmark"
 harness = false
 required-features = ["rvm"]
+
+[[bench]]
+name = "value_ops_benchmark"
+harness = false
 
 [[example]]
 name="regorus"

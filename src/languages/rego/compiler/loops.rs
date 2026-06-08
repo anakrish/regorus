@@ -16,6 +16,10 @@ use crate::lexer::Span;
 use crate::rvm::instructions::{LoopMode, LoopStartParams};
 use crate::rvm::Instruction;
 use crate::Value;
+
+#[cfg(not(feature = "optimized-value"))]
+use crate::RcStrExt;
+
 use alloc::format;
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -237,7 +241,7 @@ impl<'a> Compiler<'a> {
                     ast::Expr::Var { value, .. } => {
                         let var_name = match value {
                             Value::String(s) => {
-                                if s.as_ref() == "_" {
+                                if s.as_str() == "_" {
                                     "".to_string()
                                 } else {
                                     s.to_string()

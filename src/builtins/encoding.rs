@@ -14,6 +14,9 @@ use crate::lexer::Span;
 use crate::value::Value;
 use crate::*;
 
+#[cfg(not(feature = "optimized-value"))]
+use crate::RcStrExt;
+
 #[allow(unused)]
 use anyhow::{anyhow, bail, Context, Result};
 
@@ -252,7 +255,7 @@ fn urlquery_decode_object(
         Err(_) => bail!(params[0].span().error("not a valid url query")),
     };
 
-    let mut map = alloc::collections::BTreeMap::new();
+    let mut map = crate::value::ValueMap::new();
     for (k, v) in url.query_pairs() {
         let key = Value::String(k.clone().into());
         let value = Value::String(v.clone().into());
@@ -403,22 +406,22 @@ fn json_marshal_with_options(
     let (mut pretty, mut indent, mut prefix) = (true, Some("\t".to_owned()), None);
     for (option, option_value) in options.iter() {
         match option {
-            Value::String(s) if s.as_ref() == "pretty" && option_value.as_bool().is_ok() => {
+            Value::String(s) if s.as_str() == "pretty" && option_value.as_bool().is_ok() => {
                 pretty = option_value == &Value::Bool(true);
             }
-            Value::String(s) if s.as_ref() == "pretty" => bail!(params[1]
+            Value::String(s) if s.as_str() == "pretty" => bail!(params[1]
                 .span()
                 .error("marshaling option `pretty` must be true or false")),
-            Value::String(s) if s.as_ref() == "prefix" && option_value.as_string().is_ok() => {
-                prefix = Some(option_value.as_string()?.as_ref().to_string());
+            Value::String(s) if s.as_str() == "prefix" && option_value.as_string().is_ok() => {
+                prefix = Some(option_value.as_string()?.as_str().to_string());
             }
-            Value::String(s) if s.as_ref() == "prefix" => bail!(params[1]
+            Value::String(s) if s.as_str() == "prefix" => bail!(params[1]
                 .span()
                 .error("marshaling option `pretty` must be string")),
-            Value::String(s) if s.as_ref() == "indent" && option_value.as_string().is_ok() => {
-                indent = Some(option_value.as_string()?.as_ref().to_string());
+            Value::String(s) if s.as_str() == "indent" && option_value.as_string().is_ok() => {
+                indent = Some(option_value.as_string()?.as_str().to_string());
             }
-            Value::String(s) if s.as_ref() == "indent" => bail!(params[1]
+            Value::String(s) if s.as_str() == "indent" => bail!(params[1]
                 .span()
                 .error("marshaling option `pretty` must be string")),
             _ => bail!(params[1]

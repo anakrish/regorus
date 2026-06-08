@@ -8,7 +8,7 @@ use crate::lexer::Span;
 use crate::value::Value;
 use crate::*;
 
-use alloc::collections::BTreeMap;
+use crate::value::ValueMap;
 
 use anyhow::Result;
 use uuid::{Timestamp, Uuid};
@@ -28,10 +28,10 @@ fn parse(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Re
     };
     let version = uuid.get_version_num();
 
-    let mut result = BTreeMap::new();
+    let mut result = ValueMap::new();
     result.insert(
         Value::String("version".into()),
-        Value::Number(version.into()),
+        Value::from(version),
     );
     result.insert(
         Value::String("variant".into()),
@@ -41,7 +41,7 @@ fn parse(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Re
     if let Some(time) = timestamp(&uuid) {
         let (sec, nanosec) = time.to_unix();
         let time = sec.wrapping_mul(1_000_000_000).wrapping_add(nanosec as u64);
-        result.insert(Value::String("time".into()), Value::Number(time.into()));
+        result.insert(Value::String("time".into()), Value::from(time));
     }
 
     if version == 1 || version == 2 {
@@ -66,13 +66,13 @@ fn parse(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Re
         let clock_seq = u16::from_be_bytes([f4[0], f4[1]]) & 0x3fff;
         result.insert(
             Value::String("clocksequence".into()),
-            Value::Number((clock_seq as u64).into()),
+            Value::from((clock_seq as u64)),
         );
 
         if version == 2 {
             result.insert(
                 Value::String("id".into()),
-                Value::Number((f1 as u64).into()),
+                Value::from((f1 as u64)),
             );
             result.insert(
                 Value::String("domain".into()),

@@ -23,5 +23,5 @@ fn trace(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Re
     // The interpreter accumulates the traces.
     // TODO: Stateful bultins can pass in a state that would allow capturing
     // the traces in the state.
-    Ok(Value::String(msg))
+    Ok(Value::from(msg.as_ref()))
 }

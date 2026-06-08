@@ -47,7 +47,7 @@ impl RegoVM {
             return Ok(());
         };
 
-        if *target == Value::Undefined {
+        if target.is_undefined() {
             *target = Value::new_object();
         }
 
@@ -92,7 +92,8 @@ impl RegoVM {
         relative_path: &mut Vec<Value>,
     ) -> Result<()> {
         match *rule_tree_node {
-            Value::Number(ref rule_idx) => {
+            ref v if v.is_number() => {
+                let rule_idx = v.to_number().unwrap();
                 if let Some(rule_index) = rule_idx.as_u64() {
                     // Walk the evaluated cache using root_path then relative_path,
                     // without allocating a combined full_cache_path Vec.
@@ -140,7 +141,7 @@ impl RegoVM {
                         self.registers.push(Value::Undefined);
                         let rule_index_u16 =
                             u16::try_from(rule_index).map_err(|_| VmError::InvalidRuleIndex {
-                                rule_index: Value::Number(rule_idx.clone()),
+                                rule_index: Value::from_number(rule_idx.clone()),
                                 pc: self.pc,
                             })?;
                         self.execute_call_rule_common(temp_reg, rule_index_u16, None)?;
@@ -176,7 +177,7 @@ impl RegoVM {
                     Self::set_nested_value(result_subobject, relative_path, rule_result)?;
                 } else {
                     return Err(VmError::InvalidRuleIndex {
-                        rule_index: Value::Number(rule_idx.clone()),
+                        rule_index: Value::from_number(rule_idx.clone()),
                         pc: self.pc,
                     });
                 }
@@ -224,17 +225,19 @@ impl RegoVM {
             components_consumed = self.checked_add_one(i, "path components traversed")?;
 
             match *current_node {
-                Value::Undefined | Value::Number(_) => break,
+                Value::Undefined => break,
+                ref v if v.is_number() => break,
                 _ => {}
             }
         }
 
         match *current_node {
-            Value::Number(ref rule_index_value) => {
+            ref v if v.is_number() => {
+                let rule_index_value = v.to_number().unwrap();
                 if let Some(rule_index) = rule_index_value.as_u64() {
                     let rule_index =
                         u16::try_from(rule_index).map_err(|_| VmError::InvalidRuleIndex {
-                            rule_index: Value::Number(rule_index_value.clone()),
+                            rule_index: Value::from_number(rule_index_value.clone()),
                             pc: self.pc,
                         })?;
 
@@ -254,7 +257,7 @@ impl RegoVM {
                     }
                 } else {
                     return Err(VmError::InvalidRuleIndex {
-                        rule_index: Value::Number(rule_index_value.clone()),
+                        rule_index: Value::from_number(rule_index_value),
                         pc: self.pc,
                     });
                 }

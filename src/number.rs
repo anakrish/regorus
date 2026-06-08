@@ -322,6 +322,21 @@ impl PartialOrd for Number {
     }
 }
 
+impl core::hash::Hash for Number {
+    /// Hash consistent with `PartialEq`: values that compare equal produce
+    /// the same hash.  Integer-representable numbers hash via their `BigInt`
+    /// form; pure floats hash via `to_bits()`.
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        if let Some(bi) = self.to_bigint_owned() {
+            0u8.hash(state);
+            bi.hash(state);
+        } else {
+            1u8.hash(state);
+            self.to_f64_lossy().to_bits().hash(state);
+        }
+    }
+}
+
 impl Number {
     pub fn as_u128(&self) -> Option<u128> {
         match self {

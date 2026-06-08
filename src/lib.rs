@@ -175,6 +175,9 @@ pub use utils::limits::{
 };
 pub use value::Value;
 
+#[cfg(not(feature = "optimized-value"))]
+pub(crate) use value::RcStrExt;
+
 #[cfg(feature = "arc")]
 pub use alloc::sync::Arc as Rc;
 

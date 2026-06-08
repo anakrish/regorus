@@ -12,6 +12,9 @@ use crate::rvm::{
     program::Program,
 };
 
+#[cfg(not(feature = "optimized-value"))]
+use crate::RcStrExt;
+
 // Writing into a String via fmt never fails, so we intentionally ignore writeln! results.
 fn push_line(buf: &mut String, args: fmt::Arguments) {
     let _ = buf.write_fmt(args);
@@ -674,7 +677,7 @@ fn format_instruction_readable(
                             crate::rvm::instructions::LiteralOrRegister::Literal(idx) => {
                                 if let Some(literal) = program.literals.get(usize::from(idx)) {
                                     match *literal {
-                                        crate::Value::String(ref s) => format!(".{}", s.as_ref()),
+                                        crate::Value::String(ref s) => format!(".{}", s.as_str()),
                                         ref other => format!(
                                             "[{}]",
                                             serde_json::to_string(other)

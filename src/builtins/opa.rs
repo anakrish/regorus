@@ -9,7 +9,7 @@ use crate::*;
 use crate::lexer::Span;
 use crate::value::Value;
 
-use alloc::collections::BTreeMap;
+use crate::value::ValueMap;
 
 use anyhow::Result;
 
@@ -20,7 +20,7 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
 fn opa_runtime(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "opa.runtime";
     ensure_args_count(span, name, params, args, 0)?;
-    let mut obj = BTreeMap::new();
+    let mut obj = ValueMap::new();
 
     obj.insert(
         Value::String("commit".into()),

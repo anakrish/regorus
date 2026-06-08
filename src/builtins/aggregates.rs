@@ -111,6 +111,7 @@ fn sort(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Res
                 // Guard array growth while materializing the sorted set.
                 enforce_limit()?;
             }
+            items.sort();
             Value::from(items)
         }
         a => {

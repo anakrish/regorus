@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-use alloc::collections::{BTreeMap, BTreeSet};
+use crate::value::{ValueMap, ValueSet};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::number::Number;
 use crate::value::Value;
+
+#[cfg(not(feature = "optimized-value"))]
+use crate::RcStrExt;
 
 const VARIANT_NULL: u32 = 0;
 const VARIANT_BOOL: u32 = 1;
@@ -39,7 +42,36 @@ impl<'a> Serialize for BinaryValueRef<'a> {
             Value::Bool(b) => {
                 serializer.serialize_newtype_variant("BinaryValue", VARIANT_BOOL, "Bool", &b)
             }
-            Value::Number(ref n) => {
+            Value::String(ref s) => serializer.serialize_newtype_variant(
+                "BinaryValue",
+                VARIANT_STRING,
+                "String",
+                s.as_str(),
+            ),
+            Value::Array(ref items) => serializer.serialize_newtype_variant(
+                "BinaryValue",
+                VARIANT_ARRAY,
+                "Array",
+                &BinaryValueSlice(items.as_slice()),
+            ),
+            Value::Set(ref items) => serializer.serialize_newtype_variant(
+                "BinaryValue",
+                VARIANT_SET,
+                "Set",
+                &BinarySetRef(items.as_ref()),
+            ),
+            Value::Object(ref entries) => serializer.serialize_newtype_variant(
+                "BinaryValue",
+                VARIANT_OBJECT,
+                "Object",
+                &BinaryObjectRef(entries.as_ref()),
+            ),
+            Value::Undefined => {
+                serializer.serialize_unit_variant("BinaryValue", VARIANT_UNDEFINED, "Undefined")
+            }
+            // Number variants handled by to_number()
+            _ => {
+                let n = self.0.to_number().unwrap();
                 if let Some(value) = n.as_i64() {
                     serializer.serialize_newtype_variant(
                         "BinaryValue",
@@ -70,33 +102,6 @@ impl<'a> Serialize for BinaryValueRef<'a> {
                     )
                 }
             }
-            Value::String(ref s) => serializer.serialize_newtype_variant(
-                "BinaryValue",
-                VARIANT_STRING,
-                "String",
-                s.as_ref(),
-            ),
-            Value::Array(ref items) => serializer.serialize_newtype_variant(
-                "BinaryValue",
-                VARIANT_ARRAY,
-                "Array",
-                &BinaryValueSlice(items.as_slice()),
-            ),
-            Value::Set(ref items) => serializer.serialize_newtype_variant(
-                "BinaryValue",
-                VARIANT_SET,
-                "Set",
-                &BinarySetRef(items.as_ref()),
-            ),
-            Value::Object(ref entries) => serializer.serialize_newtype_variant(
-                "BinaryValue",
-                VARIANT_OBJECT,
-                "Object",
-                &BinaryObjectRef(entries.as_ref()),
-            ),
-            Value::Undefined => {
-                serializer.serialize_unit_variant("BinaryValue", VARIANT_UNDEFINED, "Undefined")
-            }
         }
     }
 }
@@ -117,30 +122,40 @@ impl<'a> Serialize for BinaryValueSlice<'a> {
     }
 }
 
-struct BinarySetRef<'a>(&'a BTreeSet<Value>);
+struct BinarySetRef<'a>(&'a ValueSet);
 
 impl<'a> Serialize for BinarySetRef<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
-        for value in self.0.iter() {
+        let mut sorted: Vec<&Value> = self.0.iter().collect();
+        sorted.sort();
+        let mut seq = serializer.serialize_seq(Some(sorted.len()))?;
+        for value in sorted {
             seq.serialize_element(&BinaryValueRef(value))?;
         }
         seq.end()
     }
 }
 
-struct BinaryObjectRef<'a>(&'a BTreeMap<Value, Value>);
+struct BinaryObjectRef<'a>(&'a ValueMap);
 
 impl<'a> Serialize for BinaryObjectRef<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
-        for (key, value) in self.0.iter() {
+        #[cfg(feature = "optimized-value")]
+        let sorted = self.0.iter_sorted();
+        #[cfg(not(feature = "optimized-value"))]
+        let sorted = {
+            let mut s: Vec<(&Value, &Value)> = self.0.iter().collect();
+            s.sort_by(|a, b| a.0.cmp(&b.0));
+            s
+        };
+        let mut seq = serializer.serialize_seq(Some(sorted.len()))?;
+        for (key, value) in sorted {
             seq.serialize_element(&BinaryEntryRef(key, value))?;
         }
         seq.end()
@@ -253,7 +268,7 @@ impl<'de> Visitor<'de> for BinaryValueVisitor {
             }
             (BinaryVariant::Set, variant) => {
                 let items: Vec<BinaryValue> = variant.newtype_variant()?;
-                let mut set = BTreeSet::new();
+                let mut set = ValueSet::new();
                 for item in items {
                     set.insert(item.into_value());
                 }
@@ -261,7 +276,7 @@ impl<'de> Visitor<'de> for BinaryValueVisitor {
             }
             (BinaryVariant::Object, variant) => {
                 let entries: Vec<(BinaryValue, BinaryValue)> = variant.newtype_variant()?;
-                let mut map = BTreeMap::new();
+                let mut map = ValueMap::new();
                 for (key, value) in entries {
                     map.insert(key.into_value(), value.into_value());
                 }

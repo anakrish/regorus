@@ -8,6 +8,9 @@ use crate::builtins::utils::{ensure_args_count, ensure_string};
 use crate::lexer::Span;
 use crate::value::Value;
 
+#[cfg(not(feature = "optimized-value"))]
+use crate::RcStrExt;
+
 use semver::Version;
 
 use core::cmp::Ordering;
@@ -38,15 +41,13 @@ fn compare(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
 fn is_valid(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
     let name = "semver.is_valid";
     ensure_args_count(span, name, params, args, 1)?;
-    Ok(Value::Bool(
-        Version::parse(&if strict {
-            ensure_string(name, &params[0], &args[0])?
-        } else {
-            match &args[0] {
-                Value::String(s) => s.clone(),
-                _ => return Ok(Value::Bool(false)),
-            }
-        })
-        .is_ok(),
-    ))
+    let s: alloc::string::String = if strict {
+        alloc::string::String::from(&*ensure_string(name, &params[0], &args[0])?)
+    } else {
+        match &args[0] {
+            Value::String(s) => alloc::string::String::from(s.as_str()),
+            _ => return Ok(Value::Bool(false)),
+        }
+    };
+    Ok(Value::Bool(Version::parse(&s).is_ok()))
 }

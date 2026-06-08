@@ -89,7 +89,7 @@ impl RegoVM {
                     Ok(_) => {
                         if matches!(rule_info.rule_type, RuleType::Complete) || is_function_call {
                             let current_result = self.get_register(result_reg)?.clone();
-                            if current_result != Value::Undefined {
+                            if !current_result.is_undefined() {
                                 if let Some(ref expected) = first_successful_result {
                                     if *expected != current_result {
                                         rule_failed_due_to_inconsistency = true;
@@ -233,7 +233,7 @@ impl RegoVM {
 
         self.set_register(dest, result_from_rule)?;
 
-        if self.get_register(dest)? == &Value::Undefined && !rule_failed_due_to_inconsistency {
+        if self.get_register(dest)?.is_undefined() && !rule_failed_due_to_inconsistency {
             match call_context.rule_type {
                 RuleType::PartialSet => {
                     self.set_register(dest, Value::new_set())?;
@@ -595,7 +595,7 @@ impl RegoVM {
                 .cloned()
                 .unwrap_or(Value::Undefined);
 
-            if current_result != Value::Undefined {
+            if !current_result.is_undefined() {
                 if let Some(ref expected) = frame_data.accumulated_result {
                     if *expected != current_result {
                         frame_data.rule_failed_due_to_inconsistency = true;
@@ -689,7 +689,7 @@ impl RegoVM {
 
         let needs_default = parent_registers
             .get(dest_idx)
-            .is_some_and(|value| *value == Value::Undefined);
+            .is_some_and(|value| value.is_undefined());
 
         if needs_default && !rule_failed_due_to_inconsistency {
             match rule_type {

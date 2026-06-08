@@ -22,6 +22,10 @@ use crate::lookup::Lookup;
 use crate::lookup::LookupResult;
 use crate::scheduler::compute_module_globals;
 use crate::*;
+
+#[cfg(not(feature = "optimized-value"))]
+use crate::RcStrExt;
+
 use anyhow::{anyhow, Result};
 
 use alloc::collections::BTreeSet;
@@ -756,7 +760,7 @@ impl LoopHoister {
                     ..
                 } = fcn.as_ref()
                 {
-                    name.as_ref() == "walk"
+                    name.as_str() == "walk"
                 } else {
                     false
                 };

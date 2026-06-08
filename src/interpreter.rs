@@ -28,8 +28,12 @@ use crate::{Expression, Extension, Location, QueryResult, QueryResults};
 use crate::query::traversal::traverse;
 
 use crate::Rc;
-use alloc::collections::btree_map::Entry as BTreeMapEntry;
 use alloc::collections::{BTreeMap, BTreeSet};
+use crate::value::{ValueSet, ValueMap, ValueMapEntry};
+
+#[cfg(not(feature = "optimized-value"))]
+use crate::RcStrExt;
+
 use anyhow::{anyhow, bail, Result};
 use core::ops::Bound::*;
 
@@ -577,7 +581,7 @@ impl Interpreter {
 
                         // Handle indexing into data.
                         if let Ok(ref_path) = get_path_string(refr, None) {
-                            if get_root_var(refr)?.text() == "data" && index != Value::Undefined {
+                            if get_root_var(refr)?.text() == "data" && !index.is_undefined() {
                                 let index = match &index {
                                     Value::String(s) => s.to_string(),
                                     _ => index.to_string(),
@@ -597,8 +601,8 @@ impl Interpreter {
                         // Qualified references starting with data (e.g data.p.q) can
                         // be indexed using numbers. The number will be converted to string
                         // if a matching key exists.
-                        if v == Value::Undefined
-                            && matches!(index, Value::Number(_))
+                        if v.is_undefined()
+                            && index.is_number()
                             && get_root_var(refr)?.text() == "data"
                         {
                             let index = index.to_string();
@@ -624,7 +628,7 @@ impl Interpreter {
         let lhs = self.eval_expr(lhs_expr)?;
         let rhs = self.eval_expr(rhs_expr)?;
 
-        if lhs == Value::Undefined || rhs == Value::Undefined {
+        if lhs.is_undefined() || rhs.is_undefined() {
             return Ok(Value::Undefined);
         }
 
@@ -635,7 +639,7 @@ impl Interpreter {
         let lhs_value = self.eval_expr(lhs)?;
         let rhs_value = self.eval_expr(rhs)?;
 
-        if lhs_value == Value::Undefined || rhs_value == Value::Undefined {
+        if lhs_value.is_undefined() || rhs_value.is_undefined() {
             return Ok(Value::Undefined);
         }
 
@@ -655,7 +659,7 @@ impl Interpreter {
         let lhs_value = self.eval_expr(lhs)?;
         let rhs_value = self.eval_expr(rhs)?;
 
-        if lhs_value == Value::Undefined || rhs_value == Value::Undefined {
+        if lhs_value.is_undefined() || rhs_value.is_undefined() {
             return Ok(Value::Undefined);
         }
 
@@ -745,15 +749,15 @@ impl Interpreter {
         value: &Value,
     ) -> Result<Value> {
         self.check_execution_time()?;
-        if value == &Value::Undefined {
+        if value.is_undefined() {
             return Ok(Value::Undefined);
         }
 
         fn compare(v1: &Value, v2: &Value) -> Result<Value> {
-            if v1 != v2 || v1 == &Value::Undefined {
+            if v1 != v2 || v1.is_undefined() {
                 Ok(Value::Undefined)
             } else {
-                Ok(Value::from(true))
+                Ok(Value::Bool(true))
             }
         }
 
@@ -787,12 +791,12 @@ impl Interpreter {
                         };
 
                         if self.execute_destructuring_plan(element_plan, element)?
-                            != Value::from(true)
+                            != Value::Bool(true)
                         {
                             return Ok(Value::Undefined);
                         }
                     }
-                    Ok(Value::from(true))
+                    Ok(Value::Bool(true))
                 } else {
                     Ok(Value::Undefined) // Not an array
                 }
@@ -808,7 +812,7 @@ impl Interpreter {
                     for (key, field_plan) in field_plans {
                         if let Some(field_value) = obj.get(key) {
                             if self.execute_destructuring_plan(field_plan, field_value)?
-                                != Value::from(true)
+                                != Value::Bool(true)
                             {
                                 return Ok(Value::Undefined);
                             }
@@ -820,13 +824,13 @@ impl Interpreter {
                     if !dynamic_fields.is_empty() {
                         for (key_expr, field_plan) in dynamic_fields {
                             let key_value = self.eval_expr(key_expr)?;
-                            if key_value == Value::Undefined {
+                            if key_value.is_undefined() {
                                 return Ok(Value::Undefined);
                             }
 
                             if let Some(field_value) = obj.get(&key_value) {
                                 if self.execute_destructuring_plan(field_plan, field_value)?
-                                    != Value::from(true)
+                                    != Value::Bool(true)
                                 {
                                     return Ok(Value::Undefined);
                                 }
@@ -835,7 +839,7 @@ impl Interpreter {
                             }
                         }
                     }
-                    Ok(Value::from(true))
+                    Ok(Value::Bool(true))
                 } else {
                     Ok(Value::Undefined) // Not an object
                 }
@@ -884,11 +888,11 @@ impl Interpreter {
                 // For = with both sides having patterns, execute each flattened pair
                 for (value_expr, pattern_plan) in element_pairs {
                     let value = self.eval_expr(value_expr)?;
-                    if self.execute_destructuring_plan(pattern_plan, &value)? != Value::from(true) {
+                    if self.execute_destructuring_plan(pattern_plan, &value)? != Value::Bool(true) {
                         return Ok(Value::Undefined);
                     }
                 }
-                Ok(Value::from(true))
+                Ok(Value::Bool(true))
             }
 
             AssignmentPlan::WildcardMatch {
@@ -899,7 +903,7 @@ impl Interpreter {
                 WildcardSide::Both => Ok(Value::Bool(true)),
                 WildcardSide::Lhs => {
                     let rhs_value = self.eval_expr(rhs_expr)?;
-                    if rhs_value == Value::Undefined {
+                    if rhs_value.is_undefined() {
                         Ok(Value::Undefined)
                     } else {
                         Ok(Value::Bool(true))
@@ -907,7 +911,7 @@ impl Interpreter {
                 }
                 WildcardSide::Rhs => {
                     let lhs_value = self.eval_expr(lhs_expr)?;
-                    if lhs_value == Value::Undefined {
+                    if lhs_value.is_undefined() {
                         Ok(Value::Undefined)
                     } else {
                         Ok(Value::Bool(true))
@@ -919,7 +923,7 @@ impl Interpreter {
                 let lhs_value = self.eval_expr(lhs_expr)?;
                 let rhs_value = self.eval_expr(rhs_expr)?;
 
-                if lhs_value == Value::Undefined || rhs_value == Value::Undefined {
+                if lhs_value.is_undefined() || rhs_value.is_undefined() {
                     return Ok(Value::Undefined);
                 }
 
@@ -970,7 +974,7 @@ impl Interpreter {
 
                     let mut success = if let Some(key_plan) = &key_plan {
                         self.execute_destructuring_plan(key_plan, &Value::from(idx))?
-                            == Value::from(true)
+                            == Value::Bool(true)
                     } else {
                         true
                     };
@@ -978,7 +982,7 @@ impl Interpreter {
                     // Execute value binding
                     success = success
                         && self.execute_destructuring_plan(&value_plan, value)?
-                            == Value::from(true);
+                            == Value::Bool(true);
 
                     if !success {
                         *self.current_scope_mut()? = scope_saved.clone();
@@ -1006,7 +1010,7 @@ impl Interpreter {
                     *self.current_scope_mut()? = scope_saved.clone();
 
                     let mut success = if let Some(key_plan) = &key_plan {
-                        self.execute_destructuring_plan(key_plan, value)? == Value::from(true)
+                        self.execute_destructuring_plan(key_plan, value)? == Value::Bool(true)
                     } else {
                         true
                     };
@@ -1014,7 +1018,7 @@ impl Interpreter {
                     // Execute value binding
                     success = success
                         && self.execute_destructuring_plan(&value_plan, value)?
-                            == Value::from(true);
+                            == Value::Bool(true);
 
                     if !success {
                         *self.current_scope_mut()? = scope_saved.clone();
@@ -1043,7 +1047,7 @@ impl Interpreter {
                     *self.current_scope_mut()? = scope_saved.clone();
 
                     let mut success = if let Some(key_plan) = &key_plan {
-                        self.execute_destructuring_plan(key_plan, key)? == Value::from(true)
+                        self.execute_destructuring_plan(key_plan, key)? == Value::Bool(true)
                     } else {
                         true
                     };
@@ -1051,7 +1055,7 @@ impl Interpreter {
                     // Execute value binding
                     success = success
                         && self.execute_destructuring_plan(&value_plan, value)?
-                            == Value::from(true);
+                            == Value::Bool(true);
 
                     if !success {
                         *self.current_scope_mut()? = scope_saved.clone();
@@ -1124,7 +1128,7 @@ impl Interpreter {
 
                 if let Some(ctx) = self.contexts.last_mut() {
                     if let Some(result) = &mut ctx.result {
-                        if value != Value::Undefined {
+                        if !value.is_undefined() {
                             result
                                 .expressions
                                 .push(Self::make_expression_result(span, &value));
@@ -1141,7 +1145,7 @@ impl Interpreter {
                     // panic!();
                     // TODO: confirm this
                     // For non-booleans, treat anything other than undefined as true
-                    value != Value::Undefined
+                    !value.is_undefined()
                 }
             }
             Literal::NotExpr { span, expr, .. } => {
@@ -1274,7 +1278,7 @@ impl Interpreter {
 
                 if target_is_function {
                     match self.eval_expr(&wm.r#as) {
-                        Ok(v) if v != Value::Undefined => {
+                        Ok(v) if !v.is_undefined() => {
                             // Function replaced by value.
                             self.with_functions
                                 .insert(target, FunctionModifier::Value(v));
@@ -1300,7 +1304,7 @@ impl Interpreter {
                     }
                 } else {
                     let value = self.eval_expr(&wm.r#as)?;
-                    skip_exec = value == Value::Undefined;
+                    skip_exec = value.is_undefined();
                     let Some(first) = path.first() else {
                         bail!(wm.refr.span().error("empty path in with modifier"));
                     };
@@ -1464,7 +1468,7 @@ impl Interpreter {
                             self.set_loop_var_value(loop_target_expr, item.clone())?;
 
                             if self.execute_destructuring_plan(&walk_plan, item)?
-                                == Value::from(true)
+                                == Value::Bool(true)
                             {
                                 walk_result =
                                     self.eval_stmts_in_loop(stmts, loop_tail)? || walk_result;
@@ -1498,10 +1502,10 @@ impl Interpreter {
             }) = index_expr.map(|r| r.as_ref())
             {
                 if let Some(idx) = self.lookup_local_var(&index_var.source_str()) {
-                    if loop_value[&idx] != Value::Undefined {
+                    if !loop_value[&idx].is_undefined() {
                         result = self.eval_stmts_in_loop(stmts, loop_tail)? || result;
                         return Ok(result);
-                    } else if idx != Value::Undefined {
+                    } else if !idx.is_undefined() {
                         // The index is not valid for this collection.
                         return Ok(false);
                     }
@@ -1544,7 +1548,7 @@ impl Interpreter {
                         self.set_loop_var_value(loop_target_expr, v.clone())?;
 
                         if self.execute_destructuring_plan(&index_plan, &Value::from(idx))?
-                            == Value::from(true)
+                            == Value::Bool(true)
                         {
                             result = self.eval_stmts_in_loop(stmts, loop_tail)? || result;
                         }
@@ -1561,12 +1565,14 @@ impl Interpreter {
                     self.remove_loop_var_value(loop_target_expr);
                 }
                 Value::Set(items) => {
-                    for v in items.iter() {
+                    let mut sorted: Vec<Value> = items.iter().cloned().collect();
+                    sorted.sort();
+                    for v in sorted.iter() {
                         self.memory_check()?;
                         self.set_loop_var_value(loop_target_expr, v.clone())?;
 
                         // For sets, index is also the value.
-                        if self.execute_destructuring_plan(&index_plan, v)? == Value::from(true) {
+                        if self.execute_destructuring_plan(&index_plan, v)? == Value::Bool(true) {
                             result = self.eval_stmts_in_loop(stmts, loop_tail)? || result;
                         }
 
@@ -1581,11 +1587,14 @@ impl Interpreter {
                     self.remove_loop_var_value(loop_target_expr);
                 }
                 Value::Object(obj) => {
-                    for (k, v) in obj.iter() {
+                    let mut sorted: Vec<(Value, Value)> =
+                        obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+                    for (k, v) in sorted.iter() {
                         self.memory_check()?;
                         self.set_loop_var_value(loop_target_expr, v.clone())?;
                         // For objects, index is key.
-                        if self.execute_destructuring_plan(&index_plan, k)? == Value::from(true) {
+                        if self.execute_destructuring_plan(&index_plan, k)? == Value::Bool(true) {
                             result = self.eval_stmts_in_loop(stmts, loop_tail)? || result;
                         }
 
@@ -1664,7 +1673,7 @@ impl Interpreter {
                 init_obj = &init_obj[p];
             }
 
-            if init_obj != &Value::Undefined {
+            if !init_obj.is_undefined() {
                 return Ok(());
             }
         }
@@ -1673,7 +1682,7 @@ impl Interpreter {
         let len = path.len();
         for (idx, p) in path.into_iter().enumerate() {
             // Stop at the first undefined component in the path
-            if p == Value::Undefined {
+            if p.is_undefined() {
                 break;
             }
             if idx == len.saturating_sub(1) {
@@ -1686,22 +1695,22 @@ impl Interpreter {
                         .or_insert(Value::new_set())
                         .as_set_mut()
                         .map_err(|_| anyhow!(span.error("previous value is not a set")))?;
-                    set.append(value.as_set_mut()?);
+                    set.extend(value.as_set_mut()?.iter().cloned());
                 } else {
                     let obj = obj
                         .as_object_mut()
                         .map_err(|_| anyhow!(span.error("previous value is not an object")))?;
                     match obj.entry(p) {
-                        BTreeMapEntry::Vacant(v) => {
-                            if value != Value::Undefined {
+                        ValueMapEntry::Vacant(v) => {
+                            if !value.is_undefined() {
                                 v.insert(value);
                             } else {
                                 // TODO: clean this assumption between Undefined vs Object.
                                 v.insert(Value::new_object());
                             }
                         }
-                        BTreeMapEntry::Occupied(o) => {
-                            if o.get() != &value && value != Value::Undefined {
+                        ValueMapEntry::Occupied(o) => {
+                            if o.get() != &value && !value.is_undefined() {
                                 bail!(span
                                     .error("complete rules should not produce multiple outputs"))
                             }
@@ -1801,7 +1810,7 @@ impl Interpreter {
                     Value::Bool(true)
                 };
 
-                let comps_defined = comps.iter().all(|v| v != &Value::Undefined);
+                let comps_defined = comps.iter().all(|v| !v.is_undefined());
                 let ctx_mut = self.get_current_context_mut()?;
 
                 if is_const_rule {
@@ -1811,7 +1820,7 @@ impl Interpreter {
                     ctx_mut.output_constness_determined = true;
                 }
 
-                if output == Value::Undefined || !comps_defined {
+                if output.is_undefined() || !comps_defined {
                     ctx_mut.rule_value = Value::Undefined;
                     return Ok(false);
                 }
@@ -1823,7 +1832,7 @@ impl Interpreter {
                         .as_object_mut()?
                         .entry(Value::from_array(comps))
                         .or_insert(Value::new_set());
-                    if output != Value::Undefined {
+                    if !output.is_undefined() {
                         set.as_set_mut()?.insert(output);
                         return Ok(true);
                     }
@@ -1836,10 +1845,10 @@ impl Interpreter {
                     .as_object_mut()?
                     .entry(Value::from_array(comps))
                 {
-                    BTreeMapEntry::Vacant(v) => {
+                    ValueMapEntry::Vacant(v) => {
                         v.insert(output);
                     }
-                    BTreeMapEntry::Occupied(o) if o.get() != &output => bail!(rule_ref
+                    ValueMapEntry::Occupied(o) if o.get() != &output => bail!(rule_ref
                         .span()
                         .error("rules must not produce multiple outputs")),
                     _ => {
@@ -1856,7 +1865,7 @@ impl Interpreter {
                     let value = self.eval_expr(&oe)?;
 
                     let ctx_mut = self.get_current_context_mut()?;
-                    if key != Value::Undefined && value != Value::Undefined {
+                    if !key.is_undefined() && !value.is_undefined() {
                         let map = ctx_mut.value.as_object_mut()?;
                         match map.get(&key) {
                             Some(pv) if *pv != value => {
@@ -1885,7 +1894,7 @@ impl Interpreter {
                 (None, Some(oe)) => {
                     let output = self.eval_expr(&oe)?;
                     let ctx_mut = self.get_current_context_mut()?;
-                    if output != Value::Undefined {
+                    if !output.is_undefined() {
                         match &mut ctx_mut.value {
                             Value::Array(a) => {
                                 Rc::make_mut(a).push(output);
@@ -1926,7 +1935,7 @@ impl Interpreter {
                     || current_result // Multi expression query where no value is false
                        .expressions
                        .iter()
-                       .all(|v| v.value != Value::Undefined && v.value != Value::Bool(false))
+                       .all(|v| !v.value.is_undefined() && v.value != Value::Bool(false))
                        && !current_result.expressions.is_empty()
                 {
                     let ctx_mut = self.get_current_context_mut()?;
@@ -1951,7 +1960,9 @@ impl Interpreter {
                 }
             }
             Value::Set(items) => {
-                for v in items.iter() {
+                let mut sorted: Vec<Value> = items.iter().cloned().collect();
+                sorted.sort();
+                for v in sorted.iter() {
                     self.set_loop_var_value(loop_target_expr, v.clone())?;
                     result = self.eval_output_expr_in_loop(loop_tail)? || result;
                 }
@@ -2038,7 +2049,7 @@ impl Interpreter {
         let ctx = self.get_current_context()?;
         ctx.output_expr
             .as_ref()
-            .map_or_else(|| Ok(r), |_oe| Ok(ctx.rule_value != Value::Undefined))
+            .map_or_else(|| Ok(r), |_oe| Ok(!ctx.rule_value.is_undefined()))
     }
 
     fn eval_stmts(&mut self, stmts: &[&LiteralStmt]) -> Result<bool> {
@@ -2111,7 +2122,7 @@ impl Interpreter {
                     || gathered_result // Multi expression query where no value is false
                     .expressions
                     .iter()
-                    .all(|v| v.value != Value::Undefined && v.value != Value::Bool(false))
+                    .all(|v| !v.value.is_undefined() && v.value != Value::Bool(false))
                         && !gathered_result.expressions.is_empty()
                 {
                     let ctx = self.get_current_context_mut()?;
@@ -2213,7 +2224,7 @@ impl Interpreter {
 
         for item in items {
             let term = self.eval_expr(item)?;
-            if term == Value::Undefined {
+            if term.is_undefined() {
                 return Ok(Value::Undefined);
             }
 
@@ -2225,7 +2236,7 @@ impl Interpreter {
 
     fn eval_object(&mut self, fields: &Vec<(Span, ExprRef, ExprRef)>) -> Result<Value> {
         self.check_execution_time()?;
-        let mut object = BTreeMap::new();
+        let mut object = ValueMap::new();
 
         for (_, key, value) in fields {
             // TODO: check this
@@ -2233,11 +2244,11 @@ impl Interpreter {
             // ( scalar | ref | var ) ":" term, the OPA
             // implementation is more like expr ":" expr
             let key = self.eval_expr(key)?;
-            if key == Value::Undefined {
+            if key.is_undefined() {
                 return Ok(Value::Undefined);
             }
             let value = self.eval_expr(value)?;
-            if value == Value::Undefined {
+            if value.is_undefined() {
                 return Ok(Value::Undefined);
             }
             object.insert(key, value);
@@ -2248,11 +2259,11 @@ impl Interpreter {
 
     fn eval_set(&mut self, items: &Vec<ExprRef>) -> Result<Value> {
         self.check_execution_time()?;
-        let mut set = BTreeSet::new();
+        let mut set = ValueSet::new();
 
         for item in items {
             let term = self.eval_expr(item)?;
-            if term == Value::Undefined {
+            if term.is_undefined() {
                 return Ok(Value::Undefined);
             }
             set.insert(term);
@@ -2387,7 +2398,7 @@ impl Interpreter {
     ) -> Result<Value> {
         self.check_execution_time()?;
         // If any argument is undefined, then the call is undefined.
-        if args.iter().any(|a| a == &Value::Undefined) {
+        if args.iter().any(|a| a.is_undefined()) {
             return Ok(Value::Undefined);
         }
 
@@ -2414,7 +2425,7 @@ impl Interpreter {
         // TODO: with modifier.
         if name == "trace" {
             if let (Some(traces), Value::String(msg)) = (&mut self.traces, &v) {
-                traces.push(msg.clone());
+                traces.push(Rc::from(msg.as_str()));
                 self.memory_check()?;
                 return Ok(Value::Bool(true));
             }
@@ -2454,7 +2465,9 @@ impl Interpreter {
             }
             Value::Set(set) => {
                 s.push('{');
-                for (idx, e) in set.iter().enumerate() {
+                let mut sorted: Vec<&Value> = set.iter().collect();
+                sorted.sort();
+                for (idx, e) in sorted.iter().enumerate() {
                     if idx > 0 {
                         s.push_str(", ");
                     }
@@ -2464,7 +2477,9 @@ impl Interpreter {
             }
             Value::Object(map) => {
                 s.push('{');
-                for (idx, (k, entry_value)) in map.iter().enumerate() {
+                let mut sorted: Vec<(&Value, &Value)> = map.iter().collect();
+                sorted.sort_by(|a, b| a.0.cmp(&b.0));
+                for (idx, (k, entry_value)) in sorted.iter().enumerate() {
                     if idx > 0 {
                         s.push_str(", ");
                     }
@@ -2555,7 +2570,7 @@ impl Interpreter {
             Some(FunctionModifier::Value(value_override)) => {
                 if param_values
                     .iter()
-                    .any(|evaluated_value| evaluated_value == &Value::Undefined)
+                    .any(|evaluated_value| evaluated_value.is_undefined())
                 {
                     return Ok(Value::Undefined);
                 }
@@ -2608,7 +2623,7 @@ impl Interpreter {
                 }
             }
         };
-        if param_values.iter().any(|v| v == &Value::Undefined) {
+        if param_values.iter().any(|v| v.is_undefined()) {
             if let Some(with_functions) = with_functions_saved {
                 self.with_functions = with_functions;
             }
@@ -2693,7 +2708,7 @@ impl Interpreter {
                 {
                     // Execute the destructuring plan with the parameter value
                     self.execute_destructuring_plan(&destructuring_plan, param_value)?
-                        == Value::from(true)
+                        == Value::Bool(true)
                 } else {
                     // Raise error if binding plan is not found
                     return Err(span.error(&format!(
@@ -2755,7 +2770,7 @@ impl Interpreter {
             // Restore local variables for current context.
             self.scopes = scopes;
 
-            if result != Value::Undefined {
+            if !result.is_undefined() {
                 results.push(result);
             }
         }
@@ -2912,7 +2927,7 @@ impl Interpreter {
                 let module_path_components: Vec<&str> =
                     module_path_components.iter().map(|s| s.text()).collect();
                 let vref = Self::make_or_get_value_mut(&mut self.data, &module_path_components)?;
-                if *vref == Value::Undefined {
+                if vref.is_undefined() {
                     *vref = Value::new_object();
                 }
 
@@ -2991,7 +3006,7 @@ impl Interpreter {
 
     fn mark_processed(&mut self, path: &[&str]) -> Result<()> {
         let obj = self.processed_paths.make_or_get_value_mut(path)?;
-        if obj == &Value::Undefined {
+        if obj.is_undefined() {
             *obj = Value::new_object();
         }
         obj.as_object_mut()?.insert(Value::Undefined, Value::Null);
@@ -3388,7 +3403,7 @@ impl Interpreter {
         };
 
         let key = Value::String((*first).into());
-        if obj == &Value::Undefined {
+        if obj.is_undefined() {
             *obj = Value::new_object();
         }
         if let Value::Object(map) = obj {
@@ -3654,7 +3669,7 @@ impl Interpreter {
                             let components: Vec<&str> = rule_path.split('.').skip(1).collect();
                             let value = Self::get_value_chained(self.data.clone(), &components);
 
-                            if value != Value::Undefined {
+                            if !value.is_undefined() {
                                 return Ok(value);
                             }
                         }
@@ -3675,12 +3690,12 @@ impl Interpreter {
         path: &[&str],
         value: Value,
     ) -> Result<()> {
-        if value == Value::Undefined {
+        if value.is_undefined() {
             return Ok(());
         }
         // Ensure that path is created.
         let vref = Self::make_or_get_value_mut(&mut self.data, path)?;
-        if Self::get_value_chained(self.init_data.clone(), path) == Value::Undefined {
+        if Self::get_value_chained(self.init_data.clone(), path).is_undefined() {
             Self::merge_rule_value(span, vref, value)
         } else {
             // Retain specified value.
@@ -3741,7 +3756,7 @@ impl Interpreter {
                         let value = self.eval_rule_bodies(ctx, span, rule_body)?;
                         let package_components = self.eval_rule_ref(&module.package.refr)?;
 
-                        if value != Value::Undefined {
+                        if !value.is_undefined() {
                             for (path, value_in_map) in value.as_object()? {
                                 let mut full_path = package_components.clone();
                                 full_path.append(&mut path.as_array()?.clone());
@@ -3958,7 +3973,7 @@ impl Interpreter {
                     if !invalid
                         && !ordered_expressions
                             .iter()
-                            .any(|v| v.value == Value::Undefined)
+                            .any(|v| v.value.is_undefined())
                     {
                         result.expressions = ordered_expressions;
                     }
@@ -4042,7 +4057,7 @@ impl Interpreter {
 
                 prefix_path.append(&mut components);
                 let prefix_path: Vec<&str> = prefix_path.iter().map(|s| s.as_ref()).collect();
-                if Self::get_value_chained(self.data.clone(), &prefix_path) == Value::Undefined {
+                if Self::get_value_chained(self.data.clone(), &prefix_path).is_undefined() {
                     self.update_data(
                         rule_refr.span(),
                         rule_refr,
@@ -4394,7 +4409,7 @@ impl Interpreter {
         {
             if let Some(target_info) = &self.compiled_policy.target_info {
                 // Allow undefined values to pass through without schema validation
-                if value != Value::Undefined {
+                if !value.is_undefined() {
                     target_info.effect_schema.validate(&value)?;
                 }
             }

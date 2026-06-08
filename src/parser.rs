@@ -20,6 +20,9 @@ use crate::number::*;
 use crate::value::*;
 use crate::*;
 
+#[cfg(not(feature = "optimized-value"))]
+use crate::RcStrExt;
+
 use alloc::collections::BTreeMap;
 use core::str::FromStr;
 
@@ -353,7 +356,7 @@ impl<'source> Parser<'source> {
         match Number::from_str(span.text()) {
             Ok(v) => Ok(Expr::Number {
                 span,
-                value: Value::Number(v),
+                value: Value::from_number(v),
                 eidx: self.next_eidx(),
             }),
             Err(_) => bail!(span.error("could not parse number")),
@@ -2061,7 +2064,7 @@ impl<'source> Parser<'source> {
         self.next_token()?;
 
         match target_value.as_string() {
-            Ok(s) => Ok(s.as_ref().to_string()),
+            Ok(s) => Ok(s.as_str().to_string()),
             Err(_) => {
                 bail!(string_span.error("invalid string value"));
             }

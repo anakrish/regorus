@@ -10,7 +10,10 @@ use crate::lexer::Span;
 use crate::value::Value;
 use crate::*;
 
-use alloc::collections::{BTreeMap, BTreeSet};
+use crate::value::{ValueMap, ValueSet};
+
+#[cfg(not(feature = "optimized-value"))]
+use crate::RcStrExt;
 
 use anyhow::{bail, Result};
 
@@ -46,7 +49,7 @@ fn reachable(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) ->
         _ => return Ok(Value::Undefined),
     }
 
-    let mut reachable = BTreeSet::new();
+    let mut reachable = ValueSet::new();
     while let Some(v) = worklist.pop() {
         if reachable.contains(&v) {
             continue;
@@ -80,14 +83,14 @@ fn reachable(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) ->
 }
 
 fn visit(
-    graph: &BTreeMap<Value, Value>,
-    visited: &mut BTreeSet<Value>,
+    graph: &ValueMap,
+    visited: &mut ValueSet,
     node: &Value,
     path: &mut Vec<Value>,
-    paths: &mut BTreeSet<Value>,
+    paths: &mut ValueSet,
 ) -> Result<()> {
     if let Value::String(s) = node {
-        if s.as_ref() == "" {
+        if s.as_str() == "" {
             if !path.is_empty() {
                 paths.insert(Value::from_array(path.clone()));
                 // Guard path result growth when terminating at empty edge.
@@ -127,7 +130,7 @@ fn visit(
                 arr.len()
             }
             Some(Value::Set(set)) => {
-                for n in set.iter().rev() {
+                for n in set.iter() {
                     visit(graph, visited, n, path, paths)?;
                 }
                 set.len()
@@ -162,9 +165,9 @@ fn reachable_paths(
     ensure_args_count(span, name, params, args, 2)?;
 
     let graph = ensure_object(name, &params[0], args[0].clone())?;
-    let mut visited = BTreeSet::new();
+    let mut visited = ValueSet::new();
     let mut path = vec![];
-    let mut paths = BTreeSet::new();
+    let mut paths = ValueSet::new();
 
     match &args[1] {
         Value::Array(arr) => {

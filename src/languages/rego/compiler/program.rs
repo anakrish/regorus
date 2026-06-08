@@ -157,7 +157,7 @@ impl<'a> Compiler<'a> {
 
         match interpreter.eval_default_rule_for_compiler(rule_path) {
             Ok(computed_value) => {
-                if computed_value != Value::Undefined {
+                if !computed_value.is_undefined() {
                     let literal_index = self.add_literal(computed_value);
                     return Some(literal_index);
                 }

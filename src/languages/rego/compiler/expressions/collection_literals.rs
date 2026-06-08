@@ -12,7 +12,7 @@ use crate::lexer::Span;
 use crate::rvm::instructions::{ArrayCreateParams, ObjectCreateParams, SetCreateParams};
 use crate::rvm::Instruction;
 use crate::{Rc, Value};
-use alloc::collections::BTreeMap;
+use crate::value::ValueMap;
 use alloc::vec::Vec;
 
 impl<'a> Compiler<'a> {
@@ -104,7 +104,7 @@ impl<'a> Compiler<'a> {
             let mut template_keys = literal_keys.clone();
             template_keys.sort();
 
-            let mut template_obj = BTreeMap::new();
+            let mut template_obj = ValueMap::new();
             for key in &template_keys {
                 template_obj.insert(key.clone(), Value::Undefined);
             }

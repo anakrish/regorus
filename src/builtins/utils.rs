@@ -9,7 +9,10 @@ use crate::Rc;
 use crate::Value;
 use crate::*;
 
-use alloc::collections::{BTreeMap, BTreeSet};
+use crate::value::{ValueSet, ValueMap};
+
+#[cfg(not(feature = "optimized-value"))]
+use crate::RcStrExt;
 
 use anyhow::{bail, Result};
 
@@ -40,8 +43,8 @@ pub fn ensure_args_count(
 }
 
 pub fn ensure_numeric(fcn: &str, arg: &Expr, v: &Value) -> Result<Number> {
-    Ok(match &v {
-        Value::Number(n) => n.clone(),
+    Ok(match v.to_number() {
+        Some(n) => n,
         _ => {
             let span = arg.span();
             bail!(
@@ -97,7 +100,7 @@ pub fn validate_integer_arg(
 
 pub fn ensure_string(fcn: &str, arg: &Expr, v: &Value) -> Result<Rc<str>> {
     Ok(match &v {
-        Value::String(s) => s.clone(),
+        Value::String(s) => Rc::from(s.as_str()),
         _ => {
             let span = arg.span();
             bail!(span.error(format!("`{fcn}` expects string argument. Got `{v}` instead").as_str()))
@@ -134,7 +137,9 @@ pub fn ensure_string_collection<'a>(fcn: &str, arg: &Expr, v: &'a Value) -> Resu
             }
         }
         Value::Set(s) => {
-            for (idx, elem) in s.iter().enumerate() {
+            let mut sorted: Vec<&Value> = s.iter().collect();
+            sorted.sort();
+            for (idx, elem) in sorted.iter().enumerate() {
                 collection.push(ensure_string_element(fcn, arg, elem, idx)?);
                 // Enforce allocator limit while materializing the string collection.
                 enforce_limit()?;
@@ -158,7 +163,7 @@ pub fn ensure_array(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<Vec<Value>>> {
     })
 }
 
-pub fn ensure_set(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<BTreeSet<Value>>> {
+pub fn ensure_set(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<ValueSet>> {
     Ok(match v {
         Value::Set(s) => s,
         _ => {
@@ -168,7 +173,7 @@ pub fn ensure_set(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<BTreeSet<Value>>
     })
 }
 
-pub fn ensure_object(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<BTreeMap<Value, Value>>> {
+pub fn ensure_object(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<ValueMap>> {
     Ok(match v {
         Value::Object(o) => o,
         _ => {

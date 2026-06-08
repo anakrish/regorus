@@ -6,6 +6,10 @@
 //! Shared helpers for YAML-driven integration tests.
 
 use crate::Value;
+
+#[cfg(not(feature = "optimized-value"))]
+use crate::RcStrExt;
+
 use alloc::{vec, vec::Vec};
 use anyhow::{bail, Result};
 use serde::{ser::SerializeMap, Deserialize, Deserializer, Serialize, Serializer};
@@ -50,7 +54,7 @@ impl<'de> Deserialize<'de> for ValueOrVec {
 /// Convert any YAML-described value into an engine `Value`, handling helper encodings.
 pub fn process_value(v: &Value) -> Result<Value> {
     match v {
-        Value::String(s) if s.as_ref() == "#undefined" => Ok(Value::Undefined),
+        Value::String(s) if s.as_str() == "#undefined" => Ok(Value::Undefined),
         Value::Object(ref fields) if fields.len() == 1 && matches!(&v["set!"], Value::Array(_)) => {
             let mut set_value = Value::new_set();
             let set = set_value.as_set_mut()?;

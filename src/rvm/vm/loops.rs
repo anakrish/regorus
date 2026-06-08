@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use alloc::vec::Vec;
 use crate::rvm::instructions::LoopMode;
 use crate::value::Value;
 
@@ -94,10 +95,10 @@ impl RegoVM {
                     self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
                     return Ok(());
                 }
+                let items: Vec<(Value, Value)> = obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                 IterationState::Object {
-                    obj: obj.clone(),
-                    current_key: None,
-                    first_iteration: true,
+                    items,
+                    index: 0,
                 }
             }
             Value::Set(ref set) => {
@@ -105,10 +106,10 @@ impl RegoVM {
                     self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
                     return Ok(());
                 }
+                let items: Vec<Value> = set.iter().cloned().collect();
                 IterationState::Set {
-                    items: set.clone(),
-                    current_item: None,
-                    first_iteration: true,
+                    items,
+                    index: 0,
                 }
             }
             _ => {
@@ -182,20 +183,12 @@ impl RegoVM {
                 LoopAction::Continue => {}
             }
 
-            if let &mut IterationState::Object {
-                ref mut current_key,
-                ..
-            } = &mut loop_ctx.iteration_state
+            if let &mut IterationState::Object { .. } = &mut loop_ctx.iteration_state
             {
-                if loop_ctx.key_reg != loop_ctx.value_reg {
-                    *current_key = Some(self.get_register(loop_ctx.key_reg)?.clone());
-                }
-            } else if let &mut IterationState::Set {
-                ref mut current_item,
-                ..
-            } = &mut loop_ctx.iteration_state
+                // index-based: advance() handles incrementing
+            } else if let &mut IterationState::Set { .. } = &mut loop_ctx.iteration_state
             {
-                *current_item = Some(self.get_register(loop_ctx.value_reg)?.clone());
+                // index-based: advance() handles incrementing
             }
 
             loop_ctx.iteration_state.advance();
@@ -259,10 +252,10 @@ impl RegoVM {
                     self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
                     return Ok(());
                 }
+                let items: Vec<(Value, Value)> = obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                 IterationState::Object {
-                    obj: obj.clone(),
-                    current_key: None,
-                    first_iteration: true,
+                    items,
+                    index: 0,
                 }
             }
             Value::Set(ref set) => {
@@ -270,10 +263,10 @@ impl RegoVM {
                     self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
                     return Ok(());
                 }
+                let items: Vec<Value> = set.iter().cloned().collect();
                 IterationState::Set {
-                    items: set.clone(),
-                    current_item: None,
-                    first_iteration: true,
+                    items,
+                    index: 0,
                 }
             }
             _ => {
@@ -427,20 +420,12 @@ impl RegoVM {
                         &mut FrameKind::Loop {
                             ref mut context, ..
                         } => {
-                            if let &mut IterationState::Object {
-                                ref mut current_key,
-                                ..
-                            } = &mut context.iteration_state
+                            if let &mut IterationState::Object { .. } = &mut context.iteration_state
                             {
-                                if context.key_reg != context.value_reg {
-                                    *current_key = key_value;
-                                }
-                            } else if let &mut IterationState::Set {
-                                ref mut current_item,
-                                ..
-                            } = &mut context.iteration_state
+                                // index-based: advance() handles incrementing
+                            } else if let &mut IterationState::Set { .. } = &mut context.iteration_state
                             {
-                                *current_item = Some(value_value.clone());
+                                // index-based: advance() handles incrementing
                             }
 
                             context.iteration_state.advance();
@@ -540,67 +525,29 @@ impl RegoVM {
                 }
             }
             IterationState::Object {
-                ref obj,
-                ref current_key,
-                ref first_iteration,
+                ref items,
+                ref index,
             } => {
-                if *first_iteration {
-                    if let Some((key, value)) = obj.iter().next() {
-                        if key_reg != value_reg {
-                            self.set_register(key_reg, key.clone())?;
-                        }
-                        self.set_register(value_reg, value.clone())?;
-                        Ok(true)
-                    } else {
-                        Ok(false)
+                if let Some((key, value)) = items.get(*index) {
+                    if key_reg != value_reg {
+                        self.set_register(key_reg, key.clone())?;
                     }
-                } else if let Some(ref current) = *current_key {
-                    let mut range_iter = obj.range((
-                        core::ops::Bound::Excluded(current),
-                        core::ops::Bound::Unbounded,
-                    ));
-                    if let Some((key, value)) = range_iter.next() {
-                        if key_reg != value_reg {
-                            self.set_register(key_reg, key.clone())?;
-                        }
-                        self.set_register(value_reg, value.clone())?;
-                        Ok(true)
-                    } else {
-                        Ok(false)
-                    }
+                    self.set_register(value_reg, value.clone())?;
+                    Ok(true)
                 } else {
                     Ok(false)
                 }
             }
             IterationState::Set {
                 ref items,
-                ref current_item,
-                ref first_iteration,
+                ref index,
             } => {
-                if *first_iteration {
-                    if let Some(item) = items.iter().next() {
-                        if key_reg != value_reg {
-                            self.set_register(key_reg, item.clone())?;
-                        }
-                        self.set_register(value_reg, item.clone())?;
-                        Ok(true)
-                    } else {
-                        Ok(false)
+                if let Some(item) = items.get(*index) {
+                    if key_reg != value_reg {
+                        self.set_register(key_reg, item.clone())?;
                     }
-                } else if let Some(ref current) = *current_item {
-                    let mut range_iter = items.range((
-                        core::ops::Bound::Excluded(current),
-                        core::ops::Bound::Unbounded,
-                    ));
-                    if let Some(item) = range_iter.next() {
-                        if key_reg != value_reg {
-                            self.set_register(key_reg, item.clone())?;
-                        }
-                        self.set_register(value_reg, item.clone())?;
-                        Ok(true)
-                    } else {
-                        Ok(false)
-                    }
+                    self.set_register(value_reg, item.clone())?;
+                    Ok(true)
                 } else {
                     Ok(false)
                 }

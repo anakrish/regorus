@@ -10,6 +10,7 @@ use crate::{
     *,
 };
 use alloc::collections::BTreeMap;
+use crate::value::ValueMap;
 use regex::Regex;
 
 type String = Rc<str>;
@@ -537,7 +538,7 @@ impl SchemaValidator {
     }
 
     fn validate_discriminated_subobject_with_base(
-        object_value: &BTreeMap<Value, Value>,
+        object_value: &ValueMap,
         discriminated_subobject: &crate::schema::DiscriminatedSubobject,
         base_properties: &BTreeMap<String, Schema>,
         base_additional_properties: Option<&Schema>,
@@ -653,7 +654,7 @@ impl SchemaValidator {
     }
 
     fn validate_subobject(
-        object_value: &BTreeMap<Value, Value>,
+        object_value: &ValueMap,
         subobject: &crate::schema::Subobject,
         path: &str,
     ) -> Result<(), ValidationError> {

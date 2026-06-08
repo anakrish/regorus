@@ -38,7 +38,7 @@ fn is_null(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
 
 fn is_number(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     ensure_args_count(span, "is_number", params, args, 1)?;
-    Ok(Value::Bool(matches!(&args[0], Value::Number(_))))
+    Ok(Value::Bool(args[0].is_number()))
 }
 
 fn is_object(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
@@ -60,12 +60,12 @@ pub fn get_type(value: &Value) -> &str {
     match value {
         Value::Null => "null",
         Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
         Value::String(_) => "string",
         Value::Array(_) => "array",
         Value::Object(_) => "object",
         Value::Set(_) => "set",
         Value::Undefined => "undefined",
+        _ => "number",
     }
 }
 

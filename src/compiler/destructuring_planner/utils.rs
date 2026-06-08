@@ -19,6 +19,9 @@ use crate::compiler::destructuring_planner::{
 use crate::lexer::Span;
 use crate::value::Value;
 
+#[cfg(not(feature = "optimized-value"))]
+use crate::RcStrExt;
+
 /// Result of statically comparing a destructuring plan with a literal expression.
 pub(crate) enum LiteralStructureCheck {
     Match,
@@ -263,7 +266,7 @@ pub(crate) fn extract_literal_key(expr: &ExprRef) -> Option<Value> {
 
 pub(crate) fn format_literal_key_for_error(value: &Value) -> String {
     match value {
-        Value::String(s) => s.as_ref().to_string(),
+        Value::String(s) => s.as_str().to_string(),
         _ => value.to_string(),
     }
 }

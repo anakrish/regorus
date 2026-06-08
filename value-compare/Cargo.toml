@@ -1,0 +1,41 @@
+[package]
+name = "value-compare"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Benchmarks comparing different Value implementations"
+
+[dependencies]
+# Re-use regorus types for baseline and Number/BigInt
+regorus = { path = "..", default-features = false, features = ["arc"] }
+
+# New dependencies for v1 (HashMap + SmolStr)
+hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "allocator-api2"] }
+smol_str = { version = "0.3", default-features = false }
+
+# Serialization
+serde = { version = "1.0", features = ["derive", "rc", "alloc"] }
+serde_json = { version = "1.0", features = ["alloc"] }
+anyhow = "1.0"
+
+# Thin string pointer (8 bytes) for v4
+arcstr = { version = "1.2", features = ["serde"] }
+
+# Number support
+num-bigint = { version = "0.4", default-features = false }
+num-traits = { version = "0.2", default-features = false }
+
+# Arena allocator for v9
+bumpalo = { version = "3", features = ["collections", "allocator-api2"] }
+
+[dev-dependencies]
+criterion = { version = "0.5" }
+rand = "0.8"
+
+[[bench]]
+name = "value_bench"
+harness = false
+
+[[bin]]
+name = "sarif_mem"
+path = "src/bin/sarif_mem.rs"

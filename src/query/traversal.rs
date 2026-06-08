@@ -16,6 +16,9 @@ use crate::ast::{AssignOp, ExprRef};
 use crate::lexer::{SourceStr, Span};
 use crate::value::Value;
 
+#[cfg(not(feature = "optimized-value"))]
+use crate::RcStrExt;
+
 #[derive(Clone, Default, Debug)]
 pub struct Scope {
     pub locals: BTreeMap<SourceStr, Span>,
@@ -198,7 +201,7 @@ pub fn collect_expr_dependencies(expr: &ExprRef) -> Option<BTreeSet<String>> {
     if traverse(expr, &mut |node| match node.as_ref() {
         Var { value, .. } => {
             if let Value::String(name) = value {
-                let var = name.as_ref();
+                let var: &str = name.as_str();
                 if var != "_" {
                     deps.insert(var.to_string());
                 }

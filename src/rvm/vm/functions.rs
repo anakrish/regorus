@@ -73,7 +73,7 @@ impl RegoVM {
             });
         }
 
-        if args.iter().any(|a| a == &Value::Undefined) {
+        if args.iter().any(|a| a.is_undefined()) {
             self.cached_builtin_args = args;
             self.set_register(params.dest, Value::Undefined)?;
             self.memory_check()?;

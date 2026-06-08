@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 #![allow(clippy::pattern_type_mismatch)]
 
-use alloc::collections::BTreeSet;
+use crate::value::ValueSet;
 
 use crate::number::Number;
 use crate::value::Value;
@@ -13,8 +13,8 @@ use super::machine::RegoVM;
 impl RegoVM {
     /// Add two values using interpreter's arithmetic logic
     pub(super) fn add_values(&self, a: &Value, b: &Value) -> Result<Value> {
-        match (a, b) {
-            (Value::Number(x), Value::Number(y)) => Ok(Value::from(x.add(y)?)),
+        match (a.to_number(), b.to_number()) {
+            (Some(x), Some(y)) => Ok(Value::from_number(x.add(&y)?)),
             _ => Err(VmError::InvalidAddition {
                 left: a.clone(),
                 right: b.clone(),
@@ -25,24 +25,26 @@ impl RegoVM {
 
     /// Subtract two values using interpreter's arithmetic logic
     pub(super) fn sub_values(&self, a: &Value, b: &Value) -> Result<Value> {
-        match (a, b) {
-            (Value::Number(x), Value::Number(y)) => Ok(Value::from(x.sub(y)?)),
-            (Value::Set(left), Value::Set(right)) => {
-                let diff: BTreeSet<Value> = left.difference(right).cloned().collect();
-                Ok(Value::from_set(diff))
-            }
-            _ => Err(VmError::InvalidSubtraction {
-                left: a.clone(),
-                right: b.clone(),
-                pc: self.pc,
-            }),
+        match (a.to_number(), b.to_number()) {
+            (Some(x), Some(y)) => Ok(Value::from_number(x.sub(&y)?)),
+            _ => match (a, b) {
+                (Value::Set(left), Value::Set(right)) => {
+                    let diff: ValueSet = left.difference(right).cloned().collect();
+                    Ok(Value::from_set(diff))
+                }
+                _ => Err(VmError::InvalidSubtraction {
+                    left: a.clone(),
+                    right: b.clone(),
+                    pc: self.pc,
+                }),
+            },
         }
     }
 
     /// Multiply two values using interpreter's arithmetic logic
     pub(super) fn mul_values(&self, a: &Value, b: &Value) -> Result<Value> {
-        match (a, b) {
-            (Value::Number(x), Value::Number(y)) => Ok(Value::from(x.mul(y)?)),
+        match (a.to_number(), b.to_number()) {
+            (Some(x), Some(y)) => Ok(Value::from_number(x.mul(&y)?)),
             _ => Err(VmError::InvalidMultiplication {
                 left: a.clone(),
                 right: b.clone(),
@@ -53,9 +55,9 @@ impl RegoVM {
 
     /// Divide two values using interpreter's arithmetic logic
     pub(super) fn div_values(&self, a: &Value, b: &Value) -> Result<Value> {
-        match (a, b) {
-            (Value::Number(x), Value::Number(y)) => {
-                if *y == Number::from(0_u64) {
+        match (a.to_number(), b.to_number()) {
+            (Some(x), Some(y)) => {
+                if y == Number::from(0_u64) {
                     if self.strict_builtin_errors {
                         return Err(VmError::InvalidDivision {
                             left: a.clone(),
@@ -66,7 +68,7 @@ impl RegoVM {
                     return Ok(Value::Undefined);
                 }
 
-                Ok(Value::from(x.clone().divide(y)?))
+                Ok(Value::from_number(x.divide(&y)?))
             }
             _ => Err(VmError::InvalidDivision {
                 left: a.clone(),
@@ -78,9 +80,9 @@ impl RegoVM {
 
     /// Modulo two values using interpreter's arithmetic logic
     pub(super) fn mod_values(&self, a: &Value, b: &Value) -> Result<Value> {
-        match (a, b) {
-            (Value::Number(x), Value::Number(y)) => {
-                if *y == Number::from(0_u64) {
+        match (a.to_number(), b.to_number()) {
+            (Some(x), Some(y)) => {
+                if y == Number::from(0_u64) {
                     if self.strict_builtin_errors {
                         return Err(VmError::InvalidModulo {
                             left: a.clone(),
@@ -99,7 +101,7 @@ impl RegoVM {
                     });
                 }
 
-                Ok(Value::from(x.clone().modulo(y)?))
+                Ok(Value::from_number(x.modulo(&y)?))
             }
             _ => Err(VmError::InvalidModulo {
                 left: a.clone(),

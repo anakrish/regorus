@@ -11,7 +11,11 @@ use crate::Rc;
 use crate::Value;
 use crate::*;
 
-use alloc::collections::{BTreeMap, BTreeSet};
+#[cfg(not(feature = "optimized-value"))]
+use crate::RcStrExt;
+
+use alloc::collections::BTreeSet;
+use crate::value::{ValueSet, ValueMap};
 use core::iter::Iterator;
 
 use anyhow::{bail, Result};
@@ -45,14 +49,16 @@ fn json_filter_impl(v: &Value, filter: &Value) -> Result<Value> {
 
     match v {
         Value::Array(_) => {
+            let mut sorted_filters: Vec<(&Value, &Value)> = filters.iter().collect();
+            sorted_filters.sort_by(|a, b| a.0.cmp(b.0));
             let mut items = vec![];
-            for (idx, filter) in filters.iter() {
+            for (idx, filter) in sorted_filters {
                 // The string index must be parseable as a number.
                 // TODO: support integer indexes?
                 if let Value::String(idx) = idx {
                     if let Ok(idx) = Value::from_json_str(idx) {
                         let item = json_filter_impl(&v[&idx], filter)?;
-                        if item != Value::Undefined {
+                        if !item.is_undefined() {
                             items.push(item);
                             // Guard array growth while filtering nested structures.
                             enforce_limit()?;
@@ -64,11 +70,11 @@ fn json_filter_impl(v: &Value, filter: &Value) -> Result<Value> {
         }
 
         Value::Set(s) => {
-            let mut items = BTreeSet::new();
+            let mut items = ValueSet::new();
             for (item, filter) in filters.iter() {
                 if s.contains(item) {
                     let item = json_filter_impl(item, filter)?;
-                    if item != Value::Undefined {
+                    if !item.is_undefined() {
                         items.insert(item);
                         // Guard set growth when preserving matched entries.
                         enforce_limit()?;
@@ -79,10 +85,10 @@ fn json_filter_impl(v: &Value, filter: &Value) -> Result<Value> {
         }
 
         Value::Object(_) => {
-            let mut items = BTreeMap::new();
+            let mut items = ValueMap::new();
             for (key, filter) in filters.iter() {
                 let item = json_filter_impl(&v[key], filter)?;
-                if item != Value::Undefined {
+                if !item.is_undefined() {
                     items.insert(key.clone(), item);
                     // Guard map growth as filtered keys accumulate.
                     enforce_limit()?;
@@ -113,7 +119,7 @@ fn json_remove_impl(v: &Value, filter: &Value) -> Result<Value> {
                 let idx = Value::String(format!("{idx}").into());
                 if let Some(f) = filters.get(&idx) {
                     let v = json_remove_impl(item, f)?;
-                    if v != Value::Undefined {
+                    if !v.is_undefined() {
                         items.push(v);
                         // Guard array size while removing JSON paths.
                         enforce_limit()?;
@@ -129,11 +135,11 @@ fn json_remove_impl(v: &Value, filter: &Value) -> Result<Value> {
         }
 
         Value::Set(s) => {
-            let mut items = BTreeSet::new();
+            let mut items = ValueSet::new();
             for item in s.iter() {
                 if let Some(f) = filters.get(item) {
                     let v = json_remove_impl(item, f)?;
-                    if v != Value::Undefined {
+                    if !v.is_undefined() {
                         items.insert(v);
                         // Guard set size during filtered retention.
                         enforce_limit()?;
@@ -149,11 +155,11 @@ fn json_remove_impl(v: &Value, filter: &Value) -> Result<Value> {
         }
 
         Value::Object(obj) => {
-            let mut items = BTreeMap::new();
+            let mut items = ValueMap::new();
             for (key, value) in obj.iter() {
                 if let Some(f) = filters.get(key) {
                     let v = json_remove_impl(value, f)?;
-                    if v != Value::Undefined {
+                    if !v.is_undefined() {
                         items.insert(key.clone(), v);
                         // Guard map size as filtered properties accumulate.
                         enforce_limit()?;
@@ -184,7 +190,7 @@ fn merge_filters(
                 let mut f = &mut fc;
                 for p in s.split('/') {
                     let vref = f.make_or_get_value_mut(&[p])?;
-                    if *vref == Value::Undefined {
+                    if vref.is_undefined() {
                         *vref = Value::new_object();
                     }
                     f = vref;
@@ -298,7 +304,7 @@ fn get(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Resu
             let mut v = &args[0];
             for a in keys.iter() {
                 v = &v[a];
-                if v == &Value::Undefined {
+                if v.is_undefined() {
                     v = default;
                     break;
                 }
@@ -424,7 +430,7 @@ fn object_union_n(
 #[cfg(feature = "jsonschema")]
 fn compile_json_schema(param: &Ref<Expr>, arg: &Value) -> Result<jsonschema::Validator> {
     let schema_str = match arg {
-        Value::String(schema_str) => schema_str.as_ref().to_string(),
+        Value::String(schema_str) => schema_str.as_str().to_string(),
         _ => arg.to_json_str()?,
     };
 

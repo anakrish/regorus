@@ -1,0 +1,189 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+//! Serde Serialize/Deserialize for v1::Value.
+//!
+//! - Serializes in standard JSON format (null, bool, number, string, array, object).
+//! - Deserialization detects string-only keys and creates StringKeyed ObjectMap.
+//! - Sets serialize as sorted arrays; Undefined serializes as null.
+
+use std::fmt;
+use std::sync::Arc;
+
+use serde::de::{self, MapAccess, SeqAccess, Visitor};
+use serde::ser::{SerializeMap, SerializeSeq};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use smol_str::SmolStr;
+
+use super::number::Number;
+use super::object_map::ObjectMap;
+use super::value::Value;
+
+/// Wrapper that serializes a Value with sorted object keys.
+/// Use this when deterministic output is required (e.g. `json.marshal`).
+pub struct SortedValue<'a>(pub &'a Value);
+
+impl<'a> Serialize for SortedValue<'a> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.0 {
+            Value::Null | Value::Undefined => serializer.serialize_none(),
+            Value::Bool(b) => serializer.serialize_bool(*b),
+            Value::Number(n) => n.serialize(serializer),
+            Value::String(s) => serializer.serialize_str(s),
+            Value::Array(a) => {
+                let mut seq = serializer.serialize_seq(Some(a.len()))?;
+                for item in a.iter() {
+                    seq.serialize_element(&SortedValue(item))?;
+                }
+                seq.end()
+            }
+            Value::Set(s) => {
+                let mut seq = serializer.serialize_seq(Some(s.len()))?;
+                for item in s.iter() {
+                    seq.serialize_element(&SortedValue(item))?;
+                }
+                seq.end()
+            }
+            Value::Object(o) => {
+                let sorted = o.iter_sorted();
+                let mut map = serializer.serialize_map(Some(sorted.len()))?;
+                for (k, v) in &sorted {
+                    let key_str = match k {
+                        Value::String(s) => s.to_string(),
+                        other => {
+                            serde_json::to_string(&SortedValue(other))
+                                .map_err(serde::ser::Error::custom)?
+                        }
+                    };
+                    map.serialize_entry(&key_str, &SortedValue(v))?;
+                }
+                map.end()
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Serialize
+// ---------------------------------------------------------------------------
+
+impl Serialize for Value {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Value::Null | Value::Undefined => serializer.serialize_none(),
+            Value::Bool(b) => serializer.serialize_bool(*b),
+            Value::Number(n) => n.serialize(serializer),
+            Value::String(s) => serializer.serialize_str(s),
+            Value::Array(a) => {
+                let mut seq = serializer.serialize_seq(Some(a.len()))?;
+                for item in a.iter() {
+                    seq.serialize_element(item)?;
+                }
+                seq.end()
+            }
+            Value::Set(s) => {
+                // Sets serialize as sorted arrays.
+                let mut seq = serializer.serialize_seq(Some(s.len()))?;
+                for item in s.iter() {
+                    seq.serialize_element(item)?;
+                }
+                seq.end()
+            }
+            Value::Object(o) => {
+                // Unsorted iteration — fast path (no allocation).
+                // For StringKeyed, iterate directly over SmolStr keys to avoid
+                // wrapping each key in Arc<str> and then allocating a String.
+                let mut map = serializer.serialize_map(Some(o.len()))?;
+                match o.as_ref() {
+                    ObjectMap::StringKeyed(m) => {
+                        for (k, v) in m.iter() {
+                            map.serialize_entry(k.as_str(), v)?;
+                        }
+                    }
+                    ObjectMap::Mixed(m) => {
+                        for (k, v) in m.iter() {
+                            let key_str = match k {
+                                Value::String(s) => s.to_string(),
+                                other => {
+                                    serde_json::to_string(other)
+                                        .map_err(serde::ser::Error::custom)?
+                                }
+                            };
+                            map.serialize_entry(&key_str, v)?;
+                        }
+                    }
+                }
+                map.end()
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Deserialize
+// ---------------------------------------------------------------------------
+
+impl<'de> Deserialize<'de> for Value {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(ValueVisitor)
+    }
+}
+
+struct ValueVisitor;
+
+impl<'de> Visitor<'de> for ValueVisitor {
+    type Value = Value;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "a JSON value")
+    }
+
+    fn visit_unit<E: de::Error>(self) -> Result<Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_none<E: de::Error>(self) -> Result<Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_bool<E: de::Error>(self, v: bool) -> Result<Value, E> {
+        Ok(Value::Bool(v))
+    }
+
+    fn visit_u64<E: de::Error>(self, v: u64) -> Result<Value, E> {
+        Ok(Value::Number(Number::UInt(v)))
+    }
+
+    fn visit_i64<E: de::Error>(self, v: i64) -> Result<Value, E> {
+        Ok(Value::Number(Number::Int(v)))
+    }
+
+    fn visit_f64<E: de::Error>(self, v: f64) -> Result<Value, E> {
+        Ok(Value::Number(Number::Float(v)))
+    }
+
+    fn visit_str<E: de::Error>(self, v: &str) -> Result<Value, E> {
+        Ok(Value::String(Arc::from(v)))
+    }
+
+    fn visit_string<E: de::Error>(self, v: String) -> Result<Value, E> {
+        Ok(Value::String(Arc::from(v.as_str())))
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
+        let mut items = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+        while let Some(item) = seq.next_element()? {
+            items.push(item);
+        }
+        Ok(Value::Array(Arc::new(items)))
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
+        // JSON keys are always strings, so we can always build StringKeyed.
+        let mut obj = hashbrown::HashMap::with_capacity(map.size_hint().unwrap_or(0));
+        while let Some((key, value)) = map.next_entry::<String, Value>()? {
+            obj.insert(SmolStr::new(&key), value);
+        }
+        Ok(Value::Object(Arc::new(ObjectMap::StringKeyed(obj))))
+    }
+}

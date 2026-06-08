@@ -10,7 +10,7 @@ use crate::lexer::Span;
 use crate::value::Value;
 use crate::*;
 
-use alloc::collections::BTreeSet;
+use crate::value::ValueSet;
 
 use anyhow::{bail, Result};
 
@@ -77,7 +77,7 @@ fn intersection_of_set_of_sets(
     ensure_args_count(span, name, params, args, 1)?;
     let set = ensure_set(name, &params[0], args[0].clone())?;
 
-    let mut res = BTreeSet::new();
+    let mut res = ValueSet::new();
     let mut first = true;
 
     for s in set.iter() {
@@ -109,7 +109,7 @@ fn union_of_set_of_sets(
     ensure_args_count(span, name, params, args, 1)?;
     let set = ensure_set(name, &params[0], args[0].clone())?;
 
-    let mut res = BTreeSet::new();
+    let mut res = ValueSet::new();
 
     for s in set.iter() {
         let s = match s {

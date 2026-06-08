@@ -12,6 +12,9 @@ use crate::lexer::Span;
 use crate::value::Value;
 use crate::*;
 
+#[cfg(not(feature = "optimized-value"))]
+use crate::RcStrExt;
+
 use anyhow::{bail, Result};
 
 use chrono::{
@@ -211,7 +214,7 @@ fn ensure_i32(name: &str, arg: &Expr, v: &Value) -> Result<i32> {
 
 fn safe_timestamp_nanos(span: &Span, strict: bool, nanos: Option<i64>) -> Result<Value> {
     match nanos {
-        Some(ns) => Ok(Value::Number(ns.into())),
+        Some(ns) => Ok(Value::from(ns)),
         None if strict => {
             bail!(span.error("time outside of valid range"))
         }
@@ -225,7 +228,8 @@ fn parse_epoch(
     val: &Value,
 ) -> Result<(DateTime<FixedOffset>, Option<String>)> {
     match val {
-        Value::Number(num) => {
+        v if v.is_number() => {
+            let num = v.to_number().unwrap();
             let ns = num.as_i64().ok_or_else(|| {
                 arg.span()
                     .error("could not convert numeric value of `ns` to int64")
@@ -235,7 +239,8 @@ fn parse_epoch(
         }
 
         Value::Array(arr) => match arr.as_slice() {
-            [Value::Number(num)] => {
+            [v] if v.is_number() => {
+                let num = v.to_number().unwrap();
                 let ns = num.as_i64().ok_or_else(|| {
                     arg.span()
                         .error("could not convert numeric value of `ns` to int64")
@@ -243,13 +248,14 @@ fn parse_epoch(
 
                 return Ok((Utc.timestamp_nanos(ns).fixed_offset(), None));
             }
-            [Value::Number(num), Value::String(tz), rest @ ..] => {
+            [v, Value::String(tz), rest @ ..] if v.is_number() => {
+                let num = v.to_number().unwrap();
                 let ns = num.as_i64().ok_or_else(|| {
                     arg.span()
                         .error("could not convert numeric value of `ns` to int64")
                 })?;
 
-                let datetime = match tz.as_ref() {
+                let datetime = match tz.as_str() {
                     "UTC" | "" => Utc.timestamp_nanos(ns).fixed_offset(),
                     "Local" => Local.timestamp_nanos(ns).fixed_offset(),
                     _ => {

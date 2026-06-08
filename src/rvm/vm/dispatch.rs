@@ -4,7 +4,7 @@
 use crate::rvm::instructions::{Instruction, LiteralOrRegister};
 use crate::rvm::program::Program;
 use crate::value::Value;
-use alloc::collections::BTreeSet;
+use crate::value::ValueSet;
 use alloc::vec::Vec;
 use core::mem;
 
@@ -92,7 +92,7 @@ impl RegoVM {
                 let a = self.get_register(left)?;
                 let b = self.get_register(right)?;
 
-                if a == &Value::Undefined || b == &Value::Undefined {
+                if a.is_undefined() || b.is_undefined() {
                     self.set_register(dest, Value::Undefined)?;
                     return Ok(InstructionOutcome::Continue);
                 }
@@ -105,7 +105,7 @@ impl RegoVM {
                 let a = self.get_register(left)?;
                 let b = self.get_register(right)?;
 
-                if a == &Value::Undefined || b == &Value::Undefined {
+                if a.is_undefined() || b.is_undefined() {
                     self.set_register(dest, Value::Undefined)?;
                     return Ok(InstructionOutcome::Continue);
                 }
@@ -118,7 +118,7 @@ impl RegoVM {
                 let a = self.get_register(left)?;
                 let b = self.get_register(right)?;
 
-                if a == &Value::Undefined || b == &Value::Undefined {
+                if a.is_undefined() || b.is_undefined() {
                     self.set_register(dest, Value::Undefined)?;
                     return Ok(InstructionOutcome::Continue);
                 }
@@ -131,7 +131,7 @@ impl RegoVM {
                 let a = self.get_register(left)?;
                 let b = self.get_register(right)?;
 
-                if a == &Value::Undefined || b == &Value::Undefined {
+                if a.is_undefined() || b.is_undefined() {
                     self.set_register(dest, Value::Undefined)?;
                     return Ok(InstructionOutcome::Continue);
                 }
@@ -144,7 +144,7 @@ impl RegoVM {
                 let a = self.get_register(left)?;
                 let b = self.get_register(right)?;
 
-                if a == &Value::Undefined || b == &Value::Undefined {
+                if a.is_undefined() || b.is_undefined() {
                     self.set_register(dest, Value::Undefined)?;
                     return Ok(InstructionOutcome::Continue);
                 }
@@ -168,7 +168,7 @@ impl RegoVM {
                 let a = self.get_register(left)?;
                 let b = self.get_register(right)?;
 
-                if a == &Value::Undefined || b == &Value::Undefined {
+                if a.is_undefined() || b.is_undefined() {
                     self.set_register(dest, Value::Undefined)?;
                     return Ok(InstructionOutcome::Continue);
                 }
@@ -180,7 +180,7 @@ impl RegoVM {
                 let a = self.get_register(left)?;
                 let b = self.get_register(right)?;
 
-                if a == &Value::Undefined || b == &Value::Undefined {
+                if a.is_undefined() || b.is_undefined() {
                     self.set_register(dest, Value::Undefined)?;
                     return Ok(InstructionOutcome::Continue);
                 }
@@ -192,7 +192,7 @@ impl RegoVM {
                 let a = self.get_register(left)?;
                 let b = self.get_register(right)?;
 
-                if a == &Value::Undefined || b == &Value::Undefined {
+                if a.is_undefined() || b.is_undefined() {
                     self.set_register(dest, Value::Undefined)?;
                     return Ok(InstructionOutcome::Continue);
                 }
@@ -213,7 +213,7 @@ impl RegoVM {
                 let a = self.get_register(left)?;
                 let b = self.get_register(right)?;
 
-                if a == &Value::Undefined || b == &Value::Undefined {
+                if a.is_undefined() || b.is_undefined() {
                     self.set_register(dest, Value::Undefined)?;
                     return Ok(InstructionOutcome::Continue);
                 }
@@ -234,7 +234,7 @@ impl RegoVM {
                 let a = self.get_register(left)?;
                 let b = self.get_register(right)?;
 
-                if a == &Value::Undefined || b == &Value::Undefined {
+                if a.is_undefined() || b.is_undefined() {
                     self.set_register(dest, Value::Undefined)?;
                     return Ok(InstructionOutcome::Continue);
                 }
@@ -255,7 +255,7 @@ impl RegoVM {
                 let a = self.get_register(left)?;
                 let b = self.get_register(right)?;
 
-                if a == &Value::Undefined || b == &Value::Undefined {
+                if a.is_undefined() || b.is_undefined() {
                     self.set_register(dest, Value::Undefined)?;
                     return Ok(InstructionOutcome::Continue);
                 }
@@ -276,7 +276,7 @@ impl RegoVM {
                 let left_value = self.get_register(left)?;
                 let right_value = self.get_register(right)?;
 
-                if left_value == &Value::Undefined || right_value == &Value::Undefined {
+                if left_value.is_undefined() || right_value.is_undefined() {
                     self.set_register(dest, Value::Undefined)?;
                     return Ok(InstructionOutcome::Continue);
                 }
@@ -298,7 +298,7 @@ impl RegoVM {
                 let left_value = self.get_register(left)?;
                 let right_value = self.get_register(right)?;
 
-                if left_value == &Value::Undefined || right_value == &Value::Undefined {
+                if left_value.is_undefined() || right_value.is_undefined() {
                     self.set_register(dest, Value::Undefined)?;
                     return Ok(InstructionOutcome::Continue);
                 }
@@ -319,7 +319,7 @@ impl RegoVM {
             Not { dest, operand } => {
                 let operand_value = self.get_register(operand)?;
 
-                if operand_value == &Value::Undefined {
+                if operand_value.is_undefined() {
                     // In Rego, `not expr` succeeds when `expr` has no results.
                     // When the operand evaluates to undefined we should treat it as
                     // a successful negation instead of propagating undefined.
@@ -627,7 +627,7 @@ impl RegoVM {
                 }
             }
             SetNew { dest } => {
-                let empty_set = Value::Set(crate::Rc::new(BTreeSet::new()));
+                let empty_set = Value::Set(crate::Rc::new(ValueSet::new()));
                 self.set_register(dest, empty_set)?;
                 Ok(InstructionOutcome::Continue)
             }
@@ -664,7 +664,7 @@ impl RegoVM {
                     if any_undefined {
                         self.set_register(params.dest, Value::Undefined)?;
                     } else {
-                        let mut set = BTreeSet::new();
+                        let mut set = ValueSet::new();
                         for &reg in params.element_registers() {
                             set.insert(self.get_register(reg)?.clone());
                         }
@@ -802,7 +802,7 @@ impl RegoVM {
 
                     current_value = current_value[&key_value].clone();
 
-                    if current_value == Value::Undefined {
+                    if current_value.is_undefined() {
                         break;
                     }
                 }

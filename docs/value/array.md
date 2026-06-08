@@ -6,14 +6,25 @@ shared design philosophy.
 
 ## Design
 
-`Array` wraps a `Vec<Value>` today but exposes only a curated method surface
-(`get`, `get_mut`, `push`, `pop`, `insert`, `remove`, `iter`, `iter_mut`,
-`cursor`, serde). The inner vector is private — callers cannot pattern-match it
-or hand out mutable references to the backing store, so the backend can change
-without churn at call sites that currently assume `Vec<Value>`.
+`Array` wraps a `Vec<Value>` today, but the inner vector is private: callers
+cannot pattern-match it or take ownership of the backing store. The public API is
+the curated surface in `src/value/array/mod.rs`, grouped roughly as:
+
+- construction/conversion: `new`, `with_capacity`, `From<Vec<Value>>`,
+  `FromIterator<Value>`, `IntoIterator`, `From<Array> for Value`, `into_value`
+- read access: `len`, `is_empty`, `get`, `first`, `last`, `as_slice`, indexing
+- mutation: `get_mut`, `push`, `pop`, `clear`, `insert`, `remove`, `truncate`,
+  `extend_from_slice`, `iter_mut`, `sort`, `sort_by`, `dedup`, `reverse`
+- iteration: `iter`, borrowed/mutable/owned `IntoIterator`, serde
+- RVM-only resumable traversal: `cursor` and `next`, both compiled only with
+  `#[cfg(feature = "rvm")]`
 
 Iteration follows sequence order. Cursor types support incremental traversal
 needed by the RVM iteration state without exposing iterator internals.
+
+Some ergonomic APIs (`as_slice`, `iter_mut`, indexing) expose contiguous-sequence
+semantics. Future non-`Vec` backends should preserve the API contract, possibly
+by materializing a contiguous view internally.
 
 `Ord` is hand-written against the sequence iterator rather than derived from the
 storage, so future backends compare exactly like today's `Vec<Value>` payload.

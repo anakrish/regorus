@@ -576,6 +576,12 @@ fn array_constructors_equality_and_ordering() {
     assert!(empty.is_empty());
     assert_eq!(empty.len(), 0);
 
+    let zero_capacity = Array::with_capacity(0).expect("zero capacity should reserve");
+    assert!(zero_capacity.is_empty());
+
+    let kilobyte_capacity = Array::with_capacity(1024).expect("capacity should reserve");
+    assert!(kilobyte_capacity.is_empty());
+
     let mut with_capacity = Array::with_capacity(2).expect("capacity should reserve");
     with_capacity.push(val(1)).expect("push should fit");
     with_capacity.push(val(2)).expect("push should fit");
@@ -585,6 +591,17 @@ fn array_constructors_equality_and_ordering() {
     assert_eq!(with_capacity, from_vec);
     assert_eq!(from_vec, from_iter);
     assert!(Array::from(vec![val(1), val(2)]) < Array::from(vec![val(1), val(3)]));
+}
+
+#[test]
+fn with_capacity_overflow_is_safe() {
+    let over_isize_max = usize::try_from(isize::MAX)
+        .expect("isize::MAX should fit in usize")
+        .checked_add(1)
+        .expect("usize should represent isize::MAX + 1");
+
+    assert!(Array::with_capacity(usize::MAX).is_none());
+    assert!(Array::with_capacity(over_isize_max).is_none());
 }
 
 #[test]
@@ -703,15 +720,13 @@ fn array_sort_dedup_and_reverse() {
 #[test]
 fn array_conversions_to_value() {
     let array = Array::from_iter([val(1), val(2), val(3)]);
-    let expected = Value::Array(crate::Rc::new(vec![val(1), val(2), val(3)]));
+    let expected = Value::from(Array::from_iter([val(1), val(2), val(3)]));
+
     let value_from_impl = Value::from(array.clone());
     assert_eq!(value_from_impl, expected);
 
     let value_from_method = array.into_value();
-    assert_eq!(
-        value_from_method,
-        Value::Array(crate::Rc::new(vec![val(1), val(2), val(3)]))
-    );
+    assert_eq!(value_from_method, expected);
 }
 
 #[test]

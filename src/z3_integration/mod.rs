@@ -1,14 +1,22 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 //! Z3 Integration Module
 //!
-//! This module provides Z3 theorem prover integration for Regorus,
-//! enabling formal verification, policy analysis, and constraint solving.
+//! This module provides Z3 theorem prover integration for policy verification
 
 pub mod converter;
 pub mod verifier;
 
-// Re-export main public types
+#[cfg(feature = "z3")]
+pub mod z3_sys_converter;
+
+#[cfg(feature = "z3")]
 pub use converter::RegoToZ3Converter;
-pub use verifier::{ConsistencyResult, CounterExample, TestCase, Z3PolicyVerifier};
+#[cfg(feature = "z3")]
+pub use verifier::{Z3PolicyVerifier, ConsistencyResult, CounterExample, TestCase};
+#[cfg(feature = "z3")]
+pub use z3_sys_converter::Z3SysConverter;
 
 // Feature-gated Z3 context utilities
 pub mod context {

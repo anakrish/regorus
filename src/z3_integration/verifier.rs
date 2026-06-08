@@ -10,6 +10,7 @@ use crate::ast::*;
 use crate::lexer::Source;
 use crate::parser::Parser;
 use crate::value::Value;
+use crate::z3_integration::z3_sys_converter::Z3SysConverter;
 use alloc::{
     format,
     string::{String, ToString},
@@ -58,6 +59,7 @@ pub struct ScopeAnalysis {
 /// Policy verification engine using Z3
 pub struct Z3PolicyVerifier {
     policies: Vec<String>,
+    converter: Z3SysConverter,
 }
 
 #[allow(dead_code)]
@@ -66,6 +68,7 @@ impl Z3PolicyVerifier {
     pub fn new() -> Self {
         Self { 
             policies: Vec::new(),
+            converter: Z3SysConverter::new(),
         }
     }
 
@@ -1150,19 +1153,15 @@ impl Z3PolicyVerifier {
         Ok(true)
     }
 
-    /// Check if conditions of two rules overlap (can both apply to same input)
-    fn check_conditions_overlap(&self, rule1: &Ref<Rule>, rule2: &Ref<Rule>) -> Result<bool> {
-        if let (Rule::Spec { ref bodies, .. }, Rule::Spec { bodies: ref bodies2, .. }) = (rule1.as_ref(), rule2.as_ref()) {
-            // Check all body combinations for overlap
-            for body1 in bodies {
-                for body2 in bodies2 {
-                    if self.bodies_have_overlapping_conditions(body1, body2)? {
-                        return Ok(true);
-                    }
-                }
-            }
-        }
-        Ok(false)
+    /// Check if conditions of two rules overlap (can both apply to same input) using Z3
+    fn check_conditions_overlap(&mut self, rule1: &Ref<Rule>, rule2: &Ref<Rule>) -> Result<bool> {
+        // Convert both rules to Z3 constraints
+        let constraints1 = self.converter.convert_rule(rule1)?;
+        let constraints2 = self.converter.convert_rule(rule2)?;
+        
+        // Check if both constraint sets can be satisfied simultaneously
+        // If they can, then the conditions overlap (both rules can apply to the same input)
+        self.converter.check_constraints_satisfiable(&constraints1, &constraints2)
     }
 
     /// Extract conditions from a query for analysis
@@ -2085,7 +2084,7 @@ impl Z3PolicyVerifier {
         Ok(counterexamples)
     }
 
-    fn find_conflict_counterexamples(&self, module: &Module) -> Result<Vec<CounterExample>> {
+    fn find_conflict_counterexamples(&mut self, module: &Module) -> Result<Vec<CounterExample>> {
         let mut counterexamples = vec![];
 
         // Look for rules that might conflict
@@ -2163,49 +2162,16 @@ impl Z3PolicyVerifier {
     }
 
     fn generate_conflict_input(
-        &self,
+        &mut self,
         rule1: &Ref<Rule>,
         rule2: &Ref<Rule>,
     ) -> Result<Option<String>> {
-        // Generate input that might satisfy conditions of both conflicting rules
-        match (rule1.as_ref(), rule2.as_ref()) {
-            (
-                Rule::Spec {
-                    bodies: bodies1, ..
-                },
-                Rule::Spec {
-                    bodies: bodies2, ..
-                },
-            ) => {
-                // Try to combine conditions from both rules
-                let mut combined_fields = vec![];
-
-                // Extract fields from first rule
-                if let Some(body1) = bodies1.first() {
-                    for stmt in &body1.query.stmts {
-                        if let Some(field) = self.extract_input_field_from_stmt(stmt) {
-                            combined_fields.push(field);
-                        }
-                    }
-                }
-
-                // Extract fields from second rule
-                if let Some(body2) = bodies2.first() {
-                    for stmt in &body2.query.stmts {
-                        if let Some(field) = self.extract_input_field_from_stmt(stmt) {
-                            combined_fields.push(field);
-                        }
-                    }
-                }
-
-                if !combined_fields.is_empty() {
-                    return Ok(Some(self.build_json_input(&combined_fields)?));
-                }
-            }
-            _ => {}
-        }
-
-        Ok(None)
+        // Use Z3 to find a satisfying model for both rules
+        let constraints1 = self.converter.convert_rule(rule1)?;
+        let constraints2 = self.converter.convert_rule(rule2)?;
+        
+        // Find a model that satisfies both constraint sets
+        self.converter.find_satisfying_model(&constraints1, &constraints2)
     }
 
     fn parse_policy(&self, policy_text: &str) -> Result<Module> {

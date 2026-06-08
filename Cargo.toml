@@ -87,11 +87,16 @@ opa-no-std = [
 rego-extensions = []
 
 # Z3 theorem prover integration
-z3 = ["dep:z3"]
+z3 = ["dep:z3", "dep:z3-sys"]
 
 # This feature enables some testing utils for OPA tests.
 opa-testutil = []
 rand = ["dep:rand"]
+
+[[example]]
+name = "z3_api_test"
+path = "test_z3_api.rs"
+required-features = ["z3"]
 
 [dependencies]
 anyhow = { version = "1.0.45", default-features = false }
@@ -118,6 +123,7 @@ rand = { version = "0.9.0", default-features = false, features = ["thread_rng"],
 
 # Z3 theorem prover for advanced policy analysis and verification
 z3 = { version = "0.16.2", optional = true, features = ["gh-release"] }
+z3-sys = { version = "0.9.8", optional = true }
 
 # Causes the project to link with the Spectre-mitigated CRT and libs.
 msvc_spectre_libs = { version = "0.1", features = ["error"], optional = true }

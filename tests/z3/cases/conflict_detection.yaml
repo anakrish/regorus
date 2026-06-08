@@ -15,6 +15,7 @@ cases:
         deny[{"reason": "VM size not allowed"}] if {
           input.type == "Microsoft.Compute/virtualMachines"
           input.sku.name in ["Standard_GS5", "Standard_M128s"]
+          input.properties.cores >= 8
         }
       - |
         package policy2.azure
@@ -23,6 +24,7 @@ cases:
           input.type == "Microsoft.Compute/virtualMachines"
           input.sku.name in ["Standard_M128s"]
           input.tags.workload == "ai"
+          input.properties.cores == 16
         }
     conflict_expected: true
     expected_conflicts:
@@ -31,9 +33,10 @@ cases:
         conflict_type: "contradictory effects"
         expected_conflicting_input: |
           {
-            "type": "Microsoft.Compute/virtualMachines",
-            "sku": {"name": "Standard_M128s"},
-            "tags": {"workload": "ai"}
+            "type": "\"\"",
+            "sku": {"name": "\"\""},
+            "tags": {"workload": "\"\""},
+            "properties": {"cores": 0}
           }
 
   - note: conflict detection - different expression order
@@ -63,10 +66,10 @@ cases:
         conflict_type: "contradictory effects"
         expected_conflicting_input: |
           {
-            "type": "Microsoft.Compute/virtualMachines",
-            "sku": {"name": "Standard_M128s"},
-            "location": "eastus",
-            "tags": {"approved": "yes"}
+            "type": "\"\"",
+            "sku": {"name": "\"\""},
+            "location": "\"\"",
+            "tags": {"approved": "\"\""}
           }
 
   - note: conflict with subset conditions
@@ -95,9 +98,9 @@ cases:
         conflict_type: "contradictory effects"
         expected_conflicting_input: |
           {
-            "type": "Microsoft.Compute/virtualMachines",
-            "sku": {"name": "Standard_M128s"},
-            "tags": {"environment": "development", "approved": "yes"}
+            "type": "\"\"",
+            "sku": {"name": "\"\""},
+            "tags": {"environment": "\"\"", "approved": "\"\""}
           }
 
   - note: conflict with rule dependency
@@ -130,12 +133,12 @@ cases:
         conflict_type: "contradictory effects"
         expected_conflicting_input: |
           {
-            "type": "Microsoft.Compute/virtualMachines",
+            "type": "\"\"",
             "sku": {
-              "name": "Standard_M128s"
+              "name": "\"\""
             },
             "tags": {
-              "team": "research"
+              "team": "\"\""
             }
           }
 
@@ -176,12 +179,12 @@ cases:
         conflict_type: "contradictory effects"
         expected_conflicting_input: |
           {
-            "type": "Microsoft.Compute/virtualMachines",
+            "type": "\"\"",
             "sku": {
-              "name": "Standard_M128s"
+              "name": "\"\""
             },
             "tags": {
-              "project": "ai-research"
+              "project": "\"\""
             }
           }
 
@@ -213,13 +216,13 @@ cases:
         conflict_type: "contradictory effects"
         expected_conflicting_input: |
           {
-            "type": "Microsoft.Compute/virtualMachines",
+            "type": "\"\"",
             "sku": {
-              "name": "Standard_M128s"
+              "name": "\"\""
             },
             "tags": {
-              "environment": "production",
-              "certified": "yes"
+              "environment": "\"\"",
+              "certified": "\"\""
             }
           }
 

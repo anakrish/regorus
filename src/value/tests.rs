@@ -576,7 +576,7 @@ fn array_constructors_equality_and_ordering() {
     assert!(empty.is_empty());
     assert_eq!(empty.len(), 0);
 
-    let mut with_capacity = Array::with_capacity(2);
+    let mut with_capacity = Array::with_capacity(2).expect("capacity should reserve");
     with_capacity.push(val(1));
     with_capacity.push(val(2));
 

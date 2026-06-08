@@ -42,11 +42,15 @@ impl Array {
         Self { inner: Vec::new() }
     }
 
+    /// Create an empty `Array` with space for at least `capacity` elements.
+    ///
+    /// Returns `None` if the requested capacity is too large or cannot be
+    /// reserved by the allocator.
     #[inline]
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            inner: Vec::with_capacity(capacity),
-        }
+    pub fn with_capacity(capacity: usize) -> Option<Self> {
+        let mut inner = Vec::new();
+        inner.try_reserve(capacity).ok()?;
+        Some(Self { inner })
     }
 
     #[inline]

@@ -1,0 +1,75 @@
+{
+  "type": "object",
+  "required": ["resource"],
+  "properties": {
+    "resource": {
+      "type": "object",
+      "required": [
+        "type", "version", "minimumTlsVersion", "publicNetworkAccess",
+        "restrictOutboundNetworkAccess",
+        "administrators.administratorType", "administrators.azureADOnlyAuthentication",
+        "administrators.login", "administrators.principalType",
+        "administrators.sid", "administrators.tenantId"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["Microsoft.Sql/servers"]
+        },
+        "version": {
+          "type": "string",
+          "enum": ["2.0", "12.0"]
+        },
+        "minimumTlsVersion": {
+          "type": "string",
+          "enum": ["1.0", "1.1", "1.2"],
+          "default": "1.2"
+        },
+        "publicNetworkAccess": {
+          "type": "string",
+          "enum": ["Enabled", "Disabled"],
+          "default": "Enabled"
+        },
+        "restrictOutboundNetworkAccess": {
+          "type": "string",
+          "enum": ["Enabled", "Disabled"],
+          "default": "Disabled"
+        },
+        "administrators.administratorType": {
+          "type": "string",
+          "enum": ["ActiveDirectory"]
+        },
+        "administrators.azureADOnlyAuthentication": {
+          "type": "boolean",
+          "default": false
+        },
+        "administrators.login": {
+          "type": "string"
+        },
+        "administrators.principalType": {
+          "type": "string",
+          "enum": ["User", "Group", "Application"]
+        },
+        "administrators.sid": {
+          "type": "string"
+        },
+        "administrators.tenantId": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "object",
+          "description": "Resource tags",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "parameters": {
+      "type": "object"
+    },
+    "context": {
+      "type": "object"
+    }
+  }
+}

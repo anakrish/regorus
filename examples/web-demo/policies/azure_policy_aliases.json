@@ -6,19 +6,191 @@
         "resourceType": "storageAccounts",
         "aliases": [
           {
+            "name": "Microsoft.Storage/storageAccounts/kind",
+            "defaultPath": "kind",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/sku.name",
+            "defaultPath": "sku.name",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
             "name": "Microsoft.Storage/storageAccounts/supportsHttpsTrafficOnly",
             "defaultPath": "properties.supportsHttpsTrafficOnly",
-            "defaultMetadata": {
-              "type": "Boolean"
-            },
+            "defaultMetadata": { "type": "Boolean" },
             "paths": []
           },
           {
             "name": "Microsoft.Storage/storageAccounts/minimumTlsVersion",
             "defaultPath": "properties.minimumTlsVersion",
-            "defaultMetadata": {
-              "type": "String"
-            },
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/accessTier",
+            "defaultPath": "properties.accessTier",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/allowBlobPublicAccess",
+            "defaultPath": "properties.allowBlobPublicAccess",
+            "defaultMetadata": { "type": "Boolean" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/allowCrossTenantReplication",
+            "defaultPath": "properties.allowCrossTenantReplication",
+            "defaultMetadata": { "type": "Boolean" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/allowSharedKeyAccess",
+            "defaultPath": "properties.allowSharedKeyAccess",
+            "defaultMetadata": { "type": "Boolean" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/defaultToOAuthAuthentication",
+            "defaultPath": "properties.defaultToOAuthAuthentication",
+            "defaultMetadata": { "type": "Boolean" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/isHnsEnabled",
+            "defaultPath": "properties.isHnsEnabled",
+            "defaultMetadata": { "type": "Boolean" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/isLocalUserEnabled",
+            "defaultPath": "properties.isLocalUserEnabled",
+            "defaultMetadata": { "type": "Boolean" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/isNfsV3Enabled",
+            "defaultPath": "properties.isNfsV3Enabled",
+            "defaultMetadata": { "type": "Boolean" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/isSftpEnabled",
+            "defaultPath": "properties.isSftpEnabled",
+            "defaultMetadata": { "type": "Boolean" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/largeFileSharesState",
+            "defaultPath": "properties.largeFileSharesState",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/publicNetworkAccess",
+            "defaultPath": "properties.publicNetworkAccess",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/encryption.keySource",
+            "defaultPath": "properties.encryption.keySource",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/encryption.requireInfrastructureEncryption",
+            "defaultPath": "properties.encryption.requireInfrastructureEncryption",
+            "defaultMetadata": { "type": "Boolean" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/encryption.services.blob.enabled",
+            "defaultPath": "properties.encryption.services.blob.enabled",
+            "defaultMetadata": { "type": "Boolean" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/encryption.services.file.enabled",
+            "defaultPath": "properties.encryption.services.file.enabled",
+            "defaultMetadata": { "type": "Boolean" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/encryption.services.queue.keyType",
+            "defaultPath": "properties.encryption.services.queue.keyType",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/encryption.services.table.keyType",
+            "defaultPath": "properties.encryption.services.table.keyType",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/networkAcls.defaultAction",
+            "defaultPath": "properties.networkAcls.defaultAction",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/networkAcls.bypass",
+            "defaultPath": "properties.networkAcls.bypass",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/networkAcls.virtualNetworkRules",
+            "defaultPath": "properties.networkAcls.virtualNetworkRules",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/networkAcls.virtualNetworkRules[*]",
+            "defaultPath": "properties.networkAcls.virtualNetworkRules[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/networkAcls.virtualNetworkRules[*].id",
+            "defaultPath": "properties.networkAcls.virtualNetworkRules[*].id",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/networkAcls.virtualNetworkRules[*].action",
+            "defaultPath": "properties.networkAcls.virtualNetworkRules[*].action",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/networkAcls.virtualNetworkRules[*].state",
+            "defaultPath": "properties.networkAcls.virtualNetworkRules[*].state",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/networkAcls.ipRules",
+            "defaultPath": "properties.networkAcls.ipRules",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/networkAcls.ipRules[*]",
+            "defaultPath": "properties.networkAcls.ipRules[*]",
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/networkAcls.ipRules[*].value",
+            "defaultPath": "properties.networkAcls.ipRules[*].value",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Storage/storageAccounts/networkAcls.ipRules[*].action",
+            "defaultPath": "properties.networkAcls.ipRules[*].action",
+            "defaultMetadata": { "type": "String" },
             "paths": []
           }
         ]
@@ -32,27 +204,63 @@
         "resourceType": "servers",
         "aliases": [
           {
+            "name": "Microsoft.Sql/servers/version",
+            "defaultPath": "properties.version",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
             "name": "Microsoft.Sql/servers/minimumTlsVersion",
             "defaultPath": "properties.minimumTlsVersion",
-            "defaultMetadata": {
-              "type": "String"
-            },
+            "defaultMetadata": { "type": "String" },
             "paths": []
           },
           {
             "name": "Microsoft.Sql/servers/publicNetworkAccess",
             "defaultPath": "properties.publicNetworkAccess",
-            "defaultMetadata": {
-              "type": "String"
-            },
+            "defaultMetadata": { "type": "String" },
             "paths": []
           },
           {
             "name": "Microsoft.Sql/servers/restrictOutboundNetworkAccess",
             "defaultPath": "properties.restrictOutboundNetworkAccess",
-            "defaultMetadata": {
-              "type": "String"
-            },
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Sql/servers/administrators.administratorType",
+            "defaultPath": "properties.administrators.administratorType",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Sql/servers/administrators.azureADOnlyAuthentication",
+            "defaultPath": "properties.administrators.azureADOnlyAuthentication",
+            "defaultMetadata": { "type": "Boolean" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Sql/servers/administrators.login",
+            "defaultPath": "properties.administrators.login",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Sql/servers/administrators.principalType",
+            "defaultPath": "properties.administrators.principalType",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Sql/servers/administrators.sid",
+            "defaultPath": "properties.administrators.sid",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.Sql/servers/administrators.tenantId",
+            "defaultPath": "properties.administrators.tenantId",
+            "defaultMetadata": { "type": "String" },
             "paths": []
           }
         ]
@@ -66,51 +274,87 @@
         "resourceType": "vaults",
         "aliases": [
           {
-            "name": "Microsoft.KeyVault/vaults/publicNetworkAccess",
-            "defaultPath": "properties.publicNetworkAccess",
-            "defaultMetadata": {
-              "type": "String"
-            },
+            "name": "Microsoft.KeyVault/vaults/sku.name",
+            "defaultPath": "properties.sku.name",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.KeyVault/vaults/sku.family",
+            "defaultPath": "properties.sku.family",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.KeyVault/vaults/tenantId",
+            "defaultPath": "properties.tenantId",
+            "defaultMetadata": { "type": "String" },
             "paths": []
           },
           {
             "name": "Microsoft.KeyVault/vaults/enableSoftDelete",
             "defaultPath": "properties.enableSoftDelete",
-            "defaultMetadata": {
-              "type": "Boolean"
-            },
+            "defaultMetadata": { "type": "Boolean" },
             "paths": []
           },
           {
             "name": "Microsoft.KeyVault/vaults/enablePurgeProtection",
             "defaultPath": "properties.enablePurgeProtection",
-            "defaultMetadata": {
-              "type": "Boolean"
-            },
+            "defaultMetadata": { "type": "Boolean" },
             "paths": []
           },
           {
             "name": "Microsoft.KeyVault/vaults/enableRbacAuthorization",
             "defaultPath": "properties.enableRbacAuthorization",
-            "defaultMetadata": {
-              "type": "Boolean"
-            },
+            "defaultMetadata": { "type": "Boolean" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.KeyVault/vaults/enabledForDeployment",
+            "defaultPath": "properties.enabledForDeployment",
+            "defaultMetadata": { "type": "Boolean" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.KeyVault/vaults/enabledForDiskEncryption",
+            "defaultPath": "properties.enabledForDiskEncryption",
+            "defaultMetadata": { "type": "Boolean" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.KeyVault/vaults/enabledForTemplateDeployment",
+            "defaultPath": "properties.enabledForTemplateDeployment",
+            "defaultMetadata": { "type": "Boolean" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.KeyVault/vaults/softDeleteRetentionInDays",
+            "defaultPath": "properties.softDeleteRetentionInDays",
+            "defaultMetadata": { "type": "Integer" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.KeyVault/vaults/createMode",
+            "defaultPath": "properties.createMode",
+            "defaultMetadata": { "type": "String" },
+            "paths": []
+          },
+          {
+            "name": "Microsoft.KeyVault/vaults/publicNetworkAccess",
+            "defaultPath": "properties.publicNetworkAccess",
+            "defaultMetadata": { "type": "String" },
             "paths": []
           },
           {
             "name": "Microsoft.KeyVault/vaults/networkAcls.defaultAction",
             "defaultPath": "properties.networkAcls.defaultAction",
-            "defaultMetadata": {
-              "type": "String"
-            },
+            "defaultMetadata": { "type": "String" },
             "paths": []
           },
           {
-            "name": "Microsoft.KeyVault/vaults/sku.name",
-            "defaultPath": "properties.sku.name",
-            "defaultMetadata": {
-              "type": "String"
-            },
+            "name": "Microsoft.KeyVault/vaults/networkAcls.bypass",
+            "defaultPath": "properties.networkAcls.bypass",
+            "defaultMetadata": { "type": "String" },
             "paths": []
           }
         ]

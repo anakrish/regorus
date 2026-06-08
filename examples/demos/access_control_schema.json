@@ -1,0 +1,40 @@
+{
+    "type": "object",
+    "required": ["user", "resource", "request"],
+    "properties": {
+        "user": {
+            "type": "object",
+            "required": ["role", "suspended"],
+            "properties": {
+                "role": {
+                    "type": "string",
+                    "enum": ["manager", "employee", "intern"]
+                },
+                "suspended": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "resource": {
+            "type": "object",
+            "required": ["sensitivity"],
+            "properties": {
+                "sensitivity": {
+                    "type": "string",
+                    "enum": ["sensitive", "normal", "public"]
+                }
+            }
+        },
+        "request": {
+            "type": "object",
+            "required": ["hour"],
+            "properties": {
+                "hour": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 23
+                }
+            }
+        }
+    }
+}

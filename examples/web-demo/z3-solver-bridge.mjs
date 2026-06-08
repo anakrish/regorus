@@ -74,9 +74,11 @@ export async function initZ3() {
  *
  * @param {string} smtLib2 -- The SMT-LIB2 script text.
  * @param {number} numExtractions -- Number of extractions expected.
+ * @param {object} [options] -- Optional settings.
+ * @param {number} [options.timeoutMs] -- Z3 solver timeout in milliseconds (default: none).
  * @returns {Promise<string>} -- JSON string of SmtCheckResult.
  */
-export async function solveSmtLib2(smtLib2, numExtractions) {
+export async function solveSmtLib2(smtLib2, numExtractions, options = {}) {
   if (!Z3) throw new Error('Z3 not initialized. Call initZ3() first.');
 
   // Create a fresh context.
@@ -101,7 +103,14 @@ export async function solveSmtLib2(smtLib2, numExtractions) {
     }
 
     // Run the prelude (declarations + assertions)
-    const prelude = script.substring(0, checkSatIdx).trim();
+    let prelude = script.substring(0, checkSatIdx).trim();
+
+    // Inject Z3 timeout if requested
+    const timeoutMs = options.timeoutMs;
+    if (timeoutMs && timeoutMs > 0) {
+      prelude = `(set-option :timeout ${Math.round(timeoutMs)})\n${prelude}`;
+    }
+
     if (prelude) {
       const preludeResult = await Z3.eval_smtlib2_string(ctx, prelude);
       if (preludeResult && preludeResult.trim()) {

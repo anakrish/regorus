@@ -315,3 +315,14 @@ export function highlightJsonLine(line) {
   }
   return result.join("");
 }
+
+// ═══════════════════════════════════════════════════════════
+//  FULL-TEXT WRAPPERS (multi-line → single HTML string)
+// ═══════════════════════════════════════════════════════════
+export function highlightRegoFull(text) {
+  return text.split('\n').map(line => highlightRego(line)).join('\n');
+}
+
+export function highlightJsonFull(text) {
+  return text.split('\n').map(line => highlightJsonLine(line)).join('\n');
+}

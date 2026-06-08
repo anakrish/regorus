@@ -5,39 +5,82 @@
     "resource": {
       "type": "object",
       "required": [
-        "type",
-        "publicNetworkAccess",
-        "enableSoftDelete",
-        "enablePurgeProtection",
-        "enableRbacAuthorization",
-        "networkAcls.defaultAction",
-        "sku.name"
+        "type", "sku.name", "sku.family", "tenantId",
+        "enableSoftDelete", "enablePurgeProtection", "enableRbacAuthorization",
+        "enabledForDeployment", "enabledForDiskEncryption", "enabledForTemplateDeployment",
+        "softDeleteRetentionInDays", "createMode", "publicNetworkAccess",
+        "networkAcls.defaultAction", "networkAcls.bypass"
       ],
       "properties": {
         "type": {
           "type": "string",
           "enum": ["Microsoft.KeyVault/vaults"]
         },
+        "sku.name": {
+          "type": "string",
+          "enum": ["standard", "premium"]
+        },
+        "sku.family": {
+          "type": "string",
+          "enum": ["A"]
+        },
+        "tenantId": {
+          "type": "string"
+        },
+        "enableSoftDelete": {
+          "type": "boolean",
+          "default": true
+        },
+        "enablePurgeProtection": {
+          "type": "boolean",
+          "default": false
+        },
+        "enableRbacAuthorization": {
+          "type": "boolean",
+          "default": false
+        },
+        "enabledForDeployment": {
+          "type": "boolean",
+          "default": false
+        },
+        "enabledForDiskEncryption": {
+          "type": "boolean",
+          "default": false
+        },
+        "enabledForTemplateDeployment": {
+          "type": "boolean",
+          "default": false
+        },
+        "softDeleteRetentionInDays": {
+          "type": "integer",
+          "minimum": 7,
+          "maximum": 90,
+          "default": 90
+        },
+        "createMode": {
+          "type": "string",
+          "enum": ["default", "recover"]
+        },
         "publicNetworkAccess": {
           "type": "string",
           "enum": ["Enabled", "Disabled"]
         },
-        "enableSoftDelete": {
-          "type": "boolean"
-        },
-        "enablePurgeProtection": {
-          "type": "boolean"
-        },
-        "enableRbacAuthorization": {
-          "type": "boolean"
-        },
         "networkAcls.defaultAction": {
           "type": "string",
-          "enum": ["Allow", "Deny"]
+          "enum": ["Allow", "Deny"],
+          "default": "Allow"
         },
-        "sku.name": {
+        "networkAcls.bypass": {
           "type": "string",
-          "enum": ["standard", "premium"]
+          "enum": ["AzureServices", "None"],
+          "default": "AzureServices"
+        },
+        "tags": {
+          "type": "object",
+          "description": "Resource tags",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       }
     },

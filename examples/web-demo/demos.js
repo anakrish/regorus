@@ -18,6 +18,13 @@ export const DEMOS = [
     overview: true,
   },
 
+  // ── Copilot: LLM + Policy Intelligence ────────────────
+  {
+    id: "copilot", title: "Copilot",
+    subtitle: "Describe a policy in natural language. LLM generates it, Z3 validates it.",
+    copilot: true,
+  },
+
   // ── Playground (always last in tab bar) ───────────────
   {
     id: "playground", title: "Playground",
@@ -560,6 +567,7 @@ export const DEMOS = [
 //  OVERVIEW CARD DATA
 // ═══════════════════════════════════════════════════════════
 export const OVERVIEW_CARDS = [
+  { num: "🤖", title: "Copilot", desc: "Describe a policy in natural language. LLM generates Rego, Z3 validates it, LLM explains the results. Iterate until correct.", tags: ["rego", "llm"], tabId: "copilot" },
   { num: "📐", title: "Symbolic Policy Analysis", desc: "What is SMT? Meet Z3. Try solving constraints in your browser, then see how we apply it to policies.", tags: ["smt"], tabId: "intro" },
   { num: "Demo 1", title: "Rego: Input Synthesis", desc: "Find concrete inputs for any desired policy outcome.", tags: ["rego"], tabId: "synthesis" },
   { num: "Demo 2", title: "Cedar: Authorization", desc: "Permit/forbid with entity hierarchies, geo-fencing, RBAC.", tags: ["cedar"], tabId: "cedar" },
@@ -574,5 +582,5 @@ export const OVERVIEW_CARDS = [
   { num: "🔬", title: "Playground", desc: "Paste your own policy and run Z3 analysis interactively.", tags: ["rego", "cedar", "azure"], tabId: "playground" },
 ];
 
-export const TAG_CLASSES = { rego: "tag-rego", azure: "tag-azure", cedar: "tag-cedar", diff: "tag-diff", proof: "tag-proof", gen: "tag-gen", fetch: "tag-fetch", smt: "tag-smt" };
+export const TAG_CLASSES = { rego: "tag-rego", azure: "tag-azure", cedar: "tag-cedar", diff: "tag-diff", proof: "tag-proof", gen: "tag-gen", fetch: "tag-fetch", smt: "tag-smt", llm: "tag-llm" };
 export const LANG_BADGE = { rego: "lang-rego", cedar: "lang-cedar", azure: "lang-azure", smt: "lang-smt" };

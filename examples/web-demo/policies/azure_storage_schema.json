@@ -1,33 +1,154 @@
 {
   "type": "object",
-  "required": [
-    "resource"
-  ],
+  "required": ["resource"],
   "properties": {
     "resource": {
       "type": "object",
       "required": [
-        "type",
-        "supportsHttpsTrafficOnly",
-        "minimumTlsVersion"
+        "type", "kind", "sku.name", "supportsHttpsTrafficOnly", "minimumTlsVersion",
+        "accessTier", "allowBlobPublicAccess", "allowCrossTenantReplication",
+        "allowSharedKeyAccess", "defaultToOAuthAuthentication",
+        "isHnsEnabled", "isLocalUserEnabled", "isNfsV3Enabled", "isSftpEnabled",
+        "largeFileSharesState", "publicNetworkAccess",
+        "encryption.keySource", "encryption.requireInfrastructureEncryption",
+        "encryption.services.blob.enabled", "encryption.services.file.enabled",
+        "encryption.services.queue.keyType", "encryption.services.table.keyType",
+        "networkAcls.defaultAction", "networkAcls.bypass"
       ],
       "properties": {
         "type": {
           "type": "string",
+          "enum": ["Microsoft.Storage/storageAccounts"]
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["Storage", "StorageV2", "BlobStorage", "FileStorage", "BlockBlobStorage"]
+        },
+        "sku.name": {
+          "type": "string",
           "enum": [
-            "Microsoft.Storage/storageAccounts"
+            "Standard_LRS", "Standard_GRS", "Standard_RAGRS", "Standard_ZRS",
+            "Premium_LRS", "Premium_ZRS", "Standard_GZRS", "Standard_RAGZRS"
           ]
         },
         "supportsHttpsTrafficOnly": {
-          "type": "boolean"
+          "type": "boolean",
+          "default": true
         },
         "minimumTlsVersion": {
           "type": "string",
-          "enum": [
-            "TLS1_0",
-            "TLS1_1",
-            "TLS1_2"
-          ]
+          "enum": ["TLS1_0", "TLS1_1", "TLS1_2"],
+          "default": "TLS1_0"
+        },
+        "accessTier": {
+          "type": "string",
+          "enum": ["Hot", "Cool", "Premium"],
+          "default": "Hot"
+        },
+        "allowBlobPublicAccess": {
+          "type": "boolean",
+          "default": false
+        },
+        "allowCrossTenantReplication": {
+          "type": "boolean",
+          "default": false
+        },
+        "allowSharedKeyAccess": {
+          "type": "boolean",
+          "default": true
+        },
+        "defaultToOAuthAuthentication": {
+          "type": "boolean",
+          "default": false
+        },
+        "isHnsEnabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "isLocalUserEnabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "isNfsV3Enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "isSftpEnabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "largeFileSharesState": {
+          "type": "string",
+          "enum": ["Disabled", "Enabled"]
+        },
+        "publicNetworkAccess": {
+          "type": "string",
+          "enum": ["Enabled", "Disabled"]
+        },
+        "encryption.keySource": {
+          "type": "string",
+          "enum": ["Microsoft.Storage", "Microsoft.Keyvault"],
+          "default": "Microsoft.Storage"
+        },
+        "encryption.requireInfrastructureEncryption": {
+          "type": "boolean",
+          "default": false
+        },
+        "encryption.services.blob.enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "encryption.services.file.enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "encryption.services.queue.keyType": {
+          "type": "string",
+          "enum": ["Service", "Account"]
+        },
+        "encryption.services.table.keyType": {
+          "type": "string",
+          "enum": ["Service", "Account"]
+        },
+        "networkAcls.defaultAction": {
+          "type": "string",
+          "enum": ["Allow", "Deny"],
+          "default": "Allow"
+        },
+        "networkAcls.bypass": {
+          "type": "string",
+          "enum": ["None", "Logging", "Metrics", "AzureServices"],
+          "default": "AzureServices"
+        },
+        "networkAcls.virtualNetworkRules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "action": { "type": "string", "enum": ["Allow"] },
+              "state": { "type": "string", "enum": ["provisioning", "deprovisioning", "succeeded", "failed", "networkSourceDeleted"] }
+            },
+            "required": ["id"]
+          }
+        },
+        "networkAcls.ipRules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "value": { "type": "string" },
+              "action": { "type": "string", "enum": ["Allow"] }
+            },
+            "required": ["value"]
+          }
+        },
+        "tags": {
+          "type": "object",
+          "description": "Resource tags",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       }
     },

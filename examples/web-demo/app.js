@@ -7,6 +7,7 @@ import { initZ3, solveSmtLib2 } from './z3-solver-bridge.mjs';
 import {
   escapeHtml, highlightOutput, applyKeywordHighlights,
   highlightSMT, highlightRego, highlightCedar, highlightJsonLine,
+  highlightRegoFull, highlightJsonFull,
 } from './highlighting.js';
 
 // ── WASM module references (set during init) ────────────
@@ -68,7 +69,9 @@ function buildUI(DEMOS, OVERVIEW_CARDS, TAG_CLASSES, LANG_BADGE) {
     const btn = document.createElement('button');
     btn.className = 'tab-btn' + (di === 0 ? ' active' : '');
     btn.dataset.tab = demo.id;
-    if (demo.playground) {
+    if (demo.copilot) {
+      btn.innerHTML = `<span class="tab-num">🤖</span>Copilot`;
+    } else if (demo.playground) {
       btn.innerHTML = `<span class="tab-num">🔬</span>Playground`;
     } else if (demo.intro) {
       btn.innerHTML = `<span class="tab-num">📐</span>How It Works`;
@@ -86,6 +89,8 @@ function buildUI(DEMOS, OVERVIEW_CARDS, TAG_CLASSES, LANG_BADGE) {
     panel.id = `panel-${demo.id}`;
     panel.innerHTML = demo.overview
       ? buildOverview(demo, OVERVIEW_CARDS, TAG_CLASSES)
+      : demo.copilot
+      ? buildCopilotPanel()
       : demo.intro
       ? buildIntroPanel()
       : demo.playground
@@ -114,6 +119,17 @@ function buildUI(DEMOS, OVERVIEW_CARDS, TAG_CLASSES, LANG_BADGE) {
   window.pgClearEditor = pgClearEditor;
   window.runSmtPreset = runSmtPreset;
   window.switchSmtPreset = switchSmtPreset;
+  window.cpSend = cpSend;
+  window.cpValidate = cpValidate;
+  window.cpCompare = cpCompare;
+  window.cpExplain = cpExplain;
+  window.cpUseSuggestion = cpUseSuggestion;
+  window.cpNewSession = cpNewSession;
+  window.cpLangChanged = cpLangChanged;
+  window.cpResourceChanged = cpResourceChanged;
+  window.cpSwitchVariant = cpSwitchVariant;
+  window.cpModeChanged = cpModeChanged;
+  window.syncCpSchemaHighlight = syncCpSchemaHighlight;
 
 }
 
@@ -122,6 +138,7 @@ function switchTab(tabId) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `panel-${tabId}`));
   if (tabId === 'playground') ensurePlaygroundInit();
   if (tabId === 'intro') ensureIntroInit();
+  if (tabId === 'copilot') ensureCopilotInit();
 }
 
 // ── SMT Presets for the interactive intro ───────────────
@@ -1933,4 +1950,1767 @@ function pgTogglePanel(panelId, toggleId) {
   // Flip the arrow character at the start
   const text = toggle.textContent;
   toggle.innerHTML = toggle.innerHTML.replace(/^[▸▾]/, isOpen ? '▾' : '▸');
+}
+
+// ═══════════════════════════════════════════════════════════
+//  COPILOT — LLM + Policy Intelligence
+// ═══════════════════════════════════════════════════════════
+
+const CP_LLM_BASE = 'http://localhost:8000';
+
+const CP_SUGGESTIONS = [
+  "Only managers and employees can access. Employees restricted to business hours (9-17). Suspended users always denied.",
+  "Kubernetes admission: deny privileged containers and deny unencrypted volumes on public hosts.",
+  "Storage accounts must use HTTPS. Deny any storage account where supportsHttpsTrafficOnly is false.",
+  "Allow if user's clearance level >= resource's required level, unless account is locked.",
+  "Azure: SQL servers must have minimum TLS 1.2and public network access disabled.",
+  "Azure: Key Vaults must enable soft delete, purge protection, and RBAC authorization.",
+];
+
+const CP_QUERY_SUGGESTIONS = [
+  "Can a storage account with public network access be created?",
+  "What inputs trigger the deny effect?",
+  "Is there any way to bypass the TLS 1.2 requirement?",
+  "Can a resource with HTTP (no HTTPS) pass this policy?",
+];
+
+// Azure resource type registry — pre-built schemas
+const CP_AZURE_RESOURCES = {
+  'Microsoft.Storage/storageAccounts': {
+    label: 'Storage Accounts',
+    schema: 'policies/azure_storage_schema.json',
+  },
+  'Microsoft.Sql/servers': {
+    label: 'SQL Servers',
+    schema: 'policies/azure_sql_schema.json',
+  },
+  'Microsoft.KeyVault/vaults': {
+    label: 'Key Vaults',
+    schema: 'policies/azure_keyvault_schema.json',
+  },
+};
+
+// Pre-canned Azure Policy aliases (fetched lazily)
+let cpAliasesCache = null;
+let cpResourceSchemaCache = {};
+async function cpGetAliases() {
+  if (cpAliasesCache) return cpAliasesCache;
+  try {
+    const text = await fetchText('policies/azure_policy_aliases.json');
+    cpAliasesCache = text;
+    return text;
+  } catch {
+    return null;
+  }
+}
+
+const CP_GENERATE_SYSTEM_REGO = `\
+You are a Rego policy generator.
+The user describes a policy in natural language. You generate TWO variants of the policy
+AND a shared JSON Schema describing the expected input structure.
+
+Variant A — "Basic": a straightforward, minimal policy that covers the core intent.
+Variant B — "Strict": a more comprehensive policy that adds extra conditions, edge-case
+handling, or tighter constraints beyond the basic requirement.
+
+Briefly explain (1-2 sentences each) what distinguishes the two variants.
+
+Rego v1 syntax rules (MANDATORY for BOTH variants):
+- Use package name "policy"
+- Define a boolean rule: default allow := false  (use := not =)
+- Rule syntax: allow if { ... }  (NOT "allow { ... }")
+- Iteration: some item in input.collection  (NOT some i; item := ...)
+- Partial sets: violation contains x if { ... }  (NOT violation[x] { ... })
+- Use idiomatic Rego v1: not, some, in, contains, if, every
+- Access input fields via "input." prefix
+
+Output format — return EXACTLY three fenced code blocks in this order:
+1. Variant A (Basic):
+\`\`\`rego
+package policy
+...
+\`\`\`
+2. Variant B (Strict):
+\`\`\`rego
+package policy
+...
+\`\`\`
+3. Shared input JSON Schema:
+\`\`\`json
+{"type":"object", ...}
+\`\`\`
+
+JSON Schema conventions:
+- Top-level "type": "object" with "required" and "properties"
+- Use "enum" arrays to constrain string fields to a finite set of representative values
+- For integers use "minimum" and "maximum"
+- For arrays use "minItems", "maxItems", and "items" with a nested schema
+- Add "x-unique": ["fieldname"] on array schemas when elements should have unique keys
+- Include ALL fields used by EITHER variant
+
+Do NOT include explanations outside the code blocks (except the brief variant descriptions).`;
+
+const CP_GENERATE_SYSTEM_AZURE = `\
+You are an Azure Policy definition generator.
+The user describes a policy in natural language. You generate a valid Azure Policy definition
+in JSON format.
+
+The user will provide a JSON Schema describing the resource properties available via Azure
+Policy aliases. Use ONLY the field names and enum values from this schema when writing
+conditions in the policyRule. Do NOT invent field names.
+
+CRITICAL — field names in policyRule MUST use fully-qualified Azure Policy alias names
+with FORWARD SLASHES only as separators (never dots between the resource type and the property).
+Correct:   "Microsoft.Storage/storageAccounts/minimumTlsVersion"
+WRONG:     "Microsoft.Storage/storageAccounts.minimumTlsVersion"  (dot before property)
+WRONG:     "minimumTlsVersion"  (missing resource type prefix)
+The only exception is the "type" field which stays as "type".
+
+TAGS: To check resource tags, use the built-in tag field syntax:
+  "field": "tags['tagName']"   — references a specific tag by name
+  "field": "tags"              — references the tags object itself
+Tag fields do NOT need the resource type prefix. Examples:
+  { "field": "tags['costCenter']", "exists": false }
+  { "field": "tags['environment']", "in": ["prod", "staging"] }
+
+MANDATORY: The effect MUST be parameterized. Define an "effect" parameter with
+allowedValues ["deny", "audit", "disabled"] (all lowercase) and defaultValue "deny".
+In policyRule.then.effect use "[parameters('effect')]".
+
+Example for a Storage Account policy:
+{
+  "properties": {
+    "displayName": "Storage accounts should enforce HTTPS",
+    "policyType": "Custom",
+    "mode": "Indexed",
+    "parameters": {
+      "effect": {
+        "type": "String",
+        "allowedValues": ["deny", "audit", "disabled"],
+        "defaultValue": "deny"
+      }
+    },
+    "policyRule": {
+      "if": {
+        "allOf": [
+          { "field": "type", "equals": "Microsoft.Storage/storageAccounts" },
+          { "field": "Microsoft.Storage/storageAccounts/supportsHttpsTrafficOnly", "equals": false }
+        ]
+      },
+      "then": { "effect": "[parameters('effect')]" }
+    }
+  }
+}
+
+You MUST generate TWO variants:
+Variant A — "Basic": a straightforward policy covering the core requirement.
+Variant B — "Strict": a more comprehensive policy with additional conditions or tighter constraints.
+
+Briefly explain (1-2 sentences each) what distinguishes the two variants.
+
+Output format — return EXACTLY two fenced code blocks in this order:
+1. Variant A (Basic):
+\`\`\`json
+// Variant A: Basic
+{ "properties": { ... } }
+\`\`\`
+2. Variant B (Strict):
+\`\`\`json
+// Variant B: Strict
+{ "properties": { ... } }
+\`\`\`
+
+Do NOT return a JSON Schema block — the schema is pre-built.
+Do NOT include explanations outside the code blocks (except the brief variant descriptions).`;
+
+const CP_REFINE_SYSTEM = `\
+You are a policy expert helping refine a policy.
+The user has a generated policy (Rego or Azure Policy), an input JSON Schema,
+and Z3 analysis results.
+
+For Rego — mandatory v1 syntax:
+- default allow := false  (use := not =)
+- Rule syntax: allow if { ... }  (NOT "allow { ... }")
+- Iteration: some item in input.collection  (NOT some i; item := ...)
+- Partial sets: violation contains x if { ... }  (NOT violation[x] { ... })
+
+For Azure Policy — standard ARM policy definition format.
+
+When the user asks you to fix or adjust:
+- Return the COMPLETE updated policy in the appropriate fenced code block
+  (\`\`\`rego or \`\`\`json with a comment on the first line inside)
+- If the schema also needs updating, also return the COMPLETE updated JSON Schema
+  in a separate fenced code block
+- Briefly explain what you changed (1-2 sentences)
+
+If only the policy changes and the schema is still correct, you may omit the schema block.`;
+
+const CP_EXPLAIN_SYSTEM = `\
+You are a policy analysis expert. The user will provide:
+1. One or two policy definitions (Rego or Azure Policy JSON)
+2. Z3 analysis results (synthesized inputs that trigger or satisfy the policy)
+
+Explain the Z3 results in plain English:
+- What each synthesized input means in business terms
+- Whether the results match the likely policy intent
+- Any potential issues, edge cases, or surprises
+- If two variants are provided, explain how they differ in coverage or strictness
+- Be concise but specific. Reference concrete field values from the results.`;
+
+const CP_QUERY_SYSTEM = `\
+You are a policy analysis assistant. The user has an existing policy (Rego or Azure Policy JSON) \
+and wants to ask natural-language questions about it — e.g. "Can a storage account without HTTPS pass?" \
+or "What inputs trigger the deny effect?"
+
+Your job: translate the user's question into a Z3-solvable constraint specification.
+
+You will receive:
+- The current policy source code
+- The JSON Schema describing valid inputs
+- The user's natural-language question
+
+Respond with EXACTLY one fenced JSON block (\`\`\`json ... \`\`\`) containing:
+{
+  "goal": "expected" | "non-default",
+  "desired": "<value>" | null,
+  "schema_overrides": { "<field>": <value_or_constraint>, ... } | null,
+  "explanation": "Brief explanation of how you translated the question"
+}
+
+Rules:
+- "goal": "non-default" for Azure Policy (finds inputs that trigger the effect). \
+  "expected" for Rego (finds inputs producing a specific output).
+- "desired": for Rego "expected" goals, the string value to target (e.g. "true" or "false"). \
+  null for "non-default" goals.
+- "schema_overrides": an object of field-name → value pairs to pin specific fields. \
+  For example, if the user asks "can a resource without HTTPS pass?", you would set \
+  {"supportsHttpsTrafficOnly": false}. Use null if no overrides are needed. \
+  Field names must match the JSON Schema property names.
+- "explanation": a short sentence explaining the translation.
+
+Only output the JSON block. No other text.`;
+
+function cpRenderSuggestions() {
+  const suggestions = cpGetMode() === 'query' ? CP_QUERY_SUGGESTIONS : CP_SUGGESTIONS;
+  return suggestions.map((s, i) =>
+    `<button class="cp-suggestion" onclick="cpUseSuggestion(${i})">${s.substring(0, 65)}…</button>`
+  ).join('');
+}
+
+function cpGetMode() {
+  return document.getElementById('cp-mode')?.value || 'author';
+}
+
+let cpSessionId = null;
+let cpInitialized = false;
+let cpLastZ3Results = null;  // store for explain flow
+
+// Variant state: stores policy text for each variant
+let cpVariants = { a: '', b: '' };
+let cpActiveVariant = 'a';
+
+function cpSwitchVariant(v) {
+  // Save current editor content to active variant
+  const editor = document.getElementById('cp-policy-editor');
+  if (editor) cpVariants[cpActiveVariant] = editor.value;
+  // Switch
+  cpActiveVariant = v;
+  if (editor) editor.value = cpVariants[v] || '';
+  syncCpPolicyHighlight();
+  // Update tab styling
+  document.querySelectorAll('.cp-variant-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.variant === v);
+  });
+}
+
+function cpGetActivePolicy() {
+  const editor = document.getElementById('cp-policy-editor');
+  if (editor) cpVariants[cpActiveVariant] = editor.value;
+  return cpVariants[cpActiveVariant]?.trim() || '';
+}
+
+function cpHasBothVariants() {
+  const editor = document.getElementById('cp-policy-editor');
+  if (editor) cpVariants[cpActiveVariant] = editor.value;
+  return !!(cpVariants.a?.trim() && cpVariants.b?.trim());
+}
+
+function buildCopilotPanel() {
+  return `<div class="act-header">
+    <h2>🤖 Copilot — LLM + Policy Intelligence</h2>
+    <div class="subtitle">
+      Describe a policy in natural language. The LLM generates code + schema,
+      Z3 validates with concrete inputs, the LLM explains. Iterate until correct.
+    </div>
+  </div>
+
+  <div class="cp-toolbar">
+    <div class="cp-workflow" id="cp-workflow">
+      <div class="cp-wf-step active" id="cp-wf-1">① Describe</div>
+      <div class="cp-wf-step" id="cp-wf-2">② Generate</div>
+      <div class="cp-wf-step" id="cp-wf-3">③ Validate</div>
+      <div class="cp-wf-step" id="cp-wf-4">④ Explain</div>
+      <div class="cp-wf-step" id="cp-wf-5">⑤ Refine</div>
+    </div>
+    <div class="cp-mode-select">
+      <label for="cp-mode">Mode</label>
+      <select id="cp-mode" onchange="cpModeChanged()">
+        <option value="author" selected>✍️ Author</option>
+        <option value="query">🔍 Query</option>
+      </select>
+    </div>
+    <div class="cp-lang-select">
+      <label for="cp-lang">Language</label>
+      <select id="cp-lang" onchange="cpLangChanged()">
+        <option value="rego" selected>Rego</option>
+        <option value="azure">Azure Policy</option>
+      </select>
+    </div>
+    <div class="cp-resource-select" id="cp-resource-group" style="display:none">
+      <label for="cp-resource">Resource</label>
+      <select id="cp-resource" onchange="cpResourceChanged()">
+        ${Object.entries(CP_AZURE_RESOURCES).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('')}
+      </select>
+    </div>
+    <button class="btn-sm cp-new-btn" onclick="cpNewSession()">New session</button>
+  </div>
+
+  <!-- ROW 1: Chat + Policy editor side by side -->
+  <div class="cp-row cp-row-top" id="cp-row-top">
+    <div class="cp-panel cp-panel-chat">
+      <div class="cp-panel-header">Chat</div>
+      <div class="cp-chat" id="cp-chat">
+        <div class="cp-msg cp-msg-system">Describe the policy you want to create…</div>
+      </div>
+      <div class="cp-suggestions" id="cp-suggestions">
+        ${cpRenderSuggestions()}
+      </div>
+      <div class="cp-prompt-row">
+        <textarea id="cp-prompt" class="cp-prompt"
+          placeholder="Describe your policy in plain English…"
+          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();cpSend()}"></textarea>
+        <button class="cp-send-btn" id="cp-send-btn" onclick="cpSend()">Send</button>
+      </div>
+    </div>
+
+    <div class="cp-panel cp-panel-policy">
+      <div class="cp-panel-header">
+        <span id="cp-policy-header">Generated Policy</span>
+        <span class="cp-status" id="cp-status"></span>
+      </div>
+      <div class="cp-variant-tabs">
+        <button class="cp-variant-tab active" data-variant="a" onclick="cpSwitchVariant('a')">Variant A — Basic</button>
+        <button class="cp-variant-tab" data-variant="b" onclick="cpSwitchVariant('b')">Variant B — Strict</button>
+      </div>
+      <div class="cp-editor-wrap">
+        <pre class="cp-editor-highlight" id="cp-policy-highlight"></pre>
+        <textarea id="cp-policy-editor" class="cp-policy-editor" spellcheck="false"
+          placeholder="Policy variants will appear here after LLM generates them…"></textarea>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROW 2: Schema + Z3 Results side by side -->
+  <div class="cp-row cp-row-bottom">
+    <div class="cp-panel cp-panel-schema">
+      <div class="cp-panel-header">
+        <span>Input Schema</span>
+        <button class="btn-sm" style="font-size:0.7rem" onclick="document.getElementById('cp-schema-editor').value='';syncCpSchemaHighlight()">Clear</button>
+      </div>
+      <div class="cp-editor-wrap cp-schema-wrap">
+        <pre class="cp-editor-highlight" id="cp-schema-highlight"></pre>
+        <textarea id="cp-schema-editor" class="cp-policy-editor cp-schema-editor" spellcheck="false"
+          placeholder="JSON Schema will appear here…"></textarea>
+      </div>
+    </div>
+
+    <div class="cp-panel cp-panel-z3">
+      <div class="cp-panel-header">
+        <span>Z3 Analysis</span>
+        <div class="cp-action-bar">
+          <div class="cp-config-row">
+            <label>Entry:</label>
+            <input type="text" id="cp-entrypoint" value="data.policy.allow" spellcheck="false">
+            <label>Loops:</label>
+            <input type="text" id="cp-max-loops" value="3" style="width:3rem">
+          </div>
+          <button class="cp-validate-btn" id="cp-validate-btn" onclick="cpValidate()">⚡ Validate</button>
+          <button class="cp-compare-btn" id="cp-compare-btn" onclick="cpCompare()" disabled>🔀 Compare</button>
+          <button class="cp-explain-btn" id="cp-explain-btn" onclick="cpExplain()" disabled>💬 Explain</button>
+        </div>
+      </div>
+      <div class="cp-z3-body" id="cp-z3-body">
+        <div class="cp-z3-placeholder">
+          Click <strong>Validate</strong> to analyze the active variant, or
+          <strong>Compare</strong> to find where A and B disagree.
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function ensureCopilotInit() {
+  if (cpInitialized) return;
+  if (!document.getElementById('cp-chat')) return;
+  cpInitialized = true;
+
+  // Wire up syntax highlighting overlays
+  const policyTa = document.getElementById('cp-policy-editor');
+  const policyPre = document.getElementById('cp-policy-highlight');
+  if (policyTa && policyPre) {
+    policyTa.addEventListener('input', syncCpPolicyHighlight);
+    policyTa.addEventListener('scroll', () => {
+      policyPre.scrollTop = policyTa.scrollTop;
+      policyPre.scrollLeft = policyTa.scrollLeft;
+    });
+  }
+  const schemaTa = document.getElementById('cp-schema-editor');
+  const schemaPre = document.getElementById('cp-schema-highlight');
+  if (schemaTa && schemaPre) {
+    schemaTa.addEventListener('input', syncCpSchemaHighlight);
+    schemaTa.addEventListener('scroll', () => {
+      schemaPre.scrollTop = schemaTa.scrollTop;
+      schemaPre.scrollLeft = schemaTa.scrollLeft;
+    });
+  }
+}
+
+function syncCpPolicyHighlight() {
+  const ta = document.getElementById('cp-policy-editor');
+  const pre = document.getElementById('cp-policy-highlight');
+  if (!ta || !pre) return;
+  const text = ta.value;
+  if (!text) { pre.innerHTML = ''; return; }
+  const lang = cpGetLang();
+  pre.innerHTML = lang === 'azure' ? highlightJsonFull(text) : highlightRegoFull(text);
+}
+
+function syncCpSchemaHighlight() {
+  const ta = document.getElementById('cp-schema-editor');
+  const pre = document.getElementById('cp-schema-highlight');
+  if (!ta || !pre) return;
+  const text = ta.value;
+  if (!text) { pre.innerHTML = ''; return; }
+  pre.innerHTML = highlightJsonFull(text);
+}
+
+function cpGetLang() {
+  return document.getElementById('cp-lang')?.value || 'rego';
+}
+
+function cpGetLangDefaults() {
+  const lang = cpGetLang();
+  if (lang === 'azure') {
+    return { entryPoint: 'main', placeholder: 'Azure Policy definition JSON…' };
+  }
+  return { entryPoint: 'data.policy.allow', placeholder: 'Rego policy…' };
+}
+
+function cpLangChanged() {
+  const defaults = cpGetLangDefaults();
+  const ep = document.getElementById('cp-entrypoint');
+  if (ep) ep.value = defaults.entryPoint;
+  const editor = document.getElementById('cp-policy-editor');
+  if (editor) editor.placeholder = `Policy variants will appear here after LLM generates them…`;
+
+  const lang = cpGetLang();
+  const resGroup = document.getElementById('cp-resource-group');
+  const schemaEditor = document.getElementById('cp-schema-editor');
+  if (resGroup) resGroup.style.display = lang === 'azure' ? '' : 'none';
+  if (schemaEditor) {
+    schemaEditor.readOnly = (lang === 'azure');
+    schemaEditor.classList.toggle('cp-readonly', lang === 'azure');
+    const schemaWrap = schemaEditor.closest('.cp-schema-wrap');
+    if (schemaWrap) schemaWrap.classList.toggle('cp-readonly-wrap', lang === 'azure');
+    // Clear schema when switching to Rego (LLM will generate it)
+    if (lang === 'rego') { schemaEditor.value = ''; syncCpSchemaHighlight(); }
+  }
+  // Auto-load the schema for the selected resource type
+  if (lang === 'azure') cpResourceChanged();
+  // Re-highlight policy with appropriate language
+  syncCpPolicyHighlight();
+}
+
+async function cpResourceChanged() {
+  const sel = document.getElementById('cp-resource');
+  if (!sel) return;
+  const resType = sel.value;
+  const entry = CP_AZURE_RESOURCES[resType];
+  if (!entry) return;
+
+  const schemaEditor = document.getElementById('cp-schema-editor');
+  if (!schemaEditor) return;
+
+  // Use cache if available
+  if (cpResourceSchemaCache[resType]) {
+    schemaEditor.value = cpResourceSchemaCache[resType];
+    syncCpSchemaHighlight();
+    return;
+  }
+
+  schemaEditor.value = 'Loading schema…';
+  syncCpSchemaHighlight();
+  try {
+    const text = await fetchText(entry.schema);
+    cpResourceSchemaCache[resType] = text;
+    schemaEditor.value = text;
+    syncCpSchemaHighlight();
+  } catch (err) {
+    schemaEditor.value = `Error loading schema: ${err.message}`;
+    syncCpSchemaHighlight();
+  }
+}
+
+function cpSetWorkflowStep(step) {
+  for (let i = 1; i <= 5; i++) {
+    const el = document.getElementById(`cp-wf-${i}`);
+    if (!el) continue;
+    el.classList.remove('active', 'done');
+    if (i < step) el.classList.add('done');
+    else if (i === step) el.classList.add('active');
+  }
+}
+
+function cpRenderMarkdown(text) {
+  // Lightweight markdown → HTML for chat messages.
+  // Handles: fenced code, inline code, bold, italic, headers, bullets, line breaks.
+  let html = '';
+  const lines = text.split('\n');
+  let inCode = false;
+  let codeLang = '';
+  let codeLines = [];
+  let inList = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Fenced code blocks
+    if (line.trimStart().startsWith('```')) {
+      if (!inCode) {
+        if (inList) { html += '</ul>'; inList = false; }
+        inCode = true;
+        codeLang = line.trim().slice(3).trim();
+        codeLines = [];
+      } else {
+        const langLabel = codeLang ? `<span class="cp-code-lang">${escapeHtml(codeLang)}</span>` : '';
+        html += `<div class="cp-code-block">${langLabel}<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre></div>`;
+        inCode = false;
+        codeLang = '';
+      }
+      continue;
+    }
+    if (inCode) {
+      codeLines.push(line);
+      continue;
+    }
+
+    // Blank line — end list, add spacing
+    if (line.trim() === '') {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += '<div class="cp-md-gap"></div>';
+      continue;
+    }
+
+    // Headings
+    const hMatch = line.match(/^(#{1,4})\s+(.+)/);
+    if (hMatch) {
+      if (inList) { html += '</ul>'; inList = false; }
+      const level = Math.min(hMatch[1].length, 4);
+      html += `<div class="cp-md-h cp-md-h${level}">${cpInlineMarkdown(hMatch[2])}</div>`;
+      continue;
+    }
+
+    // Bullet lists (-, *, or numbered)
+    const bulletMatch = line.match(/^\s*[-*]\s+(.+)/);
+    const numMatch = line.match(/^\s*\d+[.)\s]\s*(.+)/);
+    if (bulletMatch || numMatch) {
+      if (!inList) { html += '<ul class="cp-md-list">'; inList = true; }
+      const content = bulletMatch ? bulletMatch[1] : numMatch[1];
+      html += `<li>${cpInlineMarkdown(content)}</li>`;
+      continue;
+    }
+
+    // Regular paragraph line
+    if (inList) { html += '</ul>'; inList = false; }
+    html += `<div class="cp-md-p">${cpInlineMarkdown(line)}</div>`;
+  }
+
+  if (inCode) {
+    // Unclosed code block
+    html += `<div class="cp-code-block"><pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre></div>`;
+  }
+  if (inList) html += '</ul>';
+  return html;
+}
+
+function cpInlineMarkdown(text) {
+  // Escape HTML first, then apply inline formatting
+  let s = escapeHtml(text);
+  // Bold: **text** or __text__
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/__(.+?)__/g, '<strong>$1</strong>');
+  // Italic: *text* or _text_ (but not inside words with underscores)
+  s = s.replace(/(?<![\w*])\*([^*]+?)\*(?![\w*])/g, '<em>$1</em>');
+  // Inline code: `text`
+  s = s.replace(/`([^`]+?)`/g, '<code class="cp-md-inline-code">$1</code>');
+  return s;
+}
+
+function cpFinalizeMessage(msgDiv, fullText) {
+  // Replace the streaming span with rendered markdown
+  const contentEl = msgDiv.querySelector('#cp-stream-content');
+  if (contentEl) {
+    contentEl.classList.remove('cp-streaming');
+    contentEl.removeAttribute('id');
+  }
+  // Re-render the whole assistant message with markdown
+  const label = msgDiv.querySelector('.cp-msg-label');
+  const labelHtml = label ? label.outerHTML : '';
+  msgDiv.innerHTML = labelHtml + '<div class="cp-md-content">' + cpRenderMarkdown(fullText) + '</div>';
+}
+
+function cpAddMessage(role, text) {
+  const chat = document.getElementById('cp-chat');
+  if (!chat) return null;
+  const div = document.createElement('div');
+  const icon = role === 'user' ? '👤' : role === 'assistant' ? '🤖' : 'ℹ️';
+  const labelText = role === 'user' ? 'You' : role === 'assistant' ? 'Copilot' : '';
+  div.className = `cp-msg cp-msg-${role}`;
+  if (role === 'system') {
+    div.innerHTML = escapeHtml(text);
+  } else {
+    const content = role === 'assistant'
+      ? '<div class="cp-md-content">' + cpRenderMarkdown(text) + '</div>'
+      : escapeHtml(text);
+    div.innerHTML = `<div class="cp-msg-avatar">${icon}</div><div class="cp-msg-body"><div class="cp-msg-label">${labelText}</div>${content}</div>`;
+  }
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+  return div;
+}
+
+function cpAddStreamingMessage() {
+  const chat = document.getElementById('cp-chat');
+  if (!chat) return null;
+  const div = document.createElement('div');
+  div.className = 'cp-msg cp-msg-assistant';
+  div.innerHTML = '<div class="cp-msg-avatar">🤖</div><div class="cp-msg-body"><div class="cp-msg-label">Copilot</div><span class="cp-streaming" id="cp-stream-content"></span></div>';
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+  return div;
+}
+
+function cpExtractRego(text) {
+  // Extract rego code from fenced code block (first match)
+  const match = text.match(/```rego\s*\n([\s\S]*?)```/);
+  return match ? match[1].trim() : null;
+}
+
+function cpExtractAllRego(text) {
+  // Extract ALL rego code blocks (for variants)
+  const matches = [...text.matchAll(/```rego\s*\n([\s\S]*?)```/g)];
+  return matches.map(m => m[1].trim()).filter(s => s.length > 0);
+}
+
+function cpExtractAzureDefinition(text) {
+  // Extract Azure Policy definition from fenced JSON block (first match)
+  const blocks = [...text.matchAll(/```json\s*\n([\s\S]*?)```/g)];
+  for (const m of blocks) {
+    const content = m[1].trim();
+    const cleaned = content.replace(/^\/\/.*\n/, '').trim();
+    try {
+      const parsed = JSON.parse(cleaned);
+      if (parsed.properties?.policyRule || parsed.policyRule) {
+        return JSON.stringify(parsed, null, 2);
+      }
+    } catch { /* not valid JSON, skip */ }
+  }
+  return null;
+}
+
+function cpExtractAllAzureDefinitions(text) {
+  // Extract ALL Azure Policy definitions from fenced JSON blocks (for variants)
+  const blocks = [...text.matchAll(/```json\s*\n([\s\S]*?)```/g)];
+  const defs = [];
+  for (const m of blocks) {
+    const content = m[1].trim();
+    const cleaned = content.replace(/^\/\/.*\n/, '').trim();
+    try {
+      const parsed = JSON.parse(cleaned);
+      if (parsed.properties?.policyRule || parsed.policyRule) {
+        defs.push(JSON.stringify(parsed, null, 2));
+      }
+    } catch { /* skip */ }
+  }
+  return defs;
+}
+
+function cpExtractJsonSchema(text) {
+  // Extract JSON Schema from fenced code block (```json ... ```)
+  // Pick the JSON block that looks like a schema (has "type":"object", no policyRule)
+  const blocks = [...text.matchAll(/```json\s*\n([\s\S]*?)```/g)];
+  for (const m of blocks) {
+    const content = m[1].trim();
+    const cleaned = content.replace(/^\/\/.*\n/, '').trim();
+    try {
+      const parsed = JSON.parse(cleaned);
+      if (parsed.type === 'object' && !parsed.properties?.policyRule && !parsed.policyRule) {
+        return JSON.stringify(parsed, null, 2);
+      }
+    } catch { /* skip */ }
+  }
+  return null;
+}
+
+async function cpLlmChat(message, systemOverride, context) {
+  const body = {
+    message,
+    session_id: cpSessionId || undefined,
+    context: context || undefined,
+  };
+
+  // For generate/refine, we use a fresh session with the specific system prompt
+  if (systemOverride) {
+    body.session_id = undefined;
+  }
+
+  const resp = await fetch(`${CP_LLM_BASE}/api/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!resp.ok) {
+    throw new Error(`LLM server error: ${resp.status} ${resp.statusText}`);
+  }
+
+  return resp.body;
+}
+
+async function cpStreamResponse(readableStream, targetEl) {
+  const reader = readableStream.getReader();
+  const decoder = new TextDecoder();
+  let fullText = '';
+  let newSessionId = null;
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const jsonStr = line.slice(6).trim();
+      if (!jsonStr) continue;
+      try {
+        const data = JSON.parse(jsonStr);
+        if (data.chunk) {
+          fullText += data.chunk;
+          if (targetEl) {
+            targetEl.textContent = fullText;
+            const chat = document.getElementById('cp-chat');
+            if (chat) chat.scrollTop = chat.scrollHeight;
+          }
+        }
+        if (data.done && data.session_id) {
+          newSessionId = data.session_id;
+        }
+      } catch { /* ignore parse errors in SSE */ }
+    }
+  }
+
+  if (newSessionId) cpSessionId = newSessionId;
+  return fullText;
+}
+
+async function cpSend() {
+  const promptEl = document.getElementById('cp-prompt');
+  const message = promptEl.value.trim();
+  if (!message) return;
+
+  // Route to query mode if active
+  if (cpGetMode() === 'query') {
+    return cpQuery(message);
+  }
+
+  const sendBtn = document.getElementById('cp-send-btn');
+  sendBtn.disabled = true;
+  promptEl.value = '';
+
+  // Hide suggestions after first message
+  const sugEl = document.getElementById('cp-suggestions');
+  if (sugEl) sugEl.style.display = 'none';
+
+  cpAddMessage('user', message);
+
+  const policyEditor = document.getElementById('cp-policy-editor');
+  const existingPolicy = cpGetActivePolicy();
+
+  try {
+    // Determine if this is a generate or refine request
+    let systemPrompt;
+    let fullMessage;
+    const context = {};
+    const lang = cpGetLang();
+
+    if (!existingPolicy) {
+      // Fresh generation
+      cpSetWorkflowStep(2);
+      systemPrompt = lang === 'azure' ? CP_GENERATE_SYSTEM_AZURE : CP_GENERATE_SYSTEM_REGO;
+
+      // For Azure, prefix with the pre-built JSON schema so the LLM knows available fields
+      let schemaPrefix = '';
+      if (lang === 'azure') {
+        const schemaText = (document.getElementById('cp-schema-editor')?.value || '').trim();
+        if (schemaText && schemaText !== 'Loading schema…') {
+          const resType = document.getElementById('cp-resource')?.value || '';
+          schemaPrefix = `Resource type: ${resType}\nResource JSON Schema (properties under "resource" are aliases — use fully-qualified names like "${resType}/<propertyName>" in policyRule field references):\n${schemaText}\n\n`;
+        }
+      }
+      fullMessage = `Language: ${lang.toUpperCase()}\n\n${schemaPrefix}${message}`;
+    } else {
+      // Refinement — include current policy and Z3 results
+      cpSetWorkflowStep(5);
+      systemPrompt = CP_REFINE_SYSTEM;
+      context.policy = existingPolicy;
+      // Include both variants so LLM can differentiate
+      if (cpVariants.a?.trim()) context.variant_a = cpVariants.a;
+      if (cpVariants.b?.trim()) context.variant_b = cpVariants.b;
+      const existingSchema = (document.getElementById('cp-schema-editor')?.value || '').trim();
+      if (existingSchema) context.schema = existingSchema;
+      if (cpLastZ3Results) {
+        context.analysis_result = cpLastZ3Results;
+      }
+      fullMessage = `Language: ${lang.toUpperCase()}\n\n${message}`;
+    }
+
+    // We send to the streaming endpoint
+    // First inject system prompt via a fresh session
+    const initBody = {
+      message: `[System] ${systemPrompt}\n\n---\n\nUser request: ${fullMessage}`,
+      context: Object.keys(context).length > 0 ? context : undefined,
+    };
+
+    const resp = await fetch(`${CP_LLM_BASE}/api/chat/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(initBody),
+    });
+
+    if (!resp.ok) throw new Error(`LLM server error: ${resp.status}`);
+
+    const msgDiv = cpAddStreamingMessage();
+    const contentEl = msgDiv.querySelector('#cp-stream-content');
+    const fullText = await cpStreamResponse(resp.body, contentEl);
+
+    // Finalize: render markdown in the message
+    cpFinalizeMessage(msgDiv, fullText);
+
+    // Extract policy variants and populate editor
+    let variants = [];
+    if (lang === 'rego') {
+      variants = cpExtractAllRego(fullText);
+    } else {
+      variants = cpExtractAllAzureDefinitions(fullText);
+    }
+
+    // Detect if user's message targets a specific variant for refinement.
+    // This prevents the 2-variant path from triggering when the LLM echoes
+    // the existing variant for reference alongside the new one.
+    const wantsSpecificVariant = /variant\s*[ab]\b/i.test(message);
+    const isFreshGeneration = !existingPolicy;
+
+    if (variants.length >= 2 && (isFreshGeneration || !wantsSpecificVariant)) {
+      // Two variants — populate both tabs (fresh generation or general refinement)
+      cpVariants.a = variants[0];
+      cpVariants.b = variants[1];
+      cpActiveVariant = 'a';
+      policyEditor.value = variants[0];
+      syncCpPolicyHighlight();
+      // Update tab styling
+      document.querySelectorAll('.cp-variant-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.variant === 'a');
+      });
+      // Enable compare button, invalidate stale Z3 results
+      const compareBtn = document.getElementById('cp-compare-btn');
+      if (compareBtn) compareBtn.disabled = false;
+      cpLastZ3Results = null;
+      const explainBtnA = document.getElementById('cp-explain-btn');
+      if (explainBtnA) explainBtnA.disabled = true;
+    } else if (variants.length >= 1) {
+      // Single-variant update: pick the last extracted variant (most likely the new one)
+      const newVariant = variants[variants.length - 1];
+      // Determine target variant: if user mentioned "variant B" / "variant A", honor that
+      let targetVariant = cpActiveVariant;
+      if (/variant\s*b\b/i.test(message)) targetVariant = 'b';
+      else if (/variant\s*a\b/i.test(message)) targetVariant = 'a';
+      cpVariants[targetVariant] = newVariant;
+      // Switch to the target variant so user sees the result
+      cpActiveVariant = targetVariant;
+      policyEditor.value = newVariant;
+      syncCpPolicyHighlight();
+      document.querySelectorAll('.cp-variant-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.variant === targetVariant);
+      });
+      // Enable compare if both variants now have content
+      if (cpHasBothVariants()) {
+        const compareBtn = document.getElementById('cp-compare-btn');
+        if (compareBtn) compareBtn.disabled = false;
+      }
+      // Invalidate stale Z3 results since variants changed
+      cpLastZ3Results = null;
+      const explainBtnB = document.getElementById('cp-explain-btn');
+      if (explainBtnB) explainBtnB.disabled = true;
+    }
+
+    // Extract JSON Schema and populate schema editor (Rego only — Azure uses pre-built)
+    const schema = (lang === 'rego') ? cpExtractJsonSchema(fullText) : null;
+    const schemaEditor = document.getElementById('cp-schema-editor');
+    if (schema && schemaEditor) {
+      schemaEditor.value = schema;
+      syncCpSchemaHighlight();
+    }
+
+    const hasPolicy = variants.length > 0;
+    if (hasPolicy) {
+      cpSetWorkflowStep(3);
+      const status = document.getElementById('cp-status');
+      if (status) {
+        const variantMsg = variants.length >= 2 ? '2 variants' : 'Policy updated';
+        status.textContent = `✓ ${variantMsg}${schema ? ' + schema' : ''} generated — re-run Validate or Compare`;
+        status.className = 'cp-status success';
+      }
+      // Clear stale Z3 display
+      const z3Body = document.getElementById('cp-z3-body');
+      if (z3Body && cpLastZ3Results === null) {
+        z3Body.innerHTML = '<div class="cp-z3-placeholder">Policy changed — click <strong>Validate</strong> or <strong>Compare</strong> to re-analyze.</div>';
+      }
+    }
+  } catch (err) {
+    cpAddMessage('system', `Error: ${err.message}`);
+    console.error('Copilot send error:', err);
+  }
+
+  sendBtn.disabled = false;
+}
+
+// ── Query Mode ─────────────────────────────────────────────
+async function cpQuery(message) {
+  const promptEl = document.getElementById('cp-prompt');
+  const sendBtn = document.getElementById('cp-send-btn');
+  const z3Body = document.getElementById('cp-z3-body');
+  const status = document.getElementById('cp-status');
+
+  sendBtn.disabled = true;
+  promptEl.value = '';
+
+  // Hide suggestions after first query
+  const sugEl = document.getElementById('cp-suggestions');
+  if (sugEl) sugEl.style.display = 'none';
+
+  cpAddMessage('user', message);
+
+  const policyText = cpGetActivePolicy();
+  if (!policyText) {
+    cpAddMessage('system', 'Please paste or load a policy first, then ask your question.');
+    sendBtn.disabled = false;
+    return;
+  }
+
+  if (!wasm) {
+    cpAddMessage('system', 'WASM engine not loaded yet. Please wait and try again.');
+    sendBtn.disabled = false;
+    return;
+  }
+
+  const lang = cpGetLang();
+  const schemaText = (document.getElementById('cp-schema-editor')?.value || '').trim();
+  const entryPoint = document.getElementById('cp-entrypoint')?.value?.trim() || cpGetLangDefaults().entryPoint;
+  const maxLoops = parseInt(document.getElementById('cp-max-loops')?.value) || 3;
+
+  cpSetWorkflowStep(2); // Ask
+
+  try {
+    // ── Step 1: Ask LLM to translate question → constraint spec ──
+    const systemPrompt = CP_QUERY_SYSTEM;
+    const contextObj = { policy: policyText };
+    if (schemaText) contextObj.schema = schemaText;
+
+    const initBody = {
+      message: `[System] ${systemPrompt}\n\n---\n\nLanguage: ${lang.toUpperCase()}\n\nUser question: ${message}`,
+      context: contextObj,
+    };
+
+    const resp = await fetch(`${CP_LLM_BASE}/api/chat/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(initBody),
+    });
+
+    if (!resp.ok) throw new Error(`LLM server error: ${resp.status}`);
+
+    const msgDiv = cpAddStreamingMessage();
+    const contentEl = msgDiv.querySelector('#cp-stream-content');
+    const fullText = await cpStreamResponse(resp.body, contentEl);
+    cpFinalizeMessage(msgDiv, fullText);
+
+    // ── Step 2: Parse the constraint JSON from LLM response ──
+    const jsonMatch = fullText.match(/```json\s*([\s\S]*?)```/);
+    if (!jsonMatch) {
+      cpAddMessage('system', 'Could not extract constraint specification from LLM response. Try rephrasing your question.');
+      sendBtn.disabled = false;
+      return;
+    }
+
+    let constraints;
+    try {
+      constraints = JSON.parse(jsonMatch[1]);
+    } catch (e) {
+      cpAddMessage('system', `Failed to parse constraint JSON: ${e.message}`);
+      sendBtn.disabled = false;
+      return;
+    }
+
+    console.log('[cpQuery] constraints:', constraints);
+
+    // ── Step 3: Build overridden schema with pinned fields ──
+    const cfg = { max_loop_depth: maxLoops };
+    if (schemaText) {
+      try {
+        const baseSchema = JSON.parse(schemaText);
+        if (constraints.schema_overrides && typeof constraints.schema_overrides === 'object') {
+          // Pin each override field to an enum with one value
+          for (const [field, val] of Object.entries(constraints.schema_overrides)) {
+            if (baseSchema.properties && field in baseSchema.properties) {
+              baseSchema.properties[field] = { const: val };
+            }
+          }
+        }
+        cfg.input_schema = baseSchema;
+      } catch (e) {
+        cpAddMessage('system', `Schema parse error: ${e.message}`);
+        sendBtn.disabled = false;
+        return;
+      }
+    }
+    const configJson = JSON.stringify(cfg);
+
+    // ── Step 4: Compile policy + Z3 solve ──
+    cpSetWorkflowStep(3); // Z3 Solve
+    z3Body.innerHTML = '<div class="cp-z3-placeholder">Running Z3 analysis for your question…</div>';
+    if (status) { status.textContent = ''; status.className = 'cp-status'; }
+
+    const t0 = performance.now();
+    let program;
+    if (lang === 'rego') {
+      const modules = [{ id: 'query.rego', content: policyText }];
+      program = wasm.Program.compileFromModules('{}', JSON.stringify(modules), JSON.stringify([entryPoint]));
+    } else {
+      const aliases = await cpGetAliases();
+      program = wasm.Program.compileAzurePolicyDefinition(policyText, aliases);
+    }
+
+    const goal = constraints.goal || (lang === 'azure' ? 'non-default' : 'expected');
+    const desired = constraints.desired || null;
+
+    const problem = wasm.prepareForGoal(program, '{}', entryPoint, goal, desired, configJson);
+    const smtText = problem.smtLib2();
+    const warnings = problem.warnings();
+    const numExtractions = countExtractions(smtText);
+    const solutionJson = await solveSmtLib2(smtText, numExtractions, { timeoutMs: 30000 });
+    const resultJson = problem.interpretSolution(solutionJson);
+    const result = JSON.parse(resultJson);
+
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+
+    // ── Step 5: Display Z3 result ──
+    let z3Html = `<div style="margin-bottom:0.5rem"><strong style="color:var(--accent)">Query: ${escapeHtml(message)}</strong></div>`;
+    if (constraints.explanation) {
+      z3Html += `<div style="margin-bottom:0.5rem;color:var(--text-dim)"><em>Translation: ${escapeHtml(constraints.explanation)}</em></div>`;
+    }
+    if (constraints.schema_overrides && Object.keys(constraints.schema_overrides).length > 0) {
+      z3Html += `<div style="margin-bottom:0.5rem;color:var(--text-dim)">Pinned: ${escapeHtml(JSON.stringify(constraints.schema_overrides))}</div>`;
+    }
+
+    if (result.satisfiable === true) {
+      z3Html += `<span style="color:var(--accent2)">YES — found a matching input:</span>\n\n`;
+      try {
+        const parsed = JSON.parse(result.input);
+        z3Html += `<code style="white-space:pre-wrap">${escapeHtml(JSON.stringify(parsed, null, 2))}</code>`;
+      } catch {
+        z3Html += `<code>${escapeHtml(result.input)}</code>`;
+      }
+    } else if (result.satisfiable === false) {
+      z3Html += `<span style="color:var(--warn)">NO — no input can satisfy this query.</span>`;
+    } else {
+      z3Html += `<span style="color:var(--text-dim)">UNKNOWN — solver timed out.</span>`;
+    }
+
+    z3Body.innerHTML = z3Html;
+    if (status) {
+      status.textContent = `✓ Query answered in ${elapsed}s`;
+      status.className = 'cp-status success';
+    }
+    if (warnings) console.log('[cpQuery] Z3 warnings:', warnings);
+
+    // Store for explain context
+    cpLastZ3Results = [{
+      goal: `Query: ${message}`,
+      satisfiable: result.satisfiable,
+      input: result.input ? JSON.parse(result.input) : null,
+      error: null,
+    }];
+    const explainBtn = document.getElementById('cp-explain-btn');
+    if (explainBtn) explainBtn.disabled = false;
+
+    // ── Step 6: Ask LLM to explain the Z3 answer ──
+    cpSetWorkflowStep(4); // Answer
+    const answerContext = {
+      policy: policyText,
+      user_question: message,
+      z3_result: cpLastZ3Results[0],
+      constraints_used: constraints,
+    };
+
+    const answerBody = {
+      message: `[System] You are a policy analysis expert. The user asked a question about \
+their policy, and Z3 has produced a result. Explain the answer in plain English. \
+Be direct — answer the user's original question first ("Yes, because…" or "No, because…"), \
+then explain the Z3 result details. Be concise.\n\n---\n\nUser question: ${message}`,
+      context: answerContext,
+    };
+
+    const answerResp = await fetch(`${CP_LLM_BASE}/api/chat/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(answerBody),
+    });
+
+    if (answerResp.ok) {
+      const answerDiv = cpAddStreamingMessage();
+      const answerContentEl = answerDiv.querySelector('#cp-stream-content');
+      const answerText = await cpStreamResponse(answerResp.body, answerContentEl);
+      cpFinalizeMessage(answerDiv, answerText);
+    }
+
+  } catch (err) {
+    const errMsg = err?.message || String(err);
+    cpAddMessage('system', `Query error: ${errMsg}`);
+    if (z3Body) z3Body.innerHTML = `<span style="color:var(--danger)">Error: ${escapeHtml(errMsg)}</span>`;
+    if (status) { status.textContent = '✗ Query failed'; status.className = 'cp-status error'; }
+    console.error('Copilot query error:', err);
+  }
+
+  sendBtn.disabled = false;
+}
+
+async function cpValidate() {
+  const policyText = cpGetActivePolicy();
+  if (!policyText) {
+    const status = document.getElementById('cp-status');
+    status.textContent = '✗ No policy to validate';
+    status.className = 'cp-status error';
+    return;
+  }
+
+  if (!wasm) {
+    const status = document.getElementById('cp-status');
+    status.textContent = '✗ WASM not loaded yet';
+    status.className = 'cp-status error';
+    return;
+  }
+
+  const validateBtn = document.getElementById('cp-validate-btn');
+  const explainBtn = document.getElementById('cp-explain-btn');
+  const status = document.getElementById('cp-status');
+  const z3Body = document.getElementById('cp-z3-body');
+
+  validateBtn.disabled = true;
+  validateBtn.innerHTML = '<span class="spinner"></span> Validating…';
+  status.textContent = '';
+  status.className = 'cp-status';
+  z3Body.innerHTML = '<div class="cp-z3-placeholder">Running Z3 analysis…</div>';
+
+  cpSetWorkflowStep(3);
+  const t0 = performance.now();
+
+  const entryPoint = document.getElementById('cp-entrypoint').value.trim() || cpGetLangDefaults().entryPoint;
+  const maxLoops = parseInt(document.getElementById('cp-max-loops').value) || 3;
+  const lang = cpGetLang();
+
+  try {
+    // Compile the policy based on language
+    let program;
+    if (lang === 'rego') {
+      const modules = [{ id: 'copilot.rego', content: policyText }];
+      program = wasm.Program.compileFromModules(
+        '{}',
+        JSON.stringify(modules),
+        JSON.stringify([entryPoint]),
+      );
+    } else {
+      // Azure Policy — compile definition JSON with pre-canned aliases
+      const aliases = await cpGetAliases();
+      program = wasm.Program.compileAzurePolicyDefinition(policyText, aliases);
+    }
+
+    // Build config with optional schema
+    const cfg = { max_loop_depth: maxLoops };
+    const schemaText = (document.getElementById('cp-schema-editor')?.value || '').trim();
+    if (schemaText) {
+      try {
+        cfg.input_schema = JSON.parse(schemaText);
+      } catch (e) {
+        z3Body.innerHTML = `<span style="color:var(--danger)">Schema parse error: ${escapeHtml(e.message)}</span>`;
+        status.textContent = '✗ Invalid schema JSON';
+        status.className = 'cp-status error';
+        validateBtn.disabled = false;
+        validateBtn.innerHTML = '⚡ Validate';
+        return;
+      }
+    }
+    const configJson = JSON.stringify(cfg);
+    const results = [];
+
+    // Determine goals based on language
+    // Azure Policy: main returns the effect string (e.g. "deny") when violated, undefined when compliant.
+    //   Use "non-default" goal to find a violating input.
+    // Rego: allow is a boolean with default false.
+    //   Use "expected" goal to find inputs producing allow=false and allow=true.
+    const goals = lang === 'azure'
+      ? [{ goal: 'non-default', desired: null, label: 'Violating input (triggers effect)' }]
+      : [{ goal: 'expected', desired: 'false', label: 'allow = false' },
+         { goal: 'expected', desired: 'true', label: 'allow = true' }];
+
+    for (const { goal, desired, label } of goals) {
+      try {
+        const problem = wasm.prepareForGoal(program, '{}', entryPoint, goal, desired, configJson);
+        const smtText = problem.smtLib2();
+        const warnings = problem.warnings();
+        const numExtractions = countExtractions(smtText);
+        const solutionJson = await solveSmtLib2(smtText, numExtractions, { timeoutMs: 30000 });
+        const resultJson = problem.interpretSolution(solutionJson);
+        const result = JSON.parse(resultJson);
+        results.push({ desired: desired || 'non-default', label, result, warnings });
+      } catch (err) {
+        results.push({ desired, label, error: err.message });
+      }
+    }
+
+    // Format results
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+    let html = '';
+    for (const r of results) {
+      html += `<div style="margin-bottom:1rem"><strong style="color:var(--accent)">Goal: ${escapeHtml(r.label)}</strong>\n`;
+
+      if (r.error) {
+        html += `<span style="color:var(--danger)">Error: ${escapeHtml(r.error)}</span>`;
+      } else if (r.result.satisfiable === true) {
+        html += `<span style="color:var(--accent2)">SATISFIABLE</span> — found an input:\n\n`;
+        try {
+          const parsed = JSON.parse(r.result.input);
+          html += `<code style="white-space:pre-wrap">${escapeHtml(JSON.stringify(parsed, null, 2))}</code>`;
+        } catch {
+          html += `<code>${escapeHtml(r.result.input)}</code>`;
+        }
+      } else if (r.result.satisfiable === false) {
+        html += `<span style="color:var(--warn)">UNSATISFIABLE</span> — no input can produce this output.`;
+      } else {
+        html += `<span style="color:var(--text-dim)">UNKNOWN</span> — solver timed out or could not determine satisfiability.`;
+      }
+      html += '</div>';
+    }
+
+    z3Body.innerHTML = html;
+    status.textContent = `✓ Validated in ${elapsed}s`;
+    status.className = 'cp-status success';
+
+    // Store results for explanation
+    cpLastZ3Results = results.map(r => ({
+      goal: r.label,
+      satisfiable: r.result?.satisfiable,
+      input: r.result?.input ? JSON.parse(r.result.input) : null,
+      error: r.error || null,
+    }));
+
+    explainBtn.disabled = false;
+    cpSetWorkflowStep(4);
+
+  } catch (err) {
+    z3Body.innerHTML = `<span style="color:var(--danger)">Compilation error: ${escapeHtml(err.message)}</span>`;
+    status.textContent = '✗ Failed';
+    status.className = 'cp-status error';
+    console.error('Copilot validate error:', err);
+  }
+
+  validateBtn.disabled = false;
+  validateBtn.innerHTML = '⚡ Validate';
+}
+
+async function cpCompare() {
+  if (!cpHasBothVariants()) {
+    const status = document.getElementById('cp-status');
+    status.textContent = '✗ Need both variants to compare';
+    status.className = 'cp-status error';
+    return;
+  }
+
+  if (!wasm) {
+    const status = document.getElementById('cp-status');
+    status.textContent = '✗ WASM not loaded yet';
+    status.className = 'cp-status error';
+    return;
+  }
+
+  const compareBtn = document.getElementById('cp-compare-btn');
+  const explainBtn = document.getElementById('cp-explain-btn');
+  const status = document.getElementById('cp-status');
+  const z3Body = document.getElementById('cp-z3-body');
+
+  compareBtn.disabled = true;
+  compareBtn.innerHTML = '<span class="spinner"></span> Comparing…';
+  status.textContent = '';
+  status.className = 'cp-status';
+  z3Body.innerHTML = '<div class="cp-z3-placeholder">Running Z3 diff analysis…</div>';
+
+  cpSetWorkflowStep(3);
+  const t0 = performance.now();
+
+  const entryPoint = document.getElementById('cp-entrypoint').value.trim() || cpGetLangDefaults().entryPoint;
+  const maxLoops = parseInt(document.getElementById('cp-max-loops').value) || 3;
+  const lang = cpGetLang();
+
+  // Sync editor to cpVariants before reading
+  const editorSync = document.getElementById('cp-policy-editor');
+  if (editorSync) cpVariants[cpActiveVariant] = editorSync.value;
+
+  console.log('[cpCompare] active:', cpActiveVariant, 'a.len:', cpVariants.a?.length, 'b.len:', cpVariants.b?.length, 'same:', cpVariants.a === cpVariants.b);
+
+  try {
+    // Compile both variants
+    let program1, program2;
+    if (lang === 'rego') {
+      const mod1 = [{ id: 'variant_a.rego', content: cpVariants.a }];
+      const mod2 = [{ id: 'variant_b.rego', content: cpVariants.b }];
+      program1 = wasm.Program.compileFromModules('{}', JSON.stringify(mod1), JSON.stringify([entryPoint]));
+      program2 = wasm.Program.compileFromModules('{}', JSON.stringify(mod2), JSON.stringify([entryPoint]));
+    } else {
+      const aliases = await cpGetAliases();
+      program1 = wasm.Program.compileAzurePolicyDefinition(cpVariants.a, aliases);
+      program2 = wasm.Program.compileAzurePolicyDefinition(cpVariants.b, aliases);
+    }
+
+    // Build config with optional schema
+    const cfg = { max_loop_depth: maxLoops };
+    const schemaText = (document.getElementById('cp-schema-editor')?.value || '').trim();
+    if (schemaText) {
+      try {
+        cfg.input_schema = JSON.parse(schemaText);
+      } catch (e) {
+        z3Body.innerHTML = `<span style="color:var(--danger)">Schema parse error: ${escapeHtml(e.message)}</span>`;
+        status.textContent = '✗ Invalid schema JSON';
+        status.className = 'cp-status error';
+        compareBtn.disabled = false;
+        compareBtn.innerHTML = '🔀 Compare';
+        return;
+      }
+    }
+    const configJson = JSON.stringify(cfg);
+
+    // Determine desired output for the diff
+    // For Rego: default is true (find input where one allows and the other denies)
+    // For Azure: use "deny" (find input where one denies and the other doesn't)
+    const desiredOutput = lang === 'azure' ? '"deny"' : null;
+
+    const problem = wasm.preparePolicyDiff(program1, program2, '{}', entryPoint, desiredOutput, configJson);
+    const smtText = problem.smtLib2();
+    const warnings = problem.warnings();
+    const numExtractions = countExtractions(smtText);
+    const solutionJson = await solveSmtLib2(smtText, numExtractions, { timeoutMs: 30000 });
+    const resultJson = problem.interpretSolution(solutionJson);
+    const result = JSON.parse(resultJson);
+
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+    let html = '<div style="margin-bottom:1rem"><strong style="color:var(--accent)">Variant A vs Variant B</strong></div>';
+    let variantADenies = null;
+    let variantBDenies = null;
+
+    if (result.satisfiable === true) {
+      // Determine which variant denies and which allows the counterexample
+      try {
+        const inputStr = result.input;
+        if (lang === 'rego') {
+          const evalA = program1.evaluate(inputStr, '{}', entryPoint);
+          const evalB = program2.evaluate(inputStr, '{}', entryPoint);
+          variantADenies = evalA !== undefined && evalA !== 'undefined';
+          variantBDenies = evalB !== undefined && evalB !== 'undefined';
+        } else {
+          // Azure Policy: evaluate both programs against the counterexample.
+          // main returns the effect string (e.g. "deny") when violated, undefined when compliant.
+          try {
+            const evalA = program1.evaluate(inputStr, '{}', entryPoint);
+            variantADenies = evalA !== undefined && evalA !== 'undefined' && evalA !== '';
+          } catch { variantADenies = false; }
+          try {
+            const evalB = program2.evaluate(inputStr, '{}', entryPoint);
+            variantBDenies = evalB !== undefined && evalB !== 'undefined' && evalB !== '';
+          } catch { variantBDenies = false; }
+        }
+      } catch (e) {
+        console.warn('Could not evaluate variants against counterexample:', e);
+      }
+
+      let whoLabel = '';
+      if (variantADenies === true && variantBDenies === false) {
+        whoLabel = '<div style="margin-top:0.5rem;color:var(--warn)">⚠ <strong>Variant A (Basic)</strong> triggers the effect; <strong>Variant B (Strict)</strong> does not.</div>';
+      } else if (variantADenies === false && variantBDenies === true) {
+        whoLabel = '<div style="margin-top:0.5rem;color:var(--warn)">⚠ <strong>Variant B (Strict)</strong> triggers the effect; <strong>Variant A (Basic)</strong> does not.</div>';
+      }
+
+      html += `<span style="color:var(--warn)">NOT EQUIVALENT</span> — the variants disagree on this input:\n\n`;
+      try {
+        const parsed = JSON.parse(result.input);
+        html += `<code style="white-space:pre-wrap">${escapeHtml(JSON.stringify(parsed, null, 2))}</code>`;
+      } catch {
+        html += `<code>${escapeHtml(result.input)}</code>`;
+      }
+      html += `\n<div style="margin-top:0.8rem;color:var(--text-dim);font-size:0.85rem">One variant triggers the desired output for this input while the other does not.</div>`;
+      html += whoLabel;
+    } else if (result.satisfiable === false) {
+      html += `<span style="color:var(--accent2)">EQUIVALENT</span> — both variants produce the same output for all possible inputs.`;
+    } else {
+      html += `<span style="color:var(--text-dim)">UNKNOWN</span> — solver timed out or could not determine equivalence.`;
+    }
+
+    z3Body.innerHTML = html;
+    status.textContent = `✓ Compared in ${elapsed}s`;
+    status.className = 'cp-status success';
+
+    // Store results for explanation
+    cpLastZ3Results = [{
+      goal: 'Variant A vs B diff',
+      satisfiable: result.satisfiable,
+      equivalent: result.satisfiable === false,
+      input: result.input ? JSON.parse(result.input) : null,
+      variant_a_triggers_effect: variantADenies,
+      variant_b_triggers_effect: variantBDenies,
+    }];
+
+    explainBtn.disabled = false;
+    cpSetWorkflowStep(4);
+
+  } catch (err) {
+    z3Body.innerHTML = `<span style="color:var(--danger)">Compilation error: ${escapeHtml(err.message)}</span>`;
+    status.textContent = '✗ Failed';
+    status.className = 'cp-status error';
+    console.error('Copilot compare error:', err);
+  }
+
+  compareBtn.disabled = false;
+  compareBtn.innerHTML = '🔀 Compare';
+}
+
+// Extract field conditions from an Azure Policy policyRule for diffing
+function cpExtractFieldConditions(policyJson) {
+  try {
+    const parsed = typeof policyJson === 'string' ? JSON.parse(policyJson) : policyJson;
+    const rule = parsed.properties?.policyRule || parsed.policyRule;
+    if (!rule?.if) return [];
+    const conditions = [];
+    function walk(node, parentOp, depth) {
+      if (!node || typeof node !== 'object') return;
+      if (node.allOf) {
+        for (const child of node.allOf) walk(child, 'allOf', depth + 1);
+      } else if (node.anyOf) {
+        for (const child of node.anyOf) walk(child, 'anyOf', depth + 1);
+      } else if (node.not) {
+        walk(node.not, 'not', depth + 1);
+      } else if (node.field) {
+        const cond = { field: node.field, parentOp, depth };
+        for (const op of ['equals','notEquals','like','notLike','in','notIn','exists',
+                          'greater','less','greaterOrEquals','lessOrEquals','contains',
+                          'notContains','match','notMatch']) {
+          if (op in node) { cond.operator = op; cond.value = node[op]; break; }
+        }
+        conditions.push(cond);
+      }
+    }
+    walk(rule.if, 'root', 0);
+    return conditions;
+  } catch { return []; }
+}
+
+function cpExtractTopOp(policyJson) {
+  try {
+    const parsed = typeof policyJson === 'string' ? JSON.parse(policyJson) : policyJson;
+    const rule = parsed.properties?.policyRule || parsed.policyRule;
+    if (!rule?.if) return null;
+    if (rule.if.allOf) return 'allOf';
+    if (rule.if.anyOf) return 'anyOf';
+    if (rule.if.not) return 'not';
+    return 'single';
+  } catch { return null; }
+}
+
+function cpBuildConditionDiff(variantA, variantB) {
+  const condsA = cpExtractFieldConditions(variantA);
+  const condsB = cpExtractFieldConditions(variantB);
+  const topA = cpExtractTopOp(variantA);
+  const topB = cpExtractTopOp(variantB);
+
+  // Group conditions by field name
+  const allFields = new Set([...condsA.map(c => c.field), ...condsB.map(c => c.field)]);
+  const fmt = c => `${c.operator} ${JSON.stringify(c.value)} (inside ${c.parentOp})`;
+
+  let diff = `Structure: Variant A uses "${topA || 'single'}" at top level, Variant B uses "${topB || 'single'}" at top level.\n`;
+  if (topA !== topB) {
+    diff += `⚠ Different top-level operators! This changes which conditions must ALL match vs ANY match.\n`;
+  }
+  diff += '\nPer-field comparison:\n';
+
+  for (const field of allFields) {
+    if (field === 'type') continue; // skip resource type check — always shared
+    const inA = condsA.filter(c => c.field === field);
+    const inB = condsB.filter(c => c.field === field);
+    if (inA.length > 0 && inB.length > 0) {
+      const sameCheck = inA.length === inB.length &&
+        inA.every((a, i) => a.operator === inB[i].operator && JSON.stringify(a.value) === JSON.stringify(inB[i].value));
+      if (sameCheck) {
+        diff += `  "${field}": SAME in both — ${inA.map(fmt).join(', ')}\n`;
+      } else {
+        diff += `  "${field}": DIFFERS\n`;
+        diff += `    Variant A: ${inA.map(fmt).join(', ')}\n`;
+        diff += `    Variant B: ${inB.map(fmt).join(', ')}\n`;
+      }
+    } else if (inA.length > 0) {
+      diff += `  "${field}": ONLY in Variant A — ${inA.map(fmt).join(', ')}\n`;
+    } else {
+      diff += `  "${field}": ONLY in Variant B — ${inB.map(fmt).join(', ')}\n`;
+    }
+  }
+
+  return diff;
+}
+
+async function cpExplain() {
+  if (!cpLastZ3Results) return;
+
+  const explainBtn = document.getElementById('cp-explain-btn');
+  explainBtn.disabled = true;
+
+  cpSetWorkflowStep(4);
+
+  try {
+    const schemaText = (document.getElementById('cp-schema-editor')?.value || '').trim();
+    const isDiff = cpLastZ3Results[0]?.goal === 'Variant A vs B diff';
+    const context = {
+      analysis_result: JSON.stringify(cpLastZ3Results, null, 2),
+    };
+    // Always include both variants when available so the LLM has full context
+    if (cpVariants.a) context.variant_a = cpVariants.a;
+    if (cpVariants.b) context.variant_b = cpVariants.b;
+    // Also include the active policy for single-variant validate
+    if (!isDiff) context.active_variant = cpActiveVariant;
+    if (schemaText) context.schema = schemaText;
+
+    const explainPrompt = isDiff
+      ? (() => {
+        const r = cpLastZ3Results[0];
+        const lang = cpGetLang();
+        let evalFact = '';
+        if (r.variant_a_triggers_effect === true && r.variant_b_triggers_effect === false) {
+          evalFact = `VERIFIED EVALUATION RESULT:
+→ Variant A (Basic) TRIGGERS the effect for this counterexample.
+→ Variant B (Strict) DOES NOT trigger the effect for this counterexample.`;
+        } else if (r.variant_a_triggers_effect === false && r.variant_b_triggers_effect === true) {
+          evalFact = `VERIFIED EVALUATION RESULT:
+→ Variant B (Strict) TRIGGERS the effect for this counterexample.
+→ Variant A (Basic) DOES NOT trigger the effect for this counterexample.`;
+        }
+
+        if (lang === 'azure') {
+          // Azure Policy: pre-compute structured condition diff
+          const condDiff = cpBuildConditionDiff(cpVariants.a, cpVariants.b);
+          return `Here is a STRUCTURED DIFF of the Azure Policy conditions (pre-computed — these are facts):
+
+${condDiff}
+${evalFact}
+
+The counterexample input is in the analysis_result context.
+
+Your job: explain in 3-5 sentences WHY the counterexample triggers one variant but not the other,
+using the structured diff above. Reference the specific field differences and the counterexample
+values that exploit them. Do NOT re-analyze the JSON — use the diff provided.
+One-sentence conclusion: which variant is stricter (denies more inputs) and why.`;
+        } else {
+          // Rego: policies are arbitrary code; pass them directly with the verified result
+          return `You have two Rego policy variants (Variant A and Variant B) in the context.
+Z3 found a counterexample input where they DISAGREE.
+
+${evalFact}
+
+The counterexample input is in the analysis_result context. Both full policy source codes are
+in variant_a and variant_b context fields.
+
+Your job: read both Rego policies and explain in 3-5 sentences WHY the counterexample triggers
+one variant but not the other. Focus on the specific rule logic, conditions, or functions that
+differ between the two. Reference concrete field values from the counterexample.
+One-sentence conclusion: which variant is stricter (denies/blocks more inputs) and why.`;
+        }
+      })()
+      : CP_EXPLAIN_SYSTEM;
+
+    const message = `[System] ${explainPrompt}\n\n---\n\nPlease explain the Z3 analysis results.`;
+
+    const resp = await fetch(`${CP_LLM_BASE}/api/chat/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, context }),
+    });
+
+    if (!resp.ok) throw new Error(`LLM server error: ${resp.status}`);
+
+    const msgDiv = cpAddStreamingMessage();
+    const contentEl = msgDiv.querySelector('#cp-stream-content');
+    const fullText = await cpStreamResponse(resp.body, contentEl);
+
+    cpFinalizeMessage(msgDiv, fullText);
+
+    cpSetWorkflowStep(5);
+  } catch (err) {
+    cpAddMessage('system', `Error: ${err.message}`);
+    console.error('Copilot explain error:', err);
+  }
+
+  explainBtn.disabled = false;
+}
+
+function cpUseSuggestion(idx) {
+  const promptEl = document.getElementById('cp-prompt');
+  const suggestions = cpGetMode() === 'query' ? CP_QUERY_SUGGESTIONS : CP_SUGGESTIONS;
+  if (promptEl && suggestions[idx]) {
+    promptEl.value = suggestions[idx];
+    promptEl.focus();
+  }
+}
+
+function cpModeChanged() {
+  const mode = cpGetMode();
+  const isQuery = mode === 'query';
+  const promptEl = document.getElementById('cp-prompt');
+  const sugEl = document.getElementById('cp-suggestions');
+  const chat = document.getElementById('cp-chat');
+  const policyEditor = document.getElementById('cp-policy-editor');
+  const variantTabs = document.querySelector('.cp-variant-tabs');
+  const workflow = document.getElementById('cp-workflow');
+
+  // Swap placeholder & suggestions
+  if (promptEl) promptEl.placeholder = isQuery
+    ? 'Ask a question about the loaded policy…'
+    : 'Describe your policy in plain English…';
+  if (sugEl) {
+    sugEl.innerHTML = cpRenderSuggestions();
+    sugEl.style.display = 'flex';
+  }
+
+  // Chat welcome message
+  if (chat) {
+    const sysMsg = chat.querySelector('.cp-msg-system');
+    if (sysMsg) sysMsg.textContent = isQuery
+      ? 'Load a policy, then ask questions about it…'
+      : 'Describe the policy you want to create…';
+  }
+
+  // Policy editor: editable in both modes (user pastes policy to query against)
+  if (policyEditor) {
+    policyEditor.readOnly = false;
+    policyEditor.classList.remove('cp-readonly');
+    const wrap = policyEditor.closest('.cp-editor-wrap');
+    if (wrap) wrap.classList.remove('cp-readonly-wrap');
+    if (isQuery) policyEditor.placeholder = 'Paste or load a policy here, then ask questions…';
+    else policyEditor.placeholder = 'Policy variants will appear here after LLM generates them…';
+  }
+
+  // Hide variant tabs in query mode (single policy)
+  if (variantTabs) variantTabs.style.display = isQuery ? 'none' : '';
+
+  // Update policy panel header
+  const policyHeader = document.getElementById('cp-policy-header');
+  if (policyHeader) policyHeader.textContent = isQuery ? 'Policy' : 'Generated Policy';
+
+  // Workflow steps: different labels for query mode
+  if (workflow) {
+    const steps = workflow.querySelectorAll('.cp-wf-step');
+    if (isQuery) {
+      if (steps[0]) steps[0].textContent = '① Load';
+      if (steps[1]) steps[1].textContent = '② Ask';
+      if (steps[2]) steps[2].textContent = '③ Z3 Solve';
+      if (steps[3]) steps[3].textContent = '④ Answer';
+      if (steps[4]) steps[4].style.display = 'none';
+    } else {
+      if (steps[0]) steps[0].textContent = '① Describe';
+      if (steps[1]) steps[1].textContent = '② Generate';
+      if (steps[2]) steps[2].textContent = '③ Validate';
+      if (steps[3]) steps[3].textContent = '④ Explain';
+      if (steps[4]) { steps[4].textContent = '⑤ Refine'; steps[4].style.display = ''; }
+    }
+  }
+
+  // Swap panel order: policy first in query mode
+  const topRow = document.getElementById('cp-row-top');
+  if (topRow) topRow.classList.toggle('cp-query-layout', isQuery);
+
+  // In query mode, hide Compare but keep Validate (re-labeled "Query" via button text)
+  const validateBtn = document.getElementById('cp-validate-btn');
+  const compareBtn = document.getElementById('cp-compare-btn');
+  if (validateBtn) validateBtn.style.display = isQuery ? 'none' : '';
+  if (compareBtn) compareBtn.style.display = isQuery ? 'none' : '';
+
+  cpSetWorkflowStep(1);
+}
+
+function cpNewSession() {
+  cpSessionId = null;
+  cpLastZ3Results = null;
+  cpVariants = { a: '', b: '' };
+  cpActiveVariant = 'a';
+
+  const chat = document.getElementById('cp-chat');
+  if (chat) chat.innerHTML = '<div class="cp-msg cp-msg-system">Describe the policy you want to create…</div>';
+
+  const editor = document.getElementById('cp-policy-editor');
+  if (editor) editor.value = '';
+  syncCpPolicyHighlight();
+
+  // Reset variant tabs
+  document.querySelectorAll('.cp-variant-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.variant === 'a');
+  });
+
+  const schemaEditor = document.getElementById('cp-schema-editor');
+  if (schemaEditor) schemaEditor.value = '';
+  syncCpSchemaHighlight();
+
+  const z3Body = document.getElementById('cp-z3-body');
+  if (z3Body) z3Body.innerHTML = '<div class="cp-z3-placeholder">Click <strong>Validate</strong> to analyze the active variant, or <strong>Compare</strong> to find where A and B disagree.</div>';
+
+  const status = document.getElementById('cp-status');
+  if (status) { status.textContent = ''; status.className = 'cp-status'; }
+
+  const explainBtn = document.getElementById('cp-explain-btn');
+  if (explainBtn) explainBtn.disabled = true;
+
+  const compareBtn = document.getElementById('cp-compare-btn');
+  if (compareBtn) compareBtn.disabled = true;
+
+  const sugEl = document.getElementById('cp-suggestions');
+  if (sugEl) sugEl.style.display = 'flex';
+
+  // Reset entry point to match current language
+  cpLangChanged();
+  cpSetWorkflowStep(1);
 }

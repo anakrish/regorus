@@ -4,7 +4,6 @@
 use crate::rvm::instructions::{ComprehensionBeginParams, ComprehensionMode};
 use crate::value::Object;
 use crate::value::Value;
-use crate::Rc;
 use alloc::format;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -34,7 +33,7 @@ impl RegoVM {
         let initial_result = match params.mode {
             ComprehensionMode::Set => Value::new_set(),
             ComprehensionMode::Array => Value::new_array(),
-            ComprehensionMode::Object => Value::Object(Rc::new(Object::new())),
+            ComprehensionMode::Object => Object::new().into_value(),
         };
         self.set_register(params.result_reg, initial_result.clone())?;
 
@@ -121,7 +120,7 @@ impl RegoVM {
         let initial_result = match params.mode {
             ComprehensionMode::Set => Value::new_set(),
             ComprehensionMode::Array => Value::new_array(),
-            ComprehensionMode::Object => Value::Object(Rc::new(Object::new())),
+            ComprehensionMode::Object => Object::new().into_value(),
         };
         self.set_register(params.result_reg, initial_result.clone())?;
 
@@ -589,15 +588,17 @@ impl RegoVM {
         // `ComprehensionEnd` is reached from a loaded program; an empty stack
         // here means malformed user-supplied bytecode, which must still surface
         // as a typed error rather than a panic — including in debug builds.
-        self.comprehension_stack.pop().map_or_else(
-            || {
-                Err(VmError::InvalidIteration {
-                    value: Value::String(Arc::from("No active comprehension context")),
-                    pc: self.pc,
-                })
-            },
-            |_context| Ok(()),
-        )
+        let context = self
+            .comprehension_stack
+            .pop()
+            .ok_or_else(|| VmError::InvalidIteration {
+                value: Value::String(Arc::from("No active comprehension context")),
+                pc: self.pc,
+            })?;
+        let mut value = self.take_register(context.result_reg)?;
+        value.freeze_recursive();
+        self.set_register(context.result_reg, value)?;
+        Ok(())
     }
 
     fn execute_comprehension_end_suspendable(&mut self) -> Result<()> {
@@ -628,6 +629,9 @@ impl RegoVM {
                     return_pc: _,
                     context,
                 } => {
+                    let mut value = self.take_register(context.result_reg)?;
+                    value.freeze_recursive();
+                    self.set_register(context.result_reg, value)?;
                     let raw_target = context.resume_pc;
                     let resume_pc = if raw_target <= self.pc {
                         self.pc.saturating_add(1)

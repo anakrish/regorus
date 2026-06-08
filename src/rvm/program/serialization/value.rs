@@ -266,7 +266,7 @@ impl<'de> Visitor<'de> for BinaryValueVisitor {
                 for (key, value) in entries {
                     map.insert(key.into_value(), value.into_value());
                 }
-                Ok(BinaryValue(Value::Object(crate::Rc::new(map))))
+                Ok(BinaryValue(map.into_value()))
             }
             (BinaryVariant::Undefined, variant) => {
                 variant.unit_variant()?;

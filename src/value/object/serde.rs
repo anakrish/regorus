@@ -48,7 +48,7 @@ impl<'de> Visitor<'de> for ObjectVisitor {
             crate::utils::limits::check_memory_limit_if_needed()
                 .map_err(|err| A::Error::custom(err.to_string()))?;
         }
-        Ok(obj)
+        Ok(obj.freeze())
     }
 }
 

@@ -31,8 +31,7 @@ impl SchemaValidator {
     ///
     /// # Example
     /// ```rust
-    /// use regorus::schema::{Schema, validate::SchemaValidator};
-    /// use regorus::Value;
+    /// use regorus::{Schema, SchemaValidator, Value};
     /// use serde_json::json;
     ///
     /// let schema_json = json!({

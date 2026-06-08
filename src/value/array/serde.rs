@@ -30,8 +30,8 @@ impl<'de> Visitor<'de> for ArrayVisitor {
     fn visit_seq<A: SeqAccess<'de>>(self, mut access: A) -> Result<Self::Value, A::Error> {
         let mut array = Array::new();
         while let Some(v) = access.next_element::<Value>()? {
-            array.push(v);
-            crate::utils::limits::check_memory_limit_if_needed()
+            array
+                .push(v)
                 .map_err(|err| A::Error::custom(err.to_string()))?;
         }
         Ok(array)

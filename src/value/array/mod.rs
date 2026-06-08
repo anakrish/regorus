@@ -11,6 +11,8 @@ use core::cmp::Ordering;
 use core::fmt;
 use core::ops;
 
+use anyhow::Result;
+
 use crate::value::Value;
 
 #[cfg(feature = "rvm")]
@@ -102,9 +104,14 @@ impl Array {
         }
     }
 
+    /// Appends `value` to the end of the array.
+    ///
+    /// Returns an error if the configured memory limit is exceeded after the
+    /// growth operation.
     #[inline]
-    pub fn push(&mut self, value: Value) {
+    pub fn push(&mut self, value: Value) -> Result<()> {
         self.inner.push(value);
+        crate::utils::limits::check_memory_limit_if_needed().map_err(anyhow::Error::new)
     }
 
     #[inline]
@@ -166,9 +173,15 @@ impl Array {
         self.inner.dedup();
     }
 
+    /// Extends the array by cloning values from `other`.
+    ///
+    /// Checks the configured memory limit after each appended element.
     #[inline]
-    pub fn extend_from_slice(&mut self, other: &[Value]) {
-        self.inner.extend_from_slice(other);
+    pub fn extend_from_slice(&mut self, other: &[Value]) -> Result<()> {
+        for value in other {
+            self.push(value.clone())?;
+        }
+        Ok(())
     }
 
     #[inline]
@@ -243,17 +256,25 @@ impl ops::Index<usize> for Array {
     }
 }
 
+fn abort_on_growth_error(result: Result<()>) {
+    if result.is_err() {
+        alloc::alloc::handle_alloc_error(core::alloc::Layout::new::<Value>());
+    }
+}
+
 impl Extend<Value> for Array {
     fn extend<I: IntoIterator<Item = Value>>(&mut self, iter: I) {
-        self.inner.extend(iter);
+        for value in iter {
+            abort_on_growth_error(self.push(value));
+        }
     }
 }
 
 impl FromIterator<Value> for Array {
     fn from_iter<I: IntoIterator<Item = Value>>(iter: I) -> Self {
-        Self {
-            inner: Vec::from_iter(iter),
-        }
+        let mut array = Self::new();
+        array.extend(iter);
+        array
     }
 }
 

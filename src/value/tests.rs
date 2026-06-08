@@ -577,8 +577,8 @@ fn array_constructors_equality_and_ordering() {
     assert_eq!(empty.len(), 0);
 
     let mut with_capacity = Array::with_capacity(2).expect("capacity should reserve");
-    with_capacity.push(val(1));
-    with_capacity.push(val(2));
+    with_capacity.push(val(1)).expect("push should fit");
+    with_capacity.push(val(2)).expect("push should fit");
 
     let from_vec = Array::from(vec![val(1), val(2)]);
     let from_iter = Array::from_iter([val(1), val(2)]);
@@ -590,8 +590,8 @@ fn array_constructors_equality_and_ordering() {
 #[test]
 fn array_mutators_and_accessors() {
     let mut array = Array::new();
-    array.push(val(1));
-    array.push(val(3));
+    array.push(val(1)).expect("push should fit");
+    array.push(val(3)).expect("push should fit");
     assert_eq!(array.insert(1, val(2)), Some(()));
 
     assert_eq!(array.len(), 3);
@@ -605,7 +605,9 @@ fn array_mutators_and_accessors() {
         *v = val(20);
     }
     assert_eq!(array.remove(1), Some(val(20)));
-    array.extend_from_slice(&[val(4), val(5)]);
+    array
+        .extend_from_slice(&[val(4), val(5)])
+        .expect("extend should fit");
     array.truncate(3);
     assert_eq!(array.as_slice(), &[val(1), val(3), val(4)]);
     assert_eq!(array.pop(), Some(val(4)));

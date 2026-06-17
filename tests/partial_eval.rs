@@ -67,7 +67,64 @@ fn run_pe_with_unknowns(
     let value = vm.execute_entry_point_by_name(entrypoint_str).unwrap();
 
     let report_json = vm.take_partial_eval_result(value).unwrap();
-    serde_json::from_str(&report_json).unwrap()
+    let result = serde_json::from_str(&report_json).unwrap();
+    assert_pe_hardening_contract(&result);
+    result
+}
+
+fn assert_pe_hardening_contract(result: &serde_json::Value) {
+    assert!(
+        result["soundness"]["status"].is_string(),
+        "PE result must carry result-level soundness: {result}"
+    );
+    let queries = result["residual_queries"].as_array().unwrap();
+    if !queries.is_empty() {
+        let outcomes = result["residual_outcomes"].as_array().unwrap();
+        assert_eq!(
+            outcomes.len(),
+            queries.len(),
+            "residual_outcomes must align with residual_queries: {result}"
+        );
+    }
+    for disjunct in queries {
+        for cond in disjunct.as_array().unwrap() {
+            assert_condition_contract(cond);
+        }
+    }
+}
+
+fn assert_condition_contract(cond: &serde_json::Value) {
+    assert!(
+        cond["lowerable"].is_string(),
+        "condition must carry lowerability: {cond}"
+    );
+    assert!(
+        cond["soundness"]["status"].is_string(),
+        "condition must carry soundness: {cond}"
+    );
+    if cond["lowerable"] == "atom" {
+        assert!(
+            cond["input_path"].as_str().is_some_and(|p| !p.is_empty()),
+            "atom must have non-empty input_path: {cond}"
+        );
+        assert!(
+            matches!(
+                cond["operator"].as_str(),
+                Some("==" | "!=" | "<" | "<=" | ">" | ">=" | "in")
+            ),
+            "atom must have supported operator: {cond}"
+        );
+        assert!(!cond["value"].is_null(), "atom must have value: {cond}");
+        assert_eq!(
+            cond["soundness"]["status"], "sound",
+            "atom must be sound: {cond}"
+        );
+    }
+    if let Some(nested) = cond["negated_conditions"].as_array() {
+        for child in nested {
+            assert_condition_contract(child);
+        }
+    }
 }
 
 /// Helper: build a VM in Causality mode, run the query, and return the causality JSON report.
@@ -117,6 +174,99 @@ fn run_causality(
     let value = vm.execute_entry_point_by_name(entrypoint_str).unwrap();
     let report_json = vm.take_causality_report(value).unwrap();
     serde_json::from_str(&report_json).unwrap()
+}
+
+fn run_full(
+    policy: &str,
+    input_json: &str,
+    data_json: Option<&str>,
+    entrypoint_str: &str,
+) -> Value {
+    let mut engine = Engine::new();
+    engine
+        .add_policy("test.rego".into(), policy.into())
+        .unwrap();
+
+    let entrypoint: Rc<str> = entrypoint_str.into();
+    let compiled = engine.compile_with_entrypoint(&entrypoint).unwrap();
+    let program =
+        languages::rego::compiler::Compiler::compile_from_policy(&compiled, &[entrypoint.as_ref()])
+            .unwrap();
+
+    let mut vm = rvm::RegoVM::new_with_policy(compiled);
+    vm.load_program(program);
+    vm.set_input(serde_json::from_str(input_json).unwrap());
+    if let Some(d) = data_json {
+        let data: Value = serde_json::from_str(d).unwrap();
+        let _ = vm.set_data(data);
+    }
+    vm.execute_entry_point_by_name(entrypoint_str).unwrap()
+}
+
+fn simulated_allow(pe: &serde_json::Value, input: &serde_json::Value) -> bool {
+    if pe["soundness"]["status"] != "sound" {
+        return false;
+    }
+    pe["residual_queries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .any(|(idx, disjunct)| {
+            pe["residual_outcomes"]
+                .as_array()
+                .and_then(|outcomes| outcomes.get(idx))
+                .is_some_and(|outcome| outcome["result"] == true)
+                && disjunct
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|cond| atom_matches(cond, input))
+        })
+}
+
+fn atom_matches(cond: &serde_json::Value, input: &serde_json::Value) -> bool {
+    if cond["lowerable"] != "atom" || cond["soundness"]["status"] != "sound" {
+        return false;
+    }
+    let Some(path) = cond["input_path"].as_str() else {
+        return false;
+    };
+    let Some(actual) = get_dotted_path(input, path.strip_prefix("input.").unwrap_or(path)) else {
+        return false;
+    };
+    let expected = &cond["value"];
+    match cond["operator"].as_str() {
+        Some("==") => actual == expected,
+        Some("!=") => actual != expected,
+        Some("<") => numeric_cmp(actual, expected).is_some_and(|ord| ord.is_lt()),
+        Some("<=") => numeric_cmp(actual, expected).is_some_and(|ord| !ord.is_gt()),
+        Some(">") => numeric_cmp(actual, expected).is_some_and(|ord| ord.is_gt()),
+        Some(">=") => numeric_cmp(actual, expected).is_some_and(|ord| !ord.is_lt()),
+        _ => false,
+    }
+}
+
+fn get_dotted_path<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    let mut current = value;
+    if path.is_empty() {
+        return Some(current);
+    }
+    for segment in path.split('.') {
+        if segment.is_empty() {
+            continue;
+        }
+        if let Ok(index) = segment.parse::<usize>() {
+            current = current.as_array()?.get(index)?;
+        } else {
+            current = current.as_object()?.get(segment)?;
+        }
+    }
+    Some(current)
+}
+
+fn numeric_cmp(left: &serde_json::Value, right: &serde_json::Value) -> Option<std::cmp::Ordering> {
+    left.as_f64()?.partial_cmp(&right.as_f64()?)
 }
 
 // ---------------------------------------------------------------------------
@@ -2176,4 +2326,351 @@ allow if { input.resource.public == true }
         0,
         "second def uses known input.resource — result definitive"
     );
+}
+
+fn first_condition(result: &serde_json::Value) -> &serde_json::Value {
+    &result["residual_queries"].as_array().unwrap()[0]
+        .as_array()
+        .unwrap()[0]
+}
+
+#[test]
+fn pe_meta_reason_codes_exhaustively_handled() {
+    fn name(reason: evaluation_trace::PeUnsoundReason) -> &'static str {
+        match reason {
+            evaluation_trace::PeUnsoundReason::MissingStructuredField => "missing_structured_field",
+            evaluation_trace::PeUnsoundReason::UnsupportedOperator => "unsupported_operator",
+            evaluation_trace::PeUnsoundReason::NonScalarValue => "non_scalar_value",
+            evaluation_trace::PeUnsoundReason::NumericOutOfRange => "numeric_out_of_range",
+            evaluation_trace::PeUnsoundReason::BuiltinUnsupported => "builtin_unsupported",
+            evaluation_trace::PeUnsoundReason::InputVsInput => "input_vs_input",
+            evaluation_trace::PeUnsoundReason::ExistenceUnsupported => "existence_unsupported",
+            evaluation_trace::PeUnsoundReason::EveryVacuousTruth => "every_vacuous_truth",
+            evaluation_trace::PeUnsoundReason::ComprehensionAggregate => "comprehension_aggregate",
+            evaluation_trace::PeUnsoundReason::DataLookupUnsupported => "data_lookup_unsupported",
+            evaluation_trace::PeUnsoundReason::NegationUnsupported => "negation_unsupported",
+            evaluation_trace::PeUnsoundReason::DefinitiveViaUnknownFold => {
+                "definitive_via_unknown_fold"
+            }
+            evaluation_trace::PeUnsoundReason::CompleteRuleConflict => "complete_rule_conflict",
+            evaluation_trace::PeUnsoundReason::UnknownInputDependency => "unknown_input_dependency",
+        }
+    }
+
+    assert_eq!(
+        name(evaluation_trace::PeUnsoundReason::DefinitiveViaUnknownFold),
+        "definitive_via_unknown_fold"
+    );
+}
+
+#[test]
+fn pe_op_all_comparisons_and_operand_flip() {
+    let cases = [
+        ("input.x == 5", "==", 5),
+        ("input.x != 5", "!=", 5),
+        ("input.x < 5", "<", 5),
+        ("input.x <= 5", "<=", 5),
+        ("input.x > 5", ">", 5),
+        ("input.x >= 5", ">=", 5),
+        ("5 == input.x", "==", 5),
+        ("5 != input.x", "!=", 5),
+        ("5 < input.x", ">", 5),
+        ("5 <= input.x", ">=", 5),
+        ("5 > input.x", "<", 5),
+        ("5 >= input.x", "<=", 5),
+    ];
+
+    for (expr, op, value) in cases {
+        let policy = format!(
+            r#"
+package test
+default allow = false
+allow if {{ {expr} }}
+"#
+        );
+        let result = run_pe(&policy, None, None, "data.test.allow");
+        let cond = first_condition(&result);
+        assert_eq!(cond["lowerable"], "atom", "{expr}: {result}");
+        assert_eq!(cond["input_path"], "input.x", "{expr}: {result}");
+        assert_eq!(cond["operator"], op, "{expr}: {result}");
+        assert_eq!(cond["value"], value, "{expr}: {result}");
+    }
+}
+
+#[test]
+fn pe_neg_unknown_negation_is_rejected_not_lowered() {
+    let policy = r#"
+package test
+default allow = false
+allow if { not input.user.blocked }
+"#;
+    let result = run_pe(policy, None, None, "data.test.allow");
+    let queries = result["residual_queries"].as_array().unwrap();
+    let neg = queries
+        .iter()
+        .flat_map(|q| q.as_array().unwrap())
+        .find(|cond| cond["kind"] == "negation_holds")
+        .unwrap();
+    assert_eq!(neg["lowerable"], "negation");
+    assert_eq!(neg["soundness"]["status"], "unsound");
+    assert_eq!(neg["soundness"]["reason"], "negation_unsupported");
+}
+
+#[test]
+fn pe_inv_equality_preserves_sibling_conditions() {
+    let policy = r#"
+package test
+default allow = false
+allow if {
+    data.role_permissions[input.user.role] == "write"
+    input.document.type == "report"
+}
+"#;
+    let data = r#"{"role_permissions": {"admin": "write", "editor": "write", "viewer": "read"}}"#;
+    let result = run_pe(policy, None, Some(data), "data.test.allow");
+    let queries = result["residual_queries"].as_array().unwrap();
+    assert_eq!(queries.len(), 2, "{result}");
+    for disjunct in queries {
+        let conds = disjunct.as_array().unwrap();
+        assert!(
+            conds.iter().any(|c| c["input_path"] == "input.user.role"
+                && c["operator"] == "=="
+                && (c["value"] == "admin" || c["value"] == "editor")),
+            "{result}"
+        );
+        assert!(
+            conds
+                .iter()
+                .any(|c| c["input_path"] == "input.document.type"
+                    && c["operator"] == "=="
+                    && c["value"] == "report"),
+            "sibling condition must be preserved: {result}"
+        );
+    }
+}
+
+#[test]
+fn pe_inv_correlated_same_key_intersects() {
+    let policy = r#"
+package test
+default allow = false
+allow if {
+    data.a[input.k] == "x"
+    data.b[input.k] == "y"
+}
+"#;
+    let data = r#"{"a": {"alice": "x", "bob": "x"}, "b": {"bob": "y", "carol": "y"}}"#;
+    let result = run_pe(policy, None, Some(data), "data.test.allow");
+    let queries = result["residual_queries"].as_array().unwrap();
+    assert_eq!(queries.len(), 1, "{result}");
+    let conds = queries[0].as_array().unwrap();
+    assert!(
+        conds
+            .iter()
+            .any(|c| c["input_path"] == "input.k" && c["operator"] == "==" && c["value"] == "bob"),
+        "only the intersecting key may remain: {result}"
+    );
+}
+
+#[test]
+fn pe_inv_not_equal_lookup_is_rejected() {
+    let policy = r#"
+package test
+default allow = false
+allow if { data.perms[input.role] != "deny" }
+"#;
+    let data = r#"{"perms": {"admin": "allow", "guest": "deny"}}"#;
+    let result = run_pe(policy, None, Some(data), "data.test.allow");
+    let cond = first_condition(&result);
+    assert_eq!(cond["lowerable"], "data_lookup", "{result}");
+    assert_eq!(cond["soundness"]["status"], "unsound", "{result}");
+    assert_eq!(cond["soundness"]["reason"], "data_lookup_unsupported");
+}
+
+#[test]
+fn pe_result_outcome_metadata_preserves_false_result() {
+    let policy = r#"
+package test
+allow = false if { input.deny == true }
+"#;
+    let result = run_pe(policy, None, None, "data.test.allow");
+    assert_eq!(result["result"], false, "{result}");
+    let outcomes = result["residual_outcomes"].as_array().unwrap();
+    assert!(!outcomes.is_empty(), "{result}");
+    assert!(
+        outcomes.iter().all(|o| o["result"] == false),
+        "false-result disjuncts must be explicit: {result}"
+    );
+}
+
+#[test]
+fn pe_value_scalar_encodings_and_bigint_rejection() {
+    let policy = r#"
+package test
+default allow = false
+allow if { input.s == "a\u0000☃" }
+allow if { input.b == true }
+allow if { input.n == 9223372036854775808 }
+allow if { input.too_big == 184467440737095516160 }
+"#;
+    let result = run_pe(policy, None, None, "data.test.allow");
+    let all: Vec<&serde_json::Value> = result["residual_queries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|q| q.as_array().unwrap())
+        .collect();
+
+    let string_cond = all.iter().find(|c| c["input_path"] == "input.s").unwrap();
+    assert_eq!(string_cond["lowerable"], "atom");
+    assert_eq!(string_cond["value_encoding"]["value_type"], "string");
+    assert!(string_cond["value_encoding"]["string_bytes"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!(0)));
+
+    let bool_cond = all.iter().find(|c| c["input_path"] == "input.b").unwrap();
+    assert_eq!(bool_cond["value_encoding"]["value_type"], "bool");
+
+    let u64_cond = all.iter().find(|c| c["input_path"] == "input.n").unwrap();
+    assert_eq!(u64_cond["value_encoding"]["numeric_kind"], "u64");
+
+    let big_cond = all
+        .iter()
+        .find(|c| c["input_path"] == "input.too_big")
+        .unwrap();
+    assert_eq!(big_cond["lowerable"], "structured_value");
+    assert_eq!(big_cond["soundness"]["reason"], "numeric_out_of_range");
+}
+
+#[test]
+fn pe_result_definitive_unknown_fold_is_unsound_and_depends_on_path() {
+    let policy = r#"
+package test
+allowed contains x if { x := "read" }
+allowed contains x if { x := input.extra_perm }
+"#;
+    let result = run_pe(policy, None, None, "data.test.allowed");
+    assert_eq!(result["residual_queries"].as_array().unwrap().len(), 0);
+    assert_eq!(result["soundness"]["status"], "unsound", "{result}");
+    assert_eq!(
+        result["soundness"]["reason"], "definitive_via_unknown_fold",
+        "{result}"
+    );
+    assert!(result["depends_on_unknown"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("input.extra_perm")));
+}
+
+#[test]
+fn pe_diff_lowered_sound_subset_never_overpermits() {
+    let cases = [
+        (
+            r#"
+package test
+default allow = false
+allow if { input.user.role == "admin" }
+allow if { input.document.status == "public" }
+"#,
+            None,
+            vec![
+                r#"{"user":{"role":"admin"},"document":{"status":"private"}}"#,
+                r#"{"user":{"role":"viewer"},"document":{"status":"public"}}"#,
+                r#"{"user":{"role":"viewer"},"document":{"status":"private"}}"#,
+            ],
+        ),
+        (
+            r#"
+package test
+default allow = false
+allow if {
+    input.age >= 18
+    input.age < 65
+}
+"#,
+            None,
+            vec![
+                r#"{"age":17}"#,
+                r#"{"age":18}"#,
+                r#"{"age":64}"#,
+                r#"{"age":65}"#,
+            ],
+        ),
+        (
+            r#"
+package test
+default allow = false
+allow if { data.perms[input.role] == "write" }
+"#,
+            Some(r#"{"perms":{"admin":"write","viewer":"read"}}"#),
+            vec![
+                r#"{"role":"admin"}"#,
+                r#"{"role":"viewer"}"#,
+                r#"{"role":"guest"}"#,
+            ],
+        ),
+    ];
+
+    for (policy, data, inputs) in cases {
+        let pe = run_pe(policy, None, data, "data.test.allow");
+        for input_json in inputs {
+            let input: serde_json::Value = serde_json::from_str(input_json).unwrap();
+            let sim = simulated_allow(&pe, &input);
+            let full = run_full(policy, input_json, data, "data.test.allow");
+            assert!(
+                !sim || full == Value::Bool(true),
+                "simulated allow over-permitted input {input_json}; pe={pe}; full={full:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn pe_prop_seeded_no_atom_without_structure_and_no_overpermit() {
+    for threshold in 0..8 {
+        let policy = format!(
+            r#"
+package test
+default allow = false
+allow if {{
+    input.level >= {threshold}
+    input.level < 8
+}}
+"#
+        );
+        let pe = run_pe(&policy, None, None, "data.test.allow");
+        for level in 0..10 {
+            let input_json = format!(r#"{{"level":{level}}}"#);
+            let input: serde_json::Value = serde_json::from_str(&input_json).unwrap();
+            let sim = simulated_allow(&pe, &input);
+            let full = run_full(&policy, &input_json, None, "data.test.allow");
+            assert!(
+                !sim || full == Value::Bool(true),
+                "threshold {threshold} level {level}: pe={pe}; full={full:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn pe_prop_seeded_outcome_affecting_input_is_not_silent() {
+    for field in ["extra_perm", "role", "flag"] {
+        let policy = format!(
+            r#"
+package test
+allowed contains x if {{ x := "read" }}
+allowed contains x if {{ x := input.{field} }}
+"#
+        );
+        let pe = run_pe(&policy, None, None, "data.test.allowed");
+        assert_eq!(pe["soundness"]["status"], "unsound", "{pe}");
+        assert!(
+            pe["depends_on_unknown"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(format!("input.{field}"))),
+            "dependency on input.{field} must be surfaced: {pe}"
+        );
+    }
 }

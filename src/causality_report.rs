@@ -458,6 +458,8 @@ pub fn materialize_pe(
     let residual_outcomes = residual_queries
         .iter()
         .map(|conds| ResidualDisjunctOutcome {
+            // TODO(R7): replace the top-level fallback with definition/body
+            // outcome tracking for mixed true/false complete-rule disjuncts.
             result: result.clone(),
             soundness: disjunct_soundness(conds),
         })
@@ -533,6 +535,8 @@ fn value_encoding(value: &Value) -> Option<ValueEncoding> {
             string_bytes: Some(s.as_bytes().to_vec()),
         }),
         Value::Number(n) => {
+            // TODO(R8): combine this lossless numeric metadata with schema
+            // information when available to reject floats in integer fields.
             let numeric_kind = match n {
                 Number::UInt(_) => "u64",
                 Number::Int(_) => "i64",
@@ -557,6 +561,8 @@ fn classify_residual(
     value: Option<&Value>,
 ) -> (Lowerability, Soundness) {
     if kind == "negation_holds" {
+        // TODO(R5): expand simple negations only after undefined-vs-false can
+        // be represented explicitly; reject negation residuals for now.
         return unsound_classification(
             Lowerability::Negation,
             PeUnsoundReason::NegationUnsupported,

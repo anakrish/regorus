@@ -688,6 +688,9 @@ impl RegoVM {
                  aggregations over this result may be unsound",
                 self.pc
             ));
+            self.trace.record_pe_unsound_reason(
+                crate::evaluation_trace::PeUnsoundReason::ComprehensionAggregate,
+            );
             // Record an assumption that the comprehension depends on unknown input.
             if let Some(ref hint) = context.input_provenance_hint {
                 let (rule_index, definition_index) = self.current_rule_scope();

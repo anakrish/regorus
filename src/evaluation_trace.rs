@@ -21,6 +21,26 @@ use serde::Serialize;
 
 use crate::value::Value;
 
+/// Stable machine-readable PE soundness reason codes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeUnsoundReason {
+    MissingStructuredField,
+    UnsupportedOperator,
+    NonScalarValue,
+    NumericOutOfRange,
+    BuiltinUnsupported,
+    InputVsInput,
+    ExistenceUnsupported,
+    EveryVacuousTruth,
+    ComprehensionAggregate,
+    DataLookupUnsupported,
+    NegationUnsupported,
+    DefinitiveViaUnknownFold,
+    CompleteRuleConflict,
+    UnknownInputDependency,
+}
+
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
@@ -314,6 +334,12 @@ pub struct EvaluationTrace {
     /// `materialize_pe` returns empty residual queries because the result is
     /// fully determined by concrete evaluation.
     pub definitive_result: bool,
+    /// Unknown input paths that folded to Undefined during evaluation without
+    /// necessarily producing an assumption.
+    pub unknown_dependencies: Vec<String>,
+    /// Stable PE soundness reason codes recorded by VM paths that know they are
+    /// approximating or rejecting semantics.
+    pub pe_unsound_reasons: Vec<PeUnsoundReason>,
 }
 
 impl EvaluationTrace {
@@ -335,6 +361,8 @@ impl EvaluationTrace {
         self.next_negation_scope_id = 0;
         self.negation_scope_stack.clear();
         self.definitive_result = false;
+        self.unknown_dependencies.clear();
+        self.pe_unsound_reasons.clear();
     }
 
     /// Returns true if the trace is empty (nothing recorded).
@@ -526,6 +554,20 @@ impl EvaluationTrace {
             owned_negation_scope_id: None,
             data_lookup_context: None,
         });
+    }
+
+    /// Record that `path` influenced PE by folding to Undefined.
+    pub fn record_unknown_dependency(&mut self, path: String) {
+        if !self.unknown_dependencies.iter().any(|p| p == &path) {
+            self.unknown_dependencies.push(path);
+        }
+    }
+
+    /// Record a stable PE unsoundness reason.
+    pub fn record_pe_unsound_reason(&mut self, reason: PeUnsoundReason) {
+        if !self.pe_unsound_reasons.contains(&reason) {
+            self.pe_unsound_reasons.push(reason);
+        }
     }
 
     /// Push a negation scope — called when entering a `not` body.

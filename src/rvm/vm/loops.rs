@@ -752,6 +752,9 @@ impl RegoVM {
                                 "every over unknown collection '{input_path}' at PC {} is vacuously true; result may be unsound",
                                 self.pc
                             ));
+                            self.trace.record_pe_unsound_reason(
+                                crate::evaluation_trace::PeUnsoundReason::EveryVacuousTruth,
+                            );
                         }
                         self.trace.record_assumption(
                             crate::evaluation_trace::AssumptionKind::CollectionExists,

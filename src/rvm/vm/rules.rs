@@ -178,6 +178,10 @@ impl RegoVM {
                                 if let Some(ref expected) = first_successful_result {
                                     if *expected != current_result {
                                         rule_failed_due_to_inconsistency = true;
+                                        #[cfg(feature = "explanations")]
+                                        self.trace.record_pe_unsound_reason(
+                                            crate::evaluation_trace::PeUnsoundReason::CompleteRuleConflict,
+                                        );
                                         self.set_register(result_reg, Value::Undefined)?;
                                         break;
                                     }
@@ -919,6 +923,10 @@ impl RegoVM {
                 if let Some(ref expected) = frame_data.accumulated_result {
                     if *expected != current_result {
                         frame_data.rule_failed_due_to_inconsistency = true;
+                        #[cfg(feature = "explanations")]
+                        self.trace.record_pe_unsound_reason(
+                            crate::evaluation_trace::PeUnsoundReason::CompleteRuleConflict,
+                        );
                         if let Some(result_slot) =
                             self.registers.get_mut(usize::from(frame_data.result_reg))
                         {

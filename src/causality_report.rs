@@ -15,8 +15,9 @@ use serde::Serialize;
 
 use crate::evaluation_trace::{
     AssumptionKind, ConditionMode, ConditionOutcome, EvaluationTrace, ExplanationDetail,
-    ExplanationScope, ExplanationSettings, RuleOutcome, ValueMode,
+    ExplanationScope, ExplanationSettings, PeUnsoundReason, RuleOutcome, ValueMode,
 };
+use crate::number::Number;
 use crate::rvm::program::Program;
 use crate::static_provenance::{Provenance, ProvenanceRoot};
 use crate::value::Value;
@@ -256,8 +257,15 @@ pub struct ResidualCondition {
     /// The concrete value being compared against.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<Value>,
+    /// Lossless consumer-facing encoding metadata for scalar values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_encoding: Option<ValueEncoding>,
     /// Kind of assumption.
     pub kind: String,
+    /// Machine-readable lowerability classification.
+    pub lowerable: Lowerability,
+    /// Machine-readable soundness classification.
+    pub soundness: Soundness,
     /// For `negation_holds` conditions: the inner conditions that the negation
     /// wraps.  Semantics: "NOT (all of negated_conditions hold simultaneously)".
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -279,6 +287,48 @@ pub struct ResidualCondition {
     pub source_col: Option<u32>,
 }
 
+/// Machine-readable lowerability classification for PE residuals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Lowerability {
+    Atom,
+    OpaqueText,
+    Builtin,
+    InputVsInput,
+    StructuredValue,
+    Negation,
+    Exists,
+    Collection,
+    DataLookup,
+}
+
+/// Machine-readable PE soundness classification.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum Soundness {
+    Sound,
+    Unsound { reason: PeUnsoundReason },
+}
+
+/// Lossless scalar value metadata for PE consumers.
+#[derive(Debug, Clone, Serialize)]
+pub struct ValueEncoding {
+    pub value_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub numeric_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decimal: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub string_bytes: Option<Vec<u8>>,
+}
+
+/// Per-disjunct PE outcome metadata.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResidualDisjunctOutcome {
+    pub result: Value,
+    pub soundness: Soundness,
+}
+
 /// Result of partial evaluation.
 #[derive(Debug, Clone, Serialize)]
 pub struct PartialEvalResult {
@@ -286,6 +336,17 @@ pub struct PartialEvalResult {
     pub result: Value,
     /// DNF residual queries: outer vec is OR, inner vec is AND.
     pub residual_queries: Vec<Vec<ResidualCondition>>,
+    /// Outcome metadata aligned by index with `residual_queries`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub residual_outcomes: Vec<ResidualDisjunctOutcome>,
+    /// Unknown input paths that influenced the result without becoming atoms.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub depends_on_unknown: Vec<String>,
+    /// Result-level soundness signal.
+    pub soundness: Soundness,
+    /// Complete stable reason-code set for consumers that want all reasons.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unsound_reasons: Vec<PeUnsoundReason>,
     /// Warnings or informational messages.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
@@ -304,9 +365,14 @@ pub fn materialize_pe(
             Value::Undefined => Value::Null,
             other => other,
         };
+        let (soundness, unsound_reasons) = result_soundness(trace, &[]);
         return PartialEvalResult {
             result,
             residual_queries: Vec::new(),
+            residual_outcomes: Vec::new(),
+            depends_on_unknown: trace.unknown_dependencies.clone(),
+            soundness,
+            unsound_reasons,
             warnings: trace.warnings.clone(),
         };
     }
@@ -324,7 +390,8 @@ pub fn materialize_pe(
 
     // Group assumptions by (conjunction_id, iteration_index) to form disjuncts.
     // Each unique combination produces one conjunction (AND) in the DNF output.
-    let mut disjunct_map: BTreeMap<(u32, Option<u32>), Vec<ResidualCondition>> = BTreeMap::new();
+    let mut disjunct_map: BTreeMap<(u32, Option<u32>), Vec<Vec<ResidualCondition>>> =
+        BTreeMap::new();
 
     // First pass: collect inner-negation assumptions into negation_inner.
     for a in &trace.assumptions {
@@ -353,33 +420,13 @@ pub fn materialize_pe(
                     cond.negated_conditions = inner;
                 }
             }
-            disjunct_map.entry(key).or_default().push(cond);
+            add_condition_alternatives(disjunct_map.entry(key).or_default(), alloc::vec![cond]);
             continue;
         }
 
-        // Try data-key inversion (may produce multiple conditions).
+        // Try data-key inversion (may produce alternative conditions).
         let inverted = assumption_to_residual_conditions(a, program);
-        if inverted.len() > 1 {
-            // Multiple matching keys → each becomes a separate disjunct
-            // so the overall result is OR(key1, key2, ...).
-            // We tag them with synthetic iteration indices to separate them.
-            for (i, cond) in inverted.into_iter().enumerate() {
-                let offset = u32::try_from(i).unwrap_or(u32::MAX);
-                let split_key = (
-                    key.0,
-                    Some(
-                        key.1
-                            .unwrap_or(0)
-                            .wrapping_add(1000_u32.wrapping_add(offset)),
-                    ),
-                );
-                disjunct_map.entry(split_key).or_default().push(cond);
-            }
-        } else {
-            for cond in inverted {
-                disjunct_map.entry(key).or_default().push(cond);
-            }
-        }
+        add_condition_alternatives(disjunct_map.entry(key).or_default(), inverted);
     }
 
     // Deduplicate conditions within each disjunct.
@@ -390,6 +437,7 @@ pub fn materialize_pe(
     // collapsing to an empty (always-true) clause.
     let residual_queries: Vec<Vec<ResidualCondition>> = disjunct_map
         .into_values()
+        .flatten()
         .filter_map(|mut conds| {
             conds.dedup_by(|a, b| a.condition == b.condition && a.operator == b.operator);
             conds.retain(|c| !is_empty_placeholder(c));
@@ -406,9 +454,22 @@ pub fn materialize_pe(
         other => other,
     };
 
+    let (soundness, unsound_reasons) = result_soundness(trace, &residual_queries);
+    let residual_outcomes = residual_queries
+        .iter()
+        .map(|conds| ResidualDisjunctOutcome {
+            result: result.clone(),
+            soundness: disjunct_soundness(conds),
+        })
+        .collect();
+
     PartialEvalResult {
         result,
         residual_queries,
+        residual_outcomes,
+        depends_on_unknown: trace.unknown_dependencies.clone(),
+        soundness,
+        unsound_reasons,
         warnings: trace.warnings.clone(),
     }
 }
@@ -422,6 +483,267 @@ fn format_value(v: &Value) -> alloc::string::String {
         Value::Number(n) => alloc::format!("{:?}", n),
         _ => alloc::format!("{:?}", v),
     }
+}
+
+fn canonical_input_path(path: &str) -> String {
+    let mut canonical = String::new();
+    let mut bracket = String::new();
+    let mut in_bracket = false;
+    for ch in path.chars() {
+        if in_bracket {
+            if ch == ']' {
+                if !canonical.ends_with('.') {
+                    canonical.push('.');
+                }
+                canonical.push_str(bracket.trim_matches('"'));
+                bracket.clear();
+                in_bracket = false;
+            } else {
+                bracket.push(ch);
+            }
+        } else if ch == '[' {
+            in_bracket = true;
+        } else {
+            canonical.push(ch);
+        }
+    }
+    if in_bracket {
+        canonical.push('[');
+        canonical.push_str(&bracket);
+    }
+    canonical
+}
+
+fn is_supported_operator(op: &str) -> bool {
+    matches!(op, "==" | "!=" | "<" | "<=" | ">" | ">=" | "in")
+}
+
+fn value_encoding(value: &Value) -> Option<ValueEncoding> {
+    match value {
+        Value::Bool(_) => Some(ValueEncoding {
+            value_type: "bool".to_string(),
+            numeric_kind: None,
+            decimal: None,
+            string_bytes: None,
+        }),
+        Value::String(s) => Some(ValueEncoding {
+            value_type: "string".to_string(),
+            numeric_kind: None,
+            decimal: None,
+            string_bytes: Some(s.as_bytes().to_vec()),
+        }),
+        Value::Number(n) => {
+            let numeric_kind = match n {
+                Number::UInt(_) => "u64",
+                Number::Int(_) => "i64",
+                Number::Float(_) => "float64",
+                Number::BigInt(_) => "big_int",
+            };
+            Some(ValueEncoding {
+                value_type: "number".to_string(),
+                numeric_kind: Some(numeric_kind.to_string()),
+                decimal: Some(n.format_decimal()),
+                string_bytes: None,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn classify_residual(
+    kind: &str,
+    operator: Option<&str>,
+    input_path: Option<&str>,
+    value: Option<&Value>,
+) -> (Lowerability, Soundness) {
+    if kind == "negation_holds" {
+        return unsound_classification(
+            Lowerability::Negation,
+            PeUnsoundReason::NegationUnsupported,
+        );
+    }
+    if kind == "exists" {
+        return unsound_classification(Lowerability::Exists, PeUnsoundReason::ExistenceUnsupported);
+    }
+    if kind == "collection_exists" {
+        return unsound_classification(
+            Lowerability::Collection,
+            PeUnsoundReason::ExistenceUnsupported,
+        );
+    }
+
+    let Some(op) = operator else {
+        if kind == "condition_holds" {
+            return unsound_classification(
+                Lowerability::Builtin,
+                PeUnsoundReason::BuiltinUnsupported,
+            );
+        }
+        return unsound_classification(
+            Lowerability::OpaqueText,
+            PeUnsoundReason::MissingStructuredField,
+        );
+    };
+    if !is_supported_operator(op) {
+        return unsound_classification(
+            Lowerability::OpaqueText,
+            PeUnsoundReason::UnsupportedOperator,
+        );
+    }
+    if input_path.is_none() {
+        return unsound_classification(
+            Lowerability::OpaqueText,
+            PeUnsoundReason::MissingStructuredField,
+        );
+    }
+    let Some(value) = value else {
+        return unsound_classification(Lowerability::InputVsInput, PeUnsoundReason::InputVsInput);
+    };
+    if matches!(value, Value::Number(Number::BigInt(_))) {
+        return unsound_classification(
+            Lowerability::StructuredValue,
+            PeUnsoundReason::NumericOutOfRange,
+        );
+    }
+    if value_encoding(value).is_none() {
+        return unsound_classification(
+            Lowerability::StructuredValue,
+            PeUnsoundReason::NonScalarValue,
+        );
+    }
+    (Lowerability::Atom, Soundness::Sound)
+}
+
+const fn unsound_classification(
+    lowerability: Lowerability,
+    reason: PeUnsoundReason,
+) -> (Lowerability, Soundness) {
+    (lowerability, Soundness::Unsound { reason })
+}
+
+fn make_residual_condition(
+    condition: String,
+    operator: Option<String>,
+    input_path: Option<String>,
+    value: Option<Value>,
+    kind: String,
+    forced: Option<(Lowerability, PeUnsoundReason)>,
+    source: (Option<String>, Option<String>, Option<u32>, Option<u32>),
+) -> ResidualCondition {
+    let input_path = input_path.map(|path| canonical_input_path(&path));
+    let value_encoding = value.as_ref().and_then(value_encoding);
+    let (lowerable, soundness) = if let Some((lowerability, reason)) = forced {
+        (lowerability, Soundness::Unsound { reason })
+    } else {
+        classify_residual(
+            &kind,
+            operator.as_deref(),
+            input_path.as_deref(),
+            value.as_ref(),
+        )
+    };
+    ResidualCondition {
+        condition,
+        operator,
+        input_path,
+        value,
+        value_encoding,
+        kind,
+        lowerable,
+        soundness,
+        negated_conditions: Vec::new(),
+        source_rule: source.0,
+        source_file: source.1,
+        source_row: source.2,
+        source_col: source.3,
+    }
+}
+
+fn add_condition_alternatives(
+    clauses: &mut Vec<Vec<ResidualCondition>>,
+    alternatives: Vec<ResidualCondition>,
+) {
+    if alternatives.is_empty() {
+        return;
+    }
+    if clauses.is_empty() {
+        for cond in alternatives {
+            clauses.push(alloc::vec![cond]);
+        }
+        return;
+    }
+
+    let previous = core::mem::take(clauses);
+    for clause in previous {
+        for cond in &alternatives {
+            if conditions_compatible(&clause, cond) {
+                let mut next = clause.clone();
+                next.push(cond.clone());
+                clauses.push(next);
+            }
+        }
+    }
+}
+
+fn conditions_compatible(clause: &[ResidualCondition], cond: &ResidualCondition) -> bool {
+    for existing in clause {
+        if existing.lowerable == Lowerability::Atom
+            && cond.lowerable == Lowerability::Atom
+            && existing.operator.as_deref() == Some("==")
+            && cond.operator.as_deref() == Some("==")
+            && existing.input_path == cond.input_path
+            && existing.value != cond.value
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn disjunct_soundness(conditions: &[ResidualCondition]) -> Soundness {
+    conditions
+        .iter()
+        .find_map(condition_unsound_reason)
+        .map_or(Soundness::Sound, |reason| Soundness::Unsound { reason })
+}
+
+fn condition_unsound_reason(condition: &ResidualCondition) -> Option<PeUnsoundReason> {
+    if let Soundness::Unsound { reason } = &condition.soundness {
+        return Some(*reason);
+    }
+    condition
+        .negated_conditions
+        .iter()
+        .find_map(condition_unsound_reason)
+}
+
+fn push_unique_reason(reasons: &mut Vec<PeUnsoundReason>, reason: PeUnsoundReason) {
+    if !reasons.contains(&reason) {
+        reasons.push(reason);
+    }
+}
+
+fn result_soundness(
+    trace: &EvaluationTrace,
+    residual_queries: &[Vec<ResidualCondition>],
+) -> (Soundness, Vec<PeUnsoundReason>) {
+    let mut reasons = trace.pe_unsound_reasons.clone();
+    if trace.definitive_result && !trace.unknown_dependencies.is_empty() {
+        push_unique_reason(&mut reasons, PeUnsoundReason::DefinitiveViaUnknownFold);
+    }
+    if !trace.unknown_dependencies.is_empty() && residual_queries.is_empty() {
+        push_unique_reason(&mut reasons, PeUnsoundReason::UnknownInputDependency);
+    }
+    for cond in residual_queries.iter().flatten() {
+        if let Some(reason) = condition_unsound_reason(cond) {
+            push_unique_reason(&mut reasons, reason);
+        }
+    }
+    let soundness = reasons
+        .first()
+        .copied()
+        .map_or(Soundness::Sound, |reason| Soundness::Unsound { reason });
+    (soundness, reasons)
 }
 
 /// Convert an `Assumption` to a `ResidualCondition`.
@@ -438,14 +760,38 @@ fn assumption_to_residual_conditions(
     if let (Some(ref ctx), Some(ref cmp_value), Some(ref op)) =
         (&a.data_lookup_context, &a.assumed_value, &a.operator)
     {
+        if op != "==" {
+            return alloc::vec![make_residual_condition(
+                strip_trailing_comment(&a.condition_text),
+                a.operator.clone(),
+                Some(ctx.key_input_path.clone()),
+                a.assumed_value.clone(),
+                "condition_holds".to_string(),
+                Some((
+                    Lowerability::DataLookup,
+                    PeUnsoundReason::DataLookupUnsupported,
+                )),
+                (source_rule, source_file, source_row, source_col),
+            )];
+        }
+        if value_encoding(cmp_value).is_none() {
+            return alloc::vec![make_residual_condition(
+                strip_trailing_comment(&a.condition_text),
+                a.operator.clone(),
+                Some(ctx.key_input_path.clone()),
+                a.assumed_value.clone(),
+                "condition_holds".to_string(),
+                Some((
+                    Lowerability::DataLookup,
+                    PeUnsoundReason::DataLookupUnsupported,
+                )),
+                (source_rule, source_file, source_row, source_col),
+            )];
+        }
         if let Value::Object(ref obj) = ctx.data_object {
             let matching_keys: Vec<&Value> = obj
                 .iter()
-                .filter(|(_, v)| match op.as_str() {
-                    "==" => *v == cmp_value,
-                    "!=" => *v != cmp_value,
-                    _ => false,
-                })
+                .filter(|(_, v)| *v == cmp_value)
                 .map(|(k, _)| k)
                 .collect();
 
@@ -453,30 +799,35 @@ fn assumption_to_residual_conditions(
                 return matching_keys
                     .into_iter()
                     .map(|key| {
-                        let inverted_op = match op.as_str() {
-                            "!=" => "!=", // preserve != semantics
-                            _ => "==",
-                        };
-                        ResidualCondition {
-                            condition: alloc::format!(
-                                "{} {} {}",
-                                ctx.key_input_path,
-                                inverted_op,
-                                format_value(key),
+                        make_residual_condition(
+                            alloc::format!("{} == {}", ctx.key_input_path, format_value(key)),
+                            Some("==".to_string()),
+                            Some(ctx.key_input_path.clone()),
+                            Some(key.clone()),
+                            "condition_holds".to_string(),
+                            None,
+                            (
+                                source_rule.clone(),
+                                source_file.clone(),
+                                source_row,
+                                source_col,
                             ),
-                            operator: Some(inverted_op.to_string()),
-                            input_path: Some(ctx.key_input_path.clone()),
-                            value: Some(key.clone()),
-                            kind: "condition_holds".to_string(),
-                            negated_conditions: Vec::new(),
-                            source_rule: source_rule.clone(),
-                            source_file: source_file.clone(),
-                            source_row,
-                            source_col,
-                        }
+                        )
                     })
                     .collect();
             }
+            return alloc::vec![make_residual_condition(
+                strip_trailing_comment(&a.condition_text),
+                a.operator.clone(),
+                Some(ctx.key_input_path.clone()),
+                a.assumed_value.clone(),
+                "condition_holds".to_string(),
+                Some((
+                    Lowerability::DataLookup,
+                    PeUnsoundReason::DataLookupUnsupported,
+                )),
+                (source_rule, source_file, source_row, source_col),
+            )];
         }
     }
 
@@ -496,22 +847,19 @@ fn assumption_to_residual(
         AssumptionKind::NegationHolds => "negation_holds",
     };
     let (source_rule, source_file, source_row, source_col) = source_attribution(a, program);
-    ResidualCondition {
-        condition: strip_trailing_comment(&a.condition_text),
-        operator: a.operator.clone(),
-        input_path: if a.input_path.is_empty() {
+    make_residual_condition(
+        strip_trailing_comment(&a.condition_text),
+        a.operator.clone(),
+        if a.input_path.is_empty() {
             None
         } else {
             Some(a.input_path.clone())
         },
-        value: a.assumed_value.clone(),
-        kind: kind_str.to_string(),
-        negated_conditions: Vec::new(),
-        source_rule,
-        source_file,
-        source_row,
-        source_col,
-    }
+        a.assumed_value.clone(),
+        kind_str.to_string(),
+        None,
+        (source_rule, source_file, source_row, source_col),
+    )
 }
 
 /// Look up (rule_name, source_file, row, col) for an assumption.

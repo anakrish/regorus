@@ -81,7 +81,7 @@ impl RegoVM {
         let left_path = self.runtime_path_for_register(left);
         let right_path = self.runtime_path_for_register(right);
 
-        let (input_path, assumed_value) = if let Some(path) = left_path {
+        let (input_path, recorded_operator, assumed_value) = if let Some(path) = left_path {
             // Only assume if the input-path register is actually undefined.
             // If the value exists but doesn't match, it's a genuine failure.
             match self.get_register(left) {
@@ -92,7 +92,7 @@ impl RegoVM {
                 .get_register(right)
                 .ok()
                 .and_then(|value| (!matches!(value, Value::Undefined)).then(|| value.clone()));
-            (path, value)
+            (path, String::from(operator), value)
         } else if let Some(path) = right_path {
             match self.get_register(right) {
                 Ok(v) if *v == Value::Undefined => {}
@@ -102,7 +102,7 @@ impl RegoVM {
                 .get_register(left)
                 .ok()
                 .and_then(|value| (!matches!(value, Value::Undefined)).then(|| value.clone()));
-            (path, value)
+            (path, Self::flip_comparison_operator(operator), value)
         } else {
             return false;
         };
@@ -114,7 +114,7 @@ impl RegoVM {
             input_path,
             condition_text,
             u32::try_from(self.pc).unwrap_or(u32::MAX),
-            Some(String::from(operator)),
+            Some(recorded_operator),
             assumed_value,
             rule_index,
             definition_index,
@@ -128,6 +128,17 @@ impl RegoVM {
             }
         }
         true
+    }
+
+    #[cfg(feature = "explanations")]
+    fn flip_comparison_operator(operator: &str) -> String {
+        match operator {
+            "<" => String::from(">"),
+            "<=" => String::from(">="),
+            ">" => String::from("<"),
+            ">=" => String::from("<="),
+            _ => String::from(operator),
+        }
     }
 
     /// Record an assumption for a builtin call whose result is Undefined
@@ -183,6 +194,8 @@ impl RegoVM {
             iteration_index,
             self.current_conjunction_id(),
         );
+        self.trace
+            .record_pe_unsound_reason(crate::evaluation_trace::PeUnsoundReason::BuiltinUnsupported);
         true
     }
 
@@ -303,6 +316,9 @@ impl RegoVM {
                             iteration_index,
                             self.current_conjunction_id(),
                         );
+                        self.trace.record_pe_unsound_reason(
+                            crate::evaluation_trace::PeUnsoundReason::NegationUnsupported,
+                        );
                         return true;
                     }
                 }
@@ -393,13 +409,22 @@ impl RegoVM {
                         pc,
                         passed,
                         false,
-                        Some(value),
+                        Some(value.clone()),
                         self.provenance
                             .get(dest)
                             .map(|path| path.as_ref().to_string()),
                         None,
                         None,
                     );
+                }
+                #[cfg(feature = "explanations")]
+                if value == Value::Undefined && self.explanation_settings.assume_unknown_input {
+                    if let Some(path) = self.provenance.get(dest) {
+                        if self.explanation_settings.is_unknown_path(path.as_ref()) {
+                            self.trace
+                                .record_unknown_dependency(path.as_ref().to_string());
+                        }
+                    }
                 }
                 Ok(InstructionOutcome::Continue)
             }
@@ -781,6 +806,9 @@ impl RegoVM {
                             definition_index,
                             iteration_index,
                             self.current_conjunction_id(),
+                        );
+                        self.trace.record_pe_unsound_reason(
+                            crate::evaluation_trace::PeUnsoundReason::NegationUnsupported,
                         );
                         // Tag the NegationHolds with the scope it owns so
                         // materialize_pe can find the matching inner assumptions.
@@ -1812,6 +1840,12 @@ impl RegoVM {
                                     // Register component — can't know the key statically
                                     break;
                                 }
+                            }
+                        }
+                        #[cfg(feature = "explanations")]
+                        if let Some(path) = current_path.as_ref() {
+                            if self.explanation_settings.is_unknown_path(path) {
+                                self.trace.record_unknown_dependency(path.clone());
                             }
                         }
                         break;

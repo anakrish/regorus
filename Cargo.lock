@@ -1440,6 +1440,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "regorus-lift"
+version = "0.0.0"
+dependencies = [
+ "regorus",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "regorus-mimalloc"
 version = "2.2.7"
 dependencies = [

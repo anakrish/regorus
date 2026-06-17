@@ -627,6 +627,23 @@ impl RegoVM {
         serde_json::to_string_pretty(&report).map_err(|e| alloc::format!("{e}"))
     }
 
+    /// Take the partial evaluation result as a typed value.
+    ///
+    /// Like [`take_partial_eval_result`](Self::take_partial_eval_result) but
+    /// returns the typed [`PartialEvalResult`](crate::causality_report::PartialEvalResult)
+    /// instead of a JSON string, so in-process consumers (e.g. the `regorus-lift`
+    /// exporter) can inspect the residual structure directly. Clears the trace.
+    #[cfg(feature = "explanations")]
+    pub fn take_partial_eval_result_typed(
+        &mut self,
+        query_result: Value,
+    ) -> crate::causality_report::PartialEvalResult {
+        let report =
+            crate::causality_report::materialize_pe(&self.program, &self.trace, query_result);
+        self.trace.clear();
+        report
+    }
+
     pub(super) fn reset_execution_timer_state(&mut self) {
         let config = self.effective_execution_timer_config();
         self.execution_timer = ExecutionTimer::new(config);

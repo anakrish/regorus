@@ -19,10 +19,11 @@
 //! - `input.proto`     — L4 protocol (`ctx->protocol`, e.g. `tcp`/`udp`).
 //!
 //! Supported atoms per allow-clause: `Eq` and `Membership` over those fields,
-//! and non-negated IPv4 `Cidr` over `input.dest_ip`. Everything else makes the
-//! clause **non-lowerable** and it is dropped from the exported plan (it stays
-//! in user-space RVM). Dropping a clause can only *remove* allows, never add
-//! them.
+//! non-negated IPv4 `Cidr` over `input.dest_ip`, and `Cmp` (`>=`/`>`/`<=`/`<`)
+//! port ranges over `input.dest_port` (multiple comparisons in one clause are
+//! intersected into a single inclusive range). Everything else makes the clause
+//! **non-lowerable** and it is dropped from the exported plan (it stays in
+//! user-space RVM). Dropping a clause can only *remove* allows, never add them.
 //!
 //! # The non-negotiable invariant
 //!

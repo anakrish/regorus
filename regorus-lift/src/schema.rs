@@ -23,6 +23,7 @@ pub enum FieldType {
 #[derive(Debug, Clone, Default)]
 pub struct ContextSchema {
     fields: BTreeMap<String, FieldType>,
+    array_caps: BTreeMap<String, u32>,
 }
 
 impl ContextSchema {
@@ -37,6 +38,14 @@ impl ContextSchema {
         self
     }
 
+    /// Builder: declare a bounded observable array field.
+    pub fn with_array(mut self, input_path: impl Into<String>, cap: u32) -> Self {
+        let input_path = input_path.into();
+        self.fields.insert(input_path.clone(), FieldType::Array);
+        self.array_caps.insert(input_path, cap);
+        self
+    }
+
     /// The declared type of `input_path`, or `None` if not observable.
     pub fn field_type(&self, input_path: &str) -> Option<FieldType> {
         self.fields.get(input_path).copied()
@@ -48,5 +57,9 @@ impl ContextSchema {
 
     pub fn fields(&self) -> &BTreeMap<String, FieldType> {
         &self.fields
+    }
+
+    pub fn array_cap(&self, input_path: &str) -> Option<u32> {
+        self.array_caps.get(input_path).copied()
     }
 }

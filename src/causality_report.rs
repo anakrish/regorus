@@ -260,6 +260,15 @@ pub struct ResidualCondition {
     /// Lossless consumer-facing encoding metadata for scalar values.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value_encoding: Option<ValueEncoding>,
+    /// Right-hand input path for input-vs-input field comparisons.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub right_input_path: Option<String>,
+    /// Element comparison operator for bounded existential atoms.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub element_operator: Option<String>,
+    /// Compile-time maximum collection length for bounded existential atoms.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collection_cap: Option<u32>,
     /// Kind of assumption.
     pub kind: String,
     /// Machine-readable lowerability classification.
@@ -564,6 +573,11 @@ fn is_supported_operator(op: &str) -> bool {
             | "not_startswith"
             | "endswith"
             | "not_endswith"
+            | "bitmask_any_set"
+            | "bitmask_any_clear"
+            | "bitmask_all_set"
+            | "bitmask_all_clear"
+            | "exists_in"
     )
 }
 
@@ -604,6 +618,9 @@ fn classify_residual(
     operator: Option<&str>,
     input_path: Option<&str>,
     value: Option<&Value>,
+    right_input_path: Option<&str>,
+    element_operator: Option<&str>,
+    collection_cap: Option<u32>,
 ) -> (Lowerability, Soundness) {
     if kind == "negation_holds" {
         // A raw negation wrapper is not liftable. `finalize_negation_condition`
@@ -624,6 +641,33 @@ fn classify_residual(
             Lowerability::Collection,
             PeUnsoundReason::ExistenceUnsupported,
         );
+    }
+    if kind == "exists_in" {
+        if input_path.is_none() || element_operator.is_none() || collection_cap.is_none() {
+            return unsound_classification(
+                Lowerability::Collection,
+                PeUnsoundReason::ExistsInUnsupported,
+            );
+        }
+        let Some(value) = value else {
+            return unsound_classification(
+                Lowerability::Collection,
+                PeUnsoundReason::ExistsInUnsupported,
+            );
+        };
+        if matches!(value, Value::Number(Number::BigInt(_) | Number::Float(_))) {
+            return unsound_classification(
+                Lowerability::StructuredValue,
+                PeUnsoundReason::NumericOutOfRange,
+            );
+        }
+        if value_encoding(value).is_none() {
+            return unsound_classification(
+                Lowerability::StructuredValue,
+                PeUnsoundReason::NonScalarValue,
+            );
+        }
+        return (Lowerability::Atom, Soundness::Sound);
     }
 
     let Some(op) = operator else {
@@ -651,8 +695,18 @@ fn classify_residual(
         );
     }
     let Some(value) = value else {
+        if right_input_path.is_some() {
+            return (Lowerability::Atom, Soundness::Sound);
+        }
         return unsound_classification(Lowerability::InputVsInput, PeUnsoundReason::InputVsInput);
     };
+    if matches!(
+        op,
+        "bitmask_any_set" | "bitmask_any_clear" | "bitmask_all_set" | "bitmask_all_clear"
+    ) && !matches!(value, Value::Number(n) if n.as_u64().is_some())
+    {
+        return unsound_classification(Lowerability::Builtin, PeUnsoundReason::BitmaskUnsupported);
+    }
     if matches!(value, Value::Number(Number::BigInt(_) | Number::Float(_))) {
         return unsound_classification(
             Lowerability::StructuredValue,
@@ -694,6 +748,9 @@ fn make_residual_condition(
             operator.as_deref(),
             input_path.as_deref(),
             value.as_ref(),
+            None,
+            None,
+            None,
         )
     };
     ResidualCondition {
@@ -702,6 +759,9 @@ fn make_residual_condition(
         input_path,
         value,
         value_encoding,
+        right_input_path: None,
+        element_operator: None,
+        collection_cap: None,
         kind,
         lowerable,
         soundness,
@@ -793,6 +853,9 @@ fn finalize_negation_condition(cond: &mut ResidualCondition) {
     cond.input_path = inner.input_path;
     cond.value = inner.value;
     cond.value_encoding = inner.value_encoding;
+    cond.right_input_path = inner.right_input_path;
+    cond.element_operator = inner.element_operator;
+    cond.collection_cap = inner.collection_cap;
     cond.kind = "negation_complement".to_string();
     cond.lowerable = Lowerability::Atom;
     cond.soundness = Soundness::Sound;
@@ -813,6 +876,10 @@ fn complement_operator(op: &str) -> Option<&'static str> {
         "not_startswith" => Some("startswith"),
         "endswith" => Some("not_endswith"),
         "not_endswith" => Some("endswith"),
+        "bitmask_any_set" => Some("bitmask_all_clear"),
+        "bitmask_all_clear" => Some("bitmask_any_set"),
+        "bitmask_all_set" => Some("bitmask_any_clear"),
+        "bitmask_any_clear" => Some("bitmask_all_set"),
         _ => None,
     }
 }
@@ -878,6 +945,7 @@ fn assumption_to_residual_conditions(
             "net.cidr_contains" => Some("cidr_contains".to_string()),
             "startswith" => Some("startswith".to_string()),
             "endswith" => Some("endswith".to_string()),
+            "bits.and" => a.operator.clone(),
             _ => None,
         });
         let condition = operator.as_ref().map_or_else(
@@ -900,6 +968,52 @@ fn assumption_to_residual_conditions(
             None,
             (source_rule, source_file, source_row, source_col),
         )];
+    }
+
+    if let Some(ref right_path) = a.right_input_path {
+        let mut cond = make_residual_condition(
+            alloc::format!(
+                "{} {} {}",
+                a.input_path,
+                a.operator.as_deref().unwrap_or("field_cmp"),
+                right_path
+            ),
+            a.operator.clone(),
+            Some(a.input_path.clone()),
+            None,
+            "condition_holds".to_string(),
+            None,
+            (source_rule, source_file, source_row, source_col),
+        );
+        cond.right_input_path = Some(right_path.clone());
+        cond.lowerable = Lowerability::Atom;
+        cond.soundness = Soundness::Sound;
+        return alloc::vec![cond];
+    }
+
+    if let Some(ref ctx) = a.exists_in_context {
+        let mut cond = make_residual_condition(
+            alloc::format!(
+                "some x in {}; x {} {}",
+                ctx.collection_input_path,
+                ctx.element_operator,
+                a.assumed_value
+                    .as_ref()
+                    .map(format_value)
+                    .unwrap_or_default()
+            ),
+            Some("exists_in".to_string()),
+            Some(ctx.collection_input_path.clone()),
+            a.assumed_value.clone(),
+            "exists_in".to_string(),
+            None,
+            (source_rule, source_file, source_row, source_col),
+        );
+        cond.element_operator = Some(ctx.element_operator.clone());
+        cond.collection_cap = Some(ctx.cap);
+        cond.lowerable = Lowerability::Atom;
+        cond.soundness = Soundness::Sound;
+        return alloc::vec![cond];
     }
 
     // Check for data-key inversion.

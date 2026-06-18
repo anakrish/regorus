@@ -15,6 +15,20 @@ use super::execution_model::{ExecutionMode, SuspendReason};
 use super::loops::LoopParams;
 use super::machine::RegoVM;
 
+#[cfg(feature = "explanations")]
+const DEFAULT_EXISTS_IN_CAP: u32 = 8;
+
+#[cfg(feature = "explanations")]
+type BitmaskLowering = core::result::Result<
+    (
+        String,
+        String,
+        Value,
+        crate::evaluation_trace::BuiltinContext,
+    ),
+    String,
+>;
+
 pub(super) enum InstructionOutcome {
     Continue,
     Return(Value),
@@ -35,6 +49,20 @@ fn is_valid_cidr_literal(cidr: &str) -> bool {
         Ok(core::net::IpAddr::V6(_)) => prefix_len <= 128,
         Err(_) => false,
     }
+}
+
+#[cfg(feature = "explanations")]
+#[allow(clippy::pattern_type_mismatch)]
+fn value_u64(value: &Value) -> Option<u64> {
+    match value {
+        Value::Number(n) => n.as_u64(),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "explanations")]
+const fn is_scalar_value(value: &Value) -> bool {
+    matches!(value, Value::Bool(_) | Value::String(_) | Value::Number(_))
 }
 
 impl RegoVM {
@@ -93,8 +121,80 @@ impl RegoVM {
         operator: &str,
         condition_text: alloc::string::String,
     ) -> bool {
+        if let Some(lowering) = self.bitmask_comparison_context(left, right, operator) {
+            match lowering {
+                Ok((input_path, bitmask_operator, mask_value, builtin_context)) => {
+                    let (rule_index, definition_index) = self.current_rule_scope();
+                    let iteration_index = self.current_loop_iteration_index();
+                    self.trace.record_assumption(
+                        crate::evaluation_trace::AssumptionKind::ConditionHolds,
+                        input_path,
+                        condition_text,
+                        u32::try_from(self.pc).unwrap_or(u32::MAX),
+                        Some(bitmask_operator),
+                        Some(mask_value),
+                        rule_index,
+                        definition_index,
+                        iteration_index,
+                        self.current_conjunction_id(),
+                    );
+                    if let Some(last) = self.trace.assumptions.last_mut() {
+                        last.builtin_context = Some(builtin_context);
+                    }
+                    return true;
+                }
+                Err(input_path) => {
+                    let (rule_index, definition_index) = self.current_rule_scope();
+                    let iteration_index = self.current_loop_iteration_index();
+                    self.trace.record_assumption(
+                        crate::evaluation_trace::AssumptionKind::ConditionHolds,
+                        input_path,
+                        condition_text,
+                        u32::try_from(self.pc).unwrap_or(u32::MAX),
+                        Some(String::from("bitmask_all_clear")),
+                        Some(Value::Undefined),
+                        rule_index,
+                        definition_index,
+                        iteration_index,
+                        self.current_conjunction_id(),
+                    );
+                    self.trace.record_pe_unsound_reason(
+                        crate::evaluation_trace::PeUnsoundReason::BitmaskUnsupported,
+                    );
+                    return true;
+                }
+            }
+        }
+
         let left_path = self.runtime_path_for_register(left);
         let right_path = self.runtime_path_for_register(right);
+
+        if let (Some(left_input_path), Some(right_input_path)) =
+            (left_path.clone(), right_path.clone())
+        {
+            if matches!(self.get_register(left), Ok(v) if *v == Value::Undefined)
+                && matches!(self.get_register(right), Ok(v) if *v == Value::Undefined)
+            {
+                let (rule_index, definition_index) = self.current_rule_scope();
+                let iteration_index = self.current_loop_iteration_index();
+                self.trace.record_assumption(
+                    crate::evaluation_trace::AssumptionKind::ConditionHolds,
+                    left_input_path,
+                    condition_text,
+                    u32::try_from(self.pc).unwrap_or(u32::MAX),
+                    Some(String::from(operator)),
+                    None,
+                    rule_index,
+                    definition_index,
+                    iteration_index,
+                    self.current_conjunction_id(),
+                );
+                if let Some(last) = self.trace.assumptions.last_mut() {
+                    last.right_input_path = Some(right_input_path);
+                }
+                return true;
+            }
+        }
 
         let (input_path, recorded_operator, assumed_value) = if let Some(path) = left_path {
             // Only assume if the input-path register is actually undefined.
@@ -129,7 +229,7 @@ impl RegoVM {
             input_path,
             condition_text,
             u32::try_from(self.pc).unwrap_or(u32::MAX),
-            Some(recorded_operator),
+            Some(recorded_operator.clone()),
             assumed_value,
             rule_index,
             definition_index,
@@ -142,7 +242,125 @@ impl RegoVM {
                 last.data_lookup_context = Some(ctx);
             }
         }
+        if operator == "in" && recorded_operator == "in" {
+            if let Some(last) = self.trace.assumptions.last_mut() {
+                if last.assumed_value.as_ref().is_some_and(is_scalar_value) {
+                    last.operator = Some(String::from("exists_in"));
+                    last.exists_in_context = Some(crate::evaluation_trace::ExistsInContext {
+                        collection_input_path: last.input_path.clone(),
+                        element_operator: String::from("=="),
+                        cap: DEFAULT_EXISTS_IN_CAP,
+                    });
+                }
+            }
+        }
         true
+    }
+
+    #[cfg(feature = "explanations")]
+    fn bitmask_comparison_context(
+        &self,
+        left: u8,
+        right: u8,
+        operator: &str,
+    ) -> Option<BitmaskLowering> {
+        if let Some(ctx) = self.bitand_context_for_dest(left) {
+            return Some(self.lower_bitmask_context(ctx, right, operator));
+        }
+        if let Some(ctx) = self.bitand_context_for_dest(right) {
+            return Some(self.lower_bitmask_context(
+                ctx,
+                left,
+                Self::flip_comparison_operator(operator).as_str(),
+            ));
+        }
+        None
+    }
+
+    #[cfg(feature = "explanations")]
+    fn bitand_context_for_dest(&self, dest: u8) -> Option<(usize, String, u64, Value)> {
+        for instruction in self.program.instructions.iter().take(self.pc).rev().take(4) {
+            let Instruction::BuiltinCall { params_index } = *instruction else {
+                continue;
+            };
+            let params = self
+                .program
+                .instruction_data
+                .get_builtin_call_params(params_index)?;
+            if params.dest != dest {
+                continue;
+            }
+            let builtin_name = self
+                .program
+                .get_builtin_info(params.builtin_index)?
+                .name
+                .clone();
+            if builtin_name != "bits.and" {
+                continue;
+            }
+            let args = params.arg_registers();
+            if args.len() != 2 {
+                return None;
+            }
+            let mut unknown: Option<(usize, String)> = None;
+            let mut mask: Option<(u64, Value)> = None;
+            for (idx, &arg) in args.iter().enumerate() {
+                if matches!(self.get_register(arg), Ok(v) if *v == Value::Undefined) {
+                    if let Some(path) = self.runtime_path_for_register(arg) {
+                        if unknown.is_some() {
+                            return Some((idx, path, 0, Value::Undefined));
+                        }
+                        unknown = Some((idx, path));
+                    }
+                } else if let Ok(value) = self.get_register(arg) {
+                    if let Some(m) = value_u64(value) {
+                        mask = Some((m, value.clone()));
+                    }
+                }
+            }
+            let (unknown_idx, input_path) = unknown?;
+            let (mask, mask_value) = mask.unwrap_or((0, Value::Undefined));
+            return Some((unknown_idx, input_path, mask, mask_value));
+        }
+        None
+    }
+
+    #[cfg(feature = "explanations")]
+    fn lower_bitmask_context(
+        &self,
+        ctx: (usize, String, u64, Value),
+        expected_reg: u8,
+        operator: &str,
+    ) -> BitmaskLowering {
+        let (unknown_idx, input_path, mask, mask_value) = ctx;
+        if mask_value == Value::Undefined {
+            return Err(input_path);
+        }
+        let Some(expected) = self.get_register(expected_reg).ok().and_then(value_u64) else {
+            return Err(input_path);
+        };
+        let bitmask_operator = match (operator, expected) {
+            ("==", 0) => "bitmask_all_clear",
+            ("!=", 0) => "bitmask_any_set",
+            ("==", v) if v == mask => "bitmask_all_set",
+            ("!=", v) if v == mask => "bitmask_any_clear",
+            _ => return Err(input_path),
+        };
+        let input_arg_index = match u8::try_from(unknown_idx) {
+            Ok(idx) => idx,
+            Err(_) => return Err(input_path),
+        };
+        Ok((
+            input_path.clone(),
+            String::from(bitmask_operator),
+            mask_value.clone(),
+            crate::evaluation_trace::BuiltinContext {
+                name: String::from("bits.and"),
+                input_arg_index,
+                input_path,
+                constant_value: mask_value,
+            },
+        ))
     }
 
     #[cfg(feature = "explanations")]

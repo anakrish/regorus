@@ -247,12 +247,32 @@ fn lift_disjunct(
     let mut atoms = Vec::new();
     for cond in disjunct {
         let atom = lift_condition(cond, schema)?;
-        if let Some(field_type) = schema.field_type(atom.input_path()) {
-            fields.insert(atom.input_path().to_string(), field_type);
-        }
+        insert_atom_fields(&atom, schema, fields);
         atoms.push(atom);
     }
     Ok(Clause { atoms })
+}
+
+fn insert_atom_fields(
+    atom: &Atom,
+    schema: &ContextSchema,
+    fields: &mut BTreeMap<String, FieldType>,
+) {
+    match atom {
+        Atom::FieldCmp(atom) => {
+            if let Some(field_type) = schema.field_type(&atom.left_path) {
+                fields.insert(atom.left_path.clone(), field_type);
+            }
+            if let Some(field_type) = schema.field_type(&atom.right_path) {
+                fields.insert(atom.right_path.clone(), field_type);
+            }
+        }
+        _ => {
+            if let Some(field_type) = schema.field_type(atom.input_path()) {
+                fields.insert(atom.input_path().to_string(), field_type);
+            }
+        }
+    }
 }
 
 fn lift_condition(cond: &ResidualCondition, schema: &ContextSchema) -> Result<Atom, Rejection> {
@@ -277,6 +297,22 @@ fn lift_condition(cond: &ResidualCondition, schema: &ContextSchema) -> Result<At
     let field_type = schema
         .field_type(&input_path)
         .ok_or_else(|| reject(RejectReason::UnboundField(input_path.clone())))?;
+
+    if let Some(right_path) = cond.right_input_path.clone() {
+        let right_type = schema
+            .field_type(&right_path)
+            .ok_or_else(|| reject(RejectReason::UnboundField(right_path.clone())))?;
+        let op = field_cmp_op(cond.operator.as_deref())
+            .ok_or_else(|| reject(RejectReason::UnsupportedOperator("<none>".to_string())))?;
+        if !field_types_compatible(field_type, right_type, op) {
+            return Err(reject(RejectReason::UnboundField(input_path)));
+        }
+        return Ok(Atom::FieldCmp(ir::FieldCmpAtom {
+            left_path: input_path,
+            op,
+            right_path,
+        }));
+    }
 
     match cond.operator.as_deref() {
         None if cond.kind == "exists" => Ok(Atom::Exists(ir::ExistsAtom { input_path })),
@@ -331,6 +367,48 @@ fn lift_condition(cond: &ResidualCondition, schema: &ContextSchema) -> Result<At
             let values = membership_values(cond, &reject)?;
             Ok(Atom::Membership(ir::MembershipAtom { input_path, values }))
         }
+        Some("bitmask_any_set" | "bitmask_any_clear" | "bitmask_all_set" | "bitmask_all_clear") => {
+            if !matches!(field_type, FieldType::Int | FieldType::Uint) {
+                return Err(reject(RejectReason::UnboundField(input_path)));
+            }
+            let mask = u64_value(cond, &reject)?;
+            let test = match cond.operator.as_deref() {
+                Some("bitmask_any_set") => ir::BitmaskTest::AnySet,
+                Some("bitmask_any_clear") => ir::BitmaskTest::AnyClear,
+                Some("bitmask_all_set") => ir::BitmaskTest::AllSet,
+                Some("bitmask_all_clear") => ir::BitmaskTest::AllClear,
+                _ => {
+                    return Err(reject(RejectReason::UnsupportedOperator(
+                        "<none>".to_string(),
+                    )))
+                }
+            };
+            Ok(Atom::Bitmask(ir::BitmaskAtom {
+                input_path,
+                mask,
+                test,
+            }))
+        }
+        Some("exists_in") => {
+            if field_type != FieldType::Array {
+                return Err(reject(RejectReason::UnboundField(input_path)));
+            }
+            let scalar = scalar_value(cond, &reject)?;
+            let element_op = field_cmp_op(cond.element_operator.as_deref()).ok_or_else(|| {
+                reject(RejectReason::UnsupportedOperator("exists_in".to_string()))
+            })?;
+            let schema_cap = schema
+                .array_cap(&input_path)
+                .ok_or_else(|| reject(RejectReason::UnboundField(input_path.clone())))?;
+            let pe_cap = cond.collection_cap.unwrap_or(schema_cap);
+            let cap = core::cmp::min(schema_cap, pe_cap);
+            Ok(Atom::ExistsIn(ir::ExistsInAtom {
+                input_path,
+                element_op,
+                scalar,
+                cap,
+            }))
+        }
         Some("cidr_contains" | "not_cidr_contains") => {
             if !matches!(field_type, FieldType::Str | FieldType::Ip) {
                 return Err(reject(RejectReason::UnboundField(input_path)));
@@ -379,6 +457,50 @@ fn scalar_value(
         .as_ref()
         .ok_or_else(|| reject(RejectReason::UnencodableValue))?;
     LiftScalar::from_value(value).ok_or_else(|| reject(RejectReason::UnencodableValue))
+}
+
+fn u64_value(
+    cond: &ResidualCondition,
+    reject: &impl Fn(RejectReason) -> Rejection,
+) -> Result<u64, Rejection> {
+    let value = cond
+        .value
+        .as_ref()
+        .ok_or_else(|| reject(RejectReason::UnencodableValue))?;
+    match serde_json::to_value(value).ok() {
+        Some(serde_json::Value::Number(n)) => n
+            .as_u64()
+            .ok_or_else(|| reject(RejectReason::UnencodableValue)),
+        _ => Err(reject(RejectReason::UnencodableValue)),
+    }
+}
+
+fn field_cmp_op(op: Option<&str>) -> Option<ir::FieldCmpOp> {
+    match op {
+        Some("==") => Some(ir::FieldCmpOp::Eq),
+        Some("!=") => Some(ir::FieldCmpOp::Ne),
+        Some("<") => Some(ir::FieldCmpOp::Lt),
+        Some("<=") => Some(ir::FieldCmpOp::Le),
+        Some(">") => Some(ir::FieldCmpOp::Gt),
+        Some(">=") => Some(ir::FieldCmpOp::Ge),
+        _ => None,
+    }
+}
+
+fn field_types_compatible(left: FieldType, right: FieldType, op: ir::FieldCmpOp) -> bool {
+    if matches!(
+        (left, right),
+        (
+            FieldType::Int | FieldType::Uint,
+            FieldType::Int | FieldType::Uint
+        )
+    ) {
+        return true;
+    }
+    if left != right {
+        return false;
+    }
+    matches!(op, ir::FieldCmpOp::Eq | ir::FieldCmpOp::Ne) || matches!(left, FieldType::Str)
 }
 
 fn string_value(

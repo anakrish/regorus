@@ -39,6 +39,8 @@ pub enum PeUnsoundReason {
     DefinitiveViaUnknownFold,
     CompleteRuleConflict,
     UnknownInputDependency,
+    BitmaskUnsupported,
+    ExistsInUnsupported,
 }
 
 // ---------------------------------------------------------------------------
@@ -271,6 +273,10 @@ pub struct Assumption {
     /// input argument, this captures the builtin shape so `materialize_pe` can
     /// preserve it as a structured atom.
     pub builtin_context: Option<BuiltinContext>,
+    /// When the assumption compares two unknown input fields, this captures the right-hand input path.
+    pub right_input_path: Option<String>,
+    /// Bounded existential lowering metadata for collection membership/iteration.
+    pub exists_in_context: Option<ExistsInContext>,
 }
 
 /// Context for inverting a data lookup during partial evaluation.
@@ -297,6 +303,17 @@ pub struct BuiltinContext {
     pub input_path: String,
     /// Constant argument that parameterizes the atom (CIDR/prefix/suffix).
     pub constant_value: Value,
+}
+
+/// Context for a bounded existential over an input collection.
+#[derive(Debug, Clone)]
+pub struct ExistsInContext {
+    /// Full input path of the collection.
+    pub collection_input_path: String,
+    /// Element comparison operator.
+    pub element_operator: String,
+    /// Compile-time scan cap carried by the PE atom.
+    pub cap: u32,
 }
 
 /// Kinds of assumptions that can be recorded.
@@ -571,6 +588,8 @@ impl EvaluationTrace {
             owned_negation_scope_id: None,
             data_lookup_context: None,
             builtin_context: None,
+            right_input_path: None,
+            exists_in_context: None,
         });
     }
 

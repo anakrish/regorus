@@ -28,6 +28,9 @@ fn eq_atom(input_path: &str, value: Value) -> ResidualCondition {
         input_path: Some(input_path.to_string()),
         value: Some(value),
         value_encoding: None,
+        right_input_path: None,
+        element_operator: None,
+        collection_cap: None,
         kind: "input_eq".to_string(),
         lowerable: Lowerability::Atom,
         soundness: Soundness::Sound,
@@ -58,6 +61,9 @@ fn atom(
         input_path: Some(input_path.to_string()),
         value,
         value_encoding: None,
+        right_input_path: None,
+        element_operator: None,
+        collection_cap: None,
         kind: kind.to_string(),
         lowerable: Lowerability::Atom,
         soundness: Soundness::Sound,
@@ -392,4 +398,28 @@ fn one_bad_disjunct_does_not_sink_good_ones() {
     assert_eq!(res.rejections.len(), 1);
     assert_eq!(res.rejections[0].reason, RejectReason::ConditionNotAtom);
     assert!(!res.is_complete());
+}
+
+#[test]
+fn lifts_and_simulates_bitmask_atom() {
+    let schema = ContextSchema::new().with("input.flags", FieldType::Uint);
+    let pe = pe_with(vec![(
+        vec![atom(
+            "input.flags",
+            Some("bitmask_any_set"),
+            Some(Value::from(0o3u64)),
+            "condition_holds",
+        )],
+        sound_allow_outcome(),
+    )]);
+
+    let res = lift(&pe, &schema);
+    assert!(res.is_complete(), "rejections: {:?}", res.rejections);
+    let config = res.config.unwrap();
+    let write: serde_json::Value = serde_json::from_str(r#"{"flags":1}"#).unwrap();
+    assert_eq!(simulate(&config, &write), Verdict::Allow);
+    let none: serde_json::Value = serde_json::from_str(r#"{"flags":0}"#).unwrap();
+    assert_eq!(simulate(&config, &none), Verdict::Deny);
+    let missing: serde_json::Value = serde_json::from_str(r#"{}"#).unwrap();
+    assert_eq!(simulate(&config, &missing), Verdict::Deny);
 }

@@ -129,11 +129,18 @@ fn assert_condition_contract(cond: &serde_json::Value) {
                             | "not_startswith"
                             | "endswith"
                             | "not_endswith"
+                            | "bitmask_any_set"
+                            | "bitmask_any_clear"
+                            | "bitmask_all_set"
+                            | "bitmask_all_clear"
+                            | "exists_in"
                     )
                 ),
                 "atom must have supported operator: {cond}"
             );
-            assert!(!cond["value"].is_null(), "atom must have value: {cond}");
+            if cond["right_input_path"].is_null() {
+                assert!(!cond["value"].is_null(), "atom must have value: {cond}");
+            }
         }
         assert_eq!(
             cond["soundness"]["status"], "sound",
@@ -289,6 +296,18 @@ fn atom_matches(cond: &serde_json::Value, input: &serde_json::Value) -> bool {
                 .as_str()
                 .is_none_or(|s| !s.as_bytes().ends_with(p.as_bytes()))
         }),
+        Some("bitmask_any_set") => json_u64(actual)
+            .zip(json_u64(expected))
+            .is_some_and(|(actual, mask)| actual & mask != 0),
+        Some("bitmask_any_clear") => json_u64(actual)
+            .zip(json_u64(expected))
+            .is_some_and(|(actual, mask)| actual & mask != mask),
+        Some("bitmask_all_set") => json_u64(actual)
+            .zip(json_u64(expected))
+            .is_some_and(|(actual, mask)| actual & mask == mask),
+        Some("bitmask_all_clear") => json_u64(actual)
+            .zip(json_u64(expected))
+            .is_some_and(|(actual, mask)| actual & mask == 0),
         _ => false,
     }
 }
@@ -309,6 +328,12 @@ fn get_dotted_path<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a s
         }
     }
     Some(current)
+}
+
+fn json_u64(value: &serde_json::Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_i64().and_then(|v| u64::try_from(v).ok()))
 }
 
 fn numeric_cmp(left: &serde_json::Value, right: &serde_json::Value) -> Option<std::cmp::Ordering> {
@@ -2426,6 +2451,8 @@ fn pe_meta_reason_codes_exhaustively_handled() {
             }
             evaluation_trace::PeUnsoundReason::CompleteRuleConflict => "complete_rule_conflict",
             evaluation_trace::PeUnsoundReason::UnknownInputDependency => "unknown_input_dependency",
+            evaluation_trace::PeUnsoundReason::BitmaskUnsupported => "bitmask_unsupported",
+            evaluation_trace::PeUnsoundReason::ExistsInUnsupported => "exists_in_unsupported",
         }
     }
 
@@ -2868,6 +2895,20 @@ allow if { not input.role == "admin" }
             None,
             vec![r#"{"role":"admin"}"#, r#"{"role":"viewer"}"#, r#"{}"#],
         ),
+        (
+            r#"
+package test
+default allow = false
+allow if { bits.and(input.flags, 3) != 0 }
+"#,
+            None,
+            vec![
+                r#"{"flags":0}"#,
+                r#"{"flags":1}"#,
+                r#"{"flags":"1"}"#,
+                r#"{}"#,
+            ],
+        ),
     ];
 
     for (policy, data, inputs) in cases {
@@ -2929,6 +2970,82 @@ allowed contains x if {{ x := input.{field} }}
                 .unwrap()
                 .contains(&serde_json::json!(format!("input.{field}"))),
             "dependency on input.{field} must be surfaced: {pe}"
+        );
+    }
+}
+
+#[test]
+fn pe_bitmask_lowers_sound_atoms_and_edges() {
+    let policy = r#"
+package test
+default allow = false
+allow if { bits.and(input.flags, 3) == 0 }
+allow if { bits.and(input.mode, 0) == 0 }
+allow if { bits.and(input.high, 9223372036854775808) == 9223372036854775808 }
+"#;
+    let result = run_pe(policy, None, None, "data.test.allow");
+    let conds: Vec<&serde_json::Value> = result["residual_queries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|q| q.as_array().unwrap())
+        .collect();
+    assert!(
+        conds.iter().any(|c| c["input_path"] == "input.flags"
+            && c["operator"] == "bitmask_all_clear"
+            && c["value"] == 3),
+        "{result}"
+    );
+    assert!(
+        conds.iter().any(|c| c["input_path"] == "input.mode"
+            && c["operator"] == "bitmask_all_clear"
+            && c["value"] == 0),
+        "{result}"
+    );
+    assert!(
+        conds
+            .iter()
+            .any(|c| c["input_path"] == "input.high" && c["operator"] == "bitmask_all_set"),
+        "{result}"
+    );
+}
+
+#[test]
+fn pe_bitmask_rejects_negative_mask() {
+    let policy = r#"
+package test
+default allow = false
+allow if { bits.and(input.flags, -1) == 0 }
+"#;
+    let result = run_pe(policy, None, None, "data.test.allow");
+    let cond = first_condition(&result);
+    assert_eq!(cond["soundness"]["status"], "unsound", "{result}");
+    assert_eq!(
+        cond["soundness"]["reason"], "bitmask_unsupported",
+        "{result}"
+    );
+}
+
+#[test]
+fn pe_bitmask_never_overpermits_absent_type_mismatch() {
+    let policy = r#"
+package test
+default allow = false
+allow if { bits.and(input.flags, 3) != 0 }
+"#;
+    let pe = run_pe(policy, None, None, "data.test.allow");
+    for input_json in [
+        r#"{"flags":1}"#,
+        r#"{"flags":0}"#,
+        r#"{"flags":"1"}"#,
+        r#"{}"#,
+    ] {
+        let input: serde_json::Value = serde_json::from_str(input_json).unwrap();
+        let sim = simulated_allow(&pe, &input);
+        let full = run_full(policy, input_json, None, "data.test.allow");
+        assert!(
+            !sim || full == Value::Bool(true),
+            "overpermit {input_json}: pe={pe}; full={full:?}"
         );
     }
 }

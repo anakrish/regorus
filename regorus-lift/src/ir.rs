@@ -83,6 +83,24 @@ pub enum CmpOp {
     Ge,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldCmpOp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BitmaskTest {
+    AnySet,
+    AnyClear,
+    AllSet,
+    AllClear,
+}
+
 /// A single equality atom: `input_path == scalar`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EqAtom {
@@ -143,6 +161,31 @@ pub struct ExistsAtom {
     pub input_path: String,
 }
 
+/// Bitmask/flag atom over an integer field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BitmaskAtom {
+    pub input_path: String,
+    pub mask: u64,
+    pub test: BitmaskTest,
+}
+
+/// Comparison between two observable scalar fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldCmpAtom {
+    pub left_path: String,
+    pub op: FieldCmpOp,
+    pub right_path: String,
+}
+
+/// Bounded existential over an observable array field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExistsInAtom {
+    pub input_path: String,
+    pub element_op: FieldCmpOp,
+    pub scalar: LiftScalar,
+    pub cap: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Atom {
     Eq(EqAtom),
@@ -151,6 +194,9 @@ pub enum Atom {
     Cidr(CidrAtom),
     Prefix(PrefixAtom),
     Exists(ExistsAtom),
+    Bitmask(BitmaskAtom),
+    FieldCmp(FieldCmpAtom),
+    ExistsIn(ExistsInAtom),
 }
 
 impl Atom {
@@ -162,6 +208,9 @@ impl Atom {
             Atom::Cidr(atom) => &atom.input_path,
             Atom::Prefix(atom) => &atom.input_path,
             Atom::Exists(atom) => &atom.input_path,
+            Atom::Bitmask(atom) => &atom.input_path,
+            Atom::FieldCmp(atom) => &atom.left_path,
+            Atom::ExistsIn(atom) => &atom.input_path,
         }
     }
 }

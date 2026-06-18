@@ -11,7 +11,9 @@
 use std::cmp::Ordering;
 use std::net::IpAddr;
 
-use crate::ir::{Atom, Clause, CmpOp, EnforcerConfig, LiftScalar, PrefixKind, Verdict};
+use crate::ir::{
+    Atom, BitmaskTest, Clause, CmpOp, EnforcerConfig, FieldCmpOp, LiftScalar, PrefixKind, Verdict,
+};
 
 /// Simulate the enforcer for `input`.
 pub fn simulate(config: &EnforcerConfig, input: &serde_json::Value) -> Verdict {
@@ -85,6 +87,32 @@ fn atom_matches(atom: &Atom, input: &serde_json::Value) -> bool {
         },
         Atom::Exists(atom) => extract_json(input, &atom.input_path)
             .is_some_and(|value| value != &serde_json::Value::Bool(false)),
+        Atom::Bitmask(atom) => extract_scalar(input, &atom.input_path)
+            .and_then(scalar_to_u64)
+            .is_some_and(|actual| match atom.test {
+                BitmaskTest::AnySet => actual & atom.mask != 0,
+                BitmaskTest::AnyClear => actual & atom.mask != atom.mask,
+                BitmaskTest::AllSet => actual & atom.mask == atom.mask,
+                BitmaskTest::AllClear => actual & atom.mask == 0,
+            }),
+        Atom::FieldCmp(atom) => extract_scalar(input, &atom.left_path)
+            .zip(extract_scalar(input, &atom.right_path))
+            .is_some_and(|(left, right)| field_cmp_matches(&left, atom.op, &right)),
+        Atom::ExistsIn(atom) => extract_json(input, &atom.input_path).is_some_and(|actual| {
+            let Some(items) = actual.as_array() else {
+                return false;
+            };
+            let Ok(cap) = usize::try_from(atom.cap) else {
+                return false;
+            };
+            if items.len() > cap {
+                return false;
+            }
+            items
+                .iter()
+                .filter_map(LiftScalar::from_json)
+                .any(|item| field_cmp_matches(&item, atom.element_op, &atom.scalar))
+        }),
     }
 }
 
@@ -107,6 +135,25 @@ fn extract_json<'a>(
         cur = cur.get(seg)?;
     }
     Some(cur)
+}
+
+fn scalar_to_u64(scalar: LiftScalar) -> Option<u64> {
+    match scalar {
+        LiftScalar::Uint(v) => Some(v),
+        LiftScalar::Int(v) => u64::try_from(v).ok(),
+        _ => None,
+    }
+}
+
+fn field_cmp_matches(left: &LiftScalar, op: FieldCmpOp, right: &LiftScalar) -> bool {
+    match op {
+        FieldCmpOp::Eq => left == right,
+        FieldCmpOp::Ne => left != right,
+        FieldCmpOp::Lt => scalar_cmp(left, right).is_some_and(Ordering::is_lt),
+        FieldCmpOp::Le => scalar_cmp(left, right).is_some_and(|o| !o.is_gt()),
+        FieldCmpOp::Gt => scalar_cmp(left, right).is_some_and(Ordering::is_gt),
+        FieldCmpOp::Ge => scalar_cmp(left, right).is_some_and(|o| !o.is_lt()),
+    }
 }
 
 fn scalar_cmp(left: &LiftScalar, right: &LiftScalar) -> Option<Ordering> {

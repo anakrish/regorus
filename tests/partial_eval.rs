@@ -262,6 +262,23 @@ fn atom_matches(cond: &serde_json::Value, input: &serde_json::Value) -> bool {
     let Some(actual) = get_dotted_path(input, path.strip_prefix("input.").unwrap_or(path)) else {
         return cond["kind"] == "negation_complement";
     };
+    if let Some(right_path) = cond["right_input_path"].as_str() {
+        let Some(right) = get_dotted_path(
+            input,
+            right_path.strip_prefix("input.").unwrap_or(right_path),
+        ) else {
+            return false;
+        };
+        return match cond["operator"].as_str() {
+            Some("==") => actual == right,
+            Some("!=") => actual != right,
+            Some("<") => json_cmp(actual, right).is_some_and(|ord| ord.is_lt()),
+            Some("<=") => json_cmp(actual, right).is_some_and(|ord| !ord.is_gt()),
+            Some(">") => json_cmp(actual, right).is_some_and(|ord| ord.is_gt()),
+            Some(">=") => json_cmp(actual, right).is_some_and(|ord| !ord.is_lt()),
+            _ => false,
+        };
+    }
     let expected = &cond["value"];
     match cond["operator"].as_str() {
         None if cond["kind"] == "exists" => actual != &serde_json::Value::Bool(false),
@@ -338,6 +355,16 @@ fn json_u64(value: &serde_json::Value) -> Option<u64> {
 
 fn numeric_cmp(left: &serde_json::Value, right: &serde_json::Value) -> Option<std::cmp::Ordering> {
     left.as_f64()?.partial_cmp(&right.as_f64()?)
+}
+
+fn json_cmp(left: &serde_json::Value, right: &serde_json::Value) -> Option<std::cmp::Ordering> {
+    if left.is_number() && right.is_number() {
+        return numeric_cmp(left, right);
+    }
+    if let (Some(left), Some(right)) = (left.as_str(), right.as_str()) {
+        return Some(left.cmp(right));
+    }
+    None
 }
 
 fn cidr_contains(cidr: &str, ip: &str) -> Option<bool> {
@@ -2909,6 +2936,21 @@ allow if { bits.and(input.flags, 3) != 0 }
                 r#"{}"#,
             ],
         ),
+        (
+            r#"
+package test
+default allow = false
+allow if { input.uid == input.owner_uid }
+allow if { input.start < input.end }
+"#,
+            None,
+            vec![
+                r#"{"uid":1000,"owner_uid":1000,"start":1,"end":2}"#,
+                r#"{"uid":1000,"owner_uid":0,"start":1,"end":2}"#,
+                r#"{"uid":1000,"start":1,"end":2}"#,
+                r#"{"uid":"1000","owner_uid":1000,"start":1,"end":"2"}"#,
+            ],
+        ),
     ];
 
     for (policy, data, inputs) in cases {
@@ -3039,6 +3081,60 @@ allow if { bits.and(input.flags, 3) != 0 }
         r#"{"flags":0}"#,
         r#"{"flags":"1"}"#,
         r#"{}"#,
+    ] {
+        let input: serde_json::Value = serde_json::from_str(input_json).unwrap();
+        let sim = simulated_allow(&pe, &input);
+        let full = run_full(policy, input_json, None, "data.test.allow");
+        assert!(
+            !sim || full == Value::Bool(true),
+            "overpermit {input_json}: pe={pe}; full={full:?}"
+        );
+    }
+}
+
+#[test]
+fn pe_field_cmp_lowers_input_vs_input() {
+    let policy = r#"
+package test
+default allow = false
+allow if { input.uid == input.owner_uid }
+allow if { input.start < input.end }
+"#;
+    let result = run_pe(policy, None, None, "data.test.allow");
+    let conds: Vec<&serde_json::Value> = result["residual_queries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|q| q.as_array().unwrap())
+        .collect();
+    assert!(
+        conds.iter().any(|c| c["input_path"] == "input.uid"
+            && c["operator"] == "=="
+            && c["right_input_path"] == "input.owner_uid"
+            && c["soundness"]["status"] == "sound"),
+        "{result}"
+    );
+    assert!(
+        conds.iter().any(|c| c["input_path"] == "input.start"
+            && c["operator"] == "<"
+            && c["right_input_path"] == "input.end"),
+        "{result}"
+    );
+}
+
+#[test]
+fn pe_field_cmp_never_overpermits_absent_or_type_mismatch() {
+    let policy = r#"
+package test
+default allow = false
+allow if { input.uid == input.owner_uid }
+"#;
+    let pe = run_pe(policy, None, None, "data.test.allow");
+    for input_json in [
+        r#"{"uid":1000,"owner_uid":1000}"#,
+        r#"{"uid":1000,"owner_uid":0}"#,
+        r#"{"uid":1000}"#,
+        r#"{"uid":"1000","owner_uid":1000}"#,
     ] {
         let input: serde_json::Value = serde_json::from_str(input_json).unwrap();
         let sim = simulated_allow(&pe, &input);

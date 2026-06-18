@@ -236,3 +236,46 @@ fn extended_atoms_lift_complete_and_never_overpermit() {
         assert_eq!(got == Verdict::Allow, want_allow, "{input_json}");
     }
 }
+
+const FIELD_CMP_POLICY: &str = r#"
+package fieldcmp
+
+default allow = false
+
+allow if {
+    input.uid == input.owner_uid
+    input.start < input.end
+}
+"#;
+
+#[test]
+fn field_cmp_lifts_complete_and_never_overpermits() {
+    let pe = run_pe_typed(FIELD_CMP_POLICY, "data.fieldcmp.allow");
+    let schema = ContextSchema::new()
+        .with("input.uid", FieldType::Uint)
+        .with("input.owner_uid", FieldType::Uint)
+        .with("input.start", FieldType::Uint)
+        .with("input.end", FieldType::Uint);
+    let res = lift(&pe, &schema);
+    assert!(
+        res.is_complete(),
+        "rejections: {:?}; pe={pe:?}",
+        res.rejections
+    );
+    let config = res.config.expect("expected config");
+    let cases = [
+        r#"{"uid":1000,"owner_uid":1000,"start":1,"end":2}"#,
+        r#"{"uid":1000,"owner_uid":0,"start":1,"end":2}"#,
+        r#"{"uid":1000,"start":1,"end":2}"#,
+        r#"{"uid":"1000","owner_uid":1000,"start":1,"end":2}"#,
+    ];
+    for input_json in cases {
+        let want_allow = full_eval(FIELD_CMP_POLICY, "data.fieldcmp.allow", input_json);
+        let input: serde_json::Value = serde_json::from_str(input_json).unwrap();
+        let got = simulate(&config, &input);
+        if got == Verdict::Allow {
+            assert!(want_allow, "OVER-PERMISSION for {input_json}");
+        }
+        assert_eq!(got == Verdict::Allow, want_allow, "{input_json}");
+    }
+}

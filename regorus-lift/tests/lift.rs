@@ -423,3 +423,43 @@ fn lifts_and_simulates_bitmask_atom() {
     let missing: serde_json::Value = serde_json::from_str(r#"{}"#).unwrap();
     assert_eq!(simulate(&config, &missing), Verdict::Deny);
 }
+
+#[test]
+fn lifts_and_simulates_field_cmp_atom() {
+    let schema = ContextSchema::new()
+        .with("input.uid", FieldType::Uint)
+        .with("input.owner_uid", FieldType::Uint)
+        .with("input.start", FieldType::Uint)
+        .with("input.end", FieldType::Uint);
+    let mut eq = atom("input.uid", Some("=="), None, "condition_holds");
+    eq.right_input_path = Some("input.owner_uid".to_string());
+    let mut lt = atom("input.start", Some("<"), None, "condition_holds");
+    lt.right_input_path = Some("input.end".to_string());
+    let pe = pe_with(vec![(vec![eq, lt], sound_allow_outcome())]);
+
+    let res = lift(&pe, &schema);
+    assert!(res.is_complete(), "rejections: {:?}", res.rejections);
+    let config = res.config.unwrap();
+    let good: serde_json::Value =
+        serde_json::from_str(r#"{"uid":1000,"owner_uid":1000,"start":1,"end":2}"#).unwrap();
+    assert_eq!(simulate(&config, &good), Verdict::Allow);
+    let absent: serde_json::Value =
+        serde_json::from_str(r#"{"uid":1000,"start":1,"end":2}"#).unwrap();
+    assert_eq!(simulate(&config, &absent), Verdict::Deny);
+}
+
+#[test]
+fn rejects_field_cmp_type_mismatch() {
+    let schema = ContextSchema::new()
+        .with("input.uid", FieldType::Uint)
+        .with("input.owner", FieldType::Str);
+    let mut cond = atom("input.uid", Some("=="), None, "condition_holds");
+    cond.right_input_path = Some("input.owner".to_string());
+    let pe = pe_with(vec![(vec![cond], sound_allow_outcome())]);
+
+    let res = lift(&pe, &schema);
+    assert_eq!(
+        res.rejections[0].reason,
+        RejectReason::UnboundField("input.uid".to_string())
+    );
+}

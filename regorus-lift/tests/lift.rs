@@ -463,3 +463,48 @@ fn rejects_field_cmp_type_mismatch() {
         RejectReason::UnboundField("input.uid".to_string())
     );
 }
+
+#[test]
+fn lifts_and_simulates_exists_in_with_cap() {
+    let schema = ContextSchema::new().with_array("input.caps", 2);
+    let mut cond = atom(
+        "input.caps",
+        Some("exists_in"),
+        Some(Value::from("CAP_SYS_ADMIN")),
+        "exists_in",
+    );
+    cond.element_operator = Some("==".to_string());
+    cond.collection_cap = Some(8);
+    let pe = pe_with(vec![(vec![cond], sound_allow_outcome())]);
+
+    let res = lift(&pe, &schema);
+    assert!(res.is_complete(), "rejections: {:?}", res.rejections);
+    let config = res.config.unwrap();
+    let good: serde_json::Value = serde_json::from_str(r#"{"caps":["CAP_SYS_ADMIN"]}"#).unwrap();
+    assert_eq!(simulate(&config, &good), Verdict::Allow);
+    let empty: serde_json::Value = serde_json::from_str(r#"{"caps":[]}"#).unwrap();
+    assert_eq!(simulate(&config, &empty), Verdict::Deny);
+    let over_cap: serde_json::Value =
+        serde_json::from_str(r#"{"caps":["A","B","CAP_SYS_ADMIN"]}"#).unwrap();
+    assert_eq!(simulate(&config, &over_cap), Verdict::Deny);
+}
+
+#[test]
+fn rejects_exists_in_without_array_cap() {
+    let schema = ContextSchema::new().with("input.caps", FieldType::Array);
+    let mut cond = atom(
+        "input.caps",
+        Some("exists_in"),
+        Some(Value::from("CAP_SYS_ADMIN")),
+        "exists_in",
+    );
+    cond.element_operator = Some("==".to_string());
+    cond.collection_cap = Some(8);
+    let pe = pe_with(vec![(vec![cond], sound_allow_outcome())]);
+
+    let res = lift(&pe, &schema);
+    assert_eq!(
+        res.rejections[0].reason,
+        RejectReason::UnboundField("input.caps".to_string())
+    );
+}

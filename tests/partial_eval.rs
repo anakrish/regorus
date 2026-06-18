@@ -325,6 +325,7 @@ fn atom_matches(cond: &serde_json::Value, input: &serde_json::Value) -> bool {
         Some("bitmask_all_clear") => json_u64(actual)
             .zip(json_u64(expected))
             .is_some_and(|(actual, mask)| actual & mask == 0),
+        Some("exists_in") => exists_in_matches(cond, actual, expected),
         _ => false,
     }
 }
@@ -345,6 +346,36 @@ fn get_dotted_path<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a s
         }
     }
     Some(current)
+}
+
+fn exists_in_matches(
+    cond: &serde_json::Value,
+    actual: &serde_json::Value,
+    expected: &serde_json::Value,
+) -> bool {
+    let Some(items) = actual.as_array() else {
+        return false;
+    };
+    let Some(cap) = cond["collection_cap"]
+        .as_u64()
+        .and_then(|cap| usize::try_from(cap).ok())
+    else {
+        return false;
+    };
+    if items.len() > cap {
+        return false;
+    }
+    items
+        .iter()
+        .any(|item| match cond["element_operator"].as_str() {
+            Some("==") => item == expected,
+            Some("!=") => item != expected,
+            Some("<") => json_cmp(item, expected).is_some_and(|ord| ord.is_lt()),
+            Some("<=") => json_cmp(item, expected).is_some_and(|ord| !ord.is_gt()),
+            Some(">") => json_cmp(item, expected).is_some_and(|ord| ord.is_gt()),
+            Some(">=") => json_cmp(item, expected).is_some_and(|ord| !ord.is_lt()),
+            _ => false,
+        })
 }
 
 fn json_u64(value: &serde_json::Value) -> Option<u64> {
@@ -2951,6 +2982,20 @@ allow if { input.start < input.end }
                 r#"{"uid":"1000","owner_uid":1000,"start":1,"end":"2"}"#,
             ],
         ),
+        (
+            r#"
+package test
+default allow = false
+allow if { "CAP_SYS_ADMIN" in input.caps }
+"#,
+            None,
+            vec![
+                r#"{"caps":["CAP_SYS_ADMIN"]}"#,
+                r#"{"caps":[]}"#,
+                r#"{"caps":["A","B","C","D","E","F","G","H","CAP_SYS_ADMIN"]}"#,
+                r#"{}"#,
+            ],
+        ),
     ];
 
     for (policy, data, inputs) in cases {
@@ -3144,4 +3189,76 @@ allow if { input.uid == input.owner_uid }
             "overpermit {input_json}: pe={pe}; full={full:?}"
         );
     }
+}
+
+#[test]
+fn pe_exists_in_lowers_membership_and_iteration() {
+    let policy = r#"
+package test
+default allow = false
+allow if { "CAP_SYS_ADMIN" in input.caps }
+allow if {
+    some port in input.ports
+    port == 443
+}
+"#;
+    let result = run_pe(policy, None, None, "data.test.allow");
+    let conds: Vec<&serde_json::Value> = result["residual_queries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|q| q.as_array().unwrap())
+        .collect();
+    assert!(
+        conds.iter().any(|c| c["operator"] == "exists_in"
+            && c["input_path"] == "input.caps"
+            && c["element_operator"] == "=="
+            && c["value"] == "CAP_SYS_ADMIN"),
+        "{result}"
+    );
+    assert!(
+        conds.iter().any(|c| c["operator"] == "exists_in"
+            && c["input_path"] == "input.ports"
+            && c["element_operator"] == "=="
+            && c["value"] == 443),
+        "{result}"
+    );
+}
+
+#[test]
+fn pe_exists_in_never_overpermits_empty_absent_or_over_cap() {
+    let policy = r#"
+package test
+default allow = false
+allow if { "CAP_SYS_ADMIN" in input.caps }
+"#;
+    let pe = run_pe(policy, None, None, "data.test.allow");
+    for input_json in [
+        r#"{"caps":["CAP_SYS_ADMIN"]}"#,
+        r#"{"caps":[]}"#,
+        r#"{}"#,
+        r#"{"caps":["A","B","C","D","E","F","G","H","CAP_SYS_ADMIN"]}"#,
+    ] {
+        let input: serde_json::Value = serde_json::from_str(input_json).unwrap();
+        let sim = simulated_allow(&pe, &input);
+        let full = run_full(policy, input_json, None, "data.test.allow");
+        assert!(
+            !sim || full == Value::Bool(true),
+            "overpermit {input_json}: pe={pe}; full={full:?}"
+        );
+        if input_json.contains(r#"["A","B"#) {
+            assert!(!sim, "over-cap arrays must fail closed: {pe}");
+        }
+    }
+}
+
+#[test]
+fn pe_exists_in_rejects_aggregate_comprehension() {
+    let policy = r#"
+package test
+default allow = false
+allow if { count([x | some x in input.caps; x == "CAP_SYS_ADMIN"]) > 0 }
+"#;
+    let result = run_pe(policy, None, None, "data.test.allow");
+    assert_eq!(result["soundness"]["status"], "unsound", "{result}");
 }

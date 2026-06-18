@@ -22,6 +22,8 @@ use crate::rvm::program::Program;
 use crate::static_provenance::{Provenance, ProvenanceRoot};
 use crate::value::Value;
 
+const DEFAULT_EXISTS_IN_CAP: u32 = 8;
+
 // ---------------------------------------------------------------------------
 // Redaction
 // ---------------------------------------------------------------------------
@@ -458,11 +460,13 @@ pub fn materialize_pe(
         for mut conds in clauses {
             conds.dedup_by(|a, b| a.condition == b.condition && a.operator == b.operator);
             conds.retain(|c| !is_empty_placeholder(c));
+            combine_exists_in_conditions(&mut conds);
             if !conds.is_empty() {
                 residual_entries.push((conds, outcome.clone()));
             }
         }
     }
+    combine_exists_in_entries(&mut residual_entries);
 
     let result = match query_result {
         Value::Undefined => Value::Null,
@@ -812,6 +816,148 @@ fn conditions_compatible(clause: &[ResidualCondition], cond: &ResidualCondition)
         }
     }
     true
+}
+
+fn combine_exists_in_conditions(conds: &mut Vec<ResidualCondition>) {
+    loop {
+        let Some((collection_idx, element_idx, exists_in)) = find_exists_in_pair(conds) else {
+            return;
+        };
+        let first = core::cmp::max(collection_idx, element_idx);
+        let second = core::cmp::min(collection_idx, element_idx);
+        conds.remove(first);
+        conds.remove(second);
+        conds.push(exists_in);
+    }
+}
+
+fn combine_exists_in_entries(entries: &mut Vec<(Vec<ResidualCondition>, Value)>) {
+    loop {
+        let Some((collection_entry, element_entry, exists_in)) = find_exists_in_entry_pair(entries)
+        else {
+            return;
+        };
+        let first = core::cmp::max(collection_entry, element_entry);
+        let second = core::cmp::min(collection_entry, element_entry);
+        entries.remove(first);
+        let (_, outcome) = entries.remove(second);
+        entries.push((alloc::vec![exists_in], outcome));
+    }
+}
+
+fn find_exists_in_entry_pair(
+    entries: &[(Vec<ResidualCondition>, Value)],
+) -> Option<(usize, usize, ResidualCondition)> {
+    for (collection_entry, (collection_conds, _)) in entries.iter().enumerate() {
+        let Some(collection) = collection_conds
+            .iter()
+            .find(|cond| cond.kind == "collection_exists")
+        else {
+            continue;
+        };
+        let Some(base) = collection.input_path.as_deref() else {
+            continue;
+        };
+        for (element_entry, (element_conds, _)) in entries.iter().enumerate() {
+            if collection_entry == element_entry {
+                continue;
+            }
+            let Some(element) = element_conds
+                .iter()
+                .find(|cond| is_exists_in_element_condition(cond))
+            else {
+                continue;
+            };
+            let Some(element_path) = element.input_path.as_deref() else {
+                continue;
+            };
+            if element_collection_path(element_path).as_deref() != Some(base) {
+                continue;
+            }
+            if collection.source_rule != element.source_rule {
+                continue;
+            }
+            return Some((
+                collection_entry,
+                element_entry,
+                make_exists_in_condition(base, element),
+            ));
+        }
+    }
+    None
+}
+
+fn find_exists_in_pair(conds: &[ResidualCondition]) -> Option<(usize, usize, ResidualCondition)> {
+    for (collection_idx, collection) in conds.iter().enumerate() {
+        if collection.kind != "collection_exists" {
+            continue;
+        }
+        let Some(base) = collection.input_path.as_deref() else {
+            continue;
+        };
+        if base.contains("._") || base.contains("[_]") {
+            continue;
+        }
+        for (element_idx, element) in conds.iter().enumerate() {
+            if collection_idx == element_idx {
+                continue;
+            }
+            let Some(element_path) = element.input_path.as_deref() else {
+                continue;
+            };
+            if element_collection_path(element_path).as_deref() != Some(base) {
+                continue;
+            }
+            if !is_exists_in_element_condition(element) {
+                continue;
+            }
+            return Some((
+                collection_idx,
+                element_idx,
+                make_exists_in_condition(base, element),
+            ));
+        }
+    }
+    None
+}
+
+fn make_exists_in_condition(base: &str, element: &ResidualCondition) -> ResidualCondition {
+    let mut exists_in = element.clone();
+    exists_in.condition = alloc::format!(
+        "some x in {}; x {} {}",
+        base,
+        element.operator.as_deref().unwrap_or("=="),
+        element.value.as_ref().map(format_value).unwrap_or_default()
+    );
+    exists_in.operator = Some("exists_in".to_string());
+    exists_in.input_path = Some(base.to_string());
+    exists_in.right_input_path = None;
+    exists_in.element_operator = element.operator.clone();
+    exists_in.collection_cap = Some(DEFAULT_EXISTS_IN_CAP);
+    exists_in.kind = "exists_in".to_string();
+    exists_in.lowerable = Lowerability::Atom;
+    exists_in.soundness = Soundness::Sound;
+    exists_in
+}
+
+fn element_collection_path(path: &str) -> Option<String> {
+    path.strip_suffix("._")
+        .or_else(|| path.strip_suffix("[_]"))
+        .map(str::to_string)
+}
+
+fn is_exists_in_element_condition(cond: &ResidualCondition) -> bool {
+    cond.kind == "condition_holds"
+        && cond.right_input_path.is_none()
+        && cond.negated_conditions.is_empty()
+        && matches!(
+            cond.operator.as_deref(),
+            Some("==" | "!=" | "<" | "<=" | ">" | ">=")
+        )
+        && cond.value.as_ref().is_some_and(|value| {
+            value_encoding(value).is_some()
+                && !matches!(value, Value::Number(Number::BigInt(_) | Number::Float(_)))
+        })
 }
 
 fn finalize_negation_condition(cond: &mut ResidualCondition) {

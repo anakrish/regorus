@@ -279,3 +279,44 @@ fn field_cmp_lifts_complete_and_never_overpermits() {
         assert_eq!(got == Verdict::Allow, want_allow, "{input_json}");
     }
 }
+
+const EXISTS_IN_POLICY: &str = r#"
+package existsin
+
+default allow = false
+
+allow if { "CAP_SYS_ADMIN" in input.caps }
+"#;
+
+#[test]
+fn exists_in_lifts_and_fails_closed_over_cap() {
+    let pe = run_pe_typed(EXISTS_IN_POLICY, "data.existsin.allow");
+    let schema = ContextSchema::new().with_array("input.caps", 2);
+    let res = lift(&pe, &schema);
+    assert!(
+        res.is_complete(),
+        "rejections: {:?}; pe={pe:?}",
+        res.rejections
+    );
+    let config = res.config.expect("expected config");
+    let cases = [
+        r#"{"caps":["CAP_SYS_ADMIN"]}"#,
+        r#"{"caps":[]}"#,
+        r#"{}"#,
+        r#"{"caps":["A","B","CAP_SYS_ADMIN"]}"#,
+    ];
+    for input_json in cases {
+        let want_allow = full_eval(EXISTS_IN_POLICY, "data.existsin.allow", input_json);
+        let input: serde_json::Value = serde_json::from_str(input_json).unwrap();
+        let got = simulate(&config, &input);
+        if got == Verdict::Allow {
+            assert!(want_allow, "OVER-PERMISSION for {input_json}");
+        }
+        if input_json.contains(r#"["A","B"#) {
+            assert_eq!(got, Verdict::Deny, "over-cap arrays must fail closed");
+            assert!(want_allow, "full eval should allow matching over-cap case");
+        } else {
+            assert_eq!(got == Verdict::Allow, want_allow, "{input_json}");
+        }
+    }
+}

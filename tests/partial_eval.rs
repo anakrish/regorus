@@ -2632,6 +2632,29 @@ allow if { net.cidr_contains("10.0.0.0/24", input.dest_ip) }
 }
 
 #[test]
+fn pe_cidr_contains_ipv6_boundaries_never_overpermit() {
+    let policy = r#"
+package test
+default allow = false
+allow if { net.cidr_contains("2001:db8::/32", input.dest_ip) }
+"#;
+    let pe = run_pe(policy, None, None, "data.test.allow");
+    for input_json in [
+        r#"{"dest_ip":"2001:db8::"}"#,
+        r#"{"dest_ip":"2001:db8:ffff:ffff:ffff:ffff:ffff:ffff"}"#,
+        r#"{"dest_ip":"2001:db9::"}"#,
+    ] {
+        let input: serde_json::Value = serde_json::from_str(input_json).unwrap();
+        let sim = simulated_allow(&pe, &input);
+        let full = run_full(policy, input_json, None, "data.test.allow");
+        assert!(
+            !sim || full == Value::Bool(true),
+            "IPv6 CIDR over-permitted {input_json}; pe={pe}; full={full:?}"
+        );
+    }
+}
+
+#[test]
 fn pe_cidr_rejects_malformed_or_unknown_network() {
     let malformed = r#"
 package test

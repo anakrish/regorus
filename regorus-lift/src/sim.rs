@@ -76,6 +76,11 @@ fn atom_matches(atom: &Atom, input: &serde_json::Value) -> bool {
                 let matched = match atom.kind {
                     PrefixKind::StartsWith => s.as_bytes().starts_with(atom.pattern.as_bytes()),
                     PrefixKind::EndsWith => s.as_bytes().ends_with(atom.pattern.as_bytes()),
+                    PrefixKind::Contains => {
+                        let needle = atom.pattern.as_bytes();
+                        !needle.is_empty()
+                            && s.as_bytes().windows(needle.len()).any(|w| w == needle)
+                    }
                 };
                 if atom.negated {
                     !matched

@@ -441,6 +441,18 @@ fn lift_condition(cond: &ResidualCondition, schema: &ContextSchema) -> Result<At
                 negated: matches!(op, Some("not_startswith" | "not_endswith")),
             }))
         }
+        Some("contains" | "not_contains") => {
+            if field_type != FieldType::Str {
+                return Err(reject(RejectReason::UnboundField(input_path)));
+            }
+            let pattern = string_value(cond, &reject)?;
+            Ok(Atom::Prefix(ir::PrefixAtom {
+                input_path,
+                pattern,
+                kind: ir::PrefixKind::Contains,
+                negated: cond.operator.as_deref() == Some("not_contains"),
+            }))
+        }
         Some(op) => Err(reject(RejectReason::UnsupportedOperator(op.to_string()))),
         None => Err(reject(RejectReason::UnsupportedOperator(
             "<none>".to_string(),

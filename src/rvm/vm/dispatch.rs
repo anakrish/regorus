@@ -518,6 +518,30 @@ impl RegoVM {
                     },
                 ))
             }
+            // PE-C10: byte-substring `contains(haystack, needle)`. The haystack
+            // (arg 0) is the unknown input field; the needle (arg 1) must be a
+            // constant non-empty string. An empty needle is a tautology (every
+            // string contains "") so it is never lowered.
+            "contains" if unknown_idx == 0 && args.len() == 2 => {
+                let needle_reg = *args.get(1)?;
+                let needle_value = self.get_register(needle_reg).ok()?.clone();
+                let Value::String(ref needle) = needle_value else {
+                    return None;
+                };
+                if needle.as_ref().is_empty() {
+                    return None;
+                }
+                Some((
+                    String::from("contains"),
+                    needle_value.clone(),
+                    crate::evaluation_trace::BuiltinContext {
+                        name: String::from(builtin_name),
+                        input_arg_index: 0,
+                        input_path: input_path.to_string(),
+                        constant_value: needle_value,
+                    },
+                ))
+            }
             _ => None,
         }
     }

@@ -153,6 +153,8 @@ pub struct PrefixAtom {
 pub enum PrefixKind {
     StartsWith,
     EndsWith,
+    /// Byte-substring containment: `haystack` contains `needle`.
+    Contains,
 }
 
 /// Field-presence atom.

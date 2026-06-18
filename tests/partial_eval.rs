@@ -129,6 +129,8 @@ fn assert_condition_contract(cond: &serde_json::Value) {
                             | "not_startswith"
                             | "endswith"
                             | "not_endswith"
+                            | "contains"
+                            | "not_contains"
                             | "bitmask_any_set"
                             | "bitmask_any_clear"
                             | "bitmask_all_set"
@@ -312,6 +314,17 @@ fn atom_matches(cond: &serde_json::Value, input: &serde_json::Value) -> bool {
             actual
                 .as_str()
                 .is_none_or(|s| !s.as_bytes().ends_with(p.as_bytes()))
+        }),
+        Some("contains") => actual
+            .as_str()
+            .zip(expected.as_str())
+            .is_some_and(|(s, p)| {
+                !p.is_empty() && s.as_bytes().windows(p.len()).any(|w| w == p.as_bytes())
+            }),
+        Some("not_contains") => expected.as_str().is_some_and(|p| {
+            actual.as_str().is_none_or(|s| {
+                p.is_empty() || !s.as_bytes().windows(p.len()).any(|w| w == p.as_bytes())
+            })
         }),
         Some("bitmask_any_set") => json_u64(actual)
             .zip(json_u64(expected))
@@ -2766,6 +2779,59 @@ allow if { net.cidr_contains(input.cidr, "10.0.0.1") }
         cond["soundness"]["reason"], "builtin_unsupported",
         "{result}"
     );
+}
+
+#[test]
+fn pe_contains_builtin_lowers_to_sound_atom() {
+    let policy = r#"
+package test
+default allow = false
+allow if { contains(input.host, "evil") }
+"#;
+    let result = run_pe(policy, None, None, "data.test.allow");
+    let cond = first_condition(&result);
+    assert_eq!(cond["operator"], "contains", "{result}");
+    assert_eq!(cond["input_path"], "input.host", "{result}");
+    assert_eq!(cond["value"], "evil", "{result}");
+    assert_eq!(cond["lowerable"], "atom", "{result}");
+    assert_eq!(cond["soundness"]["status"], "sound", "{result}");
+}
+
+#[test]
+fn pe_contains_empty_needle_is_not_lowered() {
+    // The empty substring is a tautology and must never lower to a sound atom.
+    let policy = r#"
+package test
+default allow = false
+allow if { contains(input.host, "") }
+"#;
+    let result = run_pe(policy, None, None, "data.test.allow");
+    assert_eq!(result["soundness"]["status"], "unsound", "{result}");
+    let conds: Vec<&serde_json::Value> = result["residual_queries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|q| q.as_array().unwrap())
+        .collect();
+    assert!(
+        conds.iter().all(|c| c["operator"] != "contains"),
+        "empty-needle contains must not lower to a contains atom: {result}"
+    );
+}
+
+#[test]
+fn pe_not_contains_lowers_to_complement_atom() {
+    let policy = r#"
+package test
+default allow = false
+allow if { not contains(input.host, "evil") }
+"#;
+    let result = run_pe(policy, None, None, "data.test.allow");
+    let cond = first_condition(&result);
+    assert_eq!(cond["operator"], "not_contains", "{result}");
+    assert_eq!(cond["input_path"], "input.host", "{result}");
+    assert_eq!(cond["lowerable"], "atom", "{result}");
+    assert_eq!(cond["soundness"]["status"], "sound", "{result}");
 }
 
 #[test]

@@ -625,6 +625,8 @@ fn is_supported_operator(op: &str) -> bool {
             | "not_startswith"
             | "endswith"
             | "not_endswith"
+            | "contains"
+            | "not_contains"
             | "bitmask_any_set"
             | "bitmask_any_clear"
             | "bitmask_all_set"
@@ -1070,6 +1072,8 @@ fn complement_operator(op: &str) -> Option<&'static str> {
         "not_startswith" => Some("startswith"),
         "endswith" => Some("not_endswith"),
         "not_endswith" => Some("endswith"),
+        "contains" => Some("not_contains"),
+        "not_contains" => Some("contains"),
         "bitmask_any_set" => Some("bitmask_all_clear"),
         "bitmask_all_clear" => Some("bitmask_any_set"),
         "bitmask_all_set" => Some("bitmask_any_clear"),
@@ -1139,6 +1143,7 @@ fn assumption_to_residual_conditions(
             "net.cidr_contains" => Some("cidr_contains".to_string()),
             "startswith" => Some("startswith".to_string()),
             "endswith" => Some("endswith".to_string()),
+            "contains" => Some("contains".to_string()),
             "bits.and" => a.operator.clone(),
             _ => None,
         });

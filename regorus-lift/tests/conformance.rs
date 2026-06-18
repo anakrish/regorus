@@ -64,6 +64,22 @@ fn full_eval(policy: &str, entrypoint_rule: &str, input_json: &str) -> bool {
     matches!(serde_json::to_value(&v), Ok(serde_json::Value::Bool(true)))
 }
 
+/// Like [`full_eval`] but treats an evaluation error (e.g. a type-strict builtin
+/// rejecting a malformed input) as a non-allow. This models the enforcement
+/// reality: an input that makes full evaluation error is certainly not an
+/// `allow`, so the kernel sim denying it cannot be an over-permission.
+fn full_eval_lenient(policy: &str, entrypoint_rule: &str, input_json: &str) -> bool {
+    let mut engine = Engine::new();
+    engine
+        .add_policy("test.rego".into(), policy.into())
+        .unwrap();
+    engine.set_input(serde_json::from_str::<Value>(input_json).unwrap());
+    match engine.eval_rule(entrypoint_rule.to_string()) {
+        Ok(v) => matches!(serde_json::to_value(&v), Ok(serde_json::Value::Bool(true))),
+        Err(_) => false,
+    }
+}
+
 const EGRESS_POLICY: &str = r#"
 package egress
 
@@ -506,4 +522,143 @@ fn every_over_unknown_input_collection_is_not_lifted() {
         res.config.is_none(),
         "every over unknown input collection must not be lifted: {res:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// PE-C10: byte-substring `contains(input.field, needle)` (engine differential).
+// ---------------------------------------------------------------------------
+
+const CONTAINS_POLICY: &str = r#"
+package contains
+
+default allow = false
+
+allow if {
+    contains(input.host, "evil")
+}
+"#;
+
+#[test]
+fn contains_lifts_complete_and_never_overpermits() {
+    let pe = run_pe_typed(CONTAINS_POLICY, "data.contains.allow");
+    let schema = ContextSchema::new().with("input.host", FieldType::Str);
+    let res = lift(&pe, &schema);
+    assert!(
+        res.is_complete(),
+        "rejections: {:?}; pe={pe:?}",
+        res.rejections
+    );
+    let config = res.config.expect("contains should lift");
+
+    let cases = [
+        r#"{"host":"super-evil-corp"}"#, // substring -> allow
+        r#"{"host":"evil"}"#,            // exact -> allow
+        r#"{"host":"good-corp"}"#,       // no match -> deny
+        r#"{}"#,                         // missing field -> deny
+        r#"{"host":7}"#,                 // non-string -> deny
+    ];
+    for input_json in cases {
+        let want_allow = full_eval_lenient(CONTAINS_POLICY, "data.contains.allow", input_json);
+        let input: serde_json::Value = serde_json::from_str(input_json).unwrap();
+        let got = simulate(&config, &input);
+        if got == Verdict::Allow {
+            assert!(want_allow, "OVER-PERMISSION for {input_json}");
+        }
+        assert_eq!(got == Verdict::Allow, want_allow, "{input_json}");
+    }
+}
+
+const NOT_CONTAINS_POLICY: &str = r#"
+package notcontains
+
+default allow = false
+
+allow if {
+    not contains(input.host, "evil")
+}
+"#;
+
+#[test]
+fn not_contains_lifts_and_never_overpermits() {
+    let pe = run_pe_typed(NOT_CONTAINS_POLICY, "data.notcontains.allow");
+    let schema = ContextSchema::new().with("input.host", FieldType::Str);
+    let res = lift(&pe, &schema);
+    let config = res.config.expect("not_contains should lift");
+
+    let cases = [
+        r#"{"host":"good-corp"}"#, // no evil substring -> allow
+        r#"{"host":"evil-corp"}"#, // evil substring -> deny
+        r#"{}"#,                   // missing field -> Rego undefined complement
+    ];
+    for input_json in cases {
+        let want_allow =
+            full_eval_lenient(NOT_CONTAINS_POLICY, "data.notcontains.allow", input_json);
+        let input: serde_json::Value = serde_json::from_str(input_json).unwrap();
+        let got = simulate(&config, &input);
+        if got == Verdict::Allow {
+            assert!(want_allow, "OVER-PERMISSION for {input_json}");
+        }
+    }
+}
+
+const CONTAINS_EMPTY_POLICY: &str = r#"
+package containsempty
+
+default allow = false
+
+allow if {
+    contains(input.host, "")
+}
+"#;
+
+#[test]
+fn contains_empty_needle_is_not_lowered() {
+    // An empty needle is a tautology (every string contains ""), so it must
+    // never be lowered to a sound atom; the result stays unsound / unlifted.
+    let pe = run_pe_typed(CONTAINS_EMPTY_POLICY, "data.containsempty.allow");
+    assert!(
+        !matches!(pe.soundness, Soundness::Sound),
+        "empty-needle contains must not be sound: {pe:?}"
+    );
+    let schema = ContextSchema::new().with("input.host", FieldType::Str);
+    let res = lift(&pe, &schema);
+    assert!(
+        res.config.is_none(),
+        "empty-needle contains must not be lifted: {res:?}"
+    );
+}
+
+const CONTAINS_UTF8_POLICY: &str = r#"
+package containsutf8
+
+default allow = false
+
+allow if {
+    contains(input.host, "café")
+}
+"#;
+
+#[test]
+fn contains_multibyte_needle_never_overpermits() {
+    let pe = run_pe_typed(CONTAINS_UTF8_POLICY, "data.containsutf8.allow");
+    let schema = ContextSchema::new().with("input.host", FieldType::Str);
+    let res = lift(&pe, &schema);
+    assert!(res.is_complete(), "rejections: {:?}", res.rejections);
+    let config = res.config.expect("utf8 contains should lift");
+
+    let cases = [
+        r#"{"host":"le café noir"}"#, // contains café -> allow
+        r#"{"host":"cafe noir"}"#,    // ascii cafe, no é -> deny
+        r#"{}"#,
+    ];
+    for input_json in cases {
+        let want_allow =
+            full_eval_lenient(CONTAINS_UTF8_POLICY, "data.containsutf8.allow", input_json);
+        let input: serde_json::Value = serde_json::from_str(input_json).unwrap();
+        let got = simulate(&config, &input);
+        if got == Verdict::Allow {
+            assert!(want_allow, "OVER-PERMISSION for {input_json}");
+        }
+        assert_eq!(got == Verdict::Allow, want_allow, "{input_json}");
+    }
 }

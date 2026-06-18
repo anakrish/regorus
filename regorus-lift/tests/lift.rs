@@ -508,3 +508,104 @@ fn rejects_exists_in_without_array_cap() {
         RejectReason::UnboundField("input.caps".to_string())
     );
 }
+
+// ---------------------------------------------------------------------------
+// PE-C10: byte-substring `contains(input.field, needle)` (hand-built atoms).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lifts_and_simulates_contains_substring_atom() {
+    let pe = pe_with(vec![(
+        vec![atom(
+            "input.host",
+            Some("contains"),
+            Some(Value::from("evil")),
+            "condition_holds",
+        )],
+        sound_allow_outcome(),
+    )]);
+    let res = lift(&pe, &egress_schema());
+    assert!(res.is_complete(), "rejections: {:?}", res.rejections);
+    let config = res.config.unwrap();
+
+    // Positive match (substring present, including at the boundary).
+    let hit: serde_json::Value = serde_json::from_str(r#"{"host":"super-evil-corp"}"#).unwrap();
+    assert_eq!(simulate(&config, &hit), Verdict::Allow);
+    let edge: serde_json::Value = serde_json::from_str(r#"{"host":"evil"}"#).unwrap();
+    assert_eq!(simulate(&config, &edge), Verdict::Allow);
+
+    // No match.
+    let miss: serde_json::Value = serde_json::from_str(r#"{"host":"good-corp"}"#).unwrap();
+    assert_eq!(simulate(&config, &miss), Verdict::Deny);
+
+    // Missing field -> fail closed (positive form denies).
+    let missing: serde_json::Value = serde_json::from_str(r#"{}"#).unwrap();
+    assert_eq!(simulate(&config, &missing), Verdict::Deny);
+
+    // Non-string value -> fail closed.
+    let non_string: serde_json::Value = serde_json::from_str(r#"{"host":7}"#).unwrap();
+    assert_eq!(simulate(&config, &non_string), Verdict::Deny);
+}
+
+#[test]
+fn lifts_negated_contains_with_rego_undefined_semantics() {
+    let pe = pe_with(vec![(
+        vec![atom(
+            "input.host",
+            Some("not_contains"),
+            Some(Value::from("evil")),
+            "condition_holds",
+        )],
+        sound_allow_outcome(),
+    )]);
+    let config = lift(&pe, &egress_schema()).config.unwrap();
+
+    // Substring absent -> not_contains holds -> allow.
+    let clean: serde_json::Value = serde_json::from_str(r#"{"host":"good-corp"}"#).unwrap();
+    assert_eq!(simulate(&config, &clean), Verdict::Allow);
+    // Substring present -> not_contains fails -> deny.
+    let dirty: serde_json::Value = serde_json::from_str(r#"{"host":"evil-corp"}"#).unwrap();
+    assert_eq!(simulate(&config, &dirty), Verdict::Deny);
+    // Non-string -> Rego-undefined complement semantics (negated matches).
+    let non_string: serde_json::Value = serde_json::from_str(r#"{"host":7}"#).unwrap();
+    assert_eq!(simulate(&config, &non_string), Verdict::Allow);
+}
+
+#[test]
+fn lifts_multibyte_utf8_contains_needle() {
+    let pe = pe_with(vec![(
+        vec![atom(
+            "input.host",
+            Some("contains"),
+            Some(Value::from("café")),
+            "condition_holds",
+        )],
+        sound_allow_outcome(),
+    )]);
+    let config = lift(&pe, &egress_schema()).config.unwrap();
+    let hit: serde_json::Value = serde_json::from_str(r#"{"host":"le café noir"}"#).unwrap();
+    assert_eq!(simulate(&config, &hit), Verdict::Allow);
+    // A prefix of the multi-byte sequence must not match on a byte boundary.
+    let miss: serde_json::Value = serde_json::from_str(r#"{"host":"cafe noir"}"#).unwrap();
+    assert_eq!(simulate(&config, &miss), Verdict::Deny);
+}
+
+#[test]
+fn rejects_contains_on_non_string_field() {
+    // input.port is Uint in the schema; a contains atom there must be rejected.
+    let pe = pe_with(vec![(
+        vec![atom(
+            "input.port",
+            Some("contains"),
+            Some(Value::from("80")),
+            "condition_holds",
+        )],
+        sound_allow_outcome(),
+    )]);
+    let res = lift(&pe, &egress_schema());
+    assert!(res.config.is_none());
+    assert_eq!(
+        res.rejections[0].reason,
+        RejectReason::UnboundField("input.port".to_string())
+    );
+}

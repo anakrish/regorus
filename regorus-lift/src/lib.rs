@@ -453,6 +453,12 @@ fn lift_condition(cond: &ResidualCondition, schema: &ContextSchema) -> Result<At
                 negated: cond.operator.as_deref() == Some("not_contains"),
             }))
         }
+        Some("non_empty") => {
+            if field_type != FieldType::Array {
+                return Err(reject(RejectReason::UnboundField(input_path)));
+            }
+            Ok(Atom::NonEmpty(ir::NonEmptyAtom { input_path }))
+        }
         Some(op) => Err(reject(RejectReason::UnsupportedOperator(op.to_string()))),
         None => Err(reject(RejectReason::UnsupportedOperator(
             "<none>".to_string(),

@@ -188,6 +188,12 @@ pub struct ExistsInAtom {
     pub cap: u32,
 }
 
+/// Non-empty collection atom: the array/collection field has ≥1 element.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NonEmptyAtom {
+    pub input_path: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Atom {
     Eq(EqAtom),
@@ -199,6 +205,7 @@ pub enum Atom {
     Bitmask(BitmaskAtom),
     FieldCmp(FieldCmpAtom),
     ExistsIn(ExistsInAtom),
+    NonEmpty(NonEmptyAtom),
 }
 
 impl Atom {
@@ -213,6 +220,7 @@ impl Atom {
             Atom::Bitmask(atom) => &atom.input_path,
             Atom::FieldCmp(atom) => &atom.left_path,
             Atom::ExistsIn(atom) => &atom.input_path,
+            Atom::NonEmpty(atom) => &atom.input_path,
         }
     }
 }

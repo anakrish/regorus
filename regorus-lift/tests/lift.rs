@@ -510,6 +510,44 @@ fn rejects_exists_in_without_array_cap() {
 }
 
 // ---------------------------------------------------------------------------
+// PE-C12: `non_empty` collection atom (hand-built atoms).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lifts_and_simulates_non_empty_atom() {
+    let schema = ContextSchema::new().with_array("input.tags", 8);
+    let cond = atom("input.tags", Some("non_empty"), None, "condition_holds");
+    let pe = pe_with(vec![(vec![cond], sound_allow_outcome())]);
+
+    let res = lift(&pe, &schema);
+    assert!(res.is_complete(), "rejections: {:?}", res.rejections);
+    let config = res.config.unwrap();
+
+    let non_empty: serde_json::Value = serde_json::from_str(r#"{"tags":["a"]}"#).unwrap();
+    assert_eq!(simulate(&config, &non_empty), Verdict::Allow);
+    let empty: serde_json::Value = serde_json::from_str(r#"{"tags":[]}"#).unwrap();
+    assert_eq!(simulate(&config, &empty), Verdict::Deny);
+    let missing: serde_json::Value = serde_json::from_str("{}").unwrap();
+    assert_eq!(simulate(&config, &missing), Verdict::Deny);
+    // A non-array value fails closed (deny), never over-permitting.
+    let non_array: serde_json::Value = serde_json::from_str(r#"{"tags":"a"}"#).unwrap();
+    assert_eq!(simulate(&config, &non_array), Verdict::Deny);
+}
+
+#[test]
+fn rejects_non_empty_on_non_array_field() {
+    let schema = ContextSchema::new().with("input.tags", FieldType::Str);
+    let cond = atom("input.tags", Some("non_empty"), None, "condition_holds");
+    let pe = pe_with(vec![(vec![cond], sound_allow_outcome())]);
+
+    let res = lift(&pe, &schema);
+    assert_eq!(
+        res.rejections[0].reason,
+        RejectReason::UnboundField("input.tags".to_string())
+    );
+}
+
+// ---------------------------------------------------------------------------
 // PE-C10: byte-substring `contains(input.field, needle)` (hand-built atoms).
 // ---------------------------------------------------------------------------
 

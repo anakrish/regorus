@@ -118,6 +118,9 @@ fn atom_matches(atom: &Atom, input: &serde_json::Value) -> bool {
                 .filter_map(LiftScalar::from_json)
                 .any(|item| field_cmp_matches(&item, atom.element_op, &atom.scalar))
         }),
+        Atom::NonEmpty(atom) => extract_json(input, &atom.input_path)
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|items| !items.is_empty()),
     }
 }
 

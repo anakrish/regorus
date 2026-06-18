@@ -632,6 +632,7 @@ fn is_supported_operator(op: &str) -> bool {
             | "bitmask_all_set"
             | "bitmask_all_clear"
             | "exists_in"
+            | "non_empty"
     )
 }
 
@@ -722,6 +723,16 @@ fn classify_residual(
             );
         }
         return (Lowerability::Atom, Soundness::Sound);
+    }
+
+    // PE-C12: `non_empty` records that an observable collection field has at
+    // least one element (from `count(input.coll) > 0`). It needs only the input
+    // path; there is no comparison value.
+    if matches!(operator, Some("non_empty")) {
+        if input_path.is_some() {
+            return (Lowerability::Atom, Soundness::Sound);
+        }
+        return unsound_classification(Lowerability::Builtin, PeUnsoundReason::BuiltinUnsupported);
     }
 
     let Some(op) = operator else {

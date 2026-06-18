@@ -166,6 +166,29 @@ impl RegoVM {
             }
         }
 
+        // PE-C12: `count(input.collection) > 0` (and equivalents `>= 1`, `!= 0`)
+        // means the observable collection is non-empty. Lower it to a `non_empty`
+        // atom. Other count comparisons (exact cardinality, emptiness) are not
+        // intercepted here: the count of an unknown collection is `Undefined`, so
+        // the guard fails and the rule is simply not lifted (fail-closed).
+        if let Some(input_path) = self.nonempty_comparison_context(left, right, operator) {
+            let (rule_index, definition_index) = self.current_rule_scope();
+            let iteration_index = self.current_loop_iteration_index();
+            self.trace.record_assumption(
+                crate::evaluation_trace::AssumptionKind::ConditionHolds,
+                input_path,
+                condition_text,
+                u32::try_from(self.pc).unwrap_or(u32::MAX),
+                Some(String::from("non_empty")),
+                None,
+                rule_index,
+                definition_index,
+                iteration_index,
+                self.current_conjunction_id(),
+            );
+            return true;
+        }
+
         let left_path = self.runtime_path_for_register(left);
         let right_path = self.runtime_path_for_register(right);
 
@@ -275,6 +298,67 @@ impl RegoVM {
             ));
         }
         None
+    }
+
+    /// Locate a `count` builtin whose result is in `dest` and whose single
+    /// argument is an unknown input collection; return that collection's input
+    /// path. Used by PE-C12 to recognise `count(input.coll)`.
+    #[cfg(feature = "explanations")]
+    fn count_context_for_dest(&self, dest: u8) -> Option<String> {
+        for instruction in self.program.instructions.iter().take(self.pc).rev().take(4) {
+            let Instruction::BuiltinCall { params_index } = *instruction else {
+                continue;
+            };
+            let params = self
+                .program
+                .instruction_data
+                .get_builtin_call_params(params_index)?;
+            if params.dest != dest {
+                continue;
+            }
+            let builtin_name = self
+                .program
+                .get_builtin_info(params.builtin_index)?
+                .name
+                .clone();
+            if builtin_name != "count" {
+                continue;
+            }
+            let args = params.arg_registers();
+            if args.len() != 1 {
+                return None;
+            }
+            let arg = *args.first()?;
+            if !matches!(self.get_register(arg), Ok(v) if *v == Value::Undefined) {
+                return None;
+            }
+            return self.runtime_path_for_register(arg);
+        }
+        None
+    }
+
+    /// Recognise a `count(input.coll) OP const` comparison that is equivalent to
+    /// "the collection is non-empty" and return the collection's input path.
+    /// Only `> 0`, `>= 1`, and `!= 0` (in either operand orientation) qualify;
+    /// `count` is always non-negative, so these are exactly `len > 0`.
+    #[cfg(feature = "explanations")]
+    fn nonempty_comparison_context(&self, left: u8, right: u8, operator: &str) -> Option<String> {
+        if let Some(path) = self.count_context_for_dest(left) {
+            let c = self.get_register(right).ok().and_then(value_u64)?;
+            return Self::count_implies_nonempty(operator, c).then_some(path);
+        }
+        if let Some(path) = self.count_context_for_dest(right) {
+            // `const OP count` is equivalent to `count flip(OP) const`.
+            let c = self.get_register(left).ok().and_then(value_u64)?;
+            let flipped = Self::flip_comparison_operator(operator);
+            return Self::count_implies_nonempty(flipped.as_str(), c).then_some(path);
+        }
+        None
+    }
+
+    #[cfg(feature = "explanations")]
+    fn count_implies_nonempty(operator: &str, constant: u64) -> bool {
+        matches!((operator, constant), (">", 0) | (">=", 1) | ("!=", 0))
     }
 
     #[cfg(feature = "explanations")]

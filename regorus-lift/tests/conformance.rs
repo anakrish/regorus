@@ -662,3 +662,82 @@ fn contains_multibyte_needle_never_overpermits() {
         assert_eq!(got == Verdict::Allow, want_allow, "{input_json}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// PE-C12: `count(input.collection) > 0` (non-empty) lowering.
+// ---------------------------------------------------------------------------
+
+const NONEMPTY_POLICY: &str = r#"
+package nonempty
+
+default allow = false
+
+allow if {
+    count(input.tags) > 0
+    input.action == "read"
+}
+"#;
+
+#[test]
+fn nonempty_count_lifts_and_never_over_permits() {
+    let pe = run_pe_typed(NONEMPTY_POLICY, "data.nonempty.allow");
+    let schema = ContextSchema::new()
+        .with("input.action", FieldType::Str)
+        .with_array("input.tags", 16);
+    let res = lift(&pe, &schema);
+    assert!(
+        res.is_complete(),
+        "non-empty policy should fully lift; rejections: {:?}",
+        res.rejections
+    );
+    let config = res.config.expect("non-empty count should lift");
+
+    let cases = [
+        r#"{"action":"read","tags":["a"]}"#, // non-empty array + read -> allow
+        r#"{"action":"read","tags":["a","b","c"]}"#, // allow
+        r#"{"action":"read","tags":[]}"#,    // empty -> deny
+        r#"{"action":"read"}"#,              // missing tags -> deny
+        r#"{"action":"write","tags":["a"]}"#, // wrong action -> deny
+        // `count` over a string counts characters in Rego, so full eval may
+        // allow; our array-only NonEmpty atom denies -> fail-closed (sound).
+        r#"{"action":"read","tags":"abc"}"#,
+    ];
+    for input_json in cases {
+        let want_allow = full_eval_lenient(NONEMPTY_POLICY, "data.nonempty.allow", input_json);
+        let input: serde_json::Value = serde_json::from_str(input_json).unwrap();
+        let got = simulate(&config, &input);
+        if got == Verdict::Allow {
+            assert!(
+                want_allow,
+                "OVER-PERMISSION: sim allowed but full eval denied for {input_json}"
+            );
+        }
+    }
+}
+
+#[test]
+fn nonempty_count_alternate_forms_lower() {
+    // `>= 1` and `!= 0` are equivalent to non-empty for a count.
+    for op_expr in [">= 1", "!= 0"] {
+        let policy = format!(
+            "package nonempty\n\ndefault allow = false\n\nallow if {{ count(input.tags) {op_expr} }}\n"
+        );
+        let pe = run_pe_typed(&policy, "data.nonempty.allow");
+        let schema = ContextSchema::new().with_array("input.tags", 16);
+        let res = lift(&pe, &schema);
+        assert!(
+            res.is_complete(),
+            "count {op_expr} should lift; rejections: {:?}",
+            res.rejections
+        );
+        let config = res.config.expect("should lift");
+        let non_empty: serde_json::Value = serde_json::from_str(r#"{"tags":["a"]}"#).unwrap();
+        assert_eq!(
+            simulate(&config, &non_empty),
+            Verdict::Allow,
+            "op {op_expr}"
+        );
+        let empty: serde_json::Value = serde_json::from_str(r#"{"tags":[]}"#).unwrap();
+        assert_eq!(simulate(&config, &empty), Verdict::Deny, "op {op_expr}");
+    }
+}

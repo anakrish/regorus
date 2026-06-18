@@ -302,8 +302,19 @@ impl RegoVM {
                     // Assign a globally unique iteration ID for PE mode disjunct grouping
                     // so that assumptions recorded during the next body execution
                     // get a unique iteration index, even across nested loops.
-                    loop_ctx.iteration_index = self.trace.next_iteration_id;
-                    self.trace.next_iteration_id = self.trace.next_iteration_id.saturating_add(1);
+                    //
+                    // Exception: `every` bodies must hold for ALL elements, which
+                    // is a logical AND across iterations. `materialize_pe` groups
+                    // PE assumptions into disjuncts (OR) by
+                    // (conjunction_id, iteration_index), so bumping the index per
+                    // iteration would turn an `every` into an OR — over-permissive
+                    // and UNSOUND. Keep `Every` iterations on a single shared slot
+                    // so their atoms accumulate as a conjunction (AND).
+                    if matches!(loop_ctx.mode, LoopMode::Any | LoopMode::ForEach) {
+                        loop_ctx.iteration_index = self.trace.next_iteration_id;
+                        self.trace.next_iteration_id =
+                            self.trace.next_iteration_id.saturating_add(1);
+                    }
                 }
 
                 #[cfg(feature = "explanations")]
@@ -588,9 +599,17 @@ impl RegoVM {
 
                             #[cfg(feature = "explanations")]
                             {
-                                context.iteration_index = self.trace.next_iteration_id;
-                                self.trace.next_iteration_id =
-                                    self.trace.next_iteration_id.saturating_add(1);
+                                // See the matching note in
+                                // `execute_loop_next_run_to_completion`: `every`
+                                // iterations share a single disjunct slot so their
+                                // atoms accumulate as a conjunction (AND) rather
+                                // than being split into separate disjuncts (OR),
+                                // which would be over-permissive and unsound.
+                                if matches!(context.mode, LoopMode::Any | LoopMode::ForEach) {
+                                    context.iteration_index = self.trace.next_iteration_id;
+                                    self.trace.next_iteration_id =
+                                        self.trace.next_iteration_id.saturating_add(1);
+                                }
                             }
 
                             (

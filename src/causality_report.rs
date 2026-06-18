@@ -414,6 +414,16 @@ pub fn materialize_pe(
     }
 
     // Second pass: build disjuncts from top-level (non-negation-inner) assumptions.
+    //
+    // Track disjunct keys whose conjunction collapses to a *contradiction*: a
+    // non-empty clause set that `add_condition_alternatives` empties because the
+    // conjuncts are mutually incompatible (e.g. an `every` body forcing one
+    // scalar input field to equal two distinct constants). Such a disjunct can
+    // never be satisfied, so its truthy outcome is unreachable; we must not let
+    // the resulting empty residual be mistaken for a fully-determined allow.
+    let mut contradiction_keys: alloc::collections::BTreeSet<(u32, Option<u32>)> =
+        alloc::collections::BTreeSet::new();
+
     for a in &trace.assumptions {
         // Skip assumptions that belong inside a negation body — they will be
         // attached to the NegationHolds parent below.
@@ -436,13 +446,23 @@ pub fn materialize_pe(
                 }
             }
             finalize_negation_condition(&mut cond);
-            add_condition_alternatives(disjunct_map.entry(key).or_default(), alloc::vec![cond]);
+            let entry = disjunct_map.entry(key).or_default();
+            let had_clauses = !entry.is_empty();
+            add_condition_alternatives(entry, alloc::vec![cond]);
+            if had_clauses && entry.is_empty() {
+                contradiction_keys.insert(key);
+            }
             continue;
         }
 
         // Try data-key inversion (may produce alternative conditions).
         let inverted = assumption_to_residual_conditions(a, program);
-        add_condition_alternatives(disjunct_map.entry(key).or_default(), inverted);
+        let entry = disjunct_map.entry(key).or_default();
+        let had_clauses = !entry.is_empty();
+        add_condition_alternatives(entry, inverted);
+        if had_clauses && entry.is_empty() {
+            contradiction_keys.insert(key);
+        }
     }
 
     // Deduplicate conditions within each disjunct.
@@ -458,7 +478,21 @@ pub fn materialize_pe(
             .cloned()
             .unwrap_or_else(|| result_from_query(&query_result));
         for mut conds in clauses {
-            conds.dedup_by(|a, b| a.condition == b.condition && a.operator == b.operator);
+            conds.dedup_by(|a, b| {
+                // Two conditions are duplicates only when they are semantically
+                // identical. Comparing the descriptive `condition` text plus the
+                // operator alone is unsound for AND-grouped conjunctions (e.g. an
+                // `every` body): two iterations share the same rule-body text but
+                // bind different `value`s (input.f != "a" vs input.f != "b"), so
+                // collapsing them would drop a real conjunct and over-permit.
+                a.condition == b.condition
+                    && a.operator == b.operator
+                    && a.input_path == b.input_path
+                    && a.value == b.value
+                    && a.right_input_path == b.right_input_path
+                    && a.element_operator == b.element_operator
+                    && a.collection_cap == b.collection_cap
+            });
             conds.retain(|c| !is_empty_placeholder(c));
             combine_exists_in_conditions(&mut conds);
             if !conds.is_empty() {
@@ -471,6 +505,20 @@ pub fn materialize_pe(
     let result = match query_result {
         Value::Undefined => Value::Null,
         other => other,
+    };
+    // If the positive outcome was supported only by disjuncts that collapsed to
+    // contradictions (no satisfiable residual remains), the allow is unreachable.
+    // Report deny so downstream consumers (e.g. regorus-lift's empty-residual
+    // static path) cannot mistake it for a fully-determined allow — which would
+    // over-permit. Denying here is fail-closed and matches full evaluation,
+    // since a contradictory conjunction of input atoms is unsatisfiable.
+    let result = if residual_entries.is_empty()
+        && !contradiction_keys.is_empty()
+        && matches!(result, Value::Bool(true))
+    {
+        Value::Bool(false)
+    } else {
+        result
     };
     let residual_queries: Vec<Vec<ResidualCondition>> = residual_entries
         .iter()

@@ -12,6 +12,7 @@
 
 use regorus::*;
 
+use regorus::causality_report::Soundness;
 use regorus_lift::sim::simulate;
 use regorus_lift::{lift, ContextSchema, FieldType, Verdict};
 
@@ -319,4 +320,190 @@ fn exists_in_lifts_and_fails_closed_over_cap() {
             assert_eq!(got == Verdict::Allow, want_allow, "{input_json}");
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// TASK 1: `every`-over-known soundness (no OR-of-iterations over-permission).
+// ---------------------------------------------------------------------------
+
+/// Drive PE with concrete `data` (input still unknown).
+fn run_pe_typed_with_data(
+    policy: &str,
+    data_json: &str,
+    entrypoint_str: &str,
+) -> regorus::causality_report::PartialEvalResult {
+    let mut engine = Engine::new();
+    engine
+        .add_policy("test.rego".into(), policy.into())
+        .unwrap();
+
+    let entrypoint: Rc<str> = entrypoint_str.into();
+    let compiled = engine.compile_with_entrypoint(&entrypoint).unwrap();
+    let program =
+        languages::rego::compiler::Compiler::compile_from_policy(&compiled, &[entrypoint.as_ref()])
+            .unwrap();
+
+    let mut vm = rvm::RegoVM::new_with_policy(compiled);
+    vm.load_program(program);
+    vm.set_explanation_settings(evaluation_trace::ExplanationSettings {
+        enabled: true,
+        value_mode: evaluation_trace::ValueMode::Full,
+        condition_mode: evaluation_trace::ConditionMode::AllContributing,
+        scope: evaluation_trace::ExplanationScope::AllEmissions,
+        detail: evaluation_trace::ExplanationDetail::Full,
+        emission_index: None,
+        emission_value: None,
+        assume_unknown_input: true,
+        eval_mode: evaluation_trace::EvaluationMode::PartialEval,
+        unknowns: vec!["input".into()],
+    });
+    vm.set_input(Value::new_object());
+    let data: Value = serde_json::from_str(data_json).unwrap();
+    let _ = vm.set_data(data);
+
+    let value = vm.execute_entry_point_by_name(entrypoint_str).unwrap();
+    vm.take_partial_eval_result_typed(value)
+}
+
+/// Full (concrete) evaluation with both `data` and `input`.
+fn full_eval_with_data(
+    policy: &str,
+    data_json: &str,
+    entrypoint_rule: &str,
+    input_json: &str,
+) -> bool {
+    let mut engine = Engine::new();
+    engine
+        .add_policy("test.rego".into(), policy.into())
+        .unwrap();
+    engine
+        .add_data(serde_json::from_str::<Value>(data_json).unwrap())
+        .unwrap();
+    engine.set_input(serde_json::from_str::<Value>(input_json).unwrap());
+    let v = engine.eval_rule(entrypoint_rule.to_string()).unwrap();
+    matches!(serde_json::to_value(&v), Ok(serde_json::Value::Bool(true)))
+}
+
+const EVERY_EQ_POLICY: &str = r#"
+package p
+default allow = false
+allow if { every x in data.req { input.f == x } }
+"#;
+
+/// Core repro: `every x in data.req { input.f == x }` over a 2+ element known
+/// collection lowers to an AND across iterations. A scalar field cannot equal
+/// two distinct values, so NO input must be allowed by the lift (the previous
+/// bug lowered it to an OR and over-permitted input.f == "a").
+#[test]
+fn every_over_known_eq_never_overpermits() {
+    let data = r#"{"req":["a","b"]}"#;
+    let pe = run_pe_typed_with_data(EVERY_EQ_POLICY, data, "data.p.allow");
+    let schema = ContextSchema::new().with("input.f", FieldType::Str);
+    let res = lift(&pe, &schema);
+
+    // The lift may be complete-but-empty (impossible AND collapses to no
+    // disjunct) or it may reject; either way it must never allow.
+    let cases = [r#"{"f":"a"}"#, r#"{"f":"b"}"#, r#"{"f":"c"}"#, r#"{}"#];
+    if let Some(config) = res.config {
+        for input_json in cases {
+            let want_allow = full_eval_with_data(EVERY_EQ_POLICY, data, "data.p.allow", input_json);
+            // Full eval denies every input here (no scalar equals both a and b).
+            assert!(!want_allow, "sanity: full eval should deny {input_json}");
+            let input: serde_json::Value = serde_json::from_str(input_json).unwrap();
+            let got = simulate(&config, &input);
+            assert_ne!(
+                got,
+                Verdict::Allow,
+                "OVER-PERMISSION: every-over-known lifted to OR for {input_json}"
+            );
+        }
+    }
+}
+
+const EVERY_NE_POLICY: &str = r#"
+package p
+default allow = false
+allow if { every x in data.req { input.f != x } }
+"#;
+
+/// Satisfiable `every` body: `input.f != x` for all known x lowers to the
+/// conjunction `f != "a" AND f != "b"`. Must agree exactly and never overpermit.
+#[test]
+fn every_over_known_ne_is_sound_conjunction() {
+    let data = r#"{"req":["a","b"]}"#;
+    let pe = run_pe_typed_with_data(EVERY_NE_POLICY, data, "data.p.allow");
+    let schema = ContextSchema::new().with("input.f", FieldType::Str);
+    let res = lift(&pe, &schema);
+    let config = res
+        .config
+        .expect("a conjunction of != atoms should be liftable");
+
+    let cases = [
+        r#"{"f":"a"}"#, // fails first conjunct -> deny
+        r#"{"f":"b"}"#, // fails second conjunct -> deny
+        r#"{"f":"c"}"#, // satisfies both -> allow
+        r#"{}"#,        // missing field -> fail closed
+    ];
+    for input_json in cases {
+        let want_allow = full_eval_with_data(EVERY_NE_POLICY, data, "data.p.allow", input_json);
+        let input: serde_json::Value = serde_json::from_str(input_json).unwrap();
+        let got = simulate(&config, &input);
+        if got == Verdict::Allow {
+            assert!(want_allow, "OVER-PERMISSION for {input_json}");
+        }
+    }
+}
+
+const EVERY_EQ_SINGLE_POLICY: &str = r#"
+package p
+default allow = false
+allow if { every x in data.req { input.f == x } }
+"#;
+
+/// Single-element known collection: `every x in ["a"] { input.f == x }` is just
+/// `input.f == "a"`. Must lift and agree exactly.
+#[test]
+fn every_over_single_known_element_is_exact() {
+    let data = r#"{"req":["a"]}"#;
+    let pe = run_pe_typed_with_data(EVERY_EQ_SINGLE_POLICY, data, "data.p.allow");
+    let schema = ContextSchema::new().with("input.f", FieldType::Str);
+    let res = lift(&pe, &schema);
+    let config = res.config.expect("single-element every should lift");
+
+    let cases = [r#"{"f":"a"}"#, r#"{"f":"b"}"#, r#"{}"#];
+    for input_json in cases {
+        let want_allow =
+            full_eval_with_data(EVERY_EQ_SINGLE_POLICY, data, "data.p.allow", input_json);
+        let input: serde_json::Value = serde_json::from_str(input_json).unwrap();
+        let got = simulate(&config, &input);
+        if got == Verdict::Allow {
+            assert!(want_allow, "OVER-PERMISSION for {input_json}");
+        }
+        assert_eq!(got == Verdict::Allow, want_allow, "{input_json}");
+    }
+}
+
+const EVERY_UNKNOWN_COLL_POLICY: &str = r#"
+package p
+default allow = false
+allow if { every x in input.coll { input.f == x } }
+"#;
+
+/// `every` over an UNKNOWN input collection is vacuously true in PE and must stay
+/// unsound / never be lifted (EveryVacuousTruth). Regression guard.
+#[test]
+fn every_over_unknown_input_collection_is_not_lifted() {
+    let pe = run_pe_typed_with_data(EVERY_UNKNOWN_COLL_POLICY, r#"{}"#, "data.p.allow");
+    assert!(
+        !matches!(pe.soundness, Soundness::Sound),
+        "every over unknown input collection must be unsound: {pe:?}"
+    );
+    let schema = ContextSchema::new()
+        .with("input.f", FieldType::Str)
+        .with_array("input.coll", 4);
+    let res = lift(&pe, &schema);
+    assert!(
+        res.config.is_none(),
+        "every over unknown input collection must not be lifted: {res:?}"
+    );
 }

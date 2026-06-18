@@ -3262,3 +3262,80 @@ allow if { count([x | some x in input.caps; x == "CAP_SYS_ADMIN"]) > 0 }
     let result = run_pe(policy, None, None, "data.test.allow");
     assert_eq!(result["soundness"]["status"], "unsound", "{result}");
 }
+
+// ---------------------------------------------------------------------------
+// `every`-over-known disjunct grouping (soundness regression).
+//
+// An `every` body must hold for ALL elements = logical AND across iterations.
+// PE groups disjuncts by (conjunction_id, iteration_index); `every` iterations
+// must therefore SHARE one slot so their atoms accumulate as a conjunction
+// rather than fanning out into an OR (which would over-permit).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pe_every_over_known_eq_is_unsatisfiable_conjunction_not_or() {
+    // `every x in ["a","b"] { input.f == x }`: a scalar can't equal both, so the
+    // conjunction is contradictory and the rule can never fire. The buggy OR
+    // grouping produced two independent allow disjuncts (input.f == "a" OR ==
+    // "b") which over-permits. After the fix there must be NO allow disjunct and
+    // the result must not be a free-standing allow.
+    let policy = r#"
+package test
+default allow = false
+allow if { every x in data.req { input.f == x } }
+"#;
+    let data = r#"{"req":["a","b"]}"#;
+    let result = run_pe(policy, None, Some(data), "data.test.allow");
+    let queries = result["residual_queries"].as_array().unwrap();
+    assert!(
+        queries.is_empty(),
+        "contradictory every must not yield allow disjuncts: {result}"
+    );
+    assert_ne!(
+        result["result"],
+        serde_json::json!(true),
+        "contradictory every must not report a fully-determined allow: {result}"
+    );
+}
+
+#[test]
+fn pe_every_over_known_ne_groups_as_single_conjunction() {
+    // `every x in ["a","b"] { input.f != x }` => one disjunct ANDing both
+    // `input.f != "a"` and `input.f != "b"` (not two OR disjuncts).
+    let policy = r#"
+package test
+default allow = false
+allow if { every x in data.req { input.f != x } }
+"#;
+    let data = r#"{"req":["a","b"]}"#;
+    let result = run_pe(policy, None, Some(data), "data.test.allow");
+    let queries = result["residual_queries"].as_array().unwrap();
+    assert_eq!(
+        queries.len(),
+        1,
+        "every body must be a single AND-grouped disjunct: {result}"
+    );
+    let conds = queries[0].as_array().unwrap();
+    assert_eq!(
+        conds.len(),
+        2,
+        "the conjunction must retain both per-element atoms: {result}"
+    );
+    for cond in conds {
+        assert_eq!(cond["operator"], "!=");
+        assert_eq!(cond["input_path"], "input.f");
+    }
+}
+
+#[test]
+fn pe_every_over_unknown_input_collection_stays_unsound() {
+    // `every` over an UNKNOWN input collection is vacuously true in PE and must
+    // remain marked unsound so consumers never lift it.
+    let policy = r#"
+package test
+default allow = false
+allow if { every x in input.coll { input.f == x } }
+"#;
+    let result = run_pe(policy, None, None, "data.test.allow");
+    assert_eq!(result["soundness"]["status"], "unsound", "{result}");
+}

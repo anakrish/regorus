@@ -7,6 +7,7 @@ use regorus::causality_report::{
 };
 use regorus::Value;
 
+use regorus_lift::sim::simulate;
 use regorus_lift::{lift, ContextSchema, FieldType, RejectReason, Verdict};
 
 /// A schema observing the egress-style fields used throughout these tests.
@@ -15,6 +16,8 @@ fn egress_schema() -> ContextSchema {
         .with("input.dest_ip", FieldType::Str)
         .with("input.proto", FieldType::Str)
         .with("input.port", FieldType::Uint)
+        .with("input.host", FieldType::Str)
+        .with("input.user.name", FieldType::Str)
 }
 
 /// Build a sound `==` atom condition over `input_path == value`.
@@ -43,6 +46,29 @@ fn sound_allow_outcome() -> ResidualDisjunctOutcome {
     }
 }
 
+fn atom(
+    input_path: &str,
+    operator: Option<&str>,
+    value: Option<Value>,
+    kind: &str,
+) -> ResidualCondition {
+    ResidualCondition {
+        condition: format!("{input_path} atom"),
+        operator: operator.map(str::to_string),
+        input_path: Some(input_path.to_string()),
+        value,
+        value_encoding: None,
+        kind: kind.to_string(),
+        lowerable: Lowerability::Atom,
+        soundness: Soundness::Sound,
+        negated_conditions: Vec::new(),
+        source_rule: Some("data.egress.allow".to_string()),
+        source_file: None,
+        source_row: None,
+        source_col: None,
+    }
+}
+
 /// Assemble a sound PE result from aligned (disjunct, outcome) pairs.
 fn pe_with(disjuncts: Vec<(Vec<ResidualCondition>, ResidualDisjunctOutcome)>) -> PartialEvalResult {
     let (residual_queries, residual_outcomes): (Vec<_>, Vec<_>) = disjuncts.into_iter().unzip();
@@ -67,7 +93,11 @@ fn lifts_single_conjunction_disjunct() {
 
     let res = lift(&pe, &egress_schema());
 
-    assert!(res.is_complete(), "unexpected rejections: {:?}", res.rejections);
+    assert!(
+        res.is_complete(),
+        "unexpected rejections: {:?}",
+        res.rejections
+    );
     let config = res.config.expect("expected a config");
     assert_eq!(config.allow_clauses.len(), 1);
     assert_eq!(config.allow_clauses[0].atoms.len(), 2);
@@ -141,7 +171,9 @@ fn rejects_when_result_unsound() {
     assert_eq!(res.rejections.len(), 1);
     assert_eq!(
         res.rejections[0].reason,
-        RejectReason::ResultUnsound(regorus::evaluation_trace::PeUnsoundReason::UnknownInputDependency)
+        RejectReason::ResultUnsound(
+            regorus::evaluation_trace::PeUnsoundReason::UnknownInputDependency
+        )
     );
 }
 
@@ -169,16 +201,69 @@ fn rejects_unsound_condition() {
 }
 
 #[test]
-fn rejects_unsupported_operator() {
+fn lifts_numeric_comparison_operator() {
     let mut cond = eq_atom("input.port", Value::from(443u64));
     cond.operator = Some(">".to_string());
     let pe = pe_with(vec![(vec![cond], sound_allow_outcome())]);
 
     let res = lift(&pe, &egress_schema());
-    assert_eq!(
-        res.rejections[0].reason,
-        RejectReason::UnsupportedOperator(">".to_string())
-    );
+    assert!(res.is_complete(), "rejections: {:?}", res.rejections);
+    assert_eq!(res.config.unwrap().allow_clauses[0].atoms.len(), 1);
+}
+
+#[test]
+fn lifts_and_simulates_cidr_prefix_and_exists_atoms() {
+    let pe = pe_with(vec![(
+        vec![
+            atom(
+                "input.dest_ip",
+                Some("cidr_contains"),
+                Some(Value::from("10.0.0.0/24")),
+                "condition_holds",
+            ),
+            atom(
+                "input.host",
+                Some("startswith"),
+                Some(Value::from("trusted-")),
+                "condition_holds",
+            ),
+            atom("input.user.name", None, None, "exists"),
+        ],
+        sound_allow_outcome(),
+    )]);
+
+    let res = lift(&pe, &egress_schema());
+    assert!(res.is_complete(), "rejections: {:?}", res.rejections);
+    let config = res.config.unwrap();
+    let good: serde_json::Value = serde_json::from_str(
+        r#"{"dest_ip":"10.0.0.7","host":"trusted-api","user":{"name":"ana"}}"#,
+    )
+    .unwrap();
+    assert_eq!(simulate(&config, &good), Verdict::Allow);
+
+    let bad: serde_json::Value = serde_json::from_str(
+        r#"{"dest_ip":"10.0.1.7","host":"trusted-api","user":{"name":"ana"}}"#,
+    )
+    .unwrap();
+    assert_eq!(simulate(&config, &bad), Verdict::Deny);
+}
+
+#[test]
+fn lifts_negated_prefix_with_rego_undefined_semantics() {
+    let pe = pe_with(vec![(
+        vec![atom(
+            "input.host",
+            Some("not_startswith"),
+            Some(Value::from("admin-")),
+            "condition_holds",
+        )],
+        sound_allow_outcome(),
+    )]);
+    let config = lift(&pe, &egress_schema()).config.unwrap();
+    let viewer: serde_json::Value = serde_json::from_str(r#"{"host":"user-api"}"#).unwrap();
+    assert_eq!(simulate(&config, &viewer), Verdict::Allow);
+    let non_string: serde_json::Value = serde_json::from_str(r#"{"host":7}"#).unwrap();
+    assert_eq!(simulate(&config, &non_string), Verdict::Allow);
 }
 
 #[test]

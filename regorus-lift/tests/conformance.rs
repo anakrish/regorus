@@ -17,7 +17,10 @@ use regorus_lift::{lift, ContextSchema, FieldType, Verdict};
 
 /// Drive PE for `policy`/`entrypoint` with `input` unknown, returning the typed
 /// partial-evaluation result.
-fn run_pe_typed(policy: &str, entrypoint_str: &str) -> regorus::causality_report::PartialEvalResult {
+fn run_pe_typed(
+    policy: &str,
+    entrypoint_str: &str,
+) -> regorus::causality_report::PartialEvalResult {
     let mut engine = Engine::new();
     engine
         .add_policy("test.rego".into(), policy.into())
@@ -55,8 +58,7 @@ fn full_eval(policy: &str, entrypoint_rule: &str, input_json: &str) -> bool {
     engine
         .add_policy("test.rego".into(), policy.into())
         .unwrap();
-    engine
-        .set_input(serde_json::from_str::<Value>(input_json).unwrap());
+    engine.set_input(serde_json::from_str::<Value>(input_json).unwrap());
     let v = engine.eval_rule(entrypoint_rule.to_string()).unwrap();
     matches!(serde_json::to_value(&v), Ok(serde_json::Value::Bool(true)))
 }
@@ -191,4 +193,46 @@ fn mixed_policy_lifts_observable_subset_without_over_permission() {
     let u: serde_json::Value =
         serde_json::from_str(r#"{"dest_ip":"9.9.9.9","host":"trusted-svc"}"#).unwrap();
     assert_eq!(simulate(&config, &u), Verdict::Deny);
+}
+
+const EXTENDED_POLICY: &str = r#"
+package extended
+
+default allow = false
+
+allow if {
+    net.cidr_contains("10.0.0.0/24", input.dest_ip)
+    startswith(input.host, "trusted-")
+    input.port >= 1024
+    not input.role == "blocked"
+}
+"#;
+
+#[test]
+fn extended_atoms_lift_complete_and_never_overpermit() {
+    let pe = run_pe_typed(EXTENDED_POLICY, "data.extended.allow");
+    let schema = ContextSchema::new()
+        .with("input.dest_ip", FieldType::Str)
+        .with("input.host", FieldType::Str)
+        .with("input.port", FieldType::Uint)
+        .with("input.role", FieldType::Str);
+    let res = lift(&pe, &schema);
+    assert!(res.is_complete(), "rejections: {:?}", res.rejections);
+    let config = res.config.expect("expected config");
+    let cases = [
+        r#"{"dest_ip":"10.0.0.1","host":"trusted-api","port":1024,"role":"user"}"#,
+        r#"{"dest_ip":"10.0.1.1","host":"trusted-api","port":1024,"role":"user"}"#,
+        r#"{"dest_ip":"10.0.0.1","host":"evil-api","port":1024,"role":"user"}"#,
+        r#"{"dest_ip":"10.0.0.1","host":"trusted-api","port":80,"role":"user"}"#,
+        r#"{"dest_ip":"10.0.0.1","host":"trusted-api","port":1024,"role":"blocked"}"#,
+    ];
+    for input_json in cases {
+        let want_allow = full_eval(EXTENDED_POLICY, "data.extended.allow", input_json);
+        let input: serde_json::Value = serde_json::from_str(input_json).unwrap();
+        let got = simulate(&config, &input);
+        if got == Verdict::Allow {
+            assert!(want_allow, "OVER-PERMISSION for {input_json}");
+        }
+        assert_eq!(got == Verdict::Allow, want_allow, "{input_json}");
+    }
 }

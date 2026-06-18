@@ -107,14 +107,34 @@ fn assert_condition_contract(cond: &serde_json::Value) {
             cond["input_path"].as_str().is_some_and(|p| !p.is_empty()),
             "atom must have non-empty input_path: {cond}"
         );
-        assert!(
-            matches!(
-                cond["operator"].as_str(),
-                Some("==" | "!=" | "<" | "<=" | ">" | ">=" | "in")
-            ),
-            "atom must have supported operator: {cond}"
-        );
-        assert!(!cond["value"].is_null(), "atom must have value: {cond}");
+        if cond["kind"] == "exists" {
+            assert!(
+                cond["operator"].is_null(),
+                "exists atom has no operator: {cond}"
+            );
+        } else {
+            assert!(
+                matches!(
+                    cond["operator"].as_str(),
+                    Some(
+                        "==" | "!="
+                            | "<"
+                            | "<="
+                            | ">"
+                            | ">="
+                            | "in"
+                            | "cidr_contains"
+                            | "not_cidr_contains"
+                            | "startswith"
+                            | "not_startswith"
+                            | "endswith"
+                            | "not_endswith"
+                    )
+                ),
+                "atom must have supported operator: {cond}"
+            );
+            assert!(!cond["value"].is_null(), "atom must have value: {cond}");
+        }
         assert_eq!(
             cond["soundness"]["status"], "sound",
             "atom must be sound: {cond}"
@@ -233,16 +253,42 @@ fn atom_matches(cond: &serde_json::Value, input: &serde_json::Value) -> bool {
         return false;
     };
     let Some(actual) = get_dotted_path(input, path.strip_prefix("input.").unwrap_or(path)) else {
-        return false;
+        return cond["kind"] == "negation_complement";
     };
     let expected = &cond["value"];
     match cond["operator"].as_str() {
+        None if cond["kind"] == "exists" => actual != &serde_json::Value::Bool(false),
         Some("==") => actual == expected,
         Some("!=") => actual != expected,
         Some("<") => numeric_cmp(actual, expected).is_some_and(|ord| ord.is_lt()),
         Some("<=") => numeric_cmp(actual, expected).is_some_and(|ord| !ord.is_gt()),
         Some(">") => numeric_cmp(actual, expected).is_some_and(|ord| ord.is_gt()),
         Some(">=") => numeric_cmp(actual, expected).is_some_and(|ord| !ord.is_lt()),
+        Some("cidr_contains") => actual
+            .as_str()
+            .zip(expected.as_str())
+            .is_some_and(|(ip, cidr)| cidr_contains(cidr, ip) == Some(true)),
+        Some("not_cidr_contains") => expected.as_str().is_some_and(|cidr| {
+            actual.as_str().and_then(|ip| cidr_contains(cidr, ip)) != Some(true)
+        }),
+        Some("startswith") => actual
+            .as_str()
+            .zip(expected.as_str())
+            .is_some_and(|(s, p)| s.as_bytes().starts_with(p.as_bytes())),
+        Some("not_startswith") => expected.as_str().is_some_and(|p| {
+            actual
+                .as_str()
+                .is_none_or(|s| !s.as_bytes().starts_with(p.as_bytes()))
+        }),
+        Some("endswith") => actual
+            .as_str()
+            .zip(expected.as_str())
+            .is_some_and(|(s, p)| s.as_bytes().ends_with(p.as_bytes())),
+        Some("not_endswith") => expected.as_str().is_some_and(|p| {
+            actual
+                .as_str()
+                .is_none_or(|s| !s.as_bytes().ends_with(p.as_bytes()))
+        }),
         _ => false,
     }
 }
@@ -267,6 +313,32 @@ fn get_dotted_path<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a s
 
 fn numeric_cmp(left: &serde_json::Value, right: &serde_json::Value) -> Option<std::cmp::Ordering> {
     left.as_f64()?.partial_cmp(&right.as_f64()?)
+}
+
+fn cidr_contains(cidr: &str, ip: &str) -> Option<bool> {
+    let (network, prefix) = cidr.split_once('/')?;
+    let prefix_len = prefix.parse::<u8>().ok()?;
+    let network = network.parse::<std::net::IpAddr>().ok()?;
+    let ip = ip.parse::<std::net::IpAddr>().ok()?;
+    match (network, ip) {
+        (std::net::IpAddr::V4(net), std::net::IpAddr::V4(addr)) if prefix_len <= 32 => {
+            let mask = if prefix_len == 0 {
+                0
+            } else {
+                u32::MAX.checked_shl(u32::from(32u8.saturating_sub(prefix_len)))?
+            };
+            Some((u32::from(net) & mask) == (u32::from(addr) & mask))
+        }
+        (std::net::IpAddr::V6(net), std::net::IpAddr::V6(addr)) if prefix_len <= 128 => {
+            let mask = if prefix_len == 0 {
+                0
+            } else {
+                u128::MAX.checked_shl(u32::from(128u8.saturating_sub(prefix_len)))?
+            };
+            Some((u128::from(net) & mask) == (u128::from(addr) & mask))
+        }
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2544,6 +2616,133 @@ allow if { input.too_big == 184467440737095516160 }
 }
 
 #[test]
+fn pe_cidr_contains_lowers_to_sound_atom() {
+    let policy = r#"
+package test
+default allow = false
+allow if { net.cidr_contains("10.0.0.0/24", input.dest_ip) }
+"#;
+    let result = run_pe(policy, None, None, "data.test.allow");
+    let cond = first_condition(&result);
+    assert_eq!(cond["lowerable"], "atom", "{result}");
+    assert_eq!(cond["operator"], "cidr_contains", "{result}");
+    assert_eq!(cond["input_path"], "input.dest_ip", "{result}");
+    assert_eq!(cond["value"], "10.0.0.0/24", "{result}");
+    assert_eq!(cond["soundness"]["status"], "sound", "{result}");
+}
+
+#[test]
+fn pe_cidr_rejects_malformed_or_unknown_network() {
+    let malformed = r#"
+package test
+default allow = false
+allow if { net.cidr_contains("10.0.0.0/99", input.dest_ip) }
+"#;
+    let result = run_pe(malformed, None, None, "data.test.allow");
+    let cond = first_condition(&result);
+    assert_eq!(cond["soundness"]["status"], "unsound", "{result}");
+    assert_eq!(
+        cond["soundness"]["reason"], "builtin_unsupported",
+        "{result}"
+    );
+
+    let unknown_network = r#"
+package test
+default allow = false
+allow if { net.cidr_contains(input.cidr, "10.0.0.1") }
+"#;
+    let result = run_pe(unknown_network, None, None, "data.test.allow");
+    let cond = first_condition(&result);
+    assert_eq!(cond["soundness"]["status"], "unsound", "{result}");
+    assert_eq!(
+        cond["soundness"]["reason"], "builtin_unsupported",
+        "{result}"
+    );
+}
+
+#[test]
+fn pe_prefix_builtins_lower_to_sound_atoms() {
+    let policy = r#"
+package test
+default allow = false
+allow if { startswith(input.host, "trusted-") }
+allow if { endswith(input.host, ".例え") }
+"#;
+    let result = run_pe(policy, None, None, "data.test.allow");
+    let conds: Vec<&serde_json::Value> = result["residual_queries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|q| q.as_array().unwrap())
+        .collect();
+    assert!(
+        conds.iter().any(|c| {
+            c["operator"] == "startswith"
+                && c["input_path"] == "input.host"
+                && c["value"] == "trusted-"
+        }),
+        "{result}"
+    );
+    assert!(
+        conds.iter().any(|c| {
+            c["operator"] == "endswith" && c["input_path"] == "input.host" && c["value"] == ".例え"
+        }),
+        "{result}"
+    );
+}
+
+#[test]
+fn pe_exists_plain_field_is_sound_atom() {
+    let policy = r#"
+package test
+values := {k: v |
+    some k in ["name"]
+    v := input.user[k]
+}
+allow if { values["name"] == "ana" }
+"#;
+    let result = run_pe(policy, None, None, "data.test.allow");
+    let cond = first_condition(&result);
+    assert_eq!(cond["kind"], "exists", "{result}");
+    assert_eq!(cond["lowerable"], "atom", "{result}");
+    assert_eq!(cond["input_path"], "input.user", "{result}");
+    assert_eq!(cond["soundness"]["status"], "sound", "{result}");
+}
+
+#[test]
+fn pe_numeric_float_comparison_is_rejected() {
+    let policy = r#"
+package test
+default allow = false
+allow if { input.port > 1.5 }
+"#;
+    let result = run_pe(policy, None, None, "data.test.allow");
+    let cond = first_condition(&result);
+    assert_eq!(cond["lowerable"], "structured_value", "{result}");
+    assert_eq!(
+        cond["soundness"]["reason"], "numeric_out_of_range",
+        "{result}"
+    );
+}
+
+#[test]
+fn pe_neg_simple_comparison_lowers_to_complement_atom() {
+    let policy = r#"
+package test
+default allow = false
+allow if { not input.role == "admin" }
+"#;
+    let result = run_pe(policy, None, None, "data.test.allow");
+    let cond = first_condition(&result);
+    assert_eq!(cond["kind"], "negation_complement", "{result}");
+    assert_eq!(cond["lowerable"], "atom", "{result}");
+    assert_eq!(cond["operator"], "!=", "{result}");
+    assert_eq!(cond["input_path"], "input.role", "{result}");
+    assert_eq!(cond["value"], "admin", "{result}");
+    assert_eq!(cond["soundness"]["status"], "sound", "{result}");
+}
+
+#[test]
 fn pe_result_definitive_unknown_fold_is_unsound_and_depends_on_path() {
     let policy = r#"
 package test
@@ -2609,6 +2808,42 @@ allow if { data.perms[input.role] == "write" }
                 r#"{"role":"viewer"}"#,
                 r#"{"role":"guest"}"#,
             ],
+        ),
+        (
+            r#"
+package test
+default allow = false
+allow if { net.cidr_contains("10.0.0.0/24", input.dest_ip) }
+"#,
+            None,
+            vec![
+                r#"{"dest_ip":"10.0.0.0"}"#,
+                r#"{"dest_ip":"10.0.0.255"}"#,
+                r#"{"dest_ip":"10.0.1.0"}"#,
+                r#"{"dest_ip":"bad-ip"}"#,
+            ],
+        ),
+        (
+            r#"
+package test
+default allow = false
+allow if { startswith(input.host, "trusted-") }
+"#,
+            None,
+            vec![
+                r#"{"host":"trusted-api"}"#,
+                r#"{"host":"untrusted-api"}"#,
+                r#"{"host":7}"#,
+            ],
+        ),
+        (
+            r#"
+package test
+default allow = false
+allow if { not input.role == "admin" }
+"#,
+            None,
+            vec![r#"{"role":"admin"}"#, r#"{"role":"viewer"}"#, r#"{}"#],
         ),
     ];
 

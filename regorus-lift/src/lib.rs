@@ -20,9 +20,7 @@
 
 use std::collections::BTreeMap;
 
-use regorus::causality_report::{
-    Lowerability, PartialEvalResult, ResidualCondition, Soundness,
-};
+use regorus::causality_report::{Lowerability, PartialEvalResult, ResidualCondition, Soundness};
 use regorus::evaluation_trace::PeUnsoundReason;
 use regorus::Value;
 
@@ -30,7 +28,7 @@ pub mod ir;
 pub mod schema;
 pub mod sim;
 
-pub use ir::{Clause, EnforcerConfig, EqAtom, LiftScalar, Verdict};
+pub use ir::{Atom, Clause, EnforcerConfig, EqAtom, LiftScalar, Verdict};
 pub use schema::{ContextSchema, FieldType};
 
 /// Why a policy/disjunct/condition could not be lifted into the enforcer config.
@@ -49,7 +47,7 @@ pub enum RejectReason {
     ConditionNotAtom,
     /// A condition is not sound.
     ConditionUnsound,
-    /// The operator is outside the Phase-0 supported set (`==`).
+    /// The operator is outside the supported lift set.
     UnsupportedOperator(String),
     /// A condition is missing its `input_path`.
     MissingInputPath,
@@ -249,16 +247,15 @@ fn lift_disjunct(
     let mut atoms = Vec::new();
     for cond in disjunct {
         let atom = lift_condition(cond, schema)?;
-        fields.insert(atom.input_path.clone(), atom.scalar.field_type());
+        if let Some(field_type) = schema.field_type(atom.input_path()) {
+            fields.insert(atom.input_path().to_string(), field_type);
+        }
         atoms.push(atom);
     }
     Ok(Clause { atoms })
 }
 
-fn lift_condition(
-    cond: &ResidualCondition,
-    schema: &ContextSchema,
-) -> Result<EqAtom, Rejection> {
+fn lift_condition(cond: &ResidualCondition, schema: &ContextSchema) -> Result<Atom, Rejection> {
     let src = cond.source_rule.clone();
     let reject = |reason| Rejection {
         reason,
@@ -272,13 +269,6 @@ fn lift_condition(
         return Err(reject(RejectReason::ConditionUnsound));
     }
 
-    // Phase 0 supports equality only.
-    match cond.operator.as_deref() {
-        Some("==") => {}
-        Some(op) => return Err(reject(RejectReason::UnsupportedOperator(op.to_string()))),
-        None => return Err(reject(RejectReason::UnsupportedOperator("<none>".to_string()))),
-    }
-
     let input_path = cond
         .input_path
         .clone()
@@ -288,18 +278,152 @@ fn lift_condition(
         .field_type(&input_path)
         .ok_or_else(|| reject(RejectReason::UnboundField(input_path.clone())))?;
 
+    match cond.operator.as_deref() {
+        None if cond.kind == "exists" => Ok(Atom::Exists(ir::ExistsAtom { input_path })),
+        Some("==") => {
+            let scalar = scalar_value(cond, &reject)?;
+            if scalar.field_type() != field_type
+                && !(field_type == FieldType::Ip && scalar.field_type() == FieldType::Str)
+            {
+                return Err(reject(RejectReason::UnboundField(input_path)));
+            }
+            Ok(Atom::Eq(EqAtom { input_path, scalar }))
+        }
+        Some("!=") => {
+            let scalar = scalar_value(cond, &reject)?;
+            if scalar.field_type() != field_type {
+                return Err(reject(RejectReason::UnboundField(input_path)));
+            }
+            Ok(Atom::Cmp(ir::CmpAtom {
+                input_path,
+                op: ir::CmpOp::Ne,
+                scalar,
+                missing_matches: cond.kind == "negation_complement",
+            }))
+        }
+        Some("<" | "<=" | ">" | ">=") => {
+            if !matches!(field_type, FieldType::Int | FieldType::Uint) {
+                return Err(reject(RejectReason::UnboundField(input_path)));
+            }
+            let scalar = scalar_value(cond, &reject)?;
+            if !matches!(scalar, LiftScalar::Int(_) | LiftScalar::Uint(_)) {
+                return Err(reject(RejectReason::UnencodableValue));
+            }
+            let op = match cond.operator.as_deref() {
+                Some("<") => ir::CmpOp::Lt,
+                Some("<=") => ir::CmpOp::Le,
+                Some(">") => ir::CmpOp::Gt,
+                Some(">=") => ir::CmpOp::Ge,
+                _ => {
+                    return Err(reject(RejectReason::UnsupportedOperator(
+                        "<none>".to_string(),
+                    )))
+                }
+            };
+            Ok(Atom::Cmp(ir::CmpAtom {
+                input_path,
+                op,
+                scalar,
+                missing_matches: cond.kind == "negation_complement",
+            }))
+        }
+        Some("in") => {
+            let values = membership_values(cond, &reject)?;
+            Ok(Atom::Membership(ir::MembershipAtom { input_path, values }))
+        }
+        Some("cidr_contains" | "not_cidr_contains") => {
+            if !matches!(field_type, FieldType::Str | FieldType::Ip) {
+                return Err(reject(RejectReason::UnboundField(input_path)));
+            }
+            let network = string_value(cond, &reject)?;
+            let (family, prefix_len) = parse_cidr_metadata(&network)
+                .ok_or_else(|| reject(RejectReason::UnencodableValue))?;
+            Ok(Atom::Cidr(ir::CidrAtom {
+                input_path,
+                network,
+                prefix_len,
+                family,
+                negated: cond.operator.as_deref() == Some("not_cidr_contains"),
+            }))
+        }
+        Some("startswith" | "endswith" | "not_startswith" | "not_endswith") => {
+            if field_type != FieldType::Str {
+                return Err(reject(RejectReason::UnboundField(input_path)));
+            }
+            let pattern = string_value(cond, &reject)?;
+            let op = cond.operator.as_deref();
+            Ok(Atom::Prefix(ir::PrefixAtom {
+                input_path,
+                pattern,
+                kind: if matches!(op, Some("endswith" | "not_endswith")) {
+                    ir::PrefixKind::EndsWith
+                } else {
+                    ir::PrefixKind::StartsWith
+                },
+                negated: matches!(op, Some("not_startswith" | "not_endswith")),
+            }))
+        }
+        Some(op) => Err(reject(RejectReason::UnsupportedOperator(op.to_string()))),
+        None => Err(reject(RejectReason::UnsupportedOperator(
+            "<none>".to_string(),
+        ))),
+    }
+}
+
+fn scalar_value(
+    cond: &ResidualCondition,
+    reject: &impl Fn(RejectReason) -> Rejection,
+) -> Result<LiftScalar, Rejection> {
     let value = cond
         .value
         .as_ref()
         .ok_or_else(|| reject(RejectReason::UnencodableValue))?;
-    let scalar =
-        LiftScalar::from_value(value).ok_or_else(|| reject(RejectReason::UnencodableValue))?;
+    LiftScalar::from_value(value).ok_or_else(|| reject(RejectReason::UnencodableValue))
+}
 
-    if scalar.field_type() != field_type {
-        return Err(reject(RejectReason::UnboundField(input_path)));
+fn string_value(
+    cond: &ResidualCondition,
+    reject: &impl Fn(RejectReason) -> Rejection,
+) -> Result<String, Rejection> {
+    match scalar_value(cond, reject)? {
+        LiftScalar::Str(s) => Ok(s),
+        _ => Err(reject(RejectReason::UnencodableValue)),
     }
+}
 
-    Ok(EqAtom { input_path, scalar })
+fn membership_values(
+    cond: &ResidualCondition,
+    reject: &impl Fn(RejectReason) -> Rejection,
+) -> Result<Vec<LiftScalar>, Rejection> {
+    let value = cond
+        .value
+        .as_ref()
+        .ok_or_else(|| reject(RejectReason::UnencodableValue))?;
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .map(|item| {
+                LiftScalar::from_value(item).ok_or_else(|| reject(RejectReason::UnencodableValue))
+            })
+            .collect(),
+        Value::Set(items) => items
+            .iter()
+            .map(|item| {
+                LiftScalar::from_value(item).ok_or_else(|| reject(RejectReason::UnencodableValue))
+            })
+            .collect(),
+        _ => scalar_value(cond, reject).map(|scalar| vec![scalar]),
+    }
+}
+
+fn parse_cidr_metadata(cidr: &str) -> Option<(ir::IpFamily, u8)> {
+    let (addr, prefix) = cidr.split_once('/')?;
+    let prefix_len = prefix.parse::<u8>().ok()?;
+    match addr.parse::<std::net::IpAddr>().ok()? {
+        std::net::IpAddr::V4(_) if prefix_len <= 32 => Some((ir::IpFamily::V4, prefix_len)),
+        std::net::IpAddr::V6(_) if prefix_len <= 128 => Some((ir::IpFamily::V6, prefix_len)),
+        _ => None,
+    }
 }
 
 fn disjunct_source_rule(disjunct: &[ResidualCondition]) -> Option<String> {

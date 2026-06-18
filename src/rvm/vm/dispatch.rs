@@ -22,6 +22,21 @@ pub(super) enum InstructionOutcome {
     Suspend { reason: SuspendReason },
 }
 
+#[cfg(feature = "explanations")]
+fn is_valid_cidr_literal(cidr: &str) -> bool {
+    let Some((addr, prefix)) = cidr.split_once('/') else {
+        return false;
+    };
+    let Ok(prefix_len) = prefix.parse::<u8>() else {
+        return false;
+    };
+    match addr.parse::<core::net::IpAddr>() {
+        Ok(core::net::IpAddr::V4(_)) => prefix_len <= 32,
+        Ok(core::net::IpAddr::V6(_)) => prefix_len <= 128,
+        Err(_) => false,
+    }
+}
+
 impl RegoVM {
     #[cfg(feature = "explanations")]
     pub(super) fn runtime_path_for_register(&self, register: u8) -> Option<alloc::string::String> {
@@ -164,22 +179,62 @@ impl RegoVM {
             return false;
         }
 
-        // Find the first argument that is Undefined and traces to an input path.
-        let mut input_path = None;
-        for &arg_reg in params.arg_registers() {
+        let builtin_name = match self.program.get_builtin_info(params.builtin_index) {
+            Some(info) => info.name.clone(),
+            None => return false,
+        };
+
+        let mut unknown_arg: Option<(usize, u8, String)> = None;
+        let mut unknown_count = 0_usize;
+        for (idx, &arg_reg) in params.arg_registers().iter().enumerate() {
             if matches!(self.get_register(arg_reg), Ok(v) if *v == Value::Undefined) {
                 if let Some(path) = self.runtime_path_for_register(arg_reg) {
-                    input_path = Some(path);
-                    break;
+                    unknown_count = unknown_count.saturating_add(1);
+                    if unknown_arg.is_none() {
+                        unknown_arg = Some((idx, arg_reg, path));
+                    }
                 }
             }
         }
 
-        let input_path = match input_path {
-            Some(p) => p,
+        let (unknown_idx, _unknown_reg, input_path) = match unknown_arg {
+            Some(p) if unknown_count == 1 => p,
+            Some((_, _, path)) => {
+                self.record_opaque_builtin_assumption(path, condition_text);
+                return true;
+            }
             None => return false,
         };
 
+        if let Some((operator, value, builtin_context)) =
+            self.lowerable_builtin_context(&builtin_name, &params, unknown_idx, &input_path)
+        {
+            let (rule_index, definition_index) = self.current_rule_scope();
+            let iteration_index = self.current_loop_iteration_index();
+            self.trace.record_assumption(
+                crate::evaluation_trace::AssumptionKind::ConditionHolds,
+                input_path,
+                condition_text,
+                u32::try_from(self.pc).unwrap_or(u32::MAX),
+                Some(operator),
+                Some(value),
+                rule_index,
+                definition_index,
+                iteration_index,
+                self.current_conjunction_id(),
+            );
+            if let Some(last) = self.trace.assumptions.last_mut() {
+                last.builtin_context = Some(builtin_context);
+            }
+            return true;
+        }
+
+        self.record_opaque_builtin_assumption(input_path, condition_text);
+        true
+    }
+
+    #[cfg(feature = "explanations")]
+    fn record_opaque_builtin_assumption(&mut self, input_path: String, condition_text: String) {
         let (rule_index, definition_index) = self.current_rule_scope();
         let iteration_index = self.current_loop_iteration_index();
         self.trace.record_assumption(
@@ -196,7 +251,109 @@ impl RegoVM {
         );
         self.trace
             .record_pe_unsound_reason(crate::evaluation_trace::PeUnsoundReason::BuiltinUnsupported);
-        true
+    }
+
+    #[cfg(feature = "explanations")]
+    fn lowerable_builtin_context(
+        &self,
+        builtin_name: &str,
+        params: &crate::rvm::instructions::BuiltinCallParams,
+        unknown_idx: usize,
+        input_path: &str,
+    ) -> Option<(String, Value, crate::evaluation_trace::BuiltinContext)> {
+        let args = params.arg_registers();
+        match builtin_name {
+            "net.cidr_contains" if unknown_idx == 1 && args.len() == 2 => {
+                let cidr_reg = *args.first()?;
+                let cidr_value = self.get_register(cidr_reg).ok()?.clone();
+                let Value::String(ref cidr) = cidr_value else {
+                    return None;
+                };
+                if !is_valid_cidr_literal(cidr.as_ref()) {
+                    return None;
+                }
+                Some((
+                    String::from("cidr_contains"),
+                    cidr_value.clone(),
+                    crate::evaluation_trace::BuiltinContext {
+                        name: String::from(builtin_name),
+                        input_arg_index: 1,
+                        input_path: input_path.to_string(),
+                        constant_value: cidr_value,
+                    },
+                ))
+            }
+            "startswith" | "endswith" if unknown_idx == 0 && args.len() == 2 => {
+                let pattern_reg = *args.get(1)?;
+                let pattern_value = self.get_register(pattern_reg).ok()?.clone();
+                if !matches!(pattern_value, Value::String(_)) {
+                    return None;
+                }
+                Some((
+                    String::from(builtin_name),
+                    pattern_value.clone(),
+                    crate::evaluation_trace::BuiltinContext {
+                        name: String::from(builtin_name),
+                        input_arg_index: 0,
+                        input_path: input_path.to_string(),
+                        constant_value: pattern_value,
+                    },
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "explanations")]
+    fn record_negated_operand_assumption(
+        &mut self,
+        operand: u8,
+        negation_scope_id: Option<u32>,
+    ) -> bool {
+        let Some(nid) = negation_scope_id else {
+            return false;
+        };
+        let Some(prev_pc) = self.pc.checked_sub(1) else {
+            return false;
+        };
+        let Some(prev_instr) = self.program.instructions.get(prev_pc).copied() else {
+            return false;
+        };
+        let condition_text = self
+            .program
+            .condition_infos
+            .get(prev_pc)
+            .and_then(Option::as_ref)
+            .map(|info| info.text.clone())
+            .unwrap_or_default();
+
+        self.trace.negation_scope_stack.push(nid);
+        let recorded = match prev_instr {
+            Instruction::Eq { dest, left, right } if dest == operand => {
+                self.record_runtime_comparison_assumption(left, right, "==", condition_text)
+            }
+            Instruction::Ne { dest, left, right } if dest == operand => {
+                self.record_runtime_comparison_assumption(left, right, "!=", condition_text)
+            }
+            Instruction::Lt { dest, left, right } if dest == operand => {
+                self.record_runtime_comparison_assumption(left, right, "<", condition_text)
+            }
+            Instruction::Le { dest, left, right } if dest == operand => {
+                self.record_runtime_comparison_assumption(left, right, "<=", condition_text)
+            }
+            Instruction::Gt { dest, left, right } if dest == operand => {
+                self.record_runtime_comparison_assumption(left, right, ">", condition_text)
+            }
+            Instruction::Ge { dest, left, right } if dest == operand => {
+                self.record_runtime_comparison_assumption(left, right, ">=", condition_text)
+            }
+            Instruction::BuiltinCall { params_index } => {
+                self.record_builtin_assumption(params_index, operand, condition_text)
+            }
+            _ => false,
+        };
+        self.trace.negation_scope_stack.pop();
+        recorded
     }
 
     #[cfg(feature = "explanations")]
@@ -315,9 +472,6 @@ impl RegoVM {
                             definition_index,
                             iteration_index,
                             self.current_conjunction_id(),
-                        );
-                        self.trace.record_pe_unsound_reason(
-                            crate::evaluation_trace::PeUnsoundReason::NegationUnsupported,
                         );
                         return true;
                     }
@@ -756,29 +910,33 @@ impl RegoVM {
                         // record an inner Exists assumption for the operand path so the
                         // negation has a meaningful inner condition.
                         if operand_value == Value::Undefined {
-                            if let Some(input_path) = self.runtime_path_for_register(operand) {
-                                let pc = u32::try_from(self.pc).unwrap_or(u32::MAX);
-                                let (rule_index, definition_index) = self.current_rule_scope();
-                                let iteration_index = self.current_loop_iteration_index();
-                                // Temporarily re-push the negation scope so the inner
-                                // assumption is tagged with it.
-                                if let Some(nid) = negation_scope_id {
-                                    self.trace.negation_scope_stack.push(nid);
-                                }
-                                self.trace.record_assumption(
-                                    crate::evaluation_trace::AssumptionKind::Exists,
-                                    input_path,
-                                    String::new(),
-                                    pc,
-                                    None,
-                                    None,
-                                    rule_index,
-                                    definition_index,
-                                    iteration_index,
-                                    self.current_conjunction_id(),
-                                );
-                                if negation_scope_id.is_some() {
-                                    self.trace.negation_scope_stack.pop();
+                            let recorded =
+                                self.record_negated_operand_assumption(operand, negation_scope_id);
+                            if !recorded {
+                                if let Some(input_path) = self.runtime_path_for_register(operand) {
+                                    let pc = u32::try_from(self.pc).unwrap_or(u32::MAX);
+                                    let (rule_index, definition_index) = self.current_rule_scope();
+                                    let iteration_index = self.current_loop_iteration_index();
+                                    // Temporarily re-push the negation scope so the inner
+                                    // assumption is tagged with it.
+                                    if let Some(nid) = negation_scope_id {
+                                        self.trace.negation_scope_stack.push(nid);
+                                    }
+                                    self.trace.record_assumption(
+                                        crate::evaluation_trace::AssumptionKind::Exists,
+                                        input_path,
+                                        String::new(),
+                                        pc,
+                                        None,
+                                        None,
+                                        rule_index,
+                                        definition_index,
+                                        iteration_index,
+                                        self.current_conjunction_id(),
+                                    );
+                                    if negation_scope_id.is_some() {
+                                        self.trace.negation_scope_stack.pop();
+                                    }
                                 }
                             }
                         }
@@ -806,9 +964,6 @@ impl RegoVM {
                             definition_index,
                             iteration_index,
                             self.current_conjunction_id(),
-                        );
-                        self.trace.record_pe_unsound_reason(
-                            crate::evaluation_trace::PeUnsoundReason::NegationUnsupported,
                         );
                         // Tag the NegationHolds with the scope it owns so
                         // materialize_pe can find the matching inner assumptions.

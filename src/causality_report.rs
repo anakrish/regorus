@@ -392,6 +392,7 @@ pub fn materialize_pe(
     // Each unique combination produces one conjunction (AND) in the DNF output.
     let mut disjunct_map: BTreeMap<(u32, Option<u32>), Vec<Vec<ResidualCondition>>> =
         BTreeMap::new();
+    let mut disjunct_outcome_map: BTreeMap<(u32, Option<u32>), Value> = BTreeMap::new();
 
     // First pass: collect inner-negation assumptions into negation_inner.
     for a in &trace.assumptions {
@@ -410,6 +411,9 @@ pub fn materialize_pe(
         }
 
         let key = (a.conjunction_id, a.iteration_index);
+        disjunct_outcome_map.entry(key).or_insert_with(|| {
+            assumption_outcome_value(trace, a).unwrap_or_else(|| result_from_query(&query_result))
+        });
 
         // For NegationHolds: single condition with inner children.
         if a.kind == AssumptionKind::NegationHolds {
@@ -420,6 +424,7 @@ pub fn materialize_pe(
                     cond.negated_conditions = inner;
                 }
             }
+            finalize_negation_condition(&mut cond);
             add_condition_alternatives(disjunct_map.entry(key).or_default(), alloc::vec![cond]);
             continue;
         }
@@ -435,32 +440,36 @@ pub fn materialize_pe(
     // input path, no operator, and no inner conditions.  Such a placeholder
     // provides no information to consumers and prevents the disjunct from
     // collapsing to an empty (always-true) clause.
-    let residual_queries: Vec<Vec<ResidualCondition>> = disjunct_map
-        .into_values()
-        .flatten()
-        .filter_map(|mut conds| {
+    let mut residual_entries: Vec<(Vec<ResidualCondition>, Value)> = Vec::new();
+    for (key, clauses) in disjunct_map {
+        let outcome = disjunct_outcome_map
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| result_from_query(&query_result));
+        for mut conds in clauses {
             conds.dedup_by(|a, b| a.condition == b.condition && a.operator == b.operator);
             conds.retain(|c| !is_empty_placeholder(c));
-            if conds.is_empty() {
-                None
-            } else {
-                Some(conds)
+            if !conds.is_empty() {
+                residual_entries.push((conds, outcome.clone()));
             }
-        })
-        .collect();
+        }
+    }
 
     let result = match query_result {
         Value::Undefined => Value::Null,
         other => other,
     };
+    let residual_queries: Vec<Vec<ResidualCondition>> = residual_entries
+        .iter()
+        .map(|(conds, _)| conds.clone())
+        .collect();
 
     let (soundness, unsound_reasons) = result_soundness(trace, &residual_queries);
     let residual_outcomes = residual_queries
         .iter()
-        .map(|conds| ResidualDisjunctOutcome {
-            // TODO(R7): replace the top-level fallback with definition/body
-            // outcome tracking for mixed true/false complete-rule disjuncts.
-            result: result.clone(),
+        .zip(residual_entries.iter())
+        .map(|(conds, (_, outcome))| ResidualDisjunctOutcome {
+            result: outcome.clone(),
             soundness: disjunct_soundness(conds),
         })
         .collect();
@@ -485,6 +494,30 @@ fn format_value(v: &Value) -> alloc::string::String {
         Value::Number(n) => alloc::format!("{:?}", n),
         _ => alloc::format!("{:?}", v),
     }
+}
+
+fn result_from_query(query_result: &Value) -> Value {
+    match query_result {
+        Value::Undefined => Value::Null,
+        other => other.clone(),
+    }
+}
+
+fn assumption_outcome_value(
+    trace: &EvaluationTrace,
+    a: &crate::evaluation_trace::Assumption,
+) -> Option<Value> {
+    trace.rule_outcomes.iter().find_map(|outcome| {
+        if outcome.is_summary
+            || outcome.rule_index != a.rule_index
+            || outcome.definition_index != a.definition_index
+        {
+            return None;
+        }
+        outcome
+            .result_value_idx
+            .and_then(|idx| trace.get_value(idx).cloned())
+    })
 }
 
 fn canonical_input_path(path: &str) -> String {
@@ -517,7 +550,21 @@ fn canonical_input_path(path: &str) -> String {
 }
 
 fn is_supported_operator(op: &str) -> bool {
-    matches!(op, "==" | "!=" | "<" | "<=" | ">" | ">=" | "in")
+    matches!(
+        op,
+        "==" | "!="
+            | "<"
+            | "<="
+            | ">"
+            | ">="
+            | "in"
+            | "cidr_contains"
+            | "not_cidr_contains"
+            | "startswith"
+            | "not_startswith"
+            | "endswith"
+            | "not_endswith"
+    )
 }
 
 fn value_encoding(value: &Value) -> Option<ValueEncoding> {
@@ -535,8 +582,6 @@ fn value_encoding(value: &Value) -> Option<ValueEncoding> {
             string_bytes: Some(s.as_bytes().to_vec()),
         }),
         Value::Number(n) => {
-            // TODO(R8): combine this lossless numeric metadata with schema
-            // information when available to reject floats in integer fields.
             let numeric_kind = match n {
                 Number::UInt(_) => "u64",
                 Number::Int(_) => "i64",
@@ -561,14 +606,17 @@ fn classify_residual(
     value: Option<&Value>,
 ) -> (Lowerability, Soundness) {
     if kind == "negation_holds" {
-        // TODO(R5): expand simple negations only after undefined-vs-false can
-        // be represented explicitly; reject negation residuals for now.
+        // A raw negation wrapper is not liftable. `finalize_negation_condition`
+        // rewrites the provably-safe single-atom cases before consumers see it.
         return unsound_classification(
             Lowerability::Negation,
             PeUnsoundReason::NegationUnsupported,
         );
     }
     if kind == "exists" {
+        if input_path.is_some() {
+            return (Lowerability::Atom, Soundness::Sound);
+        }
         return unsound_classification(Lowerability::Exists, PeUnsoundReason::ExistenceUnsupported);
     }
     if kind == "collection_exists" {
@@ -605,7 +653,7 @@ fn classify_residual(
     let Some(value) = value else {
         return unsound_classification(Lowerability::InputVsInput, PeUnsoundReason::InputVsInput);
     };
-    if matches!(value, Value::Number(Number::BigInt(_))) {
+    if matches!(value, Value::Number(Number::BigInt(_) | Number::Float(_))) {
         return unsound_classification(
             Lowerability::StructuredValue,
             PeUnsoundReason::NumericOutOfRange,
@@ -706,6 +754,69 @@ fn conditions_compatible(clause: &[ResidualCondition], cond: &ResidualCondition)
     true
 }
 
+fn finalize_negation_condition(cond: &mut ResidualCondition) {
+    if cond.kind != "negation_holds" {
+        return;
+    }
+    let Some(inner) = cond.negated_conditions.first().cloned() else {
+        cond.lowerable = Lowerability::Negation;
+        cond.soundness = Soundness::Unsound {
+            reason: PeUnsoundReason::NegationUnsupported,
+        };
+        return;
+    };
+    if cond.negated_conditions.len() != 1 || !inner.negated_conditions.is_empty() {
+        cond.lowerable = Lowerability::Negation;
+        cond.soundness = Soundness::Unsound {
+            reason: PeUnsoundReason::NegationUnsupported,
+        };
+        return;
+    }
+    let Some(op) = inner.operator.as_deref().and_then(complement_operator) else {
+        cond.lowerable = Lowerability::Negation;
+        cond.soundness = Soundness::Unsound {
+            reason: PeUnsoundReason::NegationUnsupported,
+        };
+        return;
+    };
+    if !matches!(inner.lowerable, Lowerability::Atom)
+        || !matches!(inner.soundness, Soundness::Sound)
+    {
+        cond.lowerable = Lowerability::Negation;
+        cond.soundness = Soundness::Unsound {
+            reason: PeUnsoundReason::NegationUnsupported,
+        };
+        return;
+    }
+    cond.condition = alloc::format!("not ({})", inner.condition);
+    cond.operator = Some(op.to_string());
+    cond.input_path = inner.input_path;
+    cond.value = inner.value;
+    cond.value_encoding = inner.value_encoding;
+    cond.kind = "negation_complement".to_string();
+    cond.lowerable = Lowerability::Atom;
+    cond.soundness = Soundness::Sound;
+    cond.negated_conditions.clear();
+}
+
+fn complement_operator(op: &str) -> Option<&'static str> {
+    match op {
+        "==" => Some("!="),
+        "!=" => Some("=="),
+        "<" => Some(">="),
+        "<=" => Some(">"),
+        ">" => Some("<="),
+        ">=" => Some("<"),
+        "cidr_contains" => Some("not_cidr_contains"),
+        "not_cidr_contains" => Some("cidr_contains"),
+        "startswith" => Some("not_startswith"),
+        "not_startswith" => Some("startswith"),
+        "endswith" => Some("not_endswith"),
+        "not_endswith" => Some("endswith"),
+        _ => None,
+    }
+}
+
 fn disjunct_soundness(conditions: &[ResidualCondition]) -> Soundness {
     conditions
         .iter()
@@ -761,6 +872,35 @@ fn assumption_to_residual_conditions(
     program: &Program,
 ) -> Vec<ResidualCondition> {
     let (source_rule, source_file, source_row, source_col) = source_attribution(a, program);
+
+    if let Some(ref ctx) = a.builtin_context {
+        let operator = a.operator.clone().or_else(|| match ctx.name.as_str() {
+            "net.cidr_contains" => Some("cidr_contains".to_string()),
+            "startswith" => Some("startswith".to_string()),
+            "endswith" => Some("endswith".to_string()),
+            _ => None,
+        });
+        let condition = operator.as_ref().map_or_else(
+            || strip_trailing_comment(&a.condition_text),
+            |op| {
+                alloc::format!(
+                    "{} {} {}",
+                    ctx.input_path,
+                    op,
+                    format_value(&ctx.constant_value)
+                )
+            },
+        );
+        return alloc::vec![make_residual_condition(
+            condition,
+            operator,
+            Some(ctx.input_path.clone()),
+            Some(ctx.constant_value.clone()),
+            "condition_holds".to_string(),
+            None,
+            (source_rule, source_file, source_row, source_col),
+        )];
+    }
 
     // Check for data-key inversion.
     if let (Some(ref ctx), Some(ref cmp_value), Some(ref op)) =

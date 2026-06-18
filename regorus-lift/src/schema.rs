@@ -15,6 +15,8 @@ pub enum FieldType {
     Bool,
     Int,
     Uint,
+    Ip,
+    Array,
 }
 
 /// A set of observable input fields for a particular enforcement hook.

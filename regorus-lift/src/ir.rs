@@ -74,6 +74,15 @@ impl LiftScalar {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CmpOp {
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
 /// A single equality atom: `input_path == scalar`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EqAtom {
@@ -81,11 +90,87 @@ pub struct EqAtom {
     pub scalar: LiftScalar,
 }
 
+/// A comparison atom over a typed scalar field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CmpAtom {
+    pub input_path: String,
+    pub op: CmpOp,
+    pub scalar: LiftScalar,
+    pub missing_matches: bool,
+}
+
+/// A membership atom. `input_path in values` when `values` is non-empty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MembershipAtom {
+    pub input_path: String,
+    pub values: Vec<LiftScalar>,
+}
+
+/// CIDR containment over an IP string field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CidrAtom {
+    pub input_path: String,
+    pub network: String,
+    pub prefix_len: u8,
+    pub family: IpFamily,
+    pub negated: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IpFamily {
+    V4,
+    V6,
+}
+
+/// Prefix/suffix byte-string atom.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrefixAtom {
+    pub input_path: String,
+    pub pattern: String,
+    pub kind: PrefixKind,
+    pub negated: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrefixKind {
+    StartsWith,
+    EndsWith,
+}
+
+/// Field-presence atom.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExistsAtom {
+    pub input_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Atom {
+    Eq(EqAtom),
+    Cmp(CmpAtom),
+    Membership(MembershipAtom),
+    Cidr(CidrAtom),
+    Prefix(PrefixAtom),
+    Exists(ExistsAtom),
+}
+
+impl Atom {
+    pub fn input_path(&self) -> &str {
+        match self {
+            Atom::Eq(atom) => &atom.input_path,
+            Atom::Cmp(atom) => &atom.input_path,
+            Atom::Membership(atom) => &atom.input_path,
+            Atom::Cidr(atom) => &atom.input_path,
+            Atom::Prefix(atom) => &atom.input_path,
+            Atom::Exists(atom) => &atom.input_path,
+        }
+    }
+}
+
 /// A conjunction (AND) of atoms. A request satisfying every atom matches the
 /// clause.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Clause {
-    pub atoms: Vec<EqAtom>,
+    pub atoms: Vec<Atom>,
 }
 
 /// The lifted enforcement configuration.

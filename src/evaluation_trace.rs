@@ -267,6 +267,10 @@ pub struct Assumption {
     /// an unknown input key (e.g. `data.perms[input.role]`), this captures
     /// the concrete data object so `materialize_pe` can invert the lookup.
     pub data_lookup_context: Option<DataLookupContext>,
+    /// When the assumption originates from a supported builtin over an unknown
+    /// input argument, this captures the builtin shape so `materialize_pe` can
+    /// preserve it as a structured atom.
+    pub builtin_context: Option<BuiltinContext>,
 }
 
 /// Context for inverting a data lookup during partial evaluation.
@@ -280,6 +284,19 @@ pub struct DataLookupContext {
     pub data_object: Value,
     /// The full input path of the unknown key, e.g. `"input.user.role"`.
     pub key_input_path: String,
+}
+
+/// Context for inverting a builtin call during partial evaluation.
+#[derive(Debug, Clone)]
+pub struct BuiltinContext {
+    /// Builtin function name, e.g. `"net.cidr_contains"` or `"startswith"`.
+    pub name: String,
+    /// Zero-based argument index that traces to unknown input.
+    pub input_arg_index: u8,
+    /// Full input path of the unknown argument.
+    pub input_path: String,
+    /// Constant argument that parameterizes the atom (CIDR/prefix/suffix).
+    pub constant_value: Value,
 }
 
 /// Kinds of assumptions that can be recorded.
@@ -553,6 +570,7 @@ impl EvaluationTrace {
             negation_scope_id,
             owned_negation_scope_id: None,
             data_lookup_context: None,
+            builtin_context: None,
         });
     }
 

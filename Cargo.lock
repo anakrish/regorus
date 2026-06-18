@@ -1440,6 +1440,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "regorus-bpf"
+version = "0.0.0"
+dependencies = [
+ "regorus",
+ "regorus-lift",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "regorus-lift"
 version = "0.0.0"
 dependencies = [

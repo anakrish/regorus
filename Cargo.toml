@@ -4,6 +4,7 @@ members = [
     "tests/ensure_no_std",
   "xtask",
   "regorus-lift",
+  "regorus-bpf",
 ]
 
 [package]

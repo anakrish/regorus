@@ -1,0 +1,31 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# This is a member of the `regorus-bpf-aya` workspace. The ebpf crate only
+# builds for `bpfel-unknown-none` under nightly; the parent x86_64 regorus
+# workspace excludes the whole `regorus-bpf-aya` tree.
+[package]
+name = "regorus-bpf-loader"
+description = "User-space aya loader for the regorus-bpf cgroup/connect4 egress enforcer: serialises a MapPlan into BPF maps and binds the program to a cgroup"
+version = "0.0.0"
+edition = "2021"
+license = "MIT AND Apache-2.0 AND BSD-3-Clause"
+repository = "https://github.com/microsoft/regorus"
+publish = false
+
+[lib]
+doctest = false
+
+[dependencies]
+aya = "0.13"
+regorus-bpf = { path = "../../regorus-bpf" }
+# The shared `#[repr(C)]` clause layout, with `aya::Pod` enabled so it can be a
+# BPF map value. This is the SAME crate (same struct) the kernel program uses.
+regorus-bpf-common = { path = "../../regorus-bpf-common", features = ["user"] }
+anyhow = "1.0"
+
+[build-dependencies]
+aya-build = "0.1"
+
+[dev-dependencies]
+regorus-lift = { path = "../../regorus-lift" }

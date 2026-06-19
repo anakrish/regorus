@@ -5,7 +5,17 @@ members = [
   "xtask",
   "regorus-lift",
   "regorus-bpf",
+  "regorus-bpf-common",
   "regorus-bpf-lsm",
+]
+
+# The aya Rust-eBPF crates are built for `bpfel-unknown-none` with a nightly
+# `-Z build-std` toolchain and bpf-linker; they cannot be members of this
+# x86_64 workspace. They carry their own `[workspace]` table and are built via
+# `regorus-bpf-loader`'s `aya-build` step. Excluded here so the default host
+# test suite never tries to compile them.
+exclude = [
+    "regorus-bpf-aya",
 ]
 
 [package]

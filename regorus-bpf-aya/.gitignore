@@ -1,0 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Build artifacts for the separate aya (Rust-eBPF) workspace.
+/target/

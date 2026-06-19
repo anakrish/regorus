@@ -1,0 +1,26 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+[package]
+name = "regorus-bpf-common"
+description = "Shared no_std ABI (repr(C) clause layout + matcher) for the regorus-bpf aya egress enforcer, used by both the kernel program and the user-space loader"
+version = "0.0.0"
+edition = "2021"
+license = "MIT AND Apache-2.0 AND BSD-3-Clause"
+repository = "https://github.com/microsoft/regorus"
+publish = false
+
+[lib]
+doctest = false
+
+[dependencies]
+# Pulled in only for the user-space loader, which needs `aya::Pod` to write the
+# clause struct into a map. The kernel crate builds this crate with default
+# features (no aya, no_std) so the same `#[repr(C)]` layout is shared verbatim.
+aya = { version = "0.13", optional = true }
+
+[features]
+default = []
+# Enable the `unsafe impl aya::Pod for ClauseEntry` so user space can use the
+# shared layout directly as a BPF map value.
+user = ["dep:aya"]

@@ -1,0 +1,26 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+[package]
+name = "regorus-bpf-ebpf"
+description = "Kernel-side aya eBPF cgroup/connect4 egress enforcer for regorus-bpf (compiled to bpfel-unknown-none)"
+version = "0.0.0"
+edition = "2021"
+license = "MIT AND Apache-2.0 AND BSD-3-Clause"
+repository = "https://github.com/microsoft/regorus"
+publish = false
+
+# This crate compiles ONLY for `bpfel-unknown-none` with a nightly `-Z
+# build-std=core` toolchain and bpf-linker. It is a member of the
+# `regorus-bpf-loader` workspace (which builds it via `aya-build`), and is
+# excluded from the parent x86_64 regorus workspace.
+
+[dependencies]
+aya-ebpf = "0.1"
+# The SAME shared clause layout + matcher as the user-space loader; built here
+# with default features (no aya userspace dep, pure no_std).
+regorus-bpf-common = { path = "../../regorus-bpf-common" }
+
+[[bin]]
+name = "regorus-egress"
+path = "src/main.rs"

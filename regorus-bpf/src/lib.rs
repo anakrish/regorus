@@ -42,7 +42,9 @@
 pub mod abi;
 pub mod enforcer;
 pub mod plan;
+pub mod pod;
 
 pub use abi::{FieldId, Proto, Request, Verdict, MAX_CLAUSES};
 pub use enforcer::{enforce, extract_request};
 pub use plan::{export, ClauseEntry, ExportError, IpMatch, MapPlan, ScalarMatch};
+pub use pod::{enforce_pod, to_pod, PodPlan};

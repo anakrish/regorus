@@ -545,6 +545,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "regorus-bpf-lsm"
+version = "0.0.0"
+dependencies = [
+ "regorus",
+ "regorus-bpf-lsm-common",
+ "regorus-lift",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "regorus-bpf-lsm-common"
+version = "0.0.0"
+dependencies = [
+ "aya",
+]
+
+[[package]]
+name = "regorus-bpf-lsm-ebpf"
+version = "0.0.0"
+dependencies = [
+ "aya-ebpf",
+ "regorus-bpf-lsm-common",
+]
+
+[[package]]
+name = "regorus-bpf-lsm-loader"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "aya",
+ "aya-build",
+ "regorus-bpf-lsm",
+ "regorus-bpf-lsm-common",
+ "regorus-lift",
+]
+
+[[package]]
 name = "regorus-lift"
 version = "0.0.0"
 dependencies = [

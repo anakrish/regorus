@@ -1528,9 +1528,17 @@ name = "regorus-bpf-lsm"
 version = "0.0.0"
 dependencies = [
  "regorus",
+ "regorus-bpf-lsm-common",
  "regorus-lift",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "regorus-bpf-lsm-common"
+version = "0.0.0"
+dependencies = [
+ "aya",
 ]
 
 [[package]]

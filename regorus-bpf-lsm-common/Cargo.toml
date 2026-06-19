@@ -1,0 +1,24 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+[package]
+name = "regorus-bpf-lsm-common"
+description = "Shared no_std ABI (repr(C) file_rule layout + matcher) for the regorus-bpf-lsm aya file_open enforcer, used by both the kernel program and the user-space loader"
+version = "0.0.0"
+edition = "2021"
+license = "MIT AND Apache-2.0 AND BSD-3-Clause"
+repository = "https://github.com/microsoft/regorus"
+publish = false
+
+[lib]
+doctest = false
+
+[dependencies]
+# Only for the user-space loader (needs `aya::Pod` to write the rule struct into
+# a map). The kernel crate builds this with default features (no aya, no_std) so
+# the same `#[repr(C)]` layout is shared verbatim.
+aya = { version = "0.13", optional = true }
+
+[features]
+default = []
+user = ["dep:aya"]

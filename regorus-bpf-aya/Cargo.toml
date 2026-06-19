@@ -1,16 +1,17 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# Separate aya workspace for the Rust-eBPF egress backend: the kernel program
-# (`ebpf`, built for `bpfel-unknown-none` under nightly) and the user-space
-# loader. This is excluded from the parent x86_64 regorus workspace because the
-# ebpf member cannot be compiled for the host target. `default-members` keeps a
-# plain `cargo build`/`cargo test` here restricted to the loader; the ebpf crate
-# is compiled separately by the loader's `build.rs` via `aya-build`.
+# Separate aya workspace for the Rust-eBPF backends. Two kernel programs
+# (`ebpf` = cgroup/connect4 egress, `lsm-ebpf` = lsm/file_open access), each
+# built for `bpfel-unknown-none` under nightly, plus their user-space loaders.
+# Excluded from the parent x86_64 regorus workspace because the ebpf members
+# cannot be compiled for the host target. `default-members` keeps a plain
+# `cargo build`/`cargo test` here restricted to the loaders; the ebpf crates are
+# compiled separately by each loader's `build.rs` via `aya-build`.
 [workspace]
 resolver = "2"
-members = ["ebpf", "loader"]
-default-members = ["loader"]
+members = ["ebpf", "loader", "lsm-ebpf", "lsm-loader"]
+default-members = ["loader", "lsm-loader"]
 
 # Profiles must live at the workspace root. The ebpf crate is built `--release`
 # by aya-build; `panic = "abort"` + fat LTO + single codegen unit keep the BPF

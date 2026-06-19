@@ -61,7 +61,9 @@
 pub mod abi;
 pub mod enforcer;
 pub mod plan;
+pub mod pod;
 
 pub use abi::{FieldId, FileOp, Request, Verdict, MAX_PATH_PREFIX, MAX_RULES};
 pub use enforcer::{enforce, extract_request};
 pub use plan::{export, ExportError, FilePlan, FileRule, OpMatch, PathMatch};
+pub use pod::{enforce_pod, path_buffer, to_pod, PodFilePlan};

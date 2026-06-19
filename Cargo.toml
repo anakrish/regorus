@@ -7,6 +7,7 @@ members = [
   "regorus-bpf",
   "regorus-bpf-common",
   "regorus-bpf-lsm",
+  "regorus-bpf-lsm-common",
 ]
 
 # The aya Rust-eBPF crates are built for `bpfel-unknown-none` with a nightly

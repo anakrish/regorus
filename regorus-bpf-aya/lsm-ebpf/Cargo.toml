@@ -1,0 +1,29 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+[package]
+name = "regorus-bpf-lsm-ebpf"
+description = "Kernel-side aya eBPF lsm/file_open access enforcer for regorus-bpf-lsm (compiled to bpfel-unknown-none)"
+version = "0.0.0"
+edition = "2021"
+license = "MIT AND Apache-2.0 AND BSD-3-Clause"
+repository = "https://github.com/microsoft/regorus"
+publish = false
+
+# Member of the `regorus-bpf-aya` workspace; built for `bpfel-unknown-none` via
+# the lsm-loader's `aya-build` step.
+
+[dependencies]
+aya-ebpf = "0.1"
+# The SAME shared rule layout + matcher as the user-space loader; built here
+# with default features (pure no_std).
+regorus-bpf-lsm-common = { path = "../../regorus-bpf-lsm-common" }
+
+[build-dependencies]
+# Resolve `struct file` field offsets (`f_path`, `f_mode`) from the build host's
+# BTF, since pure-Rust aya-ebpf cannot emit clang-style CO-RE field relocations.
+# Falls back to standard x86_64 offsets when BTF/bpftool is unavailable.
+
+[[bin]]
+name = "regorus-file-open"
+path = "src/main.rs"

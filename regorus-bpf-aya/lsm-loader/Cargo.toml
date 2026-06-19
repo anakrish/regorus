@@ -1,0 +1,31 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Member of the `regorus-bpf-aya` workspace. The lsm-ebpf crate only builds for
+# `bpfel-unknown-none` under nightly; the parent x86_64 regorus workspace
+# excludes the whole `regorus-bpf-aya` tree.
+[package]
+name = "regorus-bpf-lsm-loader"
+description = "User-space aya loader for the regorus-bpf-lsm lsm/file_open access enforcer: serialises a FilePlan into BPF maps and binds the program"
+version = "0.0.0"
+edition = "2021"
+license = "MIT AND Apache-2.0 AND BSD-3-Clause"
+repository = "https://github.com/microsoft/regorus"
+publish = false
+
+[lib]
+doctest = false
+
+[dependencies]
+aya = "0.13"
+regorus-bpf-lsm = { path = "../../regorus-bpf-lsm" }
+# The shared `#[repr(C)]` rule layout, with `aya::Pod` enabled so it can be a
+# BPF map value. This is the SAME crate (same struct) the kernel program uses.
+regorus-bpf-lsm-common = { path = "../../regorus-bpf-lsm-common", features = ["user"] }
+anyhow = "1.0"
+
+[build-dependencies]
+aya-build = "0.1"
+
+[dev-dependencies]
+regorus-lift = { path = "../../regorus-lift" }

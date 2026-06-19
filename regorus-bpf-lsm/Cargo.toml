@@ -12,6 +12,7 @@ doctest = false
 
 [dependencies]
 regorus-lift = { path = "../regorus-lift" }
+regorus-bpf-lsm-common = { path = "../regorus-bpf-lsm-common" }
 regorus = { path = "..", default-features = false, features = ["std", "arc", "rvm", "explanations", "net"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

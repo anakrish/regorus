@@ -5,6 +5,7 @@ members = [
   "xtask",
   "regorus-lift",
   "regorus-bpf",
+  "regorus-bpf-lsm",
 ]
 
 [package]

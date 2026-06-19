@@ -1,0 +1,17 @@
+[package]
+name = "regorus-bpf-lsm"
+description = "Lower a regorus-lift EnforcerConfig into BPF maps + a fixed LSM file_open access enforcer (MVP)"
+version = "0.0.0"
+edition = "2021"
+license = "MIT AND Apache-2.0 AND BSD-3-Clause"
+repository = "https://github.com/microsoft/regorus"
+publish = false
+
+[lib]
+doctest = false
+
+[dependencies]
+regorus-lift = { path = "../regorus-lift" }
+regorus = { path = "..", default-features = false, features = ["std", "arc", "rvm", "explanations", "net"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

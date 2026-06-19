@@ -33,6 +33,7 @@
 // Scalar match kinds (must match regorus_bpf::plan::ScalarMatch).
 #define MATCH_ANY 0
 #define MATCH_EXACT 1
+#define MATCH_RANGE 2
 
 // Verdict ABI (must match regorus_bpf::abi::Verdict). UNDECIDED collapses to
 // DENY at the boundary, which for cgroup/connect4 means "return 0" (block).
@@ -42,13 +43,22 @@
 
 // One clause row: a full conjunction over the three observable fields. All
 // integer values are HOST byte order.
+//
+// The `port_kind` selects how the port is matched (mirrors
+// regorus_bpf::plan::ScalarMatch<u16>):
+//   * MATCH_ANY   -> wildcard (port ignored),
+//   * MATCH_EXACT -> port == port_value,
+//   * MATCH_RANGE -> port_min <= port <= port_max (inclusive). A range always
+//                    requires a present port, matching the Rust enforcer.
 struct clause_entry {
 	__u8 ip_kind;     // IP_ANY | IP_EXACT | IP_CIDR
 	__u8 prefix_len;  // valid when ip_kind == IP_CIDR (0..=32)
-	__u8 port_kind;   // MATCH_ANY | MATCH_EXACT
+	__u8 port_kind;   // MATCH_ANY | MATCH_EXACT | MATCH_RANGE
 	__u8 proto_kind;  // MATCH_ANY | MATCH_EXACT
 	__u32 ip_value;   // exact address or CIDR network (host order)
-	__u16 port_value; // exact port (host order)
+	__u16 port_value; // exact port (host order), valid when MATCH_EXACT
+	__u16 port_min;   // inclusive low bound, valid when MATCH_RANGE
+	__u16 port_max;   // inclusive high bound, valid when MATCH_RANGE
 	__u8 proto_value; // exact IPPROTO_*
 	__u8 _pad;
 };
@@ -102,7 +112,11 @@ static __always_inline bool port_matches(const struct clause_entry *c, __u16 por
 {
 	if (c->port_kind == MATCH_ANY)
 		return true;
-	return c->port_kind == MATCH_EXACT && port == c->port_value;
+	if (c->port_kind == MATCH_EXACT)
+		return port == c->port_value;
+	if (c->port_kind == MATCH_RANGE)
+		return port >= c->port_min && port <= c->port_max;
+	return false;
 }
 
 static __always_inline bool proto_matches(const struct clause_entry *c, __u8 proto)

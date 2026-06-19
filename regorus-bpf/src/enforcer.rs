@@ -73,10 +73,13 @@ fn ip_matches(m: IpMatch, value: Option<u32>) -> bool {
     }
 }
 
-fn scalar_matches<T: PartialEq + Copy>(m: ScalarMatch<T>, value: Option<T>) -> bool {
+fn scalar_matches<T: PartialOrd + Copy>(m: ScalarMatch<T>, value: Option<T>) -> bool {
     match m {
         ScalarMatch::Any => true,
         ScalarMatch::Exact(t) => value == Some(t),
+        // A range requires the field to be present (None never matches), which
+        // mirrors a Rego comparison over a missing field (fail-closed).
+        ScalarMatch::Range { min, max } => value.is_some_and(|v| v >= min && v <= max),
     }
 }
 

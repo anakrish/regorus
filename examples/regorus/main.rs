@@ -6,6 +6,9 @@ use anyhow::{anyhow, bail, Result};
 #[cfg(feature = "azure_policy")]
 mod azure_policy;
 
+#[cfg(feature = "rvm")]
+mod rvm;
+
 #[allow(dead_code)]
 fn read_file(path: &String) -> Result<String> {
     std::fs::read_to_string(path).map_err(|_| anyhow!("could not read {path}"))
@@ -271,6 +274,85 @@ enum RegorusCommand {
         v0: bool,
     },
 
+    /// Compile Rego policies into a serialized RVM program artifact.
+    ///
+    /// The default container is the portable, language-neutral `RVMP` format
+    /// described in docs/rvm/portable-format.md. Use `--format legacy` for the
+    /// Rust-shaped `REGO` v6 container.
+    #[cfg(feature = "rvm")]
+    CompileRvm {
+        /// Directories containing Rego files.
+        #[arg(long, short, value_name = "bundle")]
+        bundles: Vec<String>,
+
+        /// Policy or data files. Rego, json or yaml.
+        #[arg(long, short, value_name = "policy.rego|data.json|data.yaml")]
+        data: Vec<String>,
+
+        /// Entry point rule. Repeat to export several entry points.
+        #[arg(long, short, value_name = "data.pkg.rule", required = true)]
+        entrypoint: Vec<String>,
+
+        /// Path of the artifact to write.
+        #[arg(long, short, value_name = "policy.rvmp")]
+        output: String,
+
+        /// Artifact container format.
+        #[arg(long, short, value_enum, default_value_t = rvm::RvmFormat::Portable)]
+        format: rvm::RvmFormat,
+
+        /// Omit sources, spans and metadata (smallest portable artifact).
+        #[arg(long)]
+        execution_only: bool,
+
+        /// Also write a human readable assembly listing to this path.
+        #[arg(long, value_name = "policy.rvmasm")]
+        listing: Option<String>,
+
+        /// Perform non-strict evaluation. (default behavior of OPA).
+        #[arg(long, short)]
+        non_strict: bool,
+
+        /// Turn on Rego language v0.
+        #[arg(long)]
+        v0: bool,
+    },
+
+    /// Evaluate a serialized RVM program artifact.
+    ///
+    /// Portable (`RVMP`) and legacy (`REGO`) artifacts are both accepted; the
+    /// container is detected from the file's magic bytes.
+    #[cfg(feature = "rvm")]
+    EvalRvm {
+        /// RVM artifact produced by `compile-rvm`.
+        #[arg(value_name = "policy.rvmp")]
+        artifact: String,
+
+        /// Data files. json or yaml. Repeat to merge several.
+        #[arg(long, short, value_name = "data.json|data.yaml")]
+        data: Vec<String>,
+
+        /// Input file. json or yaml.
+        #[arg(long, short, value_name = "input.json")]
+        input: Option<String>,
+
+        /// Context file. json or yaml.
+        #[arg(long, short, value_name = "context.json")]
+        context: Option<String>,
+
+        /// Entry point to execute. Required when the artifact exports several.
+        #[arg(long, short, value_name = "data.pkg.rule")]
+        entrypoint: Option<String>,
+
+        /// Print artifact header details instead of evaluating.
+        #[arg(long)]
+        info: bool,
+
+        /// List the artifact's entry points instead of evaluating.
+        #[arg(long)]
+        list_entrypoints: bool,
+    },
+
     /// Evaluate an Azure Policy definition against a resource.
     #[cfg(feature = "azure_policy")]
     AzurePolicyEval {
@@ -345,6 +427,46 @@ fn main() -> Result<()> {
         RegorusCommand::Lex { file, verbose } => rego_lex(file, verbose),
         RegorusCommand::Parse { file, v0 } => rego_parse(file, v0),
         RegorusCommand::Ast { file } => rego_ast(file),
+        #[cfg(feature = "rvm")]
+        RegorusCommand::CompileRvm {
+            bundles,
+            data,
+            entrypoint,
+            output,
+            format,
+            execution_only,
+            listing,
+            non_strict,
+            v0,
+        } => rvm::compile_rvm(
+            &bundles,
+            &data,
+            &entrypoint,
+            output,
+            format,
+            execution_only,
+            listing,
+            non_strict,
+            v0,
+        ),
+        #[cfg(feature = "rvm")]
+        RegorusCommand::EvalRvm {
+            artifact,
+            data,
+            input,
+            context,
+            entrypoint,
+            info,
+            list_entrypoints,
+        } => rvm::eval_rvm(
+            artifact,
+            &data,
+            input,
+            context,
+            entrypoint,
+            info,
+            list_entrypoints,
+        ),
         #[cfg(feature = "azure_policy")]
         RegorusCommand::AzurePolicyEval {
             policy_definition,

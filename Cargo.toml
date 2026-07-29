@@ -216,8 +216,10 @@ required-features = ["azure_policy"]
 
 [[example]]
 name="regorus"
-harness=false
-test=false
+# `test = true` (with the default libtest harness) lets `cargo test --example
+# regorus` run the example's own unit tests, e.g. the CLI argument handling
+# tests in examples/regorus/rvm.rs. `main` is untouched for normal runs.
+test=true
 doctest=false
 
 [package.metadata.docs.rs]

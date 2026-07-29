@@ -1,0 +1,15 @@
+{
+    "roles": {
+        "alice": ["admin", "reader"],
+        "bob": ["reader"]
+    },
+    "role_permissions": {
+        "admin": [
+            {"action": "read", "resource": "server"},
+            {"action": "write", "resource": "server"}
+        ],
+        "reader": [
+            {"action": "read", "resource": "server"}
+        ]
+    }
+}

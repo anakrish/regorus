@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 pub mod binary;
 mod json;
+pub mod portable;
 pub mod value;
 
 use serde::{Deserialize, Serialize};

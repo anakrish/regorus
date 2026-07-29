@@ -13,6 +13,9 @@ pub use core::Program;
 pub use listing::{
     generate_assembly_listing, generate_tabular_assembly_listing, AssemblyListingConfig,
 };
+pub use serialization::portable::{
+    self, PortableError, PortableInfo, PortableLimits, PortableResult, PortableWriteOptions,
+};
 pub(crate) use serialization::value::{binaries_to_values, BinaryValue};
 pub use serialization::{DeserializationResult, VersionedProgram};
 pub use types::{BuiltinInfo, FunctionInfo, RuleInfo, RuleType, SourceFile, SpanInfo};

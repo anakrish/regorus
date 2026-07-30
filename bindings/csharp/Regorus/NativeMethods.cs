@@ -311,6 +311,13 @@ namespace Regorus.Internal
         internal static extern RegorusResult regorus_rvm_set_input_foreign(RegorusRvm* vm, void* foreign);
 
         /// <summary>
+        /// Bench-only: set input to a Rust-resident foreign proxy of `n` subscriptions
+        /// (no FFI crossing). Isolates foreign-backend dispatch cost.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_engine_set_input_foreign_native", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_engine_set_input_foreign_native(RegorusEngine* engine, nuint n);
+
+        /// <summary>
         /// Set input from JSON file.
         /// </summary>
         [DllImport(LibraryName, EntryPoint = "regorus_engine_set_input_from_json_file", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

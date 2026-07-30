@@ -180,6 +180,14 @@ namespace Regorus
             });
         }
 
+        public void SetInputForeignNative(int n)
+        {
+            UseHandle(enginePtr =>
+            {
+                CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_input_foreign_native((Regorus.Internal.RegorusEngine*)enginePtr, (nuint)n));
+            });
+        }
+
         public void SetInputFromJsonFile(string path)
         {
             Utf8Marshaller.WithUtf8(path, pathPtr =>

@@ -292,3 +292,178 @@ pub extern "C" fn regorus_rvm_set_input_foreign(
         }())
     })
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Rust-native foreign proxy (NO FFI crossing) — bench baseline
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Same foreign ArrayBackend/ObjectBackend machinery as the C# path, but the
+// data lives in a Rust `Vec<NativeBenchSub>` and `get_value` reads straight from
+// it — no callback, no GCHandle, no managed↔native transition. This isolates the
+// intrinsic foreign-backend dispatch cost (indirect trait calls + per-element
+// Object materialization + per-field Value/ArcStr construction) from the pure
+// FFI boundary cost. Field values/types mirror the C# DataGenerator exactly so
+// the same scan.rego touches the same fields and yields the same counts.
+
+/// One Rust-resident subscription record (mirrors the C# SubscriptionValue).
+struct NativeBenchSub {
+    id: [u8; 16],
+    name: ForeignArcStr,
+    state: u64,
+    placement: ForeignArcStr,
+    quota: ForeignArcStr,
+    spending: u64,
+}
+
+/// Packed Rust-resident array + shared schema keys.
+struct NativeBenchArray {
+    subs: Vec<NativeBenchSub>,
+    keys: Vec<ForeignArcStr>,
+}
+
+fn format_guid_bench(id: &[u8; 16]) -> ForeignArcStr {
+    // Fast manual hex encode into a fixed 36-byte buffer (8-4-4-4-12 layout).
+    // Avoids the fmt machinery so this baseline reflects foreign-dispatch cost,
+    // not formatting overhead (mirrors C# Guid.TryFormat + memcpy on the FFI path).
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut buf = [0u8; 36];
+    let mut b = 0usize; // byte index into id
+    let mut o = 0usize; // out index
+    for &pos in &[8usize, 4, 4, 4, 12] {
+        for _ in 0..(pos / 2) {
+            let byte = id[b];
+            buf[o] = HEX[(byte >> 4) as usize];
+            buf[o + 1] = HEX[(byte & 0x0f) as usize];
+            b += 1;
+            o += 2;
+        }
+        if o < 36 {
+            buf[o] = b'-';
+            o += 1;
+        }
+    }
+    // buf is guaranteed valid ASCII/UTF-8.
+    let s = unsafe { core::str::from_utf8_unchecked(&buf) };
+    ForeignArcStr::from(s)
+}
+
+impl NativeBenchArray {
+    fn generate(n: usize) -> Rc<Self> {
+        // Mirror FASTERBenchmarks.DataGenerator: State cycles Enabled(1)/Warned(2)/
+        // PastDue(3)/Disabled(4); SpendingLimit cycles On(0)/Off(1)/CurrentPeriodOff(2).
+        let states = [1u64, 2, 3, 4];
+        let limits = [0u64, 1, 2];
+        let keys: Vec<ForeignArcStr> = ["i", "n", "s", "p", "q", "l"]
+            .iter()
+            .map(|s| ForeignArcStr::from(*s))
+            .collect();
+        let mut subs = Vec::with_capacity(n);
+        for i in 0..n {
+            let mut id = [0u8; 16];
+            id[0..8].copy_from_slice(&(i as u64).to_be_bytes());
+            id[8] = 0x11;
+            id[9] = 0x22;
+            id[10] = 0x33;
+            id[11] = 0x44;
+            id[12] = 0x55;
+            id[13] = 0x66;
+            id[14] = 0x77;
+            id[15] = 0x88;
+            subs.push(NativeBenchSub {
+                id,
+                name: ForeignArcStr::from(alloc::format!("Subscription-{i:07}")),
+                state: states[i % 4],
+                placement: ForeignArcStr::from(alloc::format!("West US {}", i % 5)),
+                quota: ForeignArcStr::from(alloc::format!("PayAsYouGo_2014-09-01_{:02}", i % 12)),
+                spending: limits[i % 3],
+            });
+        }
+        Rc::new(NativeBenchArray { subs, keys })
+    }
+}
+
+/// Per-element object view over a Rust-resident record (no FFI).
+struct NativeBenchObject {
+    arr: Rc<NativeBenchArray>,
+    index: usize,
+}
+
+impl ObjectBackend for NativeBenchObject {
+    fn get_value(&self, key: &str) -> Option<Value> {
+        let sub = self.arr.subs.get(self.index)?;
+        match key {
+            "i" => Some(Value::String(format_guid_bench(&sub.id))),
+            "n" => Some(Value::String(sub.name.clone())),
+            "s" => Some(Value::UInt(sub.state)),
+            "p" => Some(Value::String(sub.placement.clone())),
+            "q" => Some(Value::String(sub.quota.clone())),
+            "l" => Some(Value::UInt(sub.spending)),
+            _ => None,
+        }
+    }
+
+    fn keys(&self) -> &[ForeignArcStr] {
+        &self.arr.keys
+    }
+
+    fn len(&self) -> usize {
+        self.arr.keys.len()
+    }
+}
+
+struct NativeBenchArrayBackend {
+    arr: Rc<NativeBenchArray>,
+}
+
+impl ArrayBackend for NativeBenchArrayBackend {
+    fn get_value(&self, index: usize) -> Option<Value> {
+        if index >= self.arr.subs.len() {
+            return None;
+        }
+        let backend: Rc<dyn ObjectBackend> = Rc::new(NativeBenchObject {
+            arr: self.arr.clone(),
+            index,
+        });
+        Some(Value::Object(Rc::new(ValueMap::from_object_backend(
+            backend,
+        ))))
+    }
+
+    fn len(&self) -> usize {
+        self.arr.subs.len()
+    }
+}
+
+fn build_native_input(n: usize) -> Value {
+    let arr = NativeBenchArray::generate(n);
+    let backend: Rc<dyn ArrayBackend> = Rc::new(NativeBenchArrayBackend { arr });
+    let values = Value::Array(Rc::new(Array::from_backend(backend)));
+
+    let mut doc = ValueMap::new();
+    doc.insert(Value::String(ForeignArcStr::from("Values")), values);
+    doc.insert(
+        Value::String(ForeignArcStr::from("ContinuationToken")),
+        Value::Null,
+    );
+    Value::Object(Rc::new(doc))
+}
+
+/// Bench-only: set the engine input to a Rust-resident foreign proxy of `n`
+/// subscriptions. Identical foreign-backend machinery to the C# path but the
+/// data lives in Rust and `get_value` reads it directly — NO managed↔native
+/// crossing. Used to isolate foreign-dispatch overhead from FFI-boundary cost.
+#[no_mangle]
+pub extern "C" fn regorus_engine_set_input_foreign_native(
+    engine: *mut RegorusEngine,
+    n: usize,
+) -> RegorusResult {
+    with_unwind_guard(|| {
+        to_regorus_result(|| -> Result<()> {
+            let engine = to_ref(engine)?;
+            let value = build_native_input(n);
+            let mut guard = engine.try_write()?;
+            guard.set_input(value);
+            Ok(())
+        }())
+    })
+}

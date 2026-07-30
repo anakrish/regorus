@@ -191,9 +191,10 @@ impl MapObject {
 /// data structure (e.g. a packed subscription record) is exposed to the RVM as
 /// a Rego object without eagerly copying every field into an owned [`Value`].
 ///
-/// Implementors are only asked to *produce* a [`Value`] for a given key; the
-/// [`ForeignObject`] wrapper takes care of caching so that the borrow-returning
-/// accessors of [`Value`]/[`ValueMap`] keep working.
+/// Implementors are only asked to *produce* a [`Value`] for a given key. The
+/// hot path uses the value-returning accessor [`ValueMap::get_owned`] which
+/// calls straight through to [`ObjectBackend::get_value`] and retains nothing;
+/// the legacy borrow-returning accessors only work on cold/non-scan fallbacks.
 pub trait ObjectBackend: Send + Sync {
     /// Materialize the value for `key`, or `None` if the key is absent.
     fn get_value(&self, key: &str) -> Option<Value>;
@@ -203,17 +204,22 @@ pub trait ObjectBackend: Send + Sync {
     fn len(&self) -> usize;
 }
 
-/// A foreign-backed object with a materialization cache.
+/// A foreign-backed object (transient / no-cache spike).
 ///
-/// The cache is an [`elsa::sync::FrozenMap`] which hands out `&Value` borrows that
-/// outlive the internal borrow (entries are append-only and boxed, so their
-/// heap address is stable). This is the safe mechanism — no `unsafe` — that
-/// lets the existing `&Value`-returning accessors keep working over a foreign
-/// object without migrating the whole engine to non-borrowing accessors.
+/// The hot path (`get_owned`) materializes a fresh [`Value`] on every field
+/// access and retains nothing — the returned value is owned by the caller and
+/// dropped at last reference. There is deliberately no per-key materialization
+/// cache: a full scan keeps only one element materialized at a time, pinning
+/// resident memory at the packed-native floor.
+///
+/// The only retained state is `pairs`, a lazily-built owned snapshot used by the
+/// borrow-returning cold fallbacks (iteration, hashing, `get`) that cannot be
+/// expressed with a value-returning accessor. `pairs` is NOT populated by the
+/// scan hot path, so those retention costs never appear during a scan.
 pub struct ForeignObject {
     backend: Rc<dyn ObjectBackend>,
-    cache: elsa::sync::FrozenMap<ArcStr, Box<Value>>,
-    /// Owned key/value pairs, materialized on first iteration (cold fallback).
+    /// Owned key/value pairs, materialized on first use of a borrow-returning
+    /// cold fallback (iteration/hashing/`get`). Never touched on the hot path.
     pairs: ForeignOnce<Vec<(Value, Value)>>,
 }
 
@@ -221,18 +227,30 @@ impl ForeignObject {
     fn new(backend: Rc<dyn ObjectBackend>) -> Self {
         ForeignObject {
             backend,
-            cache: elsa::sync::FrozenMap::new(),
             pairs: ForeignOnce::new(),
         }
     }
 
-    /// Materialize-on-first-access and return a stable borrow into the cache.
+    /// Hot path: materialize a fresh owned value for `key` and retain nothing.
+    #[inline]
+    fn get_owned(&self, key: &str) -> Option<Value> {
+        self.backend.get_value(key)
+    }
+
+    /// Borrow-returning cold fallback. There is no per-key cache, so we serve
+    /// the borrow out of the fully-materialized `pairs` snapshot. This forces
+    /// full materialization and is documented as a NON-scan path only (the scan
+    /// hot path uses `get_owned`). Retaining `pairs` here is the price of the
+    /// legacy `&Value` accessor; it must not be exercised during a scan.
     fn get(&self, key: &str) -> Option<&Value> {
-        if let Some(v) = self.cache.get(key) {
-            return Some(v);
-        }
-        let v = self.backend.get_value(key)?;
-        Some(self.cache.insert(ArcStr::from(key), Box::new(v)))
+        debug_assert!(
+            false,
+            "foreign object borrow `get` hit on hot path; use get_owned"
+        );
+        self.pairs()
+            .iter()
+            .find(|(k, _)| matches!(k, Value::String(s) if s.as_str() == key))
+            .map(|(_, v)| v)
     }
 
     /// Force full materialization into owned key/value pairs (cold fallback used
@@ -254,8 +272,7 @@ impl ForeignObject {
 
 impl Clone for ForeignObject {
     fn clone(&self) -> Self {
-        // Cloning shares the backend and starts with a fresh (empty) cache;
-        // materialized values are simply recomputed on demand.
+        // Cloning shares the backend and starts fresh; there is no cache to copy.
         ForeignObject::new(self.backend.clone())
     }
 }
@@ -357,6 +374,32 @@ impl ValueMap {
             ObjectRepr::Foreign(f) => match key {
                 Value::String(s) => f.get(s.as_str()),
                 _ => None, // Foreign objects only have string keys
+            },
+        }
+    }
+
+    /// Value-returning (non-borrowing) field accessor — the transient hot path.
+    ///
+    /// For a `Foreign` object this calls straight through to the backend and
+    /// retains NOTHING (no cache insert): the returned owned [`Value`] is the
+    /// caller's, dropped at last reference. For `Compact`/`Map` it clones the
+    /// stored value. Migrating the interpreter's field-access hot path to this
+    /// accessor is what lets a foreign scan pin memory at the native floor.
+    #[inline]
+    pub fn get_owned(&self, key: &Value) -> Option<Value> {
+        match &self.repr {
+            ObjectRepr::Compact(c) => match key {
+                Value::String(s) => c
+                    .schema
+                    .lookup
+                    .get(s.as_str())
+                    .map(|&idx| c.values[idx as usize].clone()),
+                _ => None,
+            },
+            ObjectRepr::Map(m) => m.inner.get(key).cloned(),
+            ObjectRepr::Foreign(f) => match key {
+                Value::String(s) => f.get_owned(s.as_str()),
+                _ => None,
             },
         }
     }
@@ -756,16 +799,18 @@ pub trait ArrayBackend: Send + Sync {
     fn len(&self) -> usize;
 }
 
-/// A foreign-backed array with element and full-materialization caches.
+/// A foreign-backed array (transient / no-cache spike).
+///
+/// `element(idx)` materializes a fresh owned [`Value`] on every call and retains
+/// nothing — there is no per-element cache, so a scan that visits each element
+/// once keeps only the current element live. The returned value is owned by the
+/// caller (the interpreter loop drops it before the next iteration).
 pub struct ForeignArray {
     backend: Rc<dyn ArrayBackend>,
-    /// Per-element cache (append-only, boxed => stable). Retained materialized
-    /// elements keep their (object) field caches alive across accesses — this
-    /// is what lets a full scan progressively fill memory (the spike measures
-    /// that erosion).
-    elem_cache: elsa::sync::FrozenMap<usize, Box<Value>>,
     /// Full owned materialization, built lazily by `as_slice`/`as_vec`/`Deref`
     /// (the non-lazy fallback used by `as_array` and by-reference indexing).
+    /// This is the ONLY retained state and is never populated by the scan hot
+    /// path, which uses `element(idx)`.
     full: ForeignOnce<Vec<Value>>,
 }
 
@@ -773,7 +818,6 @@ impl ForeignArray {
     fn new(backend: Rc<dyn ArrayBackend>) -> Self {
         ForeignArray {
             backend,
-            elem_cache: elsa::sync::FrozenMap::new(),
             full: ForeignOnce::new(),
         }
     }
@@ -783,17 +827,14 @@ impl ForeignArray {
         self.backend.len()
     }
 
-    /// Lazily materialize element `index`, caching (and retaining) the result.
+    /// Transient element materialization: fresh value, NO cache insert. The
+    /// returned owned value is dropped by the caller at last reference.
+    #[inline]
     fn element(&self, index: usize) -> Option<Value> {
         if index >= self.backend.len() {
             return None;
         }
-        if let Some(v) = self.elem_cache.get(&index) {
-            return Some(v.clone());
-        }
-        let v = self.backend.get_value(index)?;
-        // Retain a shared clone so materialized field caches survive.
-        Some(self.elem_cache.insert(index, Box::new(v)).clone())
+        self.backend.get_value(index)
     }
 
     /// Force full materialization (non-lazy fallback).
@@ -810,7 +851,7 @@ impl ForeignArray {
 
 impl Clone for ForeignArray {
     fn clone(&self) -> Self {
-        // Shares the backend; starts with a fresh (empty) cache.
+        // Shares the backend; starts fresh (no cache to copy).
         ForeignArray::new(self.backend.clone())
     }
 }
@@ -877,8 +918,8 @@ impl Array {
     }
 
     /// Lazily fetch a clone of element `index` (cursor/index API). For owned
-    /// arrays this clones from the `Vec`; for foreign arrays it materializes and
-    /// caches. Returns `None` if out of bounds.
+    /// arrays this clones from the `Vec`; for foreign arrays it materializes a
+    /// FRESH value and retains nothing. Returns `None` if out of bounds.
     #[inline]
     pub fn element(&self, index: usize) -> Option<Value> {
         match &self.repr {
@@ -2548,6 +2589,29 @@ impl Value {
         match self {
             Value::Object(m) => Ok(m),
             _ => Err(anyhow!("not an object")),
+        }
+    }
+
+    /// Value-returning (non-borrowing) index — the transient hot path used by
+    /// the interpreter's chained field/element access.
+    ///
+    /// Semantically equivalent to `self[key].clone()`, but for foreign-backed
+    /// objects/arrays it materializes a FRESH owned value and retains nothing
+    /// (no cache insert), whereas the `Index` operator must route foreign
+    /// objects through the retained `pairs` snapshot. Returns [`Value::Undefined`]
+    /// for missing keys / out-of-range indices / non-collections.
+    #[inline]
+    pub fn index_owned(&self, key: &Value) -> Value {
+        match self {
+            Value::Object(o) => o.get_owned(key).unwrap_or(Value::Undefined),
+            Value::Set(s) => s.get(key).cloned().unwrap_or(Value::Undefined),
+            Value::Array(a) => match key.to_number().and_then(|n| n.as_u64()) {
+                Some(index) if (index as usize) < a.len() => {
+                    a.element(index as usize).unwrap_or(Value::Undefined)
+                }
+                _ => Value::Undefined,
+            },
+            _ => Value::Undefined,
         }
     }
 

@@ -597,7 +597,11 @@ impl Interpreter {
 
                         let obj = self.eval_expr(refr)?;
 
-                        let mut v = obj[&index].clone();
+                        // Spike: value-returning index so a foreign array/object
+                        // materializes only element `index` (transient, no full
+                        // materialization) instead of the borrow `Index` (which
+                        // Derefs foreign arrays -> as_slice -> full).
+                        let mut v = obj.index_owned(&index);
                         // Qualified references starting with data (e.g data.p.q) can
                         // be indexed using numbers. The number will be converted to string
                         // if a matching key exists.
@@ -605,8 +609,7 @@ impl Interpreter {
                             && index.is_number()
                             && get_root_var(refr)?.text() == "data"
                         {
-                            let index = index.to_string();
-                            v = obj[index].clone();
+                            v = obj.index_owned(&Value::from(index.to_string()));
                         }
                         return Ok(Self::get_value_chained(v, &path[..]));
                     }
@@ -1510,7 +1513,12 @@ impl Interpreter {
             }) = index_expr.map(|r| r.as_ref())
             {
                 if let Some(idx) = self.lookup_local_var(&index_var.source_str()) {
-                    if !loop_value[&idx].is_undefined() {
+                    // Spike: value-returning index so a foreign array is probed
+                    // via the lazy `element(idx)` cursor (transient, no full
+                    // materialization) instead of the borrow `Index` (Deref ->
+                    // as_slice -> full). This fires when several statements
+                    // reference the same already-bound loop index.
+                    if !loop_value.index_owned(&idx).is_undefined() {
                         result = self.eval_stmts_in_loop(stmts, loop_tail)? || result;
                         return Ok(result);
                     } else if !idx.is_undefined() {
@@ -3407,8 +3415,11 @@ impl Interpreter {
     }
 
     fn get_value_chained(mut obj: Value, path: &[&str]) -> Value {
+        // Spike: value-returning (transient) field access so foreign-backed
+        // objects materialize each field fresh and retain nothing on the scan
+        // hot path (no per-key cache).
         for p in path {
-            obj = obj[&Value::String(p.to_string().into())].clone();
+            obj = obj.index_owned(&Value::String(p.to_string().into()));
         }
         obj
     }

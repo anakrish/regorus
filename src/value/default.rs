@@ -1341,6 +1341,14 @@ impl Value {
         }
     }
 
+    /// Value-returning index. In the default Value there are no foreign backends,
+    /// so this is simply `self[key].clone()`; it exists for source compatibility
+    /// with the optimized Value's transient (no-cache) hot path.
+    #[inline]
+    pub fn index_owned(&self, key: &Value) -> Value {
+        self[key].clone()
+    }
+
     /// Cast value to [`&mut BTreeMap<Value, Value>`] if [`Value::Object`].
     /// ```
     /// # use regorus::*;

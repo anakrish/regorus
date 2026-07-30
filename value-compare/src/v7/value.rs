@@ -113,8 +113,7 @@ impl Value {
 
     pub const fn bool_val(b: bool) -> Self {
         Value {
-            bits: TAG_IMMEDIATE
-                | (if b { IMM_TRUE } else { IMM_FALSE } << PAYLOAD_SHIFT),
+            bits: TAG_IMMEDIATE | (if b { IMM_TRUE } else { IMM_FALSE } << PAYLOAD_SHIFT),
         }
     }
 
@@ -207,15 +206,17 @@ impl Value {
         self.bits == TAG_IMMEDIATE | (IMM_UNDEFINED << PAYLOAD_SHIFT)
     }
     pub fn is_bool(&self) -> bool {
-        self.tag() == TAG_IMMEDIATE
-            && (self.payload() == IMM_TRUE || self.payload() == IMM_FALSE)
+        self.tag() == TAG_IMMEDIATE && (self.payload() == IMM_TRUE || self.payload() == IMM_FALSE)
     }
     pub fn is_number(&self) -> bool {
         match self.tag() {
             TAG_UINT | TAG_NEG_INT => true,
             TAG_PTR if self.is_ptr() => matches!(
                 self.heap(),
-                HeapValue::Float(_) | HeapValue::BigInt(_) | HeapValue::LargeUInt(_) | HeapValue::LargeInt(_)
+                HeapValue::Float(_)
+                    | HeapValue::BigInt(_)
+                    | HeapValue::LargeUInt(_)
+                    | HeapValue::LargeInt(_)
             ),
             _ => false,
         }
@@ -255,7 +256,9 @@ impl Value {
                 HeapValue::Float(f) => {
                     if f.is_finite() && *f >= 0.0 && f.fract() == 0.0 && *f <= u64::MAX as f64 {
                         let c = *f as u64;
-                        if (c as f64) == *f { return Some(c); }
+                        if (c as f64) == *f {
+                            return Some(c);
+                        }
                     }
                     None
                 }
@@ -270,7 +273,11 @@ impl Value {
         match self.tag() {
             TAG_UINT => {
                 let v = self.payload() as u64;
-                if v <= i64::MAX as u64 { Some(v as i64) } else { None }
+                if v <= i64::MAX as u64 {
+                    Some(v as i64)
+                } else {
+                    None
+                }
             }
             TAG_NEG_INT => {
                 let mag = self.payload() as u64;
@@ -286,9 +293,15 @@ impl Value {
                 HeapValue::LargeInt(i) => Some(*i),
                 HeapValue::LargeUInt(u) if *u <= i64::MAX as u64 => Some(*u as i64),
                 HeapValue::Float(f) => {
-                    if f.is_finite() && f.fract() == 0.0 && *f >= i64::MIN as f64 && *f <= i64::MAX as f64 {
+                    if f.is_finite()
+                        && f.fract() == 0.0
+                        && *f >= i64::MIN as f64
+                        && *f <= i64::MAX as f64
+                    {
                         let c = *f as i64;
-                        if (c as f64) == *f { return Some(c); }
+                        if (c as f64) == *f {
+                            return Some(c);
+                        }
                     }
                     None
                 }
@@ -369,27 +382,27 @@ impl Value {
             let b = rhs.payload() as u64;
             return match a.checked_add(b) {
                 Some(sum) => Value::from_u64(sum),
-                None => Value::from_heap(HeapValue::BigInt(
-                    Arc::new(BigInt::from(a) + BigInt::from(b)),
-                )),
+                None => Value::from_heap(HeapValue::BigInt(Arc::new(
+                    BigInt::from(a) + BigInt::from(b),
+                ))),
             };
         }
 
         if let (Some(a), Some(b)) = (self.as_u64(), rhs.as_u64()) {
             return match a.checked_add(b) {
                 Some(sum) => Value::from_u64(sum),
-                None => Value::from_heap(HeapValue::BigInt(
-                    Arc::new(BigInt::from(a) + BigInt::from(b)),
-                )),
+                None => Value::from_heap(HeapValue::BigInt(Arc::new(
+                    BigInt::from(a) + BigInt::from(b),
+                ))),
             };
         }
 
         if let (Some(a), Some(b)) = (self.as_i64(), rhs.as_i64()) {
             return match a.checked_add(b) {
                 Some(sum) => Value::from_i64(sum),
-                None => Value::from_heap(HeapValue::BigInt(
-                    Arc::new(BigInt::from(a) + BigInt::from(b)),
-                )),
+                None => Value::from_heap(HeapValue::BigInt(Arc::new(
+                    BigInt::from(a) + BigInt::from(b),
+                ))),
             };
         }
 
@@ -433,7 +446,10 @@ impl Value {
                 _ => unreachable!(),
             },
             TAG_PTR if self.is_ptr() => match self.heap() {
-                HeapValue::Float(_) | HeapValue::BigInt(_) | HeapValue::LargeUInt(_) | HeapValue::LargeInt(_) => 2,
+                HeapValue::Float(_)
+                | HeapValue::BigInt(_)
+                | HeapValue::LargeUInt(_)
+                | HeapValue::LargeInt(_) => 2,
                 HeapValue::String(_) => 3,
                 HeapValue::Array(_) => 4,
                 HeapValue::Object(_) => 5,
@@ -462,32 +478,57 @@ impl Value {
                 self.payload().hash(state);
             }
             TAG_PTR if self.is_ptr() => match self.heap() {
-                HeapValue::Float(f) => { f.to_bits().hash(state); }
-                HeapValue::LargeUInt(u) => { 0u8.hash(state); u.hash(state); }
-                HeapValue::LargeInt(i) if *i >= 0 => { 0u8.hash(state); (*i as u64).hash(state); }
-                HeapValue::LargeInt(i) => { 1u8.hash(state); i.hash(state); }
+                HeapValue::Float(f) => {
+                    f.to_bits().hash(state);
+                }
+                HeapValue::LargeUInt(u) => {
+                    0u8.hash(state);
+                    u.hash(state);
+                }
+                HeapValue::LargeInt(i) if *i >= 0 => {
+                    0u8.hash(state);
+                    (*i as u64).hash(state);
+                }
+                HeapValue::LargeInt(i) => {
+                    1u8.hash(state);
+                    i.hash(state);
+                }
                 HeapValue::BigInt(b) => {
                     use num_traits::ToPrimitive;
-                    if let Some(u) = b.to_u64() { 0u8.hash(state); u.hash(state); }
-                    else if let Some(i) = b.to_i64() {
-                        if i >= 0 { 0u8.hash(state); (i as u64).hash(state); }
-                        else { 1u8.hash(state); i.hash(state); }
+                    if let Some(u) = b.to_u64() {
+                        0u8.hash(state);
+                        u.hash(state);
+                    } else if let Some(i) = b.to_i64() {
+                        if i >= 0 {
+                            0u8.hash(state);
+                            (i as u64).hash(state);
+                        } else {
+                            1u8.hash(state);
+                            i.hash(state);
+                        }
                     } else {
                         2u8.hash(state);
                         let (sign, bytes) = b.to_bytes_be();
-                        sign.hash(state); bytes.hash(state);
+                        sign.hash(state);
+                        bytes.hash(state);
                     }
                 }
-                HeapValue::String(s) => { s.as_str().hash(state); }
+                HeapValue::String(s) => {
+                    s.as_str().hash(state);
+                }
                 HeapValue::Array(a) => {
                     a.len().hash(state);
-                    for v in a.iter() { v.hash_content(state); }
+                    for v in a.iter() {
+                        v.hash_content(state);
+                    }
                 }
                 HeapValue::Set(s) => {
                     s.len().hash(state);
                     Self::set_hash(s).hash(state);
                 }
-                HeapValue::Object(o) => { o.hash(state); }
+                HeapValue::Object(o) => {
+                    o.hash(state);
+                }
             },
             _ => {}
         }
@@ -510,9 +551,14 @@ impl Value {
             TAG_PTR if self.is_ptr() => match self.heap() {
                 HeapValue::Float(f) => {
                     if f.fract() == 0.0 && f.is_finite() {
-                        if *f >= 0.0 { (*f as u64).to_string() }
-                        else { (*f as i64).to_string() }
-                    } else { f.to_string() }
+                        if *f >= 0.0 {
+                            (*f as u64).to_string()
+                        } else {
+                            (*f as i64).to_string()
+                        }
+                    } else {
+                        f.to_string()
+                    }
                 }
                 HeapValue::LargeUInt(u) => u.to_string(),
                 HeapValue::LargeInt(i) => i.to_string(),
@@ -527,37 +573,59 @@ impl Value {
 // ─── From impls ──────────────────────────────────────────────────────────────
 
 impl From<bool> for Value {
-    fn from(b: bool) -> Self { Value::bool_val(b) }
+    fn from(b: bool) -> Self {
+        Value::bool_val(b)
+    }
 }
 impl From<&str> for Value {
-    fn from(s: &str) -> Self { Value::from_arcstr(ArcStr::from(s)) }
+    fn from(s: &str) -> Self {
+        Value::from_arcstr(ArcStr::from(s))
+    }
 }
 impl From<String> for Value {
-    fn from(s: String) -> Self { Value::from_arcstr(ArcStr::from(s.as_str())) }
+    fn from(s: String) -> Self {
+        Value::from_arcstr(ArcStr::from(s.as_str()))
+    }
 }
 impl From<ArcStr> for Value {
-    fn from(s: ArcStr) -> Self { Value::from_arcstr(s) }
+    fn from(s: ArcStr) -> Self {
+        Value::from_arcstr(s)
+    }
 }
 impl From<i64> for Value {
-    fn from(n: i64) -> Self { Value::from_i64(n) }
+    fn from(n: i64) -> Self {
+        Value::from_i64(n)
+    }
 }
 impl From<u64> for Value {
-    fn from(n: u64) -> Self { Value::from_u64(n) }
+    fn from(n: u64) -> Self {
+        Value::from_u64(n)
+    }
 }
 impl From<i32> for Value {
-    fn from(n: i32) -> Self { Value::from_i64(n as i64) }
+    fn from(n: i32) -> Self {
+        Value::from_i64(n as i64)
+    }
 }
 impl From<u32> for Value {
-    fn from(n: u32) -> Self { Value::from_u64(n as u64) }
+    fn from(n: u32) -> Self {
+        Value::from_u64(n as u64)
+    }
 }
 impl From<f64> for Value {
-    fn from(n: f64) -> Self { Value::from_f64(n) }
+    fn from(n: f64) -> Self {
+        Value::from_f64(n)
+    }
 }
 impl From<Vec<Value>> for Value {
-    fn from(a: Vec<Value>) -> Self { Value::from_array(a) }
+    fn from(a: Vec<Value>) -> Self {
+        Value::from_array(a)
+    }
 }
 impl From<HashSet<Value>> for Value {
-    fn from(s: HashSet<Value>) -> Self { Value::from_set(s) }
+    fn from(s: HashSet<Value>) -> Self {
+        Value::from_set(s)
+    }
 }
 impl From<BTreeSet<Value>> for Value {
     fn from(s: BTreeSet<Value>) -> Self {
@@ -571,7 +639,9 @@ impl From<BTreeMap<Value, Value>> for Value {
     }
 }
 impl From<ObjectMap> for Value {
-    fn from(m: ObjectMap) -> Self { Value::from_object(m) }
+    fn from(m: ObjectMap) -> Self {
+        Value::from_object(m)
+    }
 }
 
 // ─── Clone ───────────────────────────────────────────────────────────────────
@@ -580,9 +650,7 @@ impl Clone for Value {
     fn clone(&self) -> Self {
         if self.is_ptr() {
             unsafe {
-                Arc::increment_strong_count(
-                    (self.bits & !TAG_MASK) as *const HeapValue,
-                );
+                Arc::increment_strong_count((self.bits & !TAG_MASK) as *const HeapValue);
             }
         }
         Value { bits: self.bits }
@@ -595,9 +663,7 @@ impl Drop for Value {
     fn drop(&mut self) {
         if self.is_ptr() {
             unsafe {
-                Arc::decrement_strong_count(
-                    (self.bits & !TAG_MASK) as *const HeapValue,
-                );
+                Arc::decrement_strong_count((self.bits & !TAG_MASK) as *const HeapValue);
             }
         }
     }
@@ -613,17 +679,27 @@ impl PartialEq for Value {
         }
         let at = self.tag();
         let bt = other.tag();
-        if at == TAG_UINT && bt == TAG_UINT { return false; }
-        if at == TAG_NEG_INT && bt == TAG_NEG_INT { return false; }
+        if at == TAG_UINT && bt == TAG_UINT {
+            return false;
+        }
+        if at == TAG_NEG_INT && bt == TAG_NEG_INT {
+            return false;
+        }
         if (at == TAG_UINT && bt == TAG_NEG_INT) || (at == TAG_NEG_INT && bt == TAG_UINT) {
             return false;
         }
-        if at == TAG_IMMEDIATE && bt == TAG_IMMEDIATE { return false; }
-        if !self.is_ptr() && !other.is_ptr() { return false; }
+        if at == TAG_IMMEDIATE && bt == TAG_IMMEDIATE {
+            return false;
+        }
+        if !self.is_ptr() && !other.is_ptr() {
+            return false;
+        }
 
         let ak = self.kind_ordinal();
         let bk = other.kind_ordinal();
-        if ak != bk { return false; }
+        if ak != bk {
+            return false;
+        }
 
         match (self.heap(), other.heap()) {
             (HeapValue::Float(a), HeapValue::Float(b)) => a.to_bits() == b.to_bits(),
@@ -634,7 +710,9 @@ impl PartialEq for Value {
             (HeapValue::Array(a), HeapValue::Array(b)) => a == b,
             (HeapValue::Object(a), HeapValue::Object(b)) => a == b,
             (HeapValue::Set(a), HeapValue::Set(b)) => {
-                if a.len() != b.len() { return false; }
+                if a.len() != b.len() {
+                    return false;
+                }
                 a.iter().all(|v| b.contains(v))
             }
             _ => false,
@@ -656,7 +734,9 @@ impl Ord for Value {
     fn cmp(&self, other: &Self) -> Ordering {
         let ka = self.kind_ordinal();
         let kb = other.kind_ordinal();
-        if ka != kb { return ka.cmp(&kb); }
+        if ka != kb {
+            return ka.cmp(&kb);
+        }
 
         match ka {
             0 | 7 => Ordering::Equal,
@@ -687,8 +767,12 @@ impl Value {
         if self.tag() == TAG_NEG_INT && other.tag() == TAG_NEG_INT {
             return (other.payload() as u64).cmp(&(self.payload() as u64));
         }
-        if self.tag() == TAG_UINT && other.tag() == TAG_NEG_INT { return Ordering::Greater; }
-        if self.tag() == TAG_NEG_INT && other.tag() == TAG_UINT { return Ordering::Less; }
+        if self.tag() == TAG_UINT && other.tag() == TAG_NEG_INT {
+            return Ordering::Greater;
+        }
+        if self.tag() == TAG_NEG_INT && other.tag() == TAG_UINT {
+            return Ordering::Less;
+        }
 
         let a = self.as_f64().unwrap_or(0.0);
         let b = other.as_f64().unwrap_or(0.0);
@@ -752,12 +836,16 @@ impl std::ops::Index<&Value> for Value {
             return o.get(key).unwrap_or(&UNDEFINED_STATIC);
         }
         if let Some(s) = self.as_set() {
-            if let Some(v) = s.get(key) { return v; }
+            if let Some(v) = s.get(key) {
+                return v;
+            }
             return &UNDEFINED_STATIC;
         }
         if let Some(a) = self.as_array() {
             if let Some(idx) = key.as_u64() {
-                if (idx as usize) < a.len() { return &a[idx as usize]; }
+                if (idx as usize) < a.len() {
+                    return &a[idx as usize];
+                }
             }
             return &UNDEFINED_STATIC;
         }

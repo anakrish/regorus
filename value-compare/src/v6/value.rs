@@ -138,8 +138,7 @@ impl Value {
 
     pub const fn bool_val(b: bool) -> Self {
         Value {
-            bits: TAG_IMMEDIATE
-                | (if b { IMM_TRUE } else { IMM_FALSE } << PAYLOAD_SHIFT),
+            bits: TAG_IMMEDIATE | (if b { IMM_TRUE } else { IMM_FALSE } << PAYLOAD_SHIFT),
         }
     }
 
@@ -220,10 +219,7 @@ impl Value {
         let raw = Arc::into_raw(arc) as usize;
         // Arc allocations are always aligned to at least 8 bytes,
         // so the low 3 bits must be zero.
-        debug_assert!(
-            raw & TAG_MASK == 0,
-            "Arc pointer not aligned: {raw:#x}"
-        );
+        debug_assert!(raw & TAG_MASK == 0, "Arc pointer not aligned: {raw:#x}");
         Value {
             bits: raw | TAG_PTR,
         }
@@ -246,8 +242,7 @@ impl Value {
     }
 
     pub fn is_bool(&self) -> bool {
-        self.tag() == TAG_IMMEDIATE
-            && (self.payload() == IMM_TRUE || self.payload() == IMM_FALSE)
+        self.tag() == TAG_IMMEDIATE && (self.payload() == IMM_TRUE || self.payload() == IMM_FALSE)
     }
 
     pub fn is_number(&self) -> bool {
@@ -255,7 +250,10 @@ impl Value {
             TAG_UINT | TAG_NEG_INT => true,
             TAG_PTR if self.is_ptr() => matches!(
                 self.heap(),
-                HeapValue::Float(_) | HeapValue::BigInt(_) | HeapValue::LargeUInt(_) | HeapValue::LargeInt(_)
+                HeapValue::Float(_)
+                    | HeapValue::BigInt(_)
+                    | HeapValue::LargeUInt(_)
+                    | HeapValue::LargeInt(_)
             ),
             _ => false,
         }
@@ -336,7 +334,11 @@ impl Value {
                 HeapValue::LargeInt(i) => Some(*i),
                 HeapValue::LargeUInt(u) if *u <= i64::MAX as u64 => Some(*u as i64),
                 HeapValue::Float(f) => {
-                    if f.is_finite() && f.fract() == 0.0 && *f >= i64::MIN as f64 && *f <= i64::MAX as f64 {
+                    if f.is_finite()
+                        && f.fract() == 0.0
+                        && *f >= i64::MIN as f64
+                        && *f <= i64::MAX as f64
+                    {
                         let c = *f as i64;
                         if (c as f64) == *f {
                             return Some(c);
@@ -438,9 +440,9 @@ impl Value {
             let b = rhs.payload() as u64;
             return match a.checked_add(b) {
                 Some(sum) => Value::from_u64(sum),
-                None => Value::from_heap(HeapValue::BigInt(
-                    Arc::new(BigInt::from(a) + BigInt::from(b)),
-                )),
+                None => Value::from_heap(HeapValue::BigInt(Arc::new(
+                    BigInt::from(a) + BigInt::from(b),
+                ))),
             };
         }
 
@@ -448,18 +450,18 @@ impl Value {
         if let (Some(a), Some(b)) = (self.as_u64(), rhs.as_u64()) {
             return match a.checked_add(b) {
                 Some(sum) => Value::from_u64(sum),
-                None => Value::from_heap(HeapValue::BigInt(
-                    Arc::new(BigInt::from(a) + BigInt::from(b)),
-                )),
+                None => Value::from_heap(HeapValue::BigInt(Arc::new(
+                    BigInt::from(a) + BigInt::from(b),
+                ))),
             };
         }
 
         if let (Some(a), Some(b)) = (self.as_i64(), rhs.as_i64()) {
             return match a.checked_add(b) {
                 Some(sum) => Value::from_i64(sum),
-                None => Value::from_heap(HeapValue::BigInt(
-                    Arc::new(BigInt::from(a) + BigInt::from(b)),
-                )),
+                None => Value::from_heap(HeapValue::BigInt(Arc::new(
+                    BigInt::from(a) + BigInt::from(b),
+                ))),
             };
         }
 
@@ -507,7 +509,10 @@ impl Value {
                 _ => unreachable!(),
             },
             TAG_PTR if self.is_ptr() => match self.heap() {
-                HeapValue::Float(_) | HeapValue::BigInt(_) | HeapValue::LargeUInt(_) | HeapValue::LargeInt(_) => 2,
+                HeapValue::Float(_)
+                | HeapValue::BigInt(_)
+                | HeapValue::LargeUInt(_)
+                | HeapValue::LargeInt(_) => 2,
                 HeapValue::String(_) => 3,
                 HeapValue::Array(_) => 4,
                 HeapValue::Object(_) => 5,
@@ -727,9 +732,7 @@ impl Clone for Value {
         if self.is_ptr() {
             // Increment the Arc refcount.
             unsafe {
-                Arc::increment_strong_count(
-                    (self.bits & !TAG_MASK) as *const HeapValue,
-                );
+                Arc::increment_strong_count((self.bits & !TAG_MASK) as *const HeapValue);
             }
         }
         Value { bits: self.bits }
@@ -742,9 +745,7 @@ impl Drop for Value {
     fn drop(&mut self) {
         if self.is_ptr() {
             unsafe {
-                Arc::decrement_strong_count(
-                    (self.bits & !TAG_MASK) as *const HeapValue,
-                );
+                Arc::decrement_strong_count((self.bits & !TAG_MASK) as *const HeapValue);
             }
         }
     }

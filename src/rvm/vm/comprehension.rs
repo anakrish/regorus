@@ -52,11 +52,9 @@ impl RegoVM {
                     if obj.is_empty() {
                         None
                     } else {
-                        let items: Vec<(Value, Value)> = obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                        Some(IterationState::Object {
-                            items,
-                            index: 0,
-                        })
+                        let items: Vec<(Value, Value)> =
+                            obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                        Some(IterationState::Object { items, index: 0 })
                     }
                 }
                 Value::Set(set) => {
@@ -64,10 +62,7 @@ impl RegoVM {
                         None
                     } else {
                         let items: Vec<Value> = set.iter().cloned().collect();
-                        Some(IterationState::Set {
-                            items,
-                            index: 0,
-                        })
+                        Some(IterationState::Set { items, index: 0 })
                     }
                 }
                 Value::Undefined => None,
@@ -141,11 +136,9 @@ impl RegoVM {
                     if obj.is_empty() {
                         None
                     } else {
-                        let items: Vec<(Value, Value)> = obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                        Some(IterationState::Object {
-                            items,
-                            index: 0,
-                        })
+                        let items: Vec<(Value, Value)> =
+                            obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                        Some(IterationState::Object { items, index: 0 })
                     }
                 }
                 Value::Set(set) => {
@@ -153,10 +146,7 @@ impl RegoVM {
                         None
                     } else {
                         let items: Vec<Value> = set.iter().cloned().collect();
-                        Some(IterationState::Set {
-                            items,
-                            index: 0,
-                        })
+                        Some(IterationState::Set { items, index: 0 })
                     }
                 }
                 Value::Undefined => None,

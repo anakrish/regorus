@@ -117,7 +117,9 @@ const MEDIUM_JSON: &str = r#"{
 
 /// Generate a flat object with N string→string pairs.
 fn flat_obj_json(n: usize) -> String {
-    let entries: Vec<String> = (0..n).map(|i| format!(r#""key_{i}": "value_{i}""#)).collect();
+    let entries: Vec<String> = (0..n)
+        .map(|i| format!(r#""key_{i}": "value_{i}""#))
+        .collect();
     format!("{{{}}}", entries.join(", "))
 }
 
@@ -421,10 +423,9 @@ fn bench_insert(c: &mut Criterion) {
         b.iter(|| {
             let mut obj = base.clone();
             let _keep_alive = base.clone(); // hold second Rc ref
-            obj.as_object_mut().unwrap().insert(
-                Value::from("new_key"),
-                Value::from("new_val"),
-            );
+            obj.as_object_mut()
+                .unwrap()
+                .insert(Value::from("new_key"), Value::from("new_val"));
             black_box(obj);
         });
     });
@@ -442,7 +443,9 @@ fn bench_set_ops(c: &mut Criterion) {
     // Build a set of 100 string values
     let mut set = Value::new_set();
     for i in 0..100 {
-        set.as_set_mut().unwrap().insert(Value::from(format!("item_{i}").as_str()));
+        set.as_set_mut()
+            .unwrap()
+            .insert(Value::from(format!("item_{i}").as_str()));
     }
 
     let hit = Value::from("item_50");
@@ -496,7 +499,11 @@ fn bench_eval_hot(c: &mut Criterion) {
     // Representative subset: one simple, one medium, one complex policy
     let policies: &[(&str, &str, &str)] = &[
         ("rbac", "rbac_policy.rego", "rbac_input.json"),
-        ("api_access", "api_access_policy.rego", "api_access_input.json"),
+        (
+            "api_access",
+            "api_access_policy.rego",
+            "api_access_input.json",
+        ),
         ("azure_nsg", "azure_nsg_policy.rego", "azure_nsg_input.json"),
     ];
 
@@ -513,7 +520,9 @@ fn bench_eval_hot(c: &mut Criterion) {
         let input: Value = Value::from_json_str(&input_json).unwrap();
 
         let mut engine = Engine::new();
-        engine.add_policy("policy.rego".to_string(), policy).unwrap();
+        engine
+            .add_policy("policy.rego".to_string(), policy)
+            .unwrap();
         // Warm up
         engine.set_input(input.clone());
         let _ = engine.eval_rule("data.bench.allow".to_string());
@@ -570,7 +579,9 @@ fn load_aci_cases(dir: &Path) -> Vec<AciTestCase> {
 fn build_aci_engine(dir: &Path, case: &AciTestCase) -> Engine {
     let mut engine = Engine::new();
     engine.set_rego_v0(true);
-    engine.add_data(case.data.clone()).expect("failed to add data");
+    engine
+        .add_data(case.data.clone())
+        .expect("failed to add data");
     engine.set_input(case.input.clone());
     for (idx, rego) in case.modules.iter().enumerate() {
         if rego.ends_with(".rego") {

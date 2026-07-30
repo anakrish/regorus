@@ -95,7 +95,11 @@ impl Number {
             Number::UInt(v) if *v <= i64::MAX as u64 => Some(*v as i64),
             Number::BigInt(v) => v.to_i64(),
             Number::Float(f) => {
-                if f.is_finite() && f.fract() == 0.0 && *f >= i64::MIN as f64 && *f <= i64::MAX as f64 {
+                if f.is_finite()
+                    && f.fract() == 0.0
+                    && *f >= i64::MIN as f64
+                    && *f <= i64::MAX as f64
+                {
                     let c = *f as i64;
                     if (c as f64) == *f {
                         return Some(c);
@@ -234,9 +238,7 @@ impl Ord for Number {
             (Number::UInt(a), Number::UInt(b)) => a.cmp(b),
             (Number::Int(a), Number::Int(b)) => a.cmp(b),
             (Number::BigInt(a), Number::BigInt(b)) => a.cmp(b),
-            (Number::Float(a), Number::Float(b)) => {
-                a.partial_cmp(b).unwrap_or(Ordering::Equal)
-            }
+            (Number::Float(a), Number::Float(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
 
             // Cross-variant integer widening:
             (Number::UInt(a), Number::Int(b)) => {

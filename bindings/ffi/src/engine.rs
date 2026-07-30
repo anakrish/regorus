@@ -40,7 +40,7 @@ impl RegorusEngine {
         )
     }
 
-    fn try_write(&self) -> Result<WriteGuard<'_, ::regorus::Engine>> {
+    pub(crate) fn try_write(&self) -> Result<WriteGuard<'_, ::regorus::Engine>> {
         try_write(&self.engine).ok_or_else(Self::contention_error)
     }
 
@@ -350,6 +350,35 @@ pub extern "C" fn regorus_engine_set_input_from_json_file(
             let engine = to_ref(engine)?;
             let mut guard = engine.try_write()?;
             guard.set_input(regorus::Value::from_json_file(from_c_str(path)?)?);
+            Ok(())
+        }())
+    })
+}
+
+/// Set input from a self-describing MessagePack-encoded value.
+///
+/// `data` points to `len` bytes of a MessagePack document (maps must use string
+/// keys). The bytes are decoded directly into a regorus `Value`, avoiding the
+/// JSON text round-trip performed by `regorus_engine_set_input_json`.
+///
+/// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.set_input
+#[no_mangle]
+pub extern "C" fn regorus_engine_set_input_msgpack(
+    engine: *mut RegorusEngine,
+    data: *const u8,
+    len: usize,
+) -> RegorusResult {
+    with_unwind_guard(|| {
+        to_regorus_result(|| -> Result<()> {
+            let engine = to_ref(engine)?;
+            let mut guard = engine.try_write()?;
+            if data.is_null() {
+                return Err(anyhow!("null data pointer"));
+            }
+            let bytes = unsafe { core::slice::from_raw_parts(data, len) };
+            let value: regorus::Value =
+                rmp_serde::from_slice(bytes).map_err(|e| anyhow!("msgpack decode error: {e}"))?;
+            guard.set_input(value);
             Ok(())
         }())
     })

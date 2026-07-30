@@ -138,12 +138,24 @@ impl<'de> Visitor<'de> for ValueVisitor {
         write!(f, "a JSON value")
     }
 
-    fn visit_unit<E: de::Error>(self) -> Result<Value, E> { Ok(Value::null()) }
-    fn visit_none<E: de::Error>(self) -> Result<Value, E> { Ok(Value::null()) }
-    fn visit_bool<E: de::Error>(self, v: bool) -> Result<Value, E> { Ok(Value::bool_val(v)) }
-    fn visit_u64<E: de::Error>(self, v: u64) -> Result<Value, E> { Ok(Value::from(v)) }
-    fn visit_i64<E: de::Error>(self, v: i64) -> Result<Value, E> { Ok(Value::from(v)) }
-    fn visit_f64<E: de::Error>(self, v: f64) -> Result<Value, E> { Ok(Value::from_f64(v)) }
+    fn visit_unit<E: de::Error>(self) -> Result<Value, E> {
+        Ok(Value::null())
+    }
+    fn visit_none<E: de::Error>(self) -> Result<Value, E> {
+        Ok(Value::null())
+    }
+    fn visit_bool<E: de::Error>(self, v: bool) -> Result<Value, E> {
+        Ok(Value::bool_val(v))
+    }
+    fn visit_u64<E: de::Error>(self, v: u64) -> Result<Value, E> {
+        Ok(Value::from(v))
+    }
+    fn visit_i64<E: de::Error>(self, v: i64) -> Result<Value, E> {
+        Ok(Value::from(v))
+    }
+    fn visit_f64<E: de::Error>(self, v: f64) -> Result<Value, E> {
+        Ok(Value::from_f64(v))
+    }
     fn visit_str<E: de::Error>(self, v: &str) -> Result<Value, E> {
         Ok(Value::from_arcstr(ArcStr::from(v)))
     }
@@ -209,12 +221,24 @@ impl<'de> Visitor<'de> for InternedValueVisitor {
         write!(f, "a JSON value")
     }
 
-    fn visit_unit<E: de::Error>(self) -> Result<Value, E> { Ok(Value::null()) }
-    fn visit_none<E: de::Error>(self) -> Result<Value, E> { Ok(Value::null()) }
-    fn visit_bool<E: de::Error>(self, v: bool) -> Result<Value, E> { Ok(Value::bool_val(v)) }
-    fn visit_u64<E: de::Error>(self, v: u64) -> Result<Value, E> { Ok(Value::from(v)) }
-    fn visit_i64<E: de::Error>(self, v: i64) -> Result<Value, E> { Ok(Value::from(v)) }
-    fn visit_f64<E: de::Error>(self, v: f64) -> Result<Value, E> { Ok(Value::from_f64(v)) }
+    fn visit_unit<E: de::Error>(self) -> Result<Value, E> {
+        Ok(Value::null())
+    }
+    fn visit_none<E: de::Error>(self) -> Result<Value, E> {
+        Ok(Value::null())
+    }
+    fn visit_bool<E: de::Error>(self, v: bool) -> Result<Value, E> {
+        Ok(Value::bool_val(v))
+    }
+    fn visit_u64<E: de::Error>(self, v: u64) -> Result<Value, E> {
+        Ok(Value::from(v))
+    }
+    fn visit_i64<E: de::Error>(self, v: i64) -> Result<Value, E> {
+        Ok(Value::from(v))
+    }
+    fn visit_f64<E: de::Error>(self, v: f64) -> Result<Value, E> {
+        Ok(Value::from_f64(v))
+    }
     fn visit_str<E: de::Error>(self, v: &str) -> Result<Value, E> {
         Ok(Value::from_arcstr(ArcStr::from(v)))
     }

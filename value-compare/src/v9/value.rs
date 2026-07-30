@@ -257,7 +257,6 @@ impl std::fmt::Debug for ArenaSet<'_> {
 //  Value
 // ---------------------------------------------------------------------------
 
-
 // ===========================================================================
 //  ArenaValue — inner, lean 11-variant enum
 // ===========================================================================
@@ -315,8 +314,7 @@ struct SyncUndefined(Value<'static>);
 // SAFETY: Value::Arena(ArenaValue::Undefined) has no data, no references,
 // no interior mutability.
 unsafe impl Sync for SyncUndefined {}
-static UNDEFINED_WRAPPER: SyncUndefined =
-    SyncUndefined(Value::Arena(ArenaValue::Undefined));
+static UNDEFINED_WRAPPER: SyncUndefined = SyncUndefined(Value::Arena(ArenaValue::Undefined));
 
 fn undefined_ref() -> &'static Value<'static> {
     &UNDEFINED_WRAPPER.0
@@ -400,10 +398,7 @@ impl ArenaValue<'_> {
     pub fn is_number(&self) -> bool {
         matches!(
             self,
-            ArenaValue::UInt(_)
-                | ArenaValue::Int(_)
-                | ArenaValue::Float(_)
-                | ArenaValue::BigInt(_)
+            ArenaValue::UInt(_) | ArenaValue::Int(_) | ArenaValue::Float(_) | ArenaValue::BigInt(_)
         )
     }
     pub fn is_string(&self) -> bool {
@@ -546,19 +541,13 @@ impl PartialEq for ArenaValue<'_> {
             (ArenaValue::Null, ArenaValue::Null)
             | (ArenaValue::Undefined, ArenaValue::Undefined) => true,
             (ArenaValue::Bool(a), ArenaValue::Bool(b)) => a == b,
-            (ArenaValue::String(a), ArenaValue::String(b)) => {
-                std::ptr::eq(*a, *b) || a.0 == b.0
-            }
+            (ArenaValue::String(a), ArenaValue::String(b)) => std::ptr::eq(*a, *b) || a.0 == b.0,
             (ArenaValue::Array(a), ArenaValue::Array(b)) => {
                 // Array elements are Value<'a>, so == goes through Value::eq.
                 std::ptr::eq(*a, *b) || a.0 == b.0
             }
-            (ArenaValue::Set(a), ArenaValue::Set(b)) => {
-                std::ptr::eq(*a, *b) || *a == *b
-            }
-            (ArenaValue::Object(a), ArenaValue::Object(b)) => {
-                std::ptr::eq(*a, *b) || *a == *b
-            }
+            (ArenaValue::Set(a), ArenaValue::Set(b)) => std::ptr::eq(*a, *b) || *a == *b,
+            (ArenaValue::Object(a), ArenaValue::Object(b)) => std::ptr::eq(*a, *b) || *a == *b,
             _ => match (self.as_number(), other.as_number()) {
                 (Some(a), Some(b)) => a == b,
                 _ => false,
@@ -795,7 +784,9 @@ impl Value<'_> {
     pub fn is_number(&self) -> bool {
         match self {
             Value::Arena(inner) => inner.is_number(),
-            Value::Ext(ExtValue::UInt(_) | ExtValue::Int(_) | ExtValue::Float(_) | ExtValue::BigInt(_)) => true,
+            Value::Ext(
+                ExtValue::UInt(_) | ExtValue::Int(_) | ExtValue::Float(_) | ExtValue::BigInt(_),
+            ) => true,
             _ => false,
         }
     }
@@ -843,11 +834,10 @@ impl<'a> Value<'a> {
 
     pub fn get_str_val(&self, key: &str) -> Value<'a> {
         match self {
-            Value::Arena(ArenaValue::Object(o)) => {
-                o.get_str(key)
-                    .copied()
-                    .unwrap_or(Value::Arena(ArenaValue::Undefined))
-            }
+            Value::Arena(ArenaValue::Object(o)) => o
+                .get_str(key)
+                .copied()
+                .unwrap_or(Value::Arena(ArenaValue::Undefined)),
             _ => Value::Arena(ArenaValue::Undefined),
         }
     }
@@ -955,9 +945,7 @@ impl<'a> Value<'a> {
                 ArenaValue::String(arena.alloc(ArenaStr(s.as_str())))
             }
             crate::v8::Value::Array(a) => {
-                let items = arena.alloc_slice_fill_iter(
-                    a.iter().map(|v| Value::from_v8(v, arena)),
-                );
+                let items = arena.alloc_slice_fill_iter(a.iter().map(|v| Value::from_v8(v, arena)));
                 ArenaValue::Array(arena.alloc(ArenaArray(items)))
             }
             crate::v8::Value::Set(s) => {
@@ -969,10 +957,7 @@ impl<'a> Value<'a> {
             crate::v8::Value::Object(o) => {
                 let mut builder = ObjectMapBuilder::new(arena);
                 for (k, v) in o.iter() {
-                    builder.insert(
-                        Value::from_ext(arena, &k),
-                        Value::from_v8(v, arena),
-                    );
+                    builder.insert(Value::from_ext(arena, &k), Value::from_v8(v, arena));
                 }
                 ArenaValue::Object(builder.build())
             }
@@ -1061,12 +1046,10 @@ impl<'a> std::ops::Index<&Value<'a>> for Value<'a> {
         match self {
             Value::Arena(ArenaValue::Object(o)) => o.get(key).unwrap_or(undefined_ref()),
             Value::Arena(ArenaValue::Set(s)) => s.get(key).unwrap_or(undefined_ref()),
-            Value::Arena(ArenaValue::Array(a)) => {
-                match key.as_number().and_then(|n| n.as_u64()) {
-                    Some(idx) if (idx as usize) < a.0.len() => &a.0[idx as usize],
-                    _ => undefined_ref(),
-                }
-            }
+            Value::Arena(ArenaValue::Array(a)) => match key.as_number().and_then(|n| n.as_u64()) {
+                Some(idx) if (idx as usize) < a.0.len() => &a.0[idx as usize],
+                _ => undefined_ref(),
+            },
             _ => undefined_ref(),
         }
     }

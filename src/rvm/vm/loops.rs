@@ -1,9 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use alloc::vec::Vec;
 use crate::rvm::instructions::LoopMode;
 use crate::value::Value;
+use alloc::vec::Vec;
 // The lazy `element` accessor is an inherent method on the optimized `Array`
 // but a `Vec<Value>` extension trait in the default value model; import the
 // trait only when that model is active.
@@ -100,11 +100,9 @@ impl RegoVM {
                     self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
                     return Ok(());
                 }
-                let items: Vec<(Value, Value)> = obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                IterationState::Object {
-                    items,
-                    index: 0,
-                }
+                let items: Vec<(Value, Value)> =
+                    obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                IterationState::Object { items, index: 0 }
             }
             Value::Set(ref set) => {
                 if set.is_empty() {
@@ -112,10 +110,7 @@ impl RegoVM {
                     return Ok(());
                 }
                 let items: Vec<Value> = set.iter().cloned().collect();
-                IterationState::Set {
-                    items,
-                    index: 0,
-                }
+                IterationState::Set { items, index: 0 }
             }
             _ => {
                 self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
@@ -188,11 +183,9 @@ impl RegoVM {
                 LoopAction::Continue => {}
             }
 
-            if let &mut IterationState::Object { .. } = &mut loop_ctx.iteration_state
-            {
+            if let &mut IterationState::Object { .. } = &mut loop_ctx.iteration_state {
                 // index-based: advance() handles incrementing
-            } else if let &mut IterationState::Set { .. } = &mut loop_ctx.iteration_state
-            {
+            } else if let &mut IterationState::Set { .. } = &mut loop_ctx.iteration_state {
                 // index-based: advance() handles incrementing
             }
 
@@ -257,11 +250,9 @@ impl RegoVM {
                     self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
                     return Ok(());
                 }
-                let items: Vec<(Value, Value)> = obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                IterationState::Object {
-                    items,
-                    index: 0,
-                }
+                let items: Vec<(Value, Value)> =
+                    obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                IterationState::Object { items, index: 0 }
             }
             Value::Set(ref set) => {
                 if set.is_empty() {
@@ -269,10 +260,7 @@ impl RegoVM {
                     return Ok(());
                 }
                 let items: Vec<Value> = set.iter().cloned().collect();
-                IterationState::Set {
-                    items,
-                    index: 0,
-                }
+                IterationState::Set { items, index: 0 }
             }
             _ => {
                 self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
@@ -428,7 +416,8 @@ impl RegoVM {
                             if let &mut IterationState::Object { .. } = &mut context.iteration_state
                             {
                                 // index-based: advance() handles incrementing
-                            } else if let &mut IterationState::Set { .. } = &mut context.iteration_state
+                            } else if let &mut IterationState::Set { .. } =
+                                &mut context.iteration_state
                             {
                                 // index-based: advance() handles incrementing
                             }

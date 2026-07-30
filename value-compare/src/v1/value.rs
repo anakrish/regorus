@@ -299,8 +299,7 @@ impl Value {
             regorus::Value::Number(_) => {
                 // Roundtrip through JSON string for number fidelity.
                 let json_str = v.to_json_str().unwrap_or_default();
-                let parsed: Value =
-                    serde_json::from_str(&json_str).unwrap_or(Value::Null);
+                let parsed: Value = serde_json::from_str(&json_str).unwrap_or(Value::Null);
                 parsed
             }
             regorus::Value::Array(a) => {

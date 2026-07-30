@@ -161,11 +161,12 @@ impl HeapNumber {
             HeapNumber::UInt(u) => *u as f64,
             HeapNumber::BigInt(b) => {
                 use num_traits::ToPrimitive;
-                b.to_f64().unwrap_or(if b.sign() == num_bigint::Sign::Minus {
-                    f64::NEG_INFINITY
-                } else {
-                    f64::INFINITY
-                })
+                b.to_f64()
+                    .unwrap_or(if b.sign() == num_bigint::Sign::Minus {
+                        f64::NEG_INFINITY
+                    } else {
+                        f64::INFINITY
+                    })
             }
         }
     }
@@ -473,9 +474,9 @@ impl Value {
                     let bi = b as u64;
                     return match ai.checked_add(bi) {
                         Some(sum) => Value::from(sum),
-                        None => Value::from_heap_number(HeapNumber::BigInt(
-                            Arc::new(BigInt::from(ai) + BigInt::from(bi)),
-                        )),
+                        None => Value::from_heap_number(HeapNumber::BigInt(Arc::new(
+                            BigInt::from(ai) + BigInt::from(bi),
+                        ))),
                     };
                 }
                 // Signed path.
@@ -484,9 +485,9 @@ impl Value {
                 if (ai as f64) == a && (bi as f64) == b {
                     return match ai.checked_add(bi) {
                         Some(sum) => Value::from(sum),
-                        None => Value::from_heap_number(HeapNumber::BigInt(
-                            Arc::new(BigInt::from(ai) + BigInt::from(bi)),
-                        )),
+                        None => Value::from_heap_number(HeapNumber::BigInt(Arc::new(
+                            BigInt::from(ai) + BigInt::from(bi),
+                        ))),
                     };
                 }
             }
@@ -772,22 +773,21 @@ impl Clone for Value {
                 TAG_STRING => unsafe {
                     // Increment ArcStr refcount.
                     let ptr_bits = self.payload();
-                    let borrowed =
-                        ManuallyDrop::new(std::mem::transmute::<u64, ArcStr>(ptr_bits));
+                    let borrowed = ManuallyDrop::new(std::mem::transmute::<u64, ArcStr>(ptr_bits));
                     let _ = ManuallyDrop::new(ArcStr::clone(&borrowed));
-                }
+                },
                 TAG_ARRAY => unsafe {
                     Arc::increment_strong_count(self.ptr::<Vec<Value>>());
-                }
+                },
                 TAG_OBJECT => unsafe {
                     Arc::increment_strong_count(self.ptr::<ObjectMap>());
-                }
+                },
                 TAG_SET => unsafe {
                     Arc::increment_strong_count(self.ptr::<HashSet<Value>>());
-                }
+                },
                 TAG_HEAP_NUM => unsafe {
                     Arc::increment_strong_count(self.ptr::<HeapNumber>());
-                }
+                },
                 _ => {} // immediates — no refcount
             }
         }
@@ -805,19 +805,19 @@ impl Drop for Value {
                     // Reconstruct ArcStr from payload and let it drop (decrements refcount).
                     let ptr_bits = self.payload();
                     let _: ArcStr = std::mem::transmute::<u64, ArcStr>(ptr_bits);
-                }
+                },
                 TAG_ARRAY => unsafe {
                     Arc::decrement_strong_count(self.ptr::<Vec<Value>>());
-                }
+                },
                 TAG_OBJECT => unsafe {
                     Arc::decrement_strong_count(self.ptr::<ObjectMap>());
-                }
+                },
                 TAG_SET => unsafe {
                     Arc::decrement_strong_count(self.ptr::<HashSet<Value>>());
-                }
+                },
                 TAG_HEAP_NUM => unsafe {
                     Arc::decrement_strong_count(self.ptr::<HeapNumber>());
-                }
+                },
                 _ => {} // immediates — no-op
             }
         }

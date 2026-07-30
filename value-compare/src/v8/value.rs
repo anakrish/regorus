@@ -84,7 +84,10 @@ impl Value {
     }
 
     pub fn is_number(&self) -> bool {
-        matches!(self, Value::UInt(_) | Value::Int(_) | Value::Float(_) | Value::BigInt(_))
+        matches!(
+            self,
+            Value::UInt(_) | Value::Int(_) | Value::Float(_) | Value::BigInt(_)
+        )
     }
 
     fn kind_ordinal(&self) -> u8 {
@@ -435,8 +438,10 @@ impl Value {
                 regorus::Value::Set(regorus::Rc::new(items))
             }
             Value::Object(o) => {
-                let items: std::collections::BTreeMap<regorus::Value, regorus::Value> =
-                    o.iter().map(|(k, v)| (k.to_regorus(), v.to_regorus())).collect();
+                let items: std::collections::BTreeMap<regorus::Value, regorus::Value> = o
+                    .iter()
+                    .map(|(k, v)| (k.to_regorus(), v.to_regorus()))
+                    .collect();
                 regorus::Value::Object(regorus::Rc::new(items))
             }
         }

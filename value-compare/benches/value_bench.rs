@@ -3,6 +3,7 @@
 
 //! Criterion benchmarks comparing baseline (regorus::Value) vs v1::Value.
 
+use bumpalo::Bump;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::time::Duration;
 use value_compare::v1;
@@ -14,7 +15,6 @@ use value_compare::v6;
 use value_compare::v7;
 use value_compare::v8;
 use value_compare::v9;
-use bumpalo::Bump;
 
 // ---------------------------------------------------------------------------
 //  Test data
@@ -191,7 +191,8 @@ fn bench_deserialize(c: &mut Criterion) {
         b.iter(|| {
             let arena = Bump::new();
             let mut interner = v9::StringInterner::new(&arena);
-            let v = v9::from_json_interned(&arena, &mut interner, black_box(SMALL_OBJ_JSON)).unwrap();
+            let v =
+                v9::from_json_interned(&arena, &mut interner, black_box(SMALL_OBJ_JSON)).unwrap();
             black_box(v);
         });
     });
@@ -315,12 +316,16 @@ fn bench_deserialize(c: &mut Criterion) {
     // Realistic nested policy objects
     for &size in &[10, 20, 32] {
         let json = realistic_obj_json(size);
-        group.bench_with_input(BenchmarkId::new("baseline/realistic", size), &json, |b, j| {
-            b.iter(|| {
-                let v: regorus::Value = serde_json::from_str(black_box(j)).unwrap();
-                black_box(v);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("baseline/realistic", size),
+            &json,
+            |b, j| {
+                b.iter(|| {
+                    let v: regorus::Value = serde_json::from_str(black_box(j)).unwrap();
+                    black_box(v);
+                });
+            },
+        );
         group.bench_with_input(BenchmarkId::new("v1/realistic", size), &json, |b, j| {
             b.iter(|| {
                 let v: v1::Value = serde_json::from_str(black_box(j)).unwrap();
@@ -333,84 +338,112 @@ fn bench_deserialize(c: &mut Criterion) {
                 black_box(v);
             });
         });
-        group.bench_with_input(BenchmarkId::new("v2_interned/realistic", size), &json, |b, j| {
-            b.iter(|| {
-                let v: v2::Interned = serde_json::from_str(black_box(j)).unwrap();
-                black_box(v.0);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("v2_interned/realistic", size),
+            &json,
+            |b, j| {
+                b.iter(|| {
+                    let v: v2::Interned = serde_json::from_str(black_box(j)).unwrap();
+                    black_box(v.0);
+                });
+            },
+        );
         group.bench_with_input(BenchmarkId::new("v3/realistic", size), &json, |b, j| {
             b.iter(|| {
                 let v: v3::Value = serde_json::from_str(black_box(j)).unwrap();
                 black_box(v);
             });
         });
-        group.bench_with_input(BenchmarkId::new("v3_interned/realistic", size), &json, |b, j| {
-            b.iter(|| {
-                let v: v3::Interned = serde_json::from_str(black_box(j)).unwrap();
-                black_box(v.0);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("v3_interned/realistic", size),
+            &json,
+            |b, j| {
+                b.iter(|| {
+                    let v: v3::Interned = serde_json::from_str(black_box(j)).unwrap();
+                    black_box(v.0);
+                });
+            },
+        );
         group.bench_with_input(BenchmarkId::new("v4/realistic", size), &json, |b, j| {
             b.iter(|| {
                 let v: v4::Value = serde_json::from_str(black_box(j)).unwrap();
                 black_box(v);
             });
         });
-        group.bench_with_input(BenchmarkId::new("v4_interned/realistic", size), &json, |b, j| {
-            b.iter(|| {
-                let v: v4::Interned = serde_json::from_str(black_box(j)).unwrap();
-                black_box(v.0);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("v4_interned/realistic", size),
+            &json,
+            |b, j| {
+                b.iter(|| {
+                    let v: v4::Interned = serde_json::from_str(black_box(j)).unwrap();
+                    black_box(v.0);
+                });
+            },
+        );
         group.bench_with_input(BenchmarkId::new("v5/realistic", size), &json, |b, j| {
             b.iter(|| {
                 let v: v5::Value = serde_json::from_str(black_box(j)).unwrap();
                 black_box(v);
             });
         });
-        group.bench_with_input(BenchmarkId::new("v5_interned/realistic", size), &json, |b, j| {
-            b.iter(|| {
-                let v: v5::Interned = serde_json::from_str(black_box(j)).unwrap();
-                black_box(v.0);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("v5_interned/realistic", size),
+            &json,
+            |b, j| {
+                b.iter(|| {
+                    let v: v5::Interned = serde_json::from_str(black_box(j)).unwrap();
+                    black_box(v.0);
+                });
+            },
+        );
         group.bench_with_input(BenchmarkId::new("v6/realistic", size), &json, |b, j| {
             b.iter(|| {
                 let v: v6::Value = serde_json::from_str(black_box(j)).unwrap();
                 black_box(v);
             });
         });
-        group.bench_with_input(BenchmarkId::new("v6_interned/realistic", size), &json, |b, j| {
-            b.iter(|| {
-                let v: v6::Interned = serde_json::from_str(black_box(j)).unwrap();
-                black_box(v.0);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("v6_interned/realistic", size),
+            &json,
+            |b, j| {
+                b.iter(|| {
+                    let v: v6::Interned = serde_json::from_str(black_box(j)).unwrap();
+                    black_box(v.0);
+                });
+            },
+        );
         group.bench_with_input(BenchmarkId::new("v7/realistic", size), &json, |b, j| {
             b.iter(|| {
                 let v: v7::Value = serde_json::from_str(black_box(j)).unwrap();
                 black_box(v);
             });
         });
-        group.bench_with_input(BenchmarkId::new("v7_interned/realistic", size), &json, |b, j| {
-            b.iter(|| {
-                let v: v7::Interned = serde_json::from_str(black_box(j)).unwrap();
-                black_box(v.0);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("v7_interned/realistic", size),
+            &json,
+            |b, j| {
+                b.iter(|| {
+                    let v: v7::Interned = serde_json::from_str(black_box(j)).unwrap();
+                    black_box(v.0);
+                });
+            },
+        );
         group.bench_with_input(BenchmarkId::new("v8/realistic", size), &json, |b, j| {
             b.iter(|| {
                 let v: v8::Value = serde_json::from_str(black_box(j)).unwrap();
                 black_box(v);
             });
         });
-        group.bench_with_input(BenchmarkId::new("v8_interned/realistic", size), &json, |b, j| {
-            b.iter(|| {
-                let v: v8::Interned = serde_json::from_str(black_box(j)).unwrap();
-                black_box(v.0);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("v8_interned/realistic", size),
+            &json,
+            |b, j| {
+                b.iter(|| {
+                    let v: v8::Interned = serde_json::from_str(black_box(j)).unwrap();
+                    black_box(v.0);
+                });
+            },
+        );
         group.bench_with_input(BenchmarkId::new("v9/realistic", size), &json, |b, j| {
             b.iter(|| {
                 let arena = Bump::new();
@@ -418,14 +451,18 @@ fn bench_deserialize(c: &mut Criterion) {
                 black_box(v);
             });
         });
-        group.bench_with_input(BenchmarkId::new("v9_interned/realistic", size), &json, |b, j| {
-            b.iter(|| {
-                let arena = Bump::new();
-                let mut interner = v9::StringInterner::new(&arena);
-                let v = v9::from_json_interned(&arena, &mut interner, black_box(j)).unwrap();
-                black_box(v);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("v9_interned/realistic", size),
+            &json,
+            |b, j| {
+                b.iter(|| {
+                    let arena = Bump::new();
+                    let mut interner = v9::StringInterner::new(&arena);
+                    let v = v9::from_json_interned(&arena, &mut interner, black_box(j)).unwrap();
+                    black_box(v);
+                });
+            },
+        );
     }
 
     // Array of objects with shared keys — measures interning benefit from key reuse
@@ -438,92 +475,120 @@ fn bench_deserialize(c: &mut Criterion) {
                 black_box(v);
             });
         });
-        group.bench_with_input(BenchmarkId::new("v2_interned/array", &label), &json, |b, j| {
-            v2::interner::clear();
-            b.iter(|| {
-                let v: v2::Interned = serde_json::from_str(black_box(j)).unwrap();
-                black_box(v.0);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("v2_interned/array", &label),
+            &json,
+            |b, j| {
+                v2::interner::clear();
+                b.iter(|| {
+                    let v: v2::Interned = serde_json::from_str(black_box(j)).unwrap();
+                    black_box(v.0);
+                });
+            },
+        );
         group.bench_with_input(BenchmarkId::new("v3/array", &label), &json, |b, j| {
             b.iter(|| {
                 let v: v3::Value = serde_json::from_str(black_box(j)).unwrap();
                 black_box(v);
             });
         });
-        group.bench_with_input(BenchmarkId::new("v3_interned/array", &label), &json, |b, j| {
-            v3::interner::clear();
-            b.iter(|| {
-                let v: v3::Interned = serde_json::from_str(black_box(j)).unwrap();
-                black_box(v.0);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("v3_interned/array", &label),
+            &json,
+            |b, j| {
+                v3::interner::clear();
+                b.iter(|| {
+                    let v: v3::Interned = serde_json::from_str(black_box(j)).unwrap();
+                    black_box(v.0);
+                });
+            },
+        );
         group.bench_with_input(BenchmarkId::new("v4/array", &label), &json, |b, j| {
             b.iter(|| {
                 let v: v4::Value = serde_json::from_str(black_box(j)).unwrap();
                 black_box(v);
             });
         });
-        group.bench_with_input(BenchmarkId::new("v4_interned/array", &label), &json, |b, j| {
-            v4::interner::clear();
-            b.iter(|| {
-                let v: v4::Interned = serde_json::from_str(black_box(j)).unwrap();
-                black_box(v.0);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("v4_interned/array", &label),
+            &json,
+            |b, j| {
+                v4::interner::clear();
+                b.iter(|| {
+                    let v: v4::Interned = serde_json::from_str(black_box(j)).unwrap();
+                    black_box(v.0);
+                });
+            },
+        );
         group.bench_with_input(BenchmarkId::new("v5/array", &label), &json, |b, j| {
             b.iter(|| {
                 let v: v5::Value = serde_json::from_str(black_box(j)).unwrap();
                 black_box(v);
             });
         });
-        group.bench_with_input(BenchmarkId::new("v5_interned/array", &label), &json, |b, j| {
-            v5::interner::clear();
-            b.iter(|| {
-                let v: v5::Interned = serde_json::from_str(black_box(j)).unwrap();
-                black_box(v.0);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("v5_interned/array", &label),
+            &json,
+            |b, j| {
+                v5::interner::clear();
+                b.iter(|| {
+                    let v: v5::Interned = serde_json::from_str(black_box(j)).unwrap();
+                    black_box(v.0);
+                });
+            },
+        );
         group.bench_with_input(BenchmarkId::new("v6/array", &label), &json, |b, j| {
             b.iter(|| {
                 let v: v6::Value = serde_json::from_str(black_box(j)).unwrap();
                 black_box(v);
             });
         });
-        group.bench_with_input(BenchmarkId::new("v6_interned/array", &label), &json, |b, j| {
-            v6::interner::clear();
-            b.iter(|| {
-                let v: v6::Interned = serde_json::from_str(black_box(j)).unwrap();
-                black_box(v.0);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("v6_interned/array", &label),
+            &json,
+            |b, j| {
+                v6::interner::clear();
+                b.iter(|| {
+                    let v: v6::Interned = serde_json::from_str(black_box(j)).unwrap();
+                    black_box(v.0);
+                });
+            },
+        );
         group.bench_with_input(BenchmarkId::new("v7/array", &label), &json, |b, j| {
             b.iter(|| {
                 let v: v7::Value = serde_json::from_str(black_box(j)).unwrap();
                 black_box(v);
             });
         });
-        group.bench_with_input(BenchmarkId::new("v7_interned/array", &label), &json, |b, j| {
-            v7::interner::clear();
-            v7::object_map::clear_schema_cache();
-            b.iter(|| {
-                let v: v7::Interned = serde_json::from_str(black_box(j)).unwrap();
-                black_box(v.0);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("v7_interned/array", &label),
+            &json,
+            |b, j| {
+                v7::interner::clear();
+                v7::object_map::clear_schema_cache();
+                b.iter(|| {
+                    let v: v7::Interned = serde_json::from_str(black_box(j)).unwrap();
+                    black_box(v.0);
+                });
+            },
+        );
         group.bench_with_input(BenchmarkId::new("v8/array", &label), &json, |b, j| {
             b.iter(|| {
                 let v: v8::Value = serde_json::from_str(black_box(j)).unwrap();
                 black_box(v);
             });
         });
-        group.bench_with_input(BenchmarkId::new("v8_interned/array", &label), &json, |b, j| {
-            v8::object_map::clear_schema_cache();
-            b.iter(|| {
-                let v: v8::Interned = serde_json::from_str(black_box(j)).unwrap();
-                black_box(v.0);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("v8_interned/array", &label),
+            &json,
+            |b, j| {
+                v8::object_map::clear_schema_cache();
+                b.iter(|| {
+                    let v: v8::Interned = serde_json::from_str(black_box(j)).unwrap();
+                    black_box(v.0);
+                });
+            },
+        );
         group.bench_with_input(BenchmarkId::new("v9/array", &label), &json, |b, j| {
             b.iter(|| {
                 let arena = Bump::new();
@@ -531,14 +596,18 @@ fn bench_deserialize(c: &mut Criterion) {
                 black_box(v);
             });
         });
-        group.bench_with_input(BenchmarkId::new("v9_interned/array", &label), &json, |b, j| {
-            b.iter(|| {
-                let arena = Bump::new();
-                let mut interner = v9::StringInterner::new(&arena);
-                let v = v9::from_json_interned(&arena, &mut interner, black_box(j)).unwrap();
-                black_box(v);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("v9_interned/array", &label),
+            &json,
+            |b, j| {
+                b.iter(|| {
+                    let arena = Bump::new();
+                    let mut interner = v9::StringInterner::new(&arena);
+                    let v = v9::from_json_interned(&arena, &mut interner, black_box(j)).unwrap();
+                    black_box(v);
+                });
+            },
+        );
     }
 
     group.finish();
@@ -1788,7 +1857,8 @@ fn bench_set_operations(c: &mut Criterion) {
             &baseline_strs,
             |b, vals| {
                 b.iter(|| {
-                    let s: std::collections::BTreeSet<regorus::Value> = vals.iter().cloned().collect();
+                    let s: std::collections::BTreeSet<regorus::Value> =
+                        vals.iter().cloned().collect();
                     black_box(s);
                 });
             },

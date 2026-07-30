@@ -117,8 +117,7 @@ impl ObjectMap {
                 // Remove old entry hash if replacing.
                 if let Some(other) = &self.other {
                     if let Some(old_val) = other.get(&key) {
-                        self.cached_hash =
-                            self.cached_hash.wrapping_sub(entry_hash(&key, old_val));
+                        self.cached_hash = self.cached_hash.wrapping_sub(entry_hash(&key, old_val));
                     }
                 }
                 self.cached_hash = self.cached_hash.wrapping_add(entry_hash(&key, &value));
@@ -196,10 +195,7 @@ impl<'a> Iterator for ObjectMapIter<'a> {
             .other_iter
             .as_ref()
             .map_or((0, Some(0)), |it| it.size_hint());
-        (
-            s_lo + o_lo,
-            s_hi.and_then(|a| o_hi.map(|b| a + b)),
-        )
+        (s_lo + o_lo, s_hi.and_then(|a| o_hi.map(|b| a + b)))
     }
 }
 

@@ -180,6 +180,13 @@ pub use value::Value;
 #[cfg(feature = "optimized-value")]
 pub use value::NativeSubArray;
 
+/// Foreign (read-through) value backend surface. Exposed so out-of-crate FFI
+/// (e.g. the C# foreign read-through path) can implement `ArrayBackend` /
+/// `ObjectBackend` and build a `Value::Array` / `Value::Object` that materializes
+/// elements and fields on demand instead of eagerly copying a parsed document.
+#[cfg(feature = "optimized-value")]
+pub use value::{Array as ValueArray, ArrayBackend, ForeignArcStr, ObjectBackend, ValueMap};
+
 #[cfg(not(feature = "optimized-value"))]
 pub(crate) use value::RcStrExt;
 

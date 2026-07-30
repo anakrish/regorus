@@ -95,7 +95,11 @@ impl Number {
             Number::UInt(v) if *v <= i64::MAX as u64 => Some(*v as i64),
             Number::BigInt(v) => v.to_i64(),
             Number::Float(f) => {
-                if f.is_finite() && f.fract() == 0.0 && *f >= i64::MIN as f64 && *f <= i64::MAX as f64 {
+                if f.is_finite()
+                    && f.fract() == 0.0
+                    && *f >= i64::MIN as f64
+                    && *f <= i64::MAX as f64
+                {
                     let c = *f as i64;
                     if (c as f64) == *f {
                         return Some(c);
@@ -235,9 +239,7 @@ impl Ord for Number {
             (Number::UInt(a), Number::UInt(b)) => a.cmp(b),
             (Number::Int(a), Number::Int(b)) => a.cmp(b),
             (Number::BigInt(a), Number::BigInt(b)) => a.cmp(b),
-            (Number::Float(a), Number::Float(b)) => {
-                a.partial_cmp(b).unwrap_or(Ordering::Equal)
-            }
+            (Number::Float(a), Number::Float(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
 
             // Cross-variant integer widening:
             (Number::UInt(a), Number::Int(b)) => {
@@ -415,18 +417,14 @@ impl Number {
         }
 
         match (self, rhs) {
-            (Number::UInt(a), Number::UInt(b)) => {
-                match a.checked_add(*b) {
-                    Some(sum) => Number::UInt(sum),
-                    None => Number::BigInt(Arc::new(BigInt::from(*a) + BigInt::from(*b))),
-                }
-            }
-            (Number::Int(a), Number::Int(b)) => {
-                match a.checked_add(*b) {
-                    Some(sum) => Number::Int(sum),
-                    None => Number::BigInt(Arc::new(BigInt::from(*a) + BigInt::from(*b))),
-                }
-            }
+            (Number::UInt(a), Number::UInt(b)) => match a.checked_add(*b) {
+                Some(sum) => Number::UInt(sum),
+                None => Number::BigInt(Arc::new(BigInt::from(*a) + BigInt::from(*b))),
+            },
+            (Number::Int(a), Number::Int(b)) => match a.checked_add(*b) {
+                Some(sum) => Number::Int(sum),
+                None => Number::BigInt(Arc::new(BigInt::from(*a) + BigInt::from(*b))),
+            },
             (Number::Int(a), Number::UInt(b)) | (Number::UInt(b), Number::Int(a)) => {
                 let sum = *a as i128 + *b as i128;
                 if sum >= 0 && sum <= u64::MAX as i128 {

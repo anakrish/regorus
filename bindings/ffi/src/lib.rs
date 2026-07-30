@@ -11,6 +11,8 @@ mod compile;
 mod compiled_policy;
 mod effect_registry;
 mod engine;
+#[cfg(feature = "optimized-value")]
+mod foreign;
 mod limits;
 mod lock;
 mod panic_guard;

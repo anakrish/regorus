@@ -145,6 +145,41 @@ namespace Regorus
             });
         }
 
+        /// <summary>
+        /// Set input from self-describing MessagePack bytes (maps must use string keys).
+        /// Avoids the JSON text round-trip.
+        /// </summary>
+        public void SetInputMsgpack(byte[] data)
+        {
+            if (data is null)
+            {
+                throw new ArgumentNullException(nameof(data));
+            }
+
+            UseHandle(enginePtr =>
+            {
+                fixed (byte* dataPtr = data)
+                {
+                    CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_input_msgpack((Regorus.Internal.RegorusEngine*)enginePtr, dataPtr, (nuint)data.Length));
+                }
+            });
+        }
+
+        /// <summary>
+        /// Set input to a foreign read-through document. <paramref name="foreignArray"/>
+        /// points to a native <c>RegorusForeignArray</c> vtable (constructed by the
+        /// caller). regorus copies the vtable and reads fields on demand through the
+        /// callbacks; the caller must keep the underlying object alive until the
+        /// vtable's <c>free</c> callback fires (on the next set_input or engine drop).
+        /// </summary>
+        public void SetInputForeign(IntPtr foreignArray)
+        {
+            UseHandle(enginePtr =>
+            {
+                CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_input_foreign((Regorus.Internal.RegorusEngine*)enginePtr, (void*)foreignArray));
+            });
+        }
+
         public void SetInputFromJsonFile(string path)
         {
             Utf8Marshaller.WithUtf8(path, pathPtr =>

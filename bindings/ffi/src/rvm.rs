@@ -46,7 +46,7 @@ impl RegorusRvm {
         anyhow!("regorus rvm handle is already in use; create a separate VM per thread")
     }
 
-    fn try_write(&self) -> Result<WriteGuard<'_, RegoVM>> {
+    pub(crate) fn try_write(&self) -> Result<WriteGuard<'_, RegoVM>> {
         try_write(&self.vm).ok_or_else(Self::contention_error)
     }
 

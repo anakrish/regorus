@@ -292,6 +292,25 @@ namespace Regorus.Internal
         internal static extern RegorusResult regorus_engine_set_input_json(RegorusEngine* engine, byte* input);
 
         /// <summary>
+        /// Set input from a self-describing MessagePack-encoded value.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_engine_set_input_msgpack", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_engine_set_input_msgpack(RegorusEngine* engine, byte* data, nuint len);
+
+        /// <summary>
+        /// Set input to a foreign read-through document. `foreign` points to a
+        /// RegorusForeignArray vtable; regorus reads fields on demand via callbacks.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_engine_set_input_foreign", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_engine_set_input_foreign(RegorusEngine* engine, void* foreign);
+
+        /// <summary>
+        /// RVM variant of regorus_engine_set_input_foreign.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_input_foreign", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_set_input_foreign(RegorusRvm* vm, void* foreign);
+
+        /// <summary>
         /// Set input from JSON file.
         /// </summary>
         [DllImport(LibraryName, EntryPoint = "regorus_engine_set_input_from_json_file", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

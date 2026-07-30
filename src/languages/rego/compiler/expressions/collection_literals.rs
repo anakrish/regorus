@@ -11,8 +11,8 @@ use crate::ast::ExprRef;
 use crate::lexer::Span;
 use crate::rvm::instructions::{ArrayCreateParams, ObjectCreateParams, SetCreateParams};
 use crate::rvm::Instruction;
-use crate::{Rc, Value};
 use crate::value::ValueMap;
+use crate::{Rc, Value};
 use alloc::vec::Vec;
 
 impl<'a> Compiler<'a> {

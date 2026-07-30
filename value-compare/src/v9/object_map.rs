@@ -18,8 +18,8 @@ use std::sync::Arc;
 use bumpalo::Bump;
 use hashbrown::HashMap;
 
-use super::value::{ArenaValue, Value};
 use super::value::ArenaStr;
+use super::value::{ArenaValue, Value};
 
 // ─── Schema ──────────────────────────────────────────────────────────────
 
@@ -195,9 +195,7 @@ impl<'a> ObjectMap<'a> {
     /// Lookup by `&str` — O(1).
     pub fn get_str(&self, key: &str) -> Option<&Value<'a>> {
         match &self.repr {
-            ObjectRepr::Compact(c) => {
-                c.schema.lookup.get(key).map(|&idx| &c.values[idx as usize])
-            }
+            ObjectRepr::Compact(c) => c.schema.lookup.get(key).map(|&idx| &c.values[idx as usize]),
             ObjectRepr::Map(m) => m.strings.get(key),
         }
     }
@@ -262,9 +260,7 @@ impl<'a> ObjectMap<'a> {
     pub fn len(&self) -> usize {
         match &self.repr {
             ObjectRepr::Compact(c) => c.values.len(),
-            ObjectRepr::Map(m) => {
-                m.strings.len() + m.others.as_ref().map_or(0, |o| o.len())
-            }
+            ObjectRepr::Map(m) => m.strings.len() + m.others.as_ref().map_or(0, |o| o.len()),
         }
     }
 

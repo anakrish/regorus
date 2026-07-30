@@ -32,8 +32,7 @@ impl Serialize for SortedValue<'_> {
                 for (k, v) in &sorted {
                     let key_str = match k {
                         Value::String(s) => s.to_string(),
-                        other => serde_json::to_string(other)
-                            .map_err(serde::ser::Error::custom)?,
+                        other => serde_json::to_string(other).map_err(serde::ser::Error::custom)?,
                     };
                     map.serialize_entry(&key_str, &SortedValue(v))?;
                 }
@@ -90,8 +89,7 @@ impl Serialize for Value {
                 for (k, v) in o.iter() {
                     let key_str = match &k {
                         Value::String(s) => s.to_string(),
-                        other => serde_json::to_string(other)
-                            .map_err(serde::ser::Error::custom)?,
+                        other => serde_json::to_string(other).map_err(serde::ser::Error::custom)?,
                     };
                     map.serialize_entry(&key_str, v)?;
                 }

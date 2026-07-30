@@ -31,6 +31,9 @@ use core::str::FromStr;
 
 use anyhow::{anyhow, bail, Result};
 use arcstr::ArcStr;
+/// Re-export so out-of-crate FFI can construct interned strings/keys for the
+/// foreign value backend without depending on the `arcstr` crate directly.
+pub use arcstr::ArcStr as ForeignArcStr;
 use serde::de::{self, Deserializer, Error as DeError, MapAccess, SeqAccess, Visitor};
 use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};

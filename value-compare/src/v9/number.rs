@@ -254,9 +254,7 @@ impl Ord for Number<'_> {
             (Number::UInt(a), Number::UInt(b)) => a.cmp(b),
             (Number::Int(a), Number::Int(b)) => a.cmp(b),
             (Number::BigInt(a), Number::BigInt(b)) => a.cmp(b),
-            (Number::Float(a), Number::Float(b)) => {
-                a.partial_cmp(b).unwrap_or(Ordering::Equal)
-            }
+            (Number::Float(a), Number::Float(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
             (Number::UInt(a), Number::Int(b)) => {
                 if *b < 0 {
                     Ordering::Greater

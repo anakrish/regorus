@@ -107,6 +107,21 @@ namespace Regorus
         }
 
         /// <summary>
+        /// Set the VM input to a foreign read-through document. <paramref name="foreignArray"/>
+        /// points to a native <c>RegorusForeignArray</c> vtable; regorus reads fields on
+        /// demand through the callbacks. The caller owns the referenced object's lifetime
+        /// until the vtable's <c>free</c> callback fires.
+        /// </summary>
+        public void SetInputForeign(IntPtr foreignArray)
+        {
+            UseHandle(vmPtr =>
+            {
+                CheckAndDropResult(API.regorus_rvm_set_input_foreign((RegorusRvm*)vmPtr, (void*)foreignArray));
+                return 0;
+            });
+        }
+
+        /// <summary>
         /// Set the execution mode (0 = run-to-completion, 1 = suspendable).
         /// </summary>
         public void SetExecutionMode(byte mode)

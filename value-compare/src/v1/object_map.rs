@@ -56,7 +56,9 @@ impl ObjectMap {
     }
 
     /// Build from a regorus BTreeMap, choosing the best representation.
-    pub fn from_regorus_btree(m: &std::collections::BTreeMap<regorus::Value, regorus::Value>) -> Self {
+    pub fn from_regorus_btree(
+        m: &std::collections::BTreeMap<regorus::Value, regorus::Value>,
+    ) -> Self {
         let all_string_keys = m.keys().all(|k| matches!(k, regorus::Value::String(_)));
         if all_string_keys {
             let map: HashMap<SmolStr, Value> = m
@@ -224,9 +226,9 @@ impl PartialEq for ObjectMap {
         }
         // Use point lookups instead of sorting — O(n) average case.
         match (self, other) {
-            (ObjectMap::StringKeyed(a), ObjectMap::StringKeyed(b)) => {
-                a.iter().all(|(k, v)| b.get(k.as_str()).map_or(false, |bv| v == bv))
-            }
+            (ObjectMap::StringKeyed(a), ObjectMap::StringKeyed(b)) => a
+                .iter()
+                .all(|(k, v)| b.get(k.as_str()).map_or(false, |bv| v == bv)),
             (ObjectMap::Mixed(a), ObjectMap::Mixed(b)) => {
                 a.iter().all(|(k, v)| b.get(k).map_or(false, |bv| v == bv))
             }

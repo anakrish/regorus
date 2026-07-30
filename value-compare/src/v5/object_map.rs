@@ -103,8 +103,7 @@ impl ObjectMap {
         } else {
             if let Some(other) = &self.other {
                 if let Some(old_val) = other.get(&key) {
-                    self.cached_hash =
-                        self.cached_hash.wrapping_sub(entry_hash(&key, old_val));
+                    self.cached_hash = self.cached_hash.wrapping_sub(entry_hash(&key, old_val));
                 }
             }
             self.cached_hash = self.cached_hash.wrapping_add(entry_hash(&key, &value));

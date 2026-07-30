@@ -5,12 +5,12 @@
 #![allow(dead_code)]
 #![allow(clippy::pattern_type_mismatch, clippy::needless_continue)]
 
+use crate::value::ValueMap;
 use crate::{
     schema::{error::ValidationError, Schema, Type},
     *,
 };
 use alloc::collections::BTreeMap;
-use crate::value::ValueMap;
 use regex::Regex;
 
 type String = Rc<str>;

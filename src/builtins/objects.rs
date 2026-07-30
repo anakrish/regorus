@@ -14,8 +14,8 @@ use crate::*;
 #[cfg(not(feature = "optimized-value"))]
 use crate::RcStrExt;
 
+use crate::value::{ValueMap, ValueSet};
 use alloc::collections::BTreeSet;
-use crate::value::{ValueSet, ValueMap};
 use core::iter::Iterator;
 
 use anyhow::{bail, Result};

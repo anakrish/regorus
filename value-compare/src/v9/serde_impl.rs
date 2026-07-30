@@ -129,11 +129,15 @@ impl<'a, 'de> Visitor<'de> for ArenaVisitor<'a> {
     }
 
     fn visit_str<E: de::Error>(self, v: &str) -> Result<Value<'a>, E> {
-        Ok(Value::Arena(ArenaValue::String(self.arena.alloc(ArenaStr(self.arena.alloc_str(v))))))
+        Ok(Value::Arena(ArenaValue::String(
+            self.arena.alloc(ArenaStr(self.arena.alloc_str(v))),
+        )))
     }
 
     fn visit_string<E: de::Error>(self, v: String) -> Result<Value<'a>, E> {
-        Ok(Value::Arena(ArenaValue::String(self.arena.alloc(ArenaStr(self.arena.alloc_str(&v))))))
+        Ok(Value::Arena(ArenaValue::String(
+            self.arena.alloc(ArenaStr(self.arena.alloc_str(&v))),
+        )))
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value<'a>, A::Error> {
@@ -141,7 +145,9 @@ impl<'a, 'de> Visitor<'de> for ArenaVisitor<'a> {
         while let Some(item) = seq.next_element_seed(ArenaSeed { arena: self.arena })? {
             items.push(item);
         }
-        Ok(Value::Arena(ArenaValue::Array(self.arena.alloc(ArenaArray(items.into_bump_slice())))))
+        Ok(Value::Arena(ArenaValue::Array(
+            self.arena.alloc(ArenaArray(items.into_bump_slice())),
+        )))
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value<'a>, A::Error> {
@@ -158,7 +164,9 @@ impl<'a, 'de> Visitor<'de> for ArenaVisitor<'a> {
         }
 
         if keys.is_empty() {
-            return Ok(Value::Arena(ArenaValue::Object(arena.alloc(ObjectMap::new_in(arena)))));
+            return Ok(Value::Arena(ArenaValue::Object(
+                arena.alloc(ObjectMap::new_in(arena)),
+            )));
         }
 
         // Intern schema for same-schema equality fast path.
@@ -238,12 +246,16 @@ impl<'a, 'i, 'de> Visitor<'de> for InternedArenaVisitor<'a, 'i> {
 
     fn visit_str<E: de::Error>(self, v: &str) -> Result<Value<'a>, E> {
         let s = self.interner.intern(v);
-        Ok(Value::Arena(ArenaValue::String(self.arena.alloc(ArenaStr(s)))))
+        Ok(Value::Arena(ArenaValue::String(
+            self.arena.alloc(ArenaStr(s)),
+        )))
     }
 
     fn visit_string<E: de::Error>(self, v: String) -> Result<Value<'a>, E> {
         let s = self.interner.intern(&v);
-        Ok(Value::Arena(ArenaValue::String(self.arena.alloc(ArenaStr(s)))))
+        Ok(Value::Arena(ArenaValue::String(
+            self.arena.alloc(ArenaStr(s)),
+        )))
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value<'a>, A::Error> {
@@ -256,7 +268,9 @@ impl<'a, 'i, 'de> Visitor<'de> for InternedArenaVisitor<'a, 'i> {
         })? {
             items.push(item);
         }
-        Ok(Value::Arena(ArenaValue::Array(arena.alloc(ArenaArray(items.into_bump_slice())))))
+        Ok(Value::Arena(ArenaValue::Array(
+            arena.alloc(ArenaArray(items.into_bump_slice())),
+        )))
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value<'a>, A::Error> {
@@ -277,7 +291,9 @@ impl<'a, 'i, 'de> Visitor<'de> for InternedArenaVisitor<'a, 'i> {
         }
 
         if keys.is_empty() {
-            return Ok(Value::Arena(ArenaValue::Object(arena.alloc(ObjectMap::new_in(arena)))));
+            return Ok(Value::Arena(ArenaValue::Object(
+                arena.alloc(ObjectMap::new_in(arena)),
+            )));
         }
 
         // Intern schema for same-schema equality fast path.
@@ -337,8 +353,7 @@ impl Serialize for ArenaValue<'_> {
                 for (k, v) in o.iter() {
                     let key_str = match k.as_str_ref() {
                         Some(s) => s.to_string(),
-                        None => serde_json::to_string(&k)
-                            .map_err(serde::ser::Error::custom)?,
+                        None => serde_json::to_string(&k).map_err(serde::ser::Error::custom)?,
                     };
                     map.serialize_entry(&key_str, v)?;
                 }
@@ -365,8 +380,7 @@ impl Serialize for SortedValue<'_> {
                 for (k, v) in &sorted {
                     let key_str = match k.as_str_ref() {
                         Some(s) => s.to_string(),
-                        None => serde_json::to_string(k)
-                            .map_err(serde::ser::Error::custom)?,
+                        None => serde_json::to_string(k).map_err(serde::ser::Error::custom)?,
                     };
                     map.serialize_entry(&key_str, &SortedValue(v))?;
                 }

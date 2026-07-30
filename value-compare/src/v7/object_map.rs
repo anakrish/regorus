@@ -183,9 +183,7 @@ impl ObjectMap {
 
     pub fn get_str(&self, key: &str) -> Option<&Value> {
         match &self.repr {
-            ObjectRepr::Compact(c) => {
-                c.schema.lookup.get(key).map(|&idx| &c.values[idx as usize])
-            }
+            ObjectRepr::Compact(c) => c.schema.lookup.get(key).map(|&idx| &c.values[idx as usize]),
             ObjectRepr::Map(m) => m.strings.get(key),
         }
     }
@@ -222,14 +220,11 @@ impl ObjectMap {
             if let ObjectRepr::Map(m) = &mut self.repr {
                 if let Some(other) = &m.other {
                     if let Some(old_val) = other.get(&key) {
-                        m.cached_hash =
-                            m.cached_hash.wrapping_sub(entry_hash(&key, old_val));
+                        m.cached_hash = m.cached_hash.wrapping_sub(entry_hash(&key, old_val));
                     }
                 }
                 m.cached_hash = m.cached_hash.wrapping_add(entry_hash(&key, &value));
-                m.other
-                    .get_or_insert_with(HashMap::new)
-                    .insert(key, value);
+                m.other.get_or_insert_with(HashMap::new).insert(key, value);
             }
         }
     }
@@ -252,9 +247,7 @@ impl ObjectMap {
     pub fn len(&self) -> usize {
         match &self.repr {
             ObjectRepr::Compact(c) => c.values.len(),
-            ObjectRepr::Map(m) => {
-                m.strings.len() + m.other.as_ref().map_or(0, |o| o.len())
-            }
+            ObjectRepr::Map(m) => m.strings.len() + m.other.as_ref().map_or(0, |o| o.len()),
         }
     }
 
@@ -271,10 +264,7 @@ impl ObjectMap {
 
     pub fn iter(&self) -> ObjectMapIter<'_> {
         match &self.repr {
-            ObjectRepr::Compact(c) => ObjectMapIter::Compact {
-                idx: 0,
-                obj: c,
-            },
+            ObjectRepr::Compact(c) => ObjectMapIter::Compact { idx: 0, obj: c },
             ObjectRepr::Map(m) => ObjectMapIter::Map {
                 string_iter: m.strings.iter(),
                 other_iter: m.other.as_ref().map(|o| o.iter()),
@@ -401,9 +391,7 @@ impl PartialEq for ObjectMap {
         }
 
         // Fast path: both compact with the same schema → just compare value arrays.
-        if let (ObjectRepr::Compact(a), ObjectRepr::Compact(b)) =
-            (&self.repr, &other.repr)
-        {
+        if let (ObjectRepr::Compact(a), ObjectRepr::Compact(b)) = (&self.repr, &other.repr) {
             if Arc::ptr_eq(&a.schema.keys, &b.schema.keys) {
                 return a.values == b.values;
             }

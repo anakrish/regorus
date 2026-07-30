@@ -375,7 +375,9 @@ fn sprintf(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
                 s += apply_width(width, v.format_big_hex()).as_str()
             }
             ('e', v) if v.is_number() => s += &v.to_number().unwrap().format_scientific(),
-            ('E', v) if v.is_number() => s += &v.to_number().unwrap().format_scientific().replace('e', "E"),
+            ('E', v) if v.is_number() => {
+                s += &v.to_number().unwrap().format_scientific().replace('e', "E")
+            }
             ('f' | 'F', v) if v.is_number() => {
                 let f = v.to_number().unwrap();
                 s += &match width {

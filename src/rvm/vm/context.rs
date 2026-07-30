@@ -3,7 +3,6 @@
 
 use crate::rvm::instructions::{ComprehensionMode, LoopMode};
 use crate::value::Value;
-use crate::Rc;
 use alloc::vec::Vec;
 
 /// Loop execution context for managing iteration state
@@ -27,7 +26,7 @@ pub struct LoopContext {
 #[derive(Debug, Clone)]
 pub enum IterationState {
     Array {
-        items: Rc<Vec<Value>>,
+        items: crate::value::ArrayRc,
         index: usize,
     },
     Object {

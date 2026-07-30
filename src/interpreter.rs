@@ -27,9 +27,9 @@ use crate::{Expression, Extension, Location, QueryResult, QueryResults};
 #[cfg(feature = "coverage")]
 use crate::query::traversal::traverse;
 
+use crate::value::{ValueMap, ValueMapEntry, ValueSet};
 use crate::Rc;
 use alloc::collections::{BTreeMap, BTreeSet};
-use crate::value::{ValueSet, ValueMap, ValueMapEntry};
 
 #[cfg(not(feature = "optimized-value"))]
 use crate::RcStrExt;
@@ -698,7 +698,14 @@ impl Interpreter {
         let mut r = true;
         match domain {
             Value::Array(a) => {
-                for (idx, v) in a.iter().enumerate() {
+                // Spike: lazy element access keeps foreign arrays lazy.
+                let n = a.len();
+                let mut idx = 0;
+                while idx < n {
+                    let v = match a.element(idx) {
+                        Some(v) => v,
+                        None => break,
+                    };
                     self.add_variable(&value.source_str(), v.clone())?;
                     if let Some(key) = key {
                         self.add_variable(&key.source_str(), Value::from(idx))?;
@@ -707,6 +714,7 @@ impl Interpreter {
                         r = false;
                         break;
                     }
+                    idx += 1;
                 }
             }
             Value::Set(s) => {
@@ -1543,7 +1551,16 @@ impl Interpreter {
             let loop_target_expr = Self::loop_assignment_expr(loop_info);
             match loop_value {
                 Value::Array(items) => {
-                    for (idx, v) in items.iter().enumerate() {
+                    // Spike: iterate via the lazy index/cursor API so a foreign
+                    // array materializes elements on demand instead of being
+                    // force-materialized by `.iter()` (which calls `as_slice`).
+                    let n = items.len();
+                    let mut idx = 0;
+                    while idx < n {
+                        let v = match items.element(idx) {
+                            Some(v) => v,
+                            None => break,
+                        };
                         self.memory_check()?;
                         self.set_loop_var_value(loop_target_expr, v.clone())?;
 
@@ -1560,6 +1577,7 @@ impl Interpreter {
                                 break;
                             }
                         }
+                        idx += 1;
                     }
 
                     self.remove_loop_var_value(loop_target_expr);
@@ -3970,11 +3988,7 @@ impl Interpreter {
                         }
                     }
 
-                    if !invalid
-                        && !ordered_expressions
-                            .iter()
-                            .any(|v| v.value.is_undefined())
-                    {
+                    if !invalid && !ordered_expressions.iter().any(|v| v.value.is_undefined()) {
                         result.expressions = ordered_expressions;
                     }
                 }

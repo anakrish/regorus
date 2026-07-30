@@ -16,11 +16,15 @@ use num_bigint::BigInt;
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
+#[cfg(not(feature = "std"))]
+use core::cell::OnceCell as ForeignOnce;
 use core::cmp::Ordering;
 use core::fmt;
 use core::hash::{Hash, Hasher};
 use core::ops;
 use core::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+#[cfg(feature = "std")]
+use std::sync::OnceLock as ForeignOnce;
 
 use core::convert::AsRef;
 use core::str::FromStr;
@@ -37,7 +41,8 @@ use crate::*;
 pub type ValueSet = hashbrown::HashSet<Value>;
 
 /// Entry type for [`ValueMap`].
-pub type ValueMapEntry<'a> = hashbrown::hash_map::Entry<'a, Value, Value, hashbrown::DefaultHashBuilder>;
+pub type ValueMapEntry<'a> =
+    hashbrown::hash_map::Entry<'a, Value, Value, hashbrown::DefaultHashBuilder>;
 
 /// Sentinel value indicating the cached hash needs recomputation.
 const OBJECT_HASH_DIRTY: u64 = u64::MAX;
@@ -178,12 +183,100 @@ impl MapObject {
     }
 }
 
+// ─── Foreign object backend (spike) ──────────────────────────────────────────
+
+/// A read-through backend that materializes object fields on demand.
+///
+/// This is the object half of the "foreign value backend" spike: a native Rust
+/// data structure (e.g. a packed subscription record) is exposed to the RVM as
+/// a Rego object without eagerly copying every field into an owned [`Value`].
+///
+/// Implementors are only asked to *produce* a [`Value`] for a given key; the
+/// [`ForeignObject`] wrapper takes care of caching so that the borrow-returning
+/// accessors of [`Value`]/[`ValueMap`] keep working.
+pub trait ObjectBackend: Send + Sync {
+    /// Materialize the value for `key`, or `None` if the key is absent.
+    fn get_value(&self, key: &str) -> Option<Value>;
+    /// The set of keys this object exposes (stable for the object's lifetime).
+    fn keys(&self) -> &[ArcStr];
+    /// Number of keys.
+    fn len(&self) -> usize;
+}
+
+/// A foreign-backed object with a materialization cache.
+///
+/// The cache is an [`elsa::sync::FrozenMap`] which hands out `&Value` borrows that
+/// outlive the internal borrow (entries are append-only and boxed, so their
+/// heap address is stable). This is the safe mechanism — no `unsafe` — that
+/// lets the existing `&Value`-returning accessors keep working over a foreign
+/// object without migrating the whole engine to non-borrowing accessors.
+pub struct ForeignObject {
+    backend: Rc<dyn ObjectBackend>,
+    cache: elsa::sync::FrozenMap<ArcStr, Box<Value>>,
+    /// Owned key/value pairs, materialized on first iteration (cold fallback).
+    pairs: ForeignOnce<Vec<(Value, Value)>>,
+}
+
+impl ForeignObject {
+    fn new(backend: Rc<dyn ObjectBackend>) -> Self {
+        ForeignObject {
+            backend,
+            cache: elsa::sync::FrozenMap::new(),
+            pairs: ForeignOnce::new(),
+        }
+    }
+
+    /// Materialize-on-first-access and return a stable borrow into the cache.
+    fn get(&self, key: &str) -> Option<&Value> {
+        if let Some(v) = self.cache.get(key) {
+            return Some(v);
+        }
+        let v = self.backend.get_value(key)?;
+        Some(self.cache.insert(ArcStr::from(key), Box::new(v)))
+    }
+
+    /// Force full materialization into owned key/value pairs (cold fallback used
+    /// by object iteration, hashing, and mutation).
+    fn pairs(&self) -> &[(Value, Value)] {
+        self.pairs.get_or_init(|| {
+            self.backend
+                .keys()
+                .iter()
+                .filter_map(|k| {
+                    self.backend
+                        .get_value(k.as_str())
+                        .map(|v| (Value::String(k.clone()), v))
+                })
+                .collect()
+        })
+    }
+}
+
+impl Clone for ForeignObject {
+    fn clone(&self) -> Self {
+        // Cloning shares the backend and starts with a fresh (empty) cache;
+        // materialized values are simply recomputed on demand.
+        ForeignObject::new(self.backend.clone())
+    }
+}
+
+impl fmt::Debug for ForeignObject {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ForeignObject")
+            .field("len", &self.backend.len())
+            .finish()
+    }
+}
+
 // ─── ObjectRepr ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 enum ObjectRepr {
     Compact(CompactObject),
     Map(MapObject),
+    /// Read-through foreign backend (materialization-cache spike). Boxed so the
+    /// large foreign payload does not bloat the common Compact/Map objects.
+    Foreign(Box<ForeignObject>),
 }
 
 // ─── ValueMap ────────────────────────────────────────────────────────────────
@@ -221,9 +314,7 @@ impl ValueMap {
     /// schema's sorted-key order).
     pub(crate) fn from_schema_values(schema: Rc<Schema>, values: Box<[Value]>) -> Self {
         debug_assert_eq!(schema.sorted_keys.len(), values.len());
-        let cached_hash = compute_map_hash(
-            schema.sorted_keys.iter().zip(values.iter()),
-        );
+        let cached_hash = compute_map_hash(schema.sorted_keys.iter().zip(values.iter()));
         ValueMap {
             repr: ObjectRepr::Compact(CompactObject {
                 schema,
@@ -233,12 +324,19 @@ impl ValueMap {
         }
     }
 
+    /// Build a foreign (read-through) object from an [`ObjectBackend`].
+    pub fn from_object_backend(backend: Rc<dyn ObjectBackend>) -> Self {
+        ValueMap {
+            repr: ObjectRepr::Foreign(Box::new(ForeignObject::new(backend))),
+        }
+    }
+
     /// Returns the schema if this is a compact object.
     #[inline]
     pub fn schema(&self) -> Option<&Rc<Schema>> {
         match &self.repr {
             ObjectRepr::Compact(c) => Some(&c.schema),
-            ObjectRepr::Map(_) => None,
+            ObjectRepr::Map(_) | ObjectRepr::Foreign(_) => None,
         }
     }
 
@@ -256,6 +354,10 @@ impl ValueMap {
                 _ => None, // Compact objects only have string keys
             },
             ObjectRepr::Map(m) => m.inner.get(key),
+            ObjectRepr::Foreign(f) => match key {
+                Value::String(s) => f.get(s.as_str()),
+                _ => None, // Foreign objects only have string keys
+            },
         }
     }
 
@@ -267,6 +369,10 @@ impl ValueMap {
                 _ => false,
             },
             ObjectRepr::Map(m) => m.inner.contains_key(key),
+            ObjectRepr::Foreign(f) => match key {
+                Value::String(s) => f.backend.keys().iter().any(|k| k.as_str() == s.as_str()),
+                _ => false,
+            },
         }
     }
 
@@ -275,6 +381,7 @@ impl ValueMap {
         match &self.repr {
             ObjectRepr::Compact(c) => c.values.len(),
             ObjectRepr::Map(m) => m.inner.len(),
+            ObjectRepr::Foreign(f) => f.backend.len(),
         }
     }
 
@@ -292,6 +399,8 @@ impl ValueMap {
                 values: &c.values,
             },
             ObjectRepr::Map(m) => ValueMapIter::Map(m.inner.iter()),
+            // Cold fallback: force full materialization then iterate owned pairs.
+            ObjectRepr::Foreign(f) => ValueMapIter::Pairs(f.pairs().iter()),
         }
     }
 
@@ -309,13 +418,8 @@ impl ValueMap {
     /// schema).  For map objects, entries are collected and sorted.
     pub fn iter_sorted(&self) -> Vec<(&Value, &Value)> {
         match &self.repr {
-            ObjectRepr::Compact(c) => c
-                .schema
-                .sorted_keys
-                .iter()
-                .zip(c.values.iter())
-                .collect(),
-            ObjectRepr::Map(_) => {
+            ObjectRepr::Compact(c) => c.schema.sorted_keys.iter().zip(c.values.iter()).collect(),
+            ObjectRepr::Map(_) | ObjectRepr::Foreign(_) => {
                 let mut entries: Vec<(&Value, &Value)> = self.iter().collect();
                 entries.sort_by(|(a, _), (b, _)| a.cmp(b));
                 entries
@@ -329,23 +433,34 @@ impl ValueMap {
         match &self.repr {
             ObjectRepr::Compact(c) => c.cached_hash,
             ObjectRepr::Map(m) => m.ensure_hash(),
+            ObjectRepr::Foreign(f) => compute_map_hash(f.pairs().iter().map(|(k, v)| (k, v))),
         }
     }
 
     // --- Mutation operations (ensure map mode) ---
 
-    /// Convert compact → map for mutation.
+    /// Convert compact/foreign → map for mutation.
     fn ensure_map(&mut self) {
-        if let ObjectRepr::Compact(c) = &self.repr {
-            let mut inner = hashbrown::HashMap::with_capacity(c.values.len());
-            for (k, v) in c.schema.sorted_keys.iter().zip(c.values.iter()) {
-                inner.insert(k.clone(), v.clone());
+        match &self.repr {
+            ObjectRepr::Compact(c) => {
+                let mut inner = hashbrown::HashMap::with_capacity(c.values.len());
+                for (k, v) in c.schema.sorted_keys.iter().zip(c.values.iter()) {
+                    inner.insert(k.clone(), v.clone());
+                }
+                self.repr = ObjectRepr::Map(MapObject {
+                    inner,
+                    // Preserve the eagerly-computed hash.
+                    cached_hash: AtomicU64::new(c.cached_hash),
+                });
             }
-            self.repr = ObjectRepr::Map(MapObject {
-                inner,
-                // Preserve the eagerly-computed hash.
-                cached_hash: AtomicU64::new(c.cached_hash),
-            });
+            ObjectRepr::Foreign(f) => {
+                let inner: hashbrown::HashMap<Value, Value> = f.pairs().iter().cloned().collect();
+                self.repr = ObjectRepr::Map(MapObject {
+                    inner,
+                    cached_hash: AtomicU64::new(OBJECT_HASH_DIRTY),
+                });
+            }
+            ObjectRepr::Map(_) => {}
         }
     }
 
@@ -516,6 +631,16 @@ impl IntoIterator for ValueMap {
                 values: c.values.into_vec(),
             },
             ObjectRepr::Map(m) => ValueMapIntoIter::Map(m.inner.into_iter()),
+            ObjectRepr::Foreign(f) => {
+                // Force materialization then iterate owned pairs.
+                let pairs: Vec<(Value, Value)> = f.pairs().to_vec();
+                ValueMapIntoIter::Map(
+                    pairs
+                        .into_iter()
+                        .collect::<hashbrown::HashMap<_, _>>()
+                        .into_iter(),
+                )
+            }
         }
     }
 }
@@ -529,6 +654,8 @@ pub enum ValueMapIter<'a> {
         values: &'a [Value],
     },
     Map(hashbrown::hash_map::Iter<'a, Value, Value>),
+    /// Owned key/value pairs (foreign objects, materialized on demand).
+    Pairs(core::slice::Iter<'a, (Value, Value)>),
 }
 
 impl<'a> Iterator for ValueMapIter<'a> {
@@ -547,6 +674,7 @@ impl<'a> Iterator for ValueMapIter<'a> {
                 }
             }
             ValueMapIter::Map(it) => it.next(),
+            ValueMapIter::Pairs(it) => it.next().map(|(k, v)| (k, v)),
         }
     }
 
@@ -557,6 +685,7 @@ impl<'a> Iterator for ValueMapIter<'a> {
                 (rem, Some(rem))
             }
             ValueMapIter::Map(it) => it.size_hint(),
+            ValueMapIter::Pairs(it) => it.size_hint(),
         }
     }
 }
@@ -613,6 +742,285 @@ impl FromIterator<(Value, Value)> for ValueMap {
     }
 }
 
+// ─── Array (opaque, possibly foreign-backed) ─────────────────────────────────
+
+/// A read-through backend that materializes array elements on demand.
+///
+/// This is the array half of the foreign value backend spike. A packed native
+/// structure (e.g. `NativeSubArray`) implements this trait to expose its
+/// elements to the RVM without eagerly building owned [`Value`]s.
+pub trait ArrayBackend: Send + Sync {
+    /// Materialize the element at `index`, or `None` if out of bounds.
+    fn get_value(&self, index: usize) -> Option<Value>;
+    /// Number of elements.
+    fn len(&self) -> usize;
+}
+
+/// A foreign-backed array with element and full-materialization caches.
+pub struct ForeignArray {
+    backend: Rc<dyn ArrayBackend>,
+    /// Per-element cache (append-only, boxed => stable). Retained materialized
+    /// elements keep their (object) field caches alive across accesses — this
+    /// is what lets a full scan progressively fill memory (the spike measures
+    /// that erosion).
+    elem_cache: elsa::sync::FrozenMap<usize, Box<Value>>,
+    /// Full owned materialization, built lazily by `as_slice`/`as_vec`/`Deref`
+    /// (the non-lazy fallback used by `as_array` and by-reference indexing).
+    full: ForeignOnce<Vec<Value>>,
+}
+
+impl ForeignArray {
+    fn new(backend: Rc<dyn ArrayBackend>) -> Self {
+        ForeignArray {
+            backend,
+            elem_cache: elsa::sync::FrozenMap::new(),
+            full: ForeignOnce::new(),
+        }
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.backend.len()
+    }
+
+    /// Lazily materialize element `index`, caching (and retaining) the result.
+    fn element(&self, index: usize) -> Option<Value> {
+        if index >= self.backend.len() {
+            return None;
+        }
+        if let Some(v) = self.elem_cache.get(&index) {
+            return Some(v.clone());
+        }
+        let v = self.backend.get_value(index)?;
+        // Retain a shared clone so materialized field caches survive.
+        Some(self.elem_cache.insert(index, Box::new(v)).clone())
+    }
+
+    /// Force full materialization (non-lazy fallback).
+    fn as_slice(&self) -> &[Value] {
+        self.full
+            .get_or_init(|| {
+                (0..self.backend.len())
+                    .map(|i| self.element(i).unwrap_or(Value::Undefined))
+                    .collect()
+            })
+            .as_slice()
+    }
+}
+
+impl Clone for ForeignArray {
+    fn clone(&self) -> Self {
+        // Shares the backend; starts with a fresh (empty) cache.
+        ForeignArray::new(self.backend.clone())
+    }
+}
+
+impl fmt::Debug for ForeignArray {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ForeignArray")
+            .field("len", &self.backend.len())
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone)]
+enum ArrayRepr {
+    Owned(Vec<Value>),
+    /// Boxed so owned arrays are not bloated by the foreign payload.
+    Foreign(Box<ForeignArray>),
+}
+
+/// An opaque, ordered sequence of [`Value`]s.
+///
+/// The backing storage is either an owned `Vec<Value>` or a read-through
+/// [`ForeignArray`]. Owned arrays behave exactly like a `Vec` (via `Deref` to a
+/// slice); foreign arrays materialize elements lazily through
+/// [`Array::element`] / [`Array::len`] (the cursor/index API the interpreter's
+/// hot loop uses) and only force full materialization when a `&[Value]` /
+/// `&Vec<Value>` borrow is unavoidable (`Deref`, `as_slice`, `as_array`).
+#[derive(Debug, Clone)]
+pub struct Array {
+    repr: ArrayRepr,
+}
+
+/// The reference-counted array storage behind [`Value::Array`]. Aliased so that
+/// feature-agnostic code (e.g. `builtins::utils::ensure_array`) works across the
+/// default and optimized value implementations.
+pub type ArrayRc = Rc<Array>;
+
+impl Array {
+    /// Build a foreign (read-through) array from an [`ArrayBackend`].
+    pub fn from_backend(backend: Rc<dyn ArrayBackend>) -> Self {
+        Array {
+            repr: ArrayRepr::Foreign(Box::new(ForeignArray::new(backend))),
+        }
+    }
+
+    /// True if this array is foreign-backed.
+    #[inline]
+    pub fn is_foreign(&self) -> bool {
+        matches!(self.repr, ArrayRepr::Foreign(_))
+    }
+
+    /// Number of elements (does not force materialization).
+    #[inline]
+    pub fn len(&self) -> usize {
+        match &self.repr {
+            ArrayRepr::Owned(v) => v.len(),
+            ArrayRepr::Foreign(f) => f.len(),
+        }
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Lazily fetch a clone of element `index` (cursor/index API). For owned
+    /// arrays this clones from the `Vec`; for foreign arrays it materializes and
+    /// caches. Returns `None` if out of bounds.
+    #[inline]
+    pub fn element(&self, index: usize) -> Option<Value> {
+        match &self.repr {
+            ArrayRepr::Owned(v) => v.get(index).cloned(),
+            ArrayRepr::Foreign(f) => f.element(index),
+        }
+    }
+
+    /// Return the elements as a `&Vec<Value>`, forcing full materialization for
+    /// foreign arrays (the documented non-lazy fallback used by `as_array`).
+    #[inline]
+    pub fn as_vec(&self) -> &Vec<Value> {
+        match &self.repr {
+            ArrayRepr::Owned(v) => v,
+            ArrayRepr::Foreign(f) => f.full.get_or_init(|| {
+                (0..f.backend.len())
+                    .map(|i| f.element(i).unwrap_or(Value::Undefined))
+                    .collect()
+            }),
+        }
+    }
+
+    /// Return the elements as a slice, forcing full materialization for foreign
+    /// arrays (the documented non-lazy fallback).
+    #[inline]
+    pub fn as_slice(&self) -> &[Value] {
+        match &self.repr {
+            ArrayRepr::Owned(v) => v.as_slice(),
+            ArrayRepr::Foreign(f) => f.as_slice(),
+        }
+    }
+
+    /// Force materialization to an owned `Vec` and return a mutable borrow.
+    pub fn as_owned_mut(&mut self) -> &mut Vec<Value> {
+        if let ArrayRepr::Foreign(f) = &self.repr {
+            let v: Vec<Value> = f.as_slice().to_vec();
+            self.repr = ArrayRepr::Owned(v);
+        }
+        match &mut self.repr {
+            ArrayRepr::Owned(v) => v,
+            ArrayRepr::Foreign(_) => unreachable!(),
+        }
+    }
+
+    // --- Mutation helpers (force owned, delegate to Vec) ---
+
+    #[inline]
+    pub fn push(&mut self, v: Value) {
+        self.as_owned_mut().push(v);
+    }
+
+    #[inline]
+    pub fn reverse(&mut self) {
+        self.as_owned_mut().reverse();
+    }
+
+    #[inline]
+    pub fn append(&mut self, other: &mut Array) {
+        let tail = core::mem::take(other.as_owned_mut());
+        self.as_owned_mut().extend(tail);
+    }
+
+    #[inline]
+    pub fn sort(&mut self) {
+        self.as_owned_mut().sort();
+    }
+}
+
+impl Default for Array {
+    fn default() -> Self {
+        Array {
+            repr: ArrayRepr::Owned(Vec::new()),
+        }
+    }
+}
+
+impl ops::Deref for Array {
+    type Target = [Value];
+    #[inline]
+    fn deref(&self) -> &[Value] {
+        self.as_slice()
+    }
+}
+
+impl From<Vec<Value>> for Array {
+    #[inline]
+    fn from(v: Vec<Value>) -> Self {
+        Array {
+            repr: ArrayRepr::Owned(v),
+        }
+    }
+}
+
+impl From<Array> for Value {
+    #[inline]
+    fn from(a: Array) -> Value {
+        Value::Array(Rc::new(a))
+    }
+}
+
+impl FromIterator<Value> for Array {
+    fn from_iter<T: IntoIterator<Item = Value>>(iter: T) -> Self {
+        Array {
+            repr: ArrayRepr::Owned(iter.into_iter().collect()),
+        }
+    }
+}
+
+impl PartialEq for Array {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+impl Eq for Array {}
+
+impl PartialOrd for Array {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Array {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_slice().cmp(other.as_slice())
+    }
+}
+
+impl Hash for Array {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_slice().hash(state);
+    }
+}
+
+impl Serialize for Array {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.as_slice().serialize(serializer)
+    }
+}
+
 /// A value in a Rego document.
 ///
 /// Value is similar to a [`serde_json::value::Value`], but has the following additional
@@ -650,7 +1058,7 @@ pub enum Value {
     String(ArcStr),
 
     /// JSON array.
-    Array(Rc<Vec<Value>>),
+    Array(Rc<Array>),
 
     /// A set of values.
     /// No JSON equivalent.
@@ -982,7 +1390,10 @@ impl Value {
     /// Returns true if this is a numeric variant.
     #[inline(always)]
     pub fn is_number(&self) -> bool {
-        matches!(self, Value::UInt(_) | Value::Int(_) | Value::Float(_) | Value::BigInt(_))
+        matches!(
+            self,
+            Value::UInt(_) | Value::Int(_) | Value::Float(_) | Value::BigInt(_)
+        )
     }
 
     /// Extract the number payload as a `Number`, if this is a numeric variant.
@@ -1594,7 +2005,7 @@ impl From<Vec<Value>> for Value {
     /// # Ok(())
     /// # }
     fn from(a: Vec<Value>) -> Self {
-        Value::Array(Rc::new(a))
+        Value::Array(Rc::new(Array::from(a)))
     }
 }
 
@@ -2057,7 +2468,7 @@ impl Value {
     /// # }
     pub fn as_array(&self) -> Result<&Vec<Value>> {
         match self {
-            Value::Array(a) => Ok(a),
+            Value::Array(a) => Ok(a.as_vec()),
             _ => Err(anyhow!("not an array")),
         }
     }
@@ -2072,7 +2483,7 @@ impl Value {
     /// # }
     pub fn as_array_mut(&mut self) -> Result<&mut Vec<Value>> {
         match self {
-            Value::Array(a) => Ok(Rc::make_mut(a)),
+            Value::Array(a) => Ok(Rc::make_mut(a).as_owned_mut()),
             _ => Err(anyhow!("not an array")),
         }
     }
@@ -2337,15 +2748,221 @@ mod size_tests {
     #[test]
     fn print_value_sizes() {
         std::println!("=== Value type sizes ===");
-        std::println!("Value: {} bytes (align {})", core::mem::size_of::<Value>(), core::mem::align_of::<Value>());
-        std::println!("ValueMap (dual repr): {} bytes (align {})", core::mem::size_of::<ValueMap>(), core::mem::align_of::<ValueMap>());
+        std::println!(
+            "Value: {} bytes (align {})",
+            core::mem::size_of::<Value>(),
+            core::mem::align_of::<Value>()
+        );
+        std::println!(
+            "ValueMap (dual repr): {} bytes (align {})",
+            core::mem::size_of::<ValueMap>(),
+            core::mem::align_of::<ValueMap>()
+        );
         std::println!("ObjectRepr: {} bytes", core::mem::size_of::<ObjectRepr>());
-        std::println!("CompactObject: {} bytes", core::mem::size_of::<CompactObject>());
+        std::println!(
+            "CompactObject: {} bytes",
+            core::mem::size_of::<CompactObject>()
+        );
         std::println!("MapObject: {} bytes", core::mem::size_of::<MapObject>());
         std::println!("Schema: {} bytes", core::mem::size_of::<Schema>());
-        std::println!("Rc<ValueMap>: {} bytes", core::mem::size_of::<Rc<ValueMap>>());
+        std::println!(
+            "Rc<ValueMap>: {} bytes",
+            core::mem::size_of::<Rc<ValueMap>>()
+        );
         std::println!("Number: {} bytes", core::mem::size_of::<Number>());
         std::println!("ArcStr: {} bytes", core::mem::size_of::<ArcStr>());
         std::println!("ValueSet: {} bytes", core::mem::size_of::<ValueSet>());
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Foreign value backend spike: mock packed-native subscription store
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Models a C# `SubscriptionValue[]` kept in a packed Rust structure and exposed
+// to the RVM through the foreign array/object backends. Each subscription is a
+// 6-field object (short keys i/n/s/p/q/l) reproducing the exact logical data of
+// the regmem subscription JSON, so an evaluated policy returns identical results
+// whether the input is a fully-parsed Value or a foreign-backed one.
+//
+// NOTE (spike deviation): the task prose sketched fields as
+// `placement: Option<[u8;16]>` / `spending: Option<u8>`. To reproduce the exact
+// workload strings (`"p"` is a descriptive placement string, `"l"` is a nested
+// `{v,c}` object) we instead pack `zone: u8` and `spending: u16`, and `"s"` is
+// materialized as a numeric state code (matching the JSON `"s":2`). The packing
+// philosophy (fixed-width fields + interned quota strings) is preserved.
+
+/// One packed subscription record.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct NativeSub {
+    /// 16-byte guid, formatted into the "i" field on demand.
+    pub id: [u8; 16],
+    /// Display name (interned string) -> "n".
+    pub name: ArcStr,
+    /// State code -> "s" (numeric).
+    pub state: u8,
+    /// Placement zone -> formatted into "p".
+    pub zone: u8,
+    /// Index into the shared `quota_table` -> "q".
+    pub quota: u16,
+    /// Spending value -> "l".v.
+    pub spending: u16,
+}
+
+/// Packed array of subscriptions plus shared interned tables.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct NativeSubArray {
+    pub subs: Vec<NativeSub>,
+    pub quota_table: Vec<ArcStr>,
+    keys: Rc<[ArcStr]>,
+}
+
+impl NativeSubArray {
+    /// Build the mock store for `n` subscriptions, mirroring regmem's generator.
+    pub fn generate(n: usize) -> Rc<Self> {
+        let quota_table = alloc::vec![ArcStr::from("PayAsYouGo_2014")];
+        let keys: Rc<[ArcStr]> = alloc::vec![
+            ArcStr::from("i"),
+            ArcStr::from("n"),
+            ArcStr::from("s"),
+            ArcStr::from("p"),
+            ArcStr::from("q"),
+            ArcStr::from("l"),
+        ]
+        .into();
+        let mut subs = Vec::with_capacity(n);
+        for i in 0..n {
+            let mut id = [0u8; 16];
+            id[0..4].copy_from_slice(&(i as u32).to_be_bytes());
+            id[4] = 0x11;
+            id[5] = 0x11;
+            id[6] = 0x22;
+            id[7] = 0x22;
+            id[8] = 0x33;
+            id[9] = 0x33;
+            id[10] = 0x44;
+            id[11] = 0x44;
+            id[12] = 0x55;
+            id[13] = 0x55;
+            id[14] = 0x66;
+            id[15] = 0x66;
+            subs.push(NativeSub {
+                id,
+                name: ArcStr::from(alloc::format!("Subscription Display {i:06}")),
+                state: 2,
+                zone: (i % 3) as u8,
+                quota: 0,
+                spending: 0,
+            });
+        }
+        Rc::new(NativeSubArray {
+            subs,
+            quota_table,
+            keys,
+        })
+    }
+}
+
+fn format_guid(id: &[u8; 16]) -> ArcStr {
+    ArcStr::from(alloc::format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7],
+        id[8], id[9], id[10], id[11], id[12], id[13], id[14], id[15]
+    ))
+}
+
+/// Per-element object view over `arr.subs[idx]` (read-through object backend).
+struct SubView {
+    arr: Rc<NativeSubArray>,
+    idx: usize,
+}
+
+impl ObjectBackend for SubView {
+    fn keys(&self) -> &[ArcStr] {
+        &self.arr.keys
+    }
+
+    fn len(&self) -> usize {
+        6
+    }
+
+    fn get_value(&self, key: &str) -> Option<Value> {
+        let sub = self.arr.subs.get(self.idx)?;
+        match key {
+            "i" => Some(Value::String(format_guid(&sub.id))),
+            "n" => Some(Value::String(sub.name.clone())),
+            "s" => Some(Value::UInt(sub.state as u64)),
+            "p" => Some(Value::String(ArcStr::from(alloc::format!(
+                "East US 2 (Zone {:02}) Placement",
+                sub.zone
+            )))),
+            "q" => Some(Value::String(
+                self.arr.quota_table[sub.quota as usize].clone(),
+            )),
+            "l" => {
+                // Nested object {"v": spending, "c": "None"}.
+                let mut m = ValueMap::new();
+                m.insert(
+                    Value::String(ArcStr::from("v")),
+                    Value::UInt(sub.spending as u64),
+                );
+                m.insert(
+                    Value::String(ArcStr::from("c")),
+                    Value::String(ArcStr::from("None")),
+                );
+                Some(Value::Object(Rc::new(m)))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Array backend that hands out foreign-object views of each subscription.
+struct NativeSubArrayBackend(Rc<NativeSubArray>);
+
+impl ArrayBackend for NativeSubArrayBackend {
+    fn len(&self) -> usize {
+        self.0.subs.len()
+    }
+
+    fn get_value(&self, index: usize) -> Option<Value> {
+        if index >= self.0.subs.len() {
+            return None;
+        }
+        let backend: Rc<dyn ObjectBackend> = Rc::new(SubView {
+            arr: self.0.clone(),
+            idx: index,
+        });
+        Some(Value::Object(Rc::new(ValueMap::from_object_backend(
+            backend,
+        ))))
+    }
+}
+
+impl Value {
+    /// Spike: construct a foreign-backed `Value::Array` over a packed
+    /// [`NativeSubArray`]. Elements/fields materialize on demand.
+    #[doc(hidden)]
+    pub fn from_native_sub_array(arr: Rc<NativeSubArray>) -> Value {
+        let backend: Rc<dyn ArrayBackend> = Rc::new(NativeSubArrayBackend(arr));
+        Value::Array(Rc::new(Array::from_backend(backend)))
+    }
+
+    /// Spike: wrap a foreign subscription array as `{"Values":[...],
+    /// "ContinuationToken":null}` to mirror the regmem document shape.
+    #[doc(hidden)]
+    pub fn native_sub_document(arr: Rc<NativeSubArray>) -> Value {
+        let mut m = ValueMap::new();
+        m.insert(
+            Value::String(ArcStr::from("Values")),
+            Value::from_native_sub_array(arr),
+        );
+        m.insert(
+            Value::String(ArcStr::from("ContinuationToken")),
+            Value::Null,
+        );
+        Value::Object(Rc::new(m))
     }
 }

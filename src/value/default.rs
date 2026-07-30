@@ -46,6 +46,11 @@ use crate::*;
 //     - [`Value::Object`] keys can be other values, not just strings.
 ///    - [`Value::Number`] has at least 100 digits of precision for computations.
 ///
+/// The reference-counted array storage behind [`Value::Array`]. Aliased so that
+/// feature-agnostic code (e.g. `builtins::utils::ensure_array`) works across the
+/// default and optimized value implementations.
+pub type ArrayRc = Rc<Vec<Value>>;
+
 /// Value can be efficiently cloned due to the use of reference counting.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Value {

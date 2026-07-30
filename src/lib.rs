@@ -175,6 +175,11 @@ pub use utils::limits::{
 };
 pub use value::Value;
 
+/// Spike: packed-native subscription store used to exercise the foreign value
+/// backend (materialization-cache read-through path).
+#[cfg(feature = "optimized-value")]
+pub use value::NativeSubArray;
+
 #[cfg(not(feature = "optimized-value"))]
 pub(crate) use value::RcStrExt;
 

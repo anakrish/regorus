@@ -38,3 +38,20 @@ impl RcStrExt for crate::Rc<str> {
         self
     }
 }
+
+/// Lazy element access used by the interpreter's array loops.  In the optimized
+/// Value this is an inherent method on the `Array` newtype (supporting foreign
+/// backends); the default Value has no newtype, so provide the same API on the
+/// underlying `Vec<Value>` for source compatibility.
+#[cfg(not(feature = "optimized-value"))]
+pub trait ArrayLazy {
+    fn element(&self, index: usize) -> Option<Value>;
+}
+
+#[cfg(not(feature = "optimized-value"))]
+impl ArrayLazy for alloc::vec::Vec<Value> {
+    #[inline]
+    fn element(&self, index: usize) -> Option<Value> {
+        self.get(index).cloned()
+    }
+}

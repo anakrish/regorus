@@ -9,7 +9,7 @@ use crate::Rc;
 use crate::Value;
 use crate::*;
 
-use crate::value::{ValueSet, ValueMap};
+use crate::value::{ValueMap, ValueSet};
 
 #[cfg(not(feature = "optimized-value"))]
 use crate::RcStrExt;
@@ -153,7 +153,7 @@ pub fn ensure_string_collection<'a>(fcn: &str, arg: &Expr, v: &'a Value) -> Resu
     Ok(collection)
 }
 
-pub fn ensure_array(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<Vec<Value>>> {
+pub fn ensure_array(fcn: &str, arg: &Expr, v: Value) -> Result<crate::value::ArrayRc> {
     Ok(match v {
         Value::Array(a) => a,
         _ => {

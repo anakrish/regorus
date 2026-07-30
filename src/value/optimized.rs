@@ -838,7 +838,19 @@ impl ForeignArray {
     }
 
     /// Force full materialization (non-lazy fallback).
+    ///
+    /// This is the array analogue of [`ForeignObject::get`]: a `debug_assert`
+    /// guards the hot path so any RVM/interpreter site that borrows a foreign
+    /// array as a `&[Value]` (via `Deref`/`as_slice`/`as_vec`) instead of using
+    /// the lazy [`Array::element`] cursor is caught in release builds (which run
+    /// with debug-assertions on). It force-materializes the whole array and
+    /// retains it in `full`, breaking the transient floor, so it must only be
+    /// reached by documented non-scan fallbacks.
     fn as_slice(&self) -> &[Value] {
+        debug_assert!(
+            self.full.get().is_some(),
+            "foreign array borrow `as_slice`/Deref hit on hot path; use element()"
+        );
         self.full
             .get_or_init(|| {
                 (0..self.backend.len())
@@ -934,11 +946,17 @@ impl Array {
     pub fn as_vec(&self) -> &Vec<Value> {
         match &self.repr {
             ArrayRepr::Owned(v) => v,
-            ArrayRepr::Foreign(f) => f.full.get_or_init(|| {
-                (0..f.backend.len())
-                    .map(|i| f.element(i).unwrap_or(Value::Undefined))
-                    .collect()
-            }),
+            ArrayRepr::Foreign(f) => {
+                debug_assert!(
+                    f.full.get().is_some(),
+                    "foreign array borrow `as_vec` hit on hot path; use element()"
+                );
+                f.full.get_or_init(|| {
+                    (0..f.backend.len())
+                        .map(|i| f.element(i).unwrap_or(Value::Undefined))
+                        .collect()
+                })
+            }
         }
     }
 

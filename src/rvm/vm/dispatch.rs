@@ -545,7 +545,11 @@ impl RegoVM {
             } => {
                 let key_value = self.get_register(key)?;
                 let container_value = self.get_register(container)?;
-                let result = container_value[key_value].clone();
+                // Lazy, value-returning index: for foreign-backed containers this
+                // materializes a fresh element/field and retains nothing, instead
+                // of routing through the borrow (`container[key]`) path which
+                // force-materializes foreign arrays and panics on foreign objects.
+                let result = container_value.index_owned(key_value);
                 self.set_register(dest, result)?;
                 Ok(InstructionOutcome::Continue)
             }
@@ -557,7 +561,7 @@ impl RegoVM {
                 let container_value = self.get_register(container)?;
 
                 if let Some(key_value) = program.literals.get(usize::from(literal_idx)) {
-                    let result = container_value[key_value].clone();
+                    let result = container_value.index_owned(key_value);
                     self.set_register(dest, result)?;
                     Ok(InstructionOutcome::Continue)
                 } else {
@@ -800,7 +804,7 @@ impl RegoVM {
                         LiteralOrRegister::Register(reg) => self.get_register(reg)?.clone(),
                     };
 
-                    current_value = current_value[&key_value].clone();
+                    current_value = current_value.index_owned(&key_value);
 
                     if current_value.is_undefined() {
                         break;

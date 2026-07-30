@@ -4,6 +4,11 @@
 use alloc::vec::Vec;
 use crate::rvm::instructions::LoopMode;
 use crate::value::Value;
+// The lazy `element` accessor is an inherent method on the optimized `Array`
+// but a `Vec<Value>` extension trait in the default value model; import the
+// trait only when that model is active.
+#[cfg(not(feature = "optimized-value"))]
+use crate::value::ArrayLazy;
 
 use super::context::{IterationState, LoopContext};
 use super::errors::{Result, VmError};
@@ -514,7 +519,11 @@ impl RegoVM {
                         let key_value = Value::from(*index);
                         self.set_register(key_reg, key_value)?;
                     }
-                    if let Some(item_value) = items.get(*index).cloned() {
+                    // Lazy element access: for foreign-backed arrays this
+                    // materializes a fresh value and retains nothing (avoids the
+                    // `Deref`->`as_slice` full-materialization the borrow path
+                    // would trigger).
+                    if let Some(item_value) = items.element(*index) {
                         self.set_register(value_reg, item_value)?;
                         Ok(true)
                     } else {

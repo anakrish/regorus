@@ -95,6 +95,25 @@ impl RegorusForeignField {
 }
 
 /// C-ABI vtable describing a recursive immutable foreign value graph.
+///
+/// Concurrency contract:
+/// - After `regorus_foreign_input_new` returns, regorus may invoke `len`,
+///   `get_field`, `get_element`, and `keys` concurrently from many threads with
+///   the SAME `ctx` and child contexts. These callbacks must be pure,
+///   read-only, exception-safe, and free of callback-internal shared mutable
+///   state. Use per-thread/per-call scratch buffers and per-thread counters in
+///   language bindings; never reuse one mutable scratch buffer or non-atomic
+///   counter behind a shared `ctx`.
+/// - The caller must fully construct and publish the immutable object graph
+///   before sharing the returned `RegorusForeignInput` with worker threads. The
+///   shared `Arc<CtxOwner>` used by regorus is the release/acquire share point
+///   for all subsequent per-VM views.
+/// - Each engine/VM attachment creates its own thin foreign root wrapper over
+///   the shared owner, so materialization fallback caches (`OnceLock` cells in
+///   foreign arrays/objects) are per-view and are never shared across VMs.
+/// - `free(ctx)` is called exactly once, after the input handle and every
+///   engine/VM view cloned from it have been dropped; no callback is in flight
+///   when `free` runs.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct RegorusForeignValue {
@@ -302,12 +321,26 @@ impl ArrayBackend for ForeignArrayBackend {
     }
 }
 
-/// Opaque immutable foreign input handle. It owns one shared root `CtxOwner`;
-/// every set-input call builds a fresh per-VM view over this owner.
+/// Opaque immutable foreign input handle.
+///
+/// The handle owns one shared `Arc<CtxOwner>` containing the copied vtable and
+/// root caller handle. Calls to `regorus_engine_set_input_foreign_value` and
+/// `regorus_rvm_set_input_foreign_value` do NOT share a root `Value`; each call
+/// builds a fresh per-engine/VM wrapper with distinct materialization-cache cells
+/// layered over the shared owner. Dropping this handle releases one owner
+/// reference; the caller's `free(ctx)` fires exactly once when the last view also
+/// drops. The caller must publish the immutable object graph before sharing this
+/// handle with worker threads.
 pub struct RegorusForeignInput {
     owner: Arc<CtxOwner>,
 }
 
+/// Construct a shared immutable foreign input owner from a recursive vtable.
+///
+/// The vtable is copied by value. The caller must keep the object graph
+/// reachable through `root.ctx` immutable and safely published before this
+/// returned handle is shared across threads. The callbacks may be called
+/// concurrently with the same contexts by independent VM views.
 #[no_mangle]
 pub extern "C" fn regorus_foreign_input_new(root: *const RegorusForeignValue) -> RegorusResult {
     with_unwind_guard(|| {
@@ -335,6 +368,12 @@ pub extern "C" fn regorus_foreign_input_new(root: *const RegorusForeignValue) ->
     })
 }
 
+/// Drop a foreign input handle.
+///
+/// This does not necessarily call the vtable's `free(ctx)` immediately: any
+/// engine/VM that has attached the input owns a per-view wrapper holding the
+/// shared owner alive. `free(ctx)` runs exactly once after this handle and all
+/// per-view wrappers have been dropped.
 #[no_mangle]
 pub extern "C" fn regorus_foreign_input_drop(input: *mut RegorusForeignInput) -> RegorusResult {
     with_unwind_guard(|| {
@@ -358,6 +397,11 @@ fn input_to_value(input: *const RegorusForeignInput) -> Result<Value> {
     ForeignNode::root_value(input.owner.clone())
 }
 
+/// Set an engine input to a foreign value.
+///
+/// This attaches a new per-engine view over the shared immutable owner. The view
+/// has its own materialization caches, so a force-materializing policy affects
+/// only this engine's current input wrapper and not other threads/VMs.
 #[no_mangle]
 pub extern "C" fn regorus_engine_set_input_foreign_value(
     engine: *mut RegorusEngine,
@@ -374,6 +418,11 @@ pub extern "C" fn regorus_engine_set_input_foreign_value(
     })
 }
 
+/// Set an RVM input to a foreign value.
+///
+/// This attaches a new per-VM view over the shared immutable owner. The view has
+/// its own materialization caches, so a force-materializing policy affects only
+/// this VM's current input wrapper and not other threads/VMs.
 #[cfg(feature = "rvm")]
 #[no_mangle]
 pub extern "C" fn regorus_rvm_set_input_foreign_value(
@@ -395,14 +444,17 @@ pub extern "C" fn regorus_rvm_set_input_foreign_value(
 mod tests {
     use super::*;
     use core::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
     use std::thread;
 
     struct TestRoot {
         rows: Vec<u64>,
         frees: AtomicUsize,
+        element_fetches: AtomicUsize,
     }
 
     static ROOT_PTR: AtomicUsize = AtomicUsize::new(0);
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     const ROOT_CTX: usize = 1;
     const ARRAY_CTX: usize = 2;
@@ -463,6 +515,7 @@ mod tests {
         unsafe {
             *out = RegorusForeignField::empty();
             if ctx as usize == ARRAY_CTX && index < root().rows.len() {
+                root().element_fetches.fetch_add(1, Ordering::SeqCst);
                 (*out).tag = TAG_OBJECT;
                 (*out).child_ctx = (ELEMENT_BASE + index) as *mut c_void;
             }
@@ -494,11 +547,35 @@ mod tests {
             .count()
     }
 
+    fn force_materialize_and_count(value: Value) -> usize {
+        let Value::Object(map) = value else {
+            panic!("root object")
+        };
+        let values = map
+            .get_owned(&Value::String(ForeignArcStr::from("Values")))
+            .unwrap();
+        let Value::Array(arr) = values else {
+            panic!("values array")
+        };
+        arr.as_slice()
+            .iter()
+            .filter(|v| match v {
+                Value::Object(obj) => matches!(
+                    obj.get_owned(&Value::String(ForeignArcStr::from("v"))),
+                    Some(Value::UInt(1))
+                ),
+                _ => false,
+            })
+            .count()
+    }
+
     #[test]
     fn shared_owner_supports_concurrent_read_views() {
+        let _guard = TEST_LOCK.lock().unwrap();
         let root = Box::leak(Box::new(TestRoot {
             rows: (0..256).map(|i| (i % 4) as u64).collect(),
             frees: AtomicUsize::new(0),
+            element_fetches: AtomicUsize::new(0),
         }));
         ROOT_PTR.store(root as *const TestRoot as usize, Ordering::Release);
         let owner = Arc::new(CtxOwner {
@@ -527,6 +604,55 @@ mod tests {
         for t in threads {
             t.join().unwrap();
         }
+        drop(owner);
+        assert_eq!(root.frees.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn force_materialization_is_per_view_under_concurrency() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let root = Box::leak(Box::new(TestRoot {
+            rows: (0..128).map(|i| (i % 4) as u64).collect(),
+            frees: AtomicUsize::new(0),
+            element_fetches: AtomicUsize::new(0),
+        }));
+        ROOT_PTR.store(root as *const TestRoot as usize, Ordering::Release);
+        let owner = Arc::new(CtxOwner {
+            vtable: RegorusForeignValue {
+                ctx: ROOT_CTX as *mut c_void,
+                kind: TAG_OBJECT,
+                len: len_cb,
+                get_field: get_field_cb,
+                keys: keys_cb,
+                get_element: get_element_cb,
+                free: free_cb,
+            },
+        });
+        let expected = force_materialize_and_count(ForeignNode::root_value(owner.clone()).unwrap());
+
+        let threads = 16;
+        let iters = 25;
+        let mut workers = Vec::new();
+        for _ in 0..threads {
+            let owner = owner.clone();
+            workers.push(thread::spawn(move || {
+                for _ in 0..iters {
+                    let got =
+                        force_materialize_and_count(ForeignNode::root_value(owner.clone()).unwrap());
+                    assert_eq!(got, expected);
+                }
+            }));
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+
+        let expected_fetches = root.rows.len() * (1 + threads * iters);
+        assert_eq!(
+            root.element_fetches.load(Ordering::SeqCst),
+            expected_fetches,
+            "each per-VM wrapper must materialize independently; a shared OnceLock would undercount"
+        );
         drop(owner);
         assert_eq!(root.frees.load(Ordering::SeqCst), 1);
     }

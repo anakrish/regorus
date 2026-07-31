@@ -467,3 +467,23 @@ pub extern "C" fn regorus_engine_set_input_foreign_native(
         }())
     })
 }
+
+/// RVM variant of [`regorus_engine_set_input_foreign_native`]. Bench-only:
+/// set the RVM input to a Rust-resident foreign proxy of `n` subscriptions
+/// (no FFI crossing).
+#[cfg(feature = "rvm")]
+#[no_mangle]
+pub extern "C" fn regorus_rvm_set_input_foreign_native(
+    vm: *mut crate::rvm::RegorusRvm,
+    n: usize,
+) -> RegorusResult {
+    with_unwind_guard(|| {
+        to_regorus_result(|| -> Result<()> {
+            let vm = to_ref(vm)?;
+            let value = build_native_input(n);
+            let mut guard = vm.try_write()?;
+            guard.set_input(value);
+            Ok(())
+        }())
+    })
+}

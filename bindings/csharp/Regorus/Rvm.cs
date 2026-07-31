@@ -122,6 +122,31 @@ namespace Regorus
         }
 
         /// <summary>
+        /// Bench-only: set the VM input to a Rust-resident foreign proxy of
+        /// <paramref name="n"/> subscriptions (no FFI crossing).
+        /// </summary>
+        public void SetInputForeignNative(int n)
+        {
+            UseHandle(vmPtr =>
+            {
+                CheckAndDropResult(API.regorus_rvm_set_input_foreign_native((RegorusRvm*)vmPtr, (nuint)n));
+                return 0;
+            });
+        }
+
+        /// <summary>
+        /// Set the maximum number of instructions the VM may execute before aborting.
+        /// </summary>
+        public void SetMaxInstructions(ulong maxInstructions)
+        {
+            UseHandle(vmPtr =>
+            {
+                CheckAndDropResult(API.regorus_rvm_set_max_instructions((RegorusRvm*)vmPtr, (UIntPtr)maxInstructions));
+                return 0;
+            });
+        }
+
+        /// <summary>
         /// Set the execution mode (0 = run-to-completion, 1 = suspendable).
         /// </summary>
         public void SetExecutionMode(byte mode)

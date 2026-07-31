@@ -318,6 +318,12 @@ namespace Regorus.Internal
         internal static extern RegorusResult regorus_engine_set_input_foreign_native(RegorusEngine* engine, nuint n);
 
         /// <summary>
+        /// Bench-only RVM variant of regorus_engine_set_input_foreign_native.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_input_foreign_native", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_set_input_foreign_native(RegorusRvm* vm, nuint n);
+
+        /// <summary>
         /// Set input from JSON file.
         /// </summary>
         [DllImport(LibraryName, EntryPoint = "regorus_engine_set_input_from_json_file", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

@@ -20,6 +20,7 @@ use anyhow::{bail, Result};
 use core::ffi::{c_char, c_void, CStr};
 use core::ptr;
 use regorus::{ArrayBackend, ForeignArcStr, ObjectBackend, Rc, Value, ValueArray as Array, ValueMap};
+use std::sync::OnceLock;
 
 const TAG_UNDEFINED: u8 = 0;
 const TAG_NULL: u8 = 1;
@@ -126,6 +127,18 @@ pub struct RegorusForeignValue {
     pub keys: extern "C" fn(ctx: *mut c_void, out_ptrs: *mut *const c_char, out_len: *mut usize),
     pub get_element:
         extern "C" fn(ctx: *mut c_void, index: usize, out: *mut RegorusForeignField),
+    /// Optional fused fast path for homogeneous arrays of objects. When non-null
+    /// and `keys(array_ctx)` reports element object keys, regorus can create an
+    /// indexed object wrapper without first calling `get_element(array_ctx,i)`,
+    /// then read `input.arr[i].field` with one callback instead of two.
+    pub get_element_field: Option<
+        extern "C" fn(
+            ctx: *mut c_void,
+            index: usize,
+            key: *const c_char,
+            out: *mut RegorusForeignField,
+        ),
+    >,
     /// Release the root caller handle exactly once on final owner drop.
     pub free: extern "C" fn(ctx: *mut c_void),
 }
@@ -176,8 +189,10 @@ struct ForeignNode {
     state: Rc<ForeignViewState>,
     ctx: *mut c_void,
     kind: u8,
-    keys: Vec<ForeignArcStr>,
-    key_cstrings: Vec<CString>,
+    len: usize,
+    keys: Rc<Vec<ForeignArcStr>>,
+    key_cstrings: Rc<Vec<CString>>,
+    composite_cache: OnceLock<Vec<(ForeignArcStr, Value)>>,
 }
 
 // SAFETY: `ForeignNode` contains an opaque immutable caller context and a
@@ -188,17 +203,24 @@ unsafe impl Sync for ForeignNode {}
 
 impl ForeignNode {
     fn new(state: Rc<ForeignViewState>, ctx: *mut c_void, kind: u8) -> Result<Self> {
-        let (keys, key_cstrings) = if kind == TAG_OBJECT {
+        let (keys, key_cstrings) = if kind == TAG_OBJECT || kind == TAG_ARRAY {
             unsafe { read_keys(&state.owner.vtable, ctx)? }
         } else {
             (Vec::new(), Vec::new())
+        };
+        let len = if kind == TAG_ARRAY {
+            (state.owner.vtable.len)(ctx)
+        } else {
+            keys.len()
         };
         Ok(Self {
             state,
             ctx,
             kind,
-            keys,
-            key_cstrings,
+            len,
+            keys: Rc::new(keys),
+            key_cstrings: Rc::new(key_cstrings),
+            composite_cache: OnceLock::new(),
         })
     }
 
@@ -234,10 +256,10 @@ impl ForeignNode {
     }
 
     fn len(&self) -> usize {
-        (self.state.owner.vtable.len)(self.ctx)
+        self.len
     }
 
-    fn get_field(&self, key: &str) -> Option<Value> {
+    fn get_field_uncached(&self, key: &str) -> Option<Value> {
         if self.kind != TAG_OBJECT {
             return None;
         }
@@ -250,6 +272,39 @@ impl ForeignNode {
         (self.state.owner.vtable.get_field)(self.ctx, key_ptr, &mut out as *mut _);
         let value = unsafe { out.to_value(&self.state) };
         (!value.is_undefined()).then_some(value)
+    }
+
+    fn composite_fields(&self) -> &[(ForeignArcStr, Value)] {
+        self.composite_cache.get_or_init(|| {
+            self.keys
+                .iter()
+                .filter_map(|key| {
+                    let value = self.get_field_uncached(key.as_str())?;
+                    matches!(value, Value::Object(_) | Value::Array(_))
+                        .then_some((key.clone(), value))
+                })
+                .collect()
+        })
+    }
+
+    fn get_field(&self, key: &str) -> Option<Value> {
+        if let Some((_, value)) = self
+            .composite_cache
+            .get()
+            .and_then(|fields| fields.iter().find(|(k, _)| k.as_str() == key))
+        {
+            return Some(value.clone());
+        }
+
+        if let Some((_, value)) = self
+            .composite_fields()
+            .iter()
+            .find(|(k, _)| k.as_str() == key)
+        {
+            return Some(value.clone());
+        }
+
+        self.get_field_uncached(key)
     }
 
     fn get_element(&self, index: usize) -> Option<Value> {
@@ -299,7 +354,7 @@ impl ObjectBackend for ForeignObjectBackend {
     }
 
     fn keys(&self) -> &[ForeignArcStr] {
-        &self.node.keys
+        self.node.keys.as_slice()
     }
 
     fn len(&self) -> usize {
@@ -313,11 +368,71 @@ struct ForeignArrayBackend {
 
 impl ArrayBackend for ForeignArrayBackend {
     fn get_value(&self, index: usize) -> Option<Value> {
+        if index >= self.node.len() {
+            return None;
+        }
+        if self.node.kind == TAG_ARRAY
+            && !self.node.keys.is_empty()
+            && self
+                .node
+                .state
+                .owner
+                .vtable
+                .get_element_field
+                .is_some()
+        {
+            let backend: Rc<dyn ObjectBackend> = Rc::new(ForeignIndexedObjectBackend {
+                state: self.node.state.clone(),
+                array_ctx: self.node.ctx,
+                index,
+                keys: self.node.keys.clone(),
+                key_cstrings: self.node.key_cstrings.clone(),
+            });
+            return Some(Value::Object(Rc::new(ValueMap::from_object_backend(
+                backend,
+            ))));
+        }
         self.node.get_element(index)
     }
 
     fn len(&self) -> usize {
         self.node.len()
+    }
+}
+
+struct ForeignIndexedObjectBackend {
+    state: Rc<ForeignViewState>,
+    array_ctx: *mut c_void,
+    index: usize,
+    keys: Rc<Vec<ForeignArcStr>>,
+    key_cstrings: Rc<Vec<CString>>,
+}
+
+// SAFETY: same immutable-callback invariants as `ForeignNode`; this wrapper
+// carries an array context plus an index and shared immutable key metadata.
+unsafe impl Send for ForeignIndexedObjectBackend {}
+unsafe impl Sync for ForeignIndexedObjectBackend {}
+
+impl ObjectBackend for ForeignIndexedObjectBackend {
+    fn get_value(&self, key: &str) -> Option<Value> {
+        let key_ptr = self
+            .keys
+            .iter()
+            .position(|k| k.as_str() == key)
+            .map(|i| self.key_cstrings[i].as_ptr())?;
+        let mut out = RegorusForeignField::empty();
+        let get_element_field = self.state.owner.vtable.get_element_field?;
+        get_element_field(self.array_ctx, self.index, key_ptr, &mut out as *mut _);
+        let value = unsafe { out.to_value(&self.state) };
+        (!value.is_undefined()).then_some(value)
+    }
+
+    fn keys(&self) -> &[ForeignArcStr] {
+        self.keys.as_slice()
+    }
+
+    fn len(&self) -> usize {
+        self.keys.len()
     }
 }
 
@@ -586,6 +701,7 @@ mod tests {
                 get_field: get_field_cb,
                 keys: keys_cb,
                 get_element: get_element_cb,
+                get_element_field: None,
                 free: free_cb,
             },
         });
@@ -625,6 +741,7 @@ mod tests {
                 get_field: get_field_cb,
                 keys: keys_cb,
                 get_element: get_element_cb,
+                get_element_field: None,
                 free: free_cb,
             },
         });

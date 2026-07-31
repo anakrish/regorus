@@ -358,6 +358,29 @@ pub extern "C" fn regorus_rvm_set_input(
     })
 }
 
+/// Set the VM input document from self-describing MessagePack bytes.
+#[no_mangle]
+pub extern "C" fn regorus_rvm_set_input_msgpack(
+    vm: *mut RegorusRvm,
+    data: *const u8,
+    len: usize,
+) -> RegorusResult {
+    with_unwind_guard(|| {
+        to_regorus_result(|| -> Result<()> {
+            let vm = to_ref(vm)?;
+            let mut guard = vm.try_write()?;
+            if data.is_null() {
+                return Err(anyhow!("null data pointer"));
+            }
+            let bytes = unsafe { core::slice::from_raw_parts(data, len) };
+            let input_value: Value =
+                rmp_serde::from_slice(bytes).map_err(|e| anyhow!("msgpack decode error: {e}"))?;
+            guard.set_input(input_value);
+            Ok(())
+        }())
+    })
+}
+
 /// Set the maximum number of instructions that can execute.
 #[no_mangle]
 pub extern "C" fn regorus_rvm_set_max_instructions(

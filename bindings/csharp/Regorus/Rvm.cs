@@ -107,29 +107,33 @@ namespace Regorus
         }
 
         /// <summary>
-        /// Set the VM input to a foreign read-through document. <paramref name="foreignArray"/>
-        /// points to a native <c>RegorusForeignArray</c> vtable; regorus reads fields on
-        /// demand through the callbacks. The caller owns the referenced object's lifetime
-        /// until the vtable's <c>free</c> callback fires.
+        /// Set the VM input from self-describing MessagePack bytes.
         /// </summary>
-        public void SetInputForeign(IntPtr foreignArray)
+        public void SetInputMsgpack(byte[] data)
         {
+            if (data is null)
+            {
+                throw new ArgumentNullException(nameof(data));
+            }
+
             UseHandle(vmPtr =>
             {
-                CheckAndDropResult(API.regorus_rvm_set_input_foreign((RegorusRvm*)vmPtr, (void*)foreignArray));
+                fixed (byte* dataPtr = data)
+                {
+                    CheckAndDropResult(API.regorus_rvm_set_input_msgpack((RegorusRvm*)vmPtr, dataPtr, (nuint)data.Length));
+                }
                 return 0;
             });
         }
 
         /// <summary>
-        /// Bench-only: set the VM input to a Rust-resident foreign proxy of
-        /// <paramref name="n"/> subscriptions (no FFI crossing).
+        /// Set the VM input to a generic foreign read-through value.
         /// </summary>
-        public void SetInputForeignNative(int n)
+        public void SetInputForeign(IntPtr foreignInput)
         {
             UseHandle(vmPtr =>
             {
-                CheckAndDropResult(API.regorus_rvm_set_input_foreign_native((RegorusRvm*)vmPtr, (nuint)n));
+                CheckAndDropResult(API.regorus_rvm_set_input_foreign_value((RegorusRvm*)vmPtr, (void*)foreignInput));
                 return 0;
             });
         }

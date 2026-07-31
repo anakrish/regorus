@@ -35,7 +35,7 @@ use arcstr::ArcStr;
 /// foreign value backend without depending on the `arcstr` crate directly.
 pub use arcstr::ArcStr as ForeignArcStr;
 use serde::de::{self, Deserializer, Error as DeError, MapAccess, SeqAccess, Visitor};
-use serde::ser::{SerializeMap, Serializer};
+use serde::ser::{SerializeMap, SerializeSeq, Serializer};
 use serde::{Deserialize, Serialize};
 
 use crate::*;
@@ -49,6 +49,7 @@ pub type ValueMapEntry<'a> =
 
 /// Sentinel value indicating the cached hash needs recomputation.
 const OBJECT_HASH_DIRTY: u64 = u64::MAX;
+static FOREIGN_ARRAY_FULL_MATERIALIZATION_FALLBACKS: AtomicU64 = AtomicU64::new(0);
 
 // ─── Schema ──────────────────────────────────────────────────────────────────
 
@@ -850,10 +851,9 @@ impl ForeignArray {
     /// retains it in `full`, breaking the transient floor, so it must only be
     /// reached by documented non-scan fallbacks.
     fn as_slice(&self) -> &[Value] {
-        debug_assert!(
-            self.full.get().is_some(),
-            "foreign array borrow `as_slice`/Deref hit on hot path; use element()"
-        );
+        if self.full.get().is_none() {
+            FOREIGN_ARRAY_FULL_MATERIALIZATION_FALLBACKS.fetch_add(1, AtomicOrdering::Relaxed);
+        }
         self.full
             .get_or_init(|| {
                 (0..self.backend.len())
@@ -950,10 +950,10 @@ impl Array {
         match &self.repr {
             ArrayRepr::Owned(v) => v,
             ArrayRepr::Foreign(f) => {
-                debug_assert!(
-                    f.full.get().is_some(),
-                    "foreign array borrow `as_vec` hit on hot path; use element()"
-                );
+                if f.full.get().is_none() {
+                    FOREIGN_ARRAY_FULL_MATERIALIZATION_FALLBACKS
+                        .fetch_add(1, AtomicOrdering::Relaxed);
+                }
                 f.full.get_or_init(|| {
                     (0..f.backend.len())
                         .map(|i| f.element(i).unwrap_or(Value::Undefined))
@@ -1052,7 +1052,10 @@ impl FromIterator<Value> for Array {
 impl PartialEq for Array {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.as_slice() == other.as_slice()
+        if self.len() != other.len() {
+            return false;
+        }
+        (0..self.len()).all(|i| self.element(i) == other.element(i))
     }
 }
 impl Eq for Array {}
@@ -1064,13 +1067,27 @@ impl PartialOrd for Array {
 }
 impl Ord for Array {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.as_slice().cmp(other.as_slice())
+        let mut i = 0;
+        loop {
+            match (self.element(i), other.element(i)) {
+                (Some(a), Some(b)) => match a.cmp(&b) {
+                    Ordering::Equal => i += 1,
+                    ord => return ord,
+                },
+                (None, Some(_)) => return Ordering::Less,
+                (Some(_), None) => return Ordering::Greater,
+                (None, None) => return Ordering::Equal,
+            }
+        }
     }
 }
 
 impl Hash for Array {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.as_slice().hash(state);
+        self.len().hash(state);
+        for i in 0..self.len() {
+            self.element(i).unwrap_or(Value::Undefined).hash(state);
+        }
     }
 }
 
@@ -1079,7 +1096,11 @@ impl Serialize for Array {
     where
         S: Serializer,
     {
-        self.as_slice().serialize(serializer)
+        let mut seq = serializer.serialize_seq(Some(self.len()))?;
+        for i in 0..self.len() {
+            seq.serialize_element(&self.element(i).unwrap_or(Value::Undefined))?;
+        }
+        seq.end()
     }
 }
 

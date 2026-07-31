@@ -178,6 +178,9 @@ namespace Regorus.Internal
         [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_input", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern RegorusResult regorus_rvm_set_input(RegorusRvm* vm, byte* input_json);
 
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_input_msgpack", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_set_input_msgpack(RegorusRvm* vm, byte* data, nuint len);
+
         /// <summary>
         /// Execute the program.
         /// </summary>
@@ -298,30 +301,25 @@ namespace Regorus.Internal
         internal static extern RegorusResult regorus_engine_set_input_msgpack(RegorusEngine* engine, byte* data, nuint len);
 
         /// <summary>
-        /// Set input to a foreign read-through document. `foreign` points to a
-        /// RegorusForeignArray vtable; regorus reads fields on demand via callbacks.
+        /// Create/drop a generic immutable foreign input owner.
         /// </summary>
-        [DllImport(LibraryName, EntryPoint = "regorus_engine_set_input_foreign", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern RegorusResult regorus_engine_set_input_foreign(RegorusEngine* engine, void* foreign);
+        [DllImport(LibraryName, EntryPoint = "regorus_foreign_input_new", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_foreign_input_new(void* root);
+
+        [DllImport(LibraryName, EntryPoint = "regorus_foreign_input_drop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_foreign_input_drop(void* input);
 
         /// <summary>
-        /// RVM variant of regorus_engine_set_input_foreign.
+        /// Set input to a generic foreign read-through value.
         /// </summary>
-        [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_input_foreign", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern RegorusResult regorus_rvm_set_input_foreign(RegorusRvm* vm, void* foreign);
+        [DllImport(LibraryName, EntryPoint = "regorus_engine_set_input_foreign_value", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_engine_set_input_foreign_value(RegorusEngine* engine, void* input);
 
         /// <summary>
-        /// Bench-only: set input to a Rust-resident foreign proxy of `n` subscriptions
-        /// (no FFI crossing). Isolates foreign-backend dispatch cost.
+        /// RVM variant of regorus_engine_set_input_foreign_value.
         /// </summary>
-        [DllImport(LibraryName, EntryPoint = "regorus_engine_set_input_foreign_native", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern RegorusResult regorus_engine_set_input_foreign_native(RegorusEngine* engine, nuint n);
-
-        /// <summary>
-        /// Bench-only RVM variant of regorus_engine_set_input_foreign_native.
-        /// </summary>
-        [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_input_foreign_native", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern RegorusResult regorus_rvm_set_input_foreign_native(RegorusRvm* vm, nuint n);
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_input_foreign_value", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_set_input_foreign_value(RegorusRvm* vm, void* input);
 
         /// <summary>
         /// Set input from JSON file.

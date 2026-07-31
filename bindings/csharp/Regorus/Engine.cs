@@ -166,25 +166,15 @@ namespace Regorus
         }
 
         /// <summary>
-        /// Set input to a foreign read-through document. <paramref name="foreignArray"/>
-        /// points to a native <c>RegorusForeignArray</c> vtable (constructed by the
-        /// caller). regorus copies the vtable and reads fields on demand through the
-        /// callbacks; the caller must keep the underlying object alive until the
-        /// vtable's <c>free</c> callback fires (on the next set_input or engine drop).
+        /// Set input to a generic foreign read-through value. <paramref name="foreignInput"/>
+        /// points to a native <c>RegorusForeignInput</c> owner constructed by the caller.
+        /// Each set creates a fresh per-engine view over the immutable owner.
         /// </summary>
-        public void SetInputForeign(IntPtr foreignArray)
+        public void SetInputForeign(IntPtr foreignInput)
         {
             UseHandle(enginePtr =>
             {
-                CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_input_foreign((Regorus.Internal.RegorusEngine*)enginePtr, (void*)foreignArray));
-            });
-        }
-
-        public void SetInputForeignNative(int n)
-        {
-            UseHandle(enginePtr =>
-            {
-                CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_input_foreign_native((Regorus.Internal.RegorusEngine*)enginePtr, (nuint)n));
+                CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_input_foreign_value((Regorus.Internal.RegorusEngine*)enginePtr, (void*)foreignInput));
             });
         }
 

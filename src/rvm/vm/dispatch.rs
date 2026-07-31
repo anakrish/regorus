@@ -792,19 +792,21 @@ impl RegoVM {
                 let mut current_value = self.get_register(params.root)?.clone();
 
                 for component in &params.path_components {
-                    let key_value = match *component {
-                        LiteralOrRegister::Literal(idx) => program
-                            .literals
-                            .get(usize::from(idx))
-                            .ok_or(VmError::LiteralIndexOutOfBounds {
-                                index: idx,
-                                pc: self.pc,
-                            })?
-                            .clone(),
-                        LiteralOrRegister::Register(reg) => self.get_register(reg)?.clone(),
+                    current_value = match *component {
+                        LiteralOrRegister::Literal(idx) => {
+                            let key_value = program.literals.get(usize::from(idx)).ok_or(
+                                VmError::LiteralIndexOutOfBounds {
+                                    index: idx,
+                                    pc: self.pc,
+                                },
+                            )?;
+                            current_value.index_owned(key_value)
+                        }
+                        LiteralOrRegister::Register(reg) => {
+                            let key_value = self.get_register(reg)?.clone();
+                            current_value.index_owned(&key_value)
+                        }
                     };
-
-                    current_value = current_value.index_owned(&key_value);
 
                     if current_value.is_undefined() {
                         break;

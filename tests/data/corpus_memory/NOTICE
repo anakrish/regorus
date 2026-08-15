@@ -1,9 +1,0 @@
-Canonical JSON benchmark fixtures vendored for memory-residency tests.
-
-- twitter.json, citm_catalog.json, canada.json
-  Source: https://github.com/miloyip/nativejson-benchmark/tree/master/data
-  License: MIT
-
-- synthea_fhir.json
-  Source: https://github.com/cloudwego/sonic-rs/tree/main/benchmarks/benches/testdata
-  License: Apache-2.0

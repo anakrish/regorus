@@ -395,6 +395,7 @@ impl Object {
         Value::Object(crate::Rc::new(self.freeze()))
     }
 
+    #[cfg(test)]
     #[doc(hidden)]
     pub(crate) const fn storage_variant_for_memory_diagnostics(&self) -> &'static str {
         match &self.repr {

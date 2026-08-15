@@ -853,12 +853,6 @@ impl From<BTreeMap<Value, Value>> for Value {
     }
 }
 
-#[cfg(debug_assertions)]
-#[doc(hidden)]
-pub const fn object_storage_variant_for_memory_diagnostics(object: &Object) -> &'static str {
-    object.storage_variant_for_memory_diagnostics()
-}
-
 impl Value {
     pub(crate) fn from_array(a: Vec<Value>) -> Value {
         Value::from(a)

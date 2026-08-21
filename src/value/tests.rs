@@ -1041,6 +1041,170 @@ fn object_remove_absent_on_frozen_stays_frozen() {
     assert_eq!(obj.get(&val(1)), None);
 }
 
+// ---- Owned/fallible accessor API (foundation 1/6) ----------------------
+//
+// These tests prove that, for native data, the fallible accessors return
+// exactly what the native borrow/lookup APIs return (fallible == native).
+mod owned_accessors {
+    use super::{make_pairs, val, SIZES};
+    use crate::value::{Array, Object, Value};
+    use alloc::vec::Vec;
+
+    /// `Object::try_get_owned(k).unwrap()` must equal the native `get` lookup
+    /// for every key, across storage variants (BTree and Frozen).
+    #[test]
+    fn object_try_get_owned_matches_native() {
+        for &n in SIZES {
+            let pairs = make_pairs(n);
+            let btree: Object = pairs.iter().cloned().collect();
+            let frozen = btree.clone().freeze();
+
+            for obj in [&btree, &frozen] {
+                for (k, expected) in &pairs {
+                    let owned = obj.try_get_owned(k).unwrap();
+                    assert_eq!(owned.as_ref(), obj.get(k));
+                    assert_eq!(owned, Some(expected.clone()));
+                }
+                // Absent key: Ok(None), matching native.
+                let absent = val(n.saturating_add(1000));
+                assert_eq!(obj.try_get_owned(&absent).unwrap(), None);
+                assert_eq!(obj.get(&absent), None);
+            }
+        }
+    }
+
+    /// `Array::try_to_vec().unwrap()` and `try_element` must equal native
+    /// contents element-for-element.
+    #[test]
+    fn array_try_accessors_match_native() {
+        for &n in SIZES {
+            let native: Vec<Value> = (0..n).map(val).collect();
+            let array = Array::from(native.clone());
+
+            assert_eq!(array.try_to_vec().unwrap(), native);
+            assert_eq!(array.try_to_vec().unwrap(), array.to_vec());
+
+            for i in 0..native.len() {
+                let owned = array.try_element(i).unwrap();
+                assert_eq!(owned.as_ref(), array.get(i));
+                assert_eq!(owned, native.get(i).cloned());
+            }
+            // Out-of-bounds: Ok(None), matching native.
+            assert_eq!(array.try_element(native.len()).unwrap(), None);
+        }
+    }
+
+    /// `Value::try_index_owned` must mirror the `ops::Index` operator for native
+    /// objects, arrays and sets, and return `Undefined` (never `Null`) on miss.
+    #[test]
+    fn value_try_index_owned_matches_native() {
+        // Object.
+        let obj: Value = Object::from_iter(make_pairs(4)).into_value();
+        for (k, _) in &make_pairs(4) {
+            assert_eq!(&obj.try_index_owned(k).unwrap(), &obj[k]);
+        }
+        let missing = val(999);
+        assert_eq!(obj.try_index_owned(&missing).unwrap(), Value::Undefined);
+        assert_ne!(obj.try_index_owned(&missing).unwrap(), Value::Null);
+
+        // Array.
+        let arr: Value = Array::from((0..4).map(val).collect::<Vec<_>>()).into_value();
+        for i in 0..4u64 {
+            let key = Value::from(i);
+            assert_eq!(&arr.try_index_owned(&key).unwrap(), &arr[&key]);
+        }
+        let oob = Value::from(10u64);
+        assert_eq!(arr.try_index_owned(&oob).unwrap(), Value::Undefined);
+
+        // Set.
+        let mut set = Value::new_set();
+        set.as_set_mut().unwrap().insert(val(7));
+        assert_eq!(set.try_index_owned(&val(7)).unwrap(), val(7));
+        assert_eq!(set.try_index_owned(&val(8)).unwrap(), Value::Undefined);
+
+        // Non-collection.
+        assert_eq!(
+            Value::Null.try_index_owned(&val(0)).unwrap(),
+            Value::Undefined
+        );
+    }
+
+    /// `next_owned` (and the borrowing `next`) must yield every entry in sorted
+    /// order for both BTree and Frozen storage. Large sizes exercise the Frozen
+    /// cursor's O(1) positional resume (no per-step binary search).
+    #[test]
+    fn object_next_owned_yields_all_in_sorted_order() {
+        for &n in SIZES {
+            let pairs = make_pairs(n);
+            let btree: Object = pairs.iter().cloned().collect();
+            let frozen = btree.clone().freeze();
+
+            for obj in [&btree, &frozen] {
+                let oracle: Vec<(Value, Value)> = obj
+                    .iter_sorted()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+
+                let mut cursor = obj.cursor();
+                let mut owned = Vec::new();
+                while let Some(entry) = obj.next_owned(&mut cursor) {
+                    owned.push(entry);
+                }
+                assert_eq!(owned, oracle);
+
+                let mut cursor = obj.cursor();
+                let mut borrowed = Vec::new();
+                while let Some((k, v)) = obj.next(&mut cursor) {
+                    borrowed.push((k.clone(), v.clone()));
+                }
+                assert_eq!(borrowed, oracle);
+            }
+        }
+    }
+
+    /// A cursor started on one representation must keep yielding the correct
+    /// remaining entries in order if the object's storage changes between steps.
+    /// The cursor holds no borrow, so the representation can change; the retained
+    /// key drives key-based resume across the transition. Here: BTree → Frozen
+    /// (a `Key`-state cursor resuming against a Frozen slice).
+    #[test]
+    fn object_cursor_survives_btree_to_frozen_transition() {
+        let obj: Object = make_pairs(8).into_iter().collect();
+        assert_eq!(obj.storage_variant_for_memory_diagnostics(), "BTree");
+        let oracle: Vec<(Value, Value)> = obj
+            .iter_sorted()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        let mut cursor = obj.cursor();
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            seen.push(obj.next_owned(&mut cursor).unwrap());
+        }
+        let obj = obj.freeze();
+        assert_eq!(obj.storage_variant_for_memory_diagnostics(), "Frozen");
+        while let Some(entry) = obj.next_owned(&mut cursor) {
+            seen.push(entry);
+        }
+        assert_eq!(seen, oracle);
+    }
+
+    /// `ObjectOwnedIter` reports an exact length so `.collect()` preallocates
+    /// once instead of reallocating as it grows.
+    #[test]
+    fn object_iter_owned_is_exact_sized() {
+        for &n in SIZES {
+            let btree: Object = make_pairs(n).into_iter().collect();
+            let frozen = btree.clone().freeze();
+            for obj in [&btree, &frozen] {
+                assert_eq!(obj.iter_owned().len(), n as usize);
+                let collected: Vec<(Value, Value)> = obj.iter_owned().collect();
+                assert_eq!(collected.len(), n as usize);
+            }
+        }
+    }
+}
+
 #[cfg(feature = "std")]
 mod interning_tests {
     use crate::Value;

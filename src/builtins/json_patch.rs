@@ -35,16 +35,16 @@ impl EditNode {
         Ok(match value {
             Value::Object(object) => {
                 let mut fields = BTreeMap::new();
-                for (key, value) in object.iter() {
-                    fields.insert(key.clone(), Self::from_value(value)?);
+                for (key, value) in object.iter_owned() {
+                    fields.insert(key, Self::from_value(&value)?);
                     enforce_limit()?;
                 }
                 Self::Object(fields)
             }
             Value::Array(array) => {
                 let mut items = VecDeque::with_capacity(array.len());
-                for value in array.iter() {
-                    items.push_back(Self::from_value(value)?);
+                for value in array.iter_owned() {
+                    items.push_back(Self::from_value(&value)?);
                     enforce_limit()?;
                 }
                 Self::Array(items)
@@ -420,7 +420,7 @@ fn parse_path(path: &Value) -> Result<Vec<Value>> {
             .split('/')
             .map(|part| Value::from(part.replace("~1", "/").replace("~0", "~")))
             .collect()),
-        Value::Array(parts) => Ok(parts.iter().cloned().collect()),
+        Value::Array(parts) => Ok(parts.iter_owned().collect()),
         _ => bail!("path must be a string or an array of path segments"),
     }
 }

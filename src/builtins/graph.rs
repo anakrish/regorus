@@ -133,7 +133,7 @@ fn visit(
                 }
                 set.len()
             }
-            Some(&Value::Null) => 0,
+            Some(Value::Null) => 0,
             _ => bail!(format!("neighbors for node `{node}` must be array/set.")),
         };
 
@@ -194,11 +194,11 @@ fn walk_visit(path: &mut Vec<Value>, value: &Value, paths: &mut Vec<Value>) -> R
     }
     match value {
         Value::Array(arr) => {
-            for (idx, elem) in arr.iter().enumerate() {
+            for (idx, elem) in arr.iter_owned().enumerate() {
                 path.push(Value::from(idx));
                 // Guard path stack growth while traversing array members.
                 enforce_limit()?;
-                walk_visit(path, elem, paths)?;
+                walk_visit(path, &elem, paths)?;
                 path.pop();
             }
         }
@@ -212,11 +212,11 @@ fn walk_visit(path: &mut Vec<Value>, value: &Value, paths: &mut Vec<Value>) -> R
             }
         }
         Value::Object(obj) => {
-            for (key, value) in obj.iter_sorted() {
-                path.push(key.clone());
+            for (key, value) in obj.iter_owned() {
+                path.push(key);
                 // Guard path stack growth while traversing object entries.
                 enforce_limit()?;
-                walk_visit(path, value, paths)?;
+                walk_visit(path, &value, paths)?;
                 path.pop();
             }
         }

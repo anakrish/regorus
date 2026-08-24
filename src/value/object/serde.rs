@@ -18,7 +18,7 @@ impl Serialize for Object {
         let mut map = serializer.serialize_map(Some(self.len()))?;
         // Sorted iteration: canonical JSON.
         for (k, v) in self.iter_sorted() {
-            match *k {
+            match k {
                 Value::String(_) => map.serialize_entry(k, v)?,
                 _ => {
                     // Non-string keys are stringified via serde_json::to_string

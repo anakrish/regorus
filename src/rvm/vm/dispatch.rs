@@ -560,7 +560,7 @@ impl RegoVM {
             } => {
                 let key_value = self.get_register(key)?;
                 let container_value = self.get_register(container)?;
-                let result = container_value[key_value].clone();
+                let result = container_value.try_index_owned(key_value)?;
                 self.set_register(dest, result)?;
                 Ok(InstructionOutcome::Continue)
             }
@@ -572,7 +572,7 @@ impl RegoVM {
                 let container_value = self.get_register(container)?;
 
                 if let Some(key_value) = program.literals.get(usize::from(literal_idx)) {
-                    let result = container_value[key_value].clone();
+                    let result = container_value.try_index_owned(key_value)?;
                     self.set_register(dest, result)?;
                     Ok(InstructionOutcome::Continue)
                 } else {
@@ -738,9 +738,11 @@ impl RegoVM {
                     Value::Array(ref array_items) => {
                         Value::Bool(array_items.contains(value_to_check))
                     }
-                    Value::Object(ref object_fields) => {
-                        Value::Bool(object_fields.values().any(|v| v == value_to_check))
-                    }
+                    Value::Object(ref object_fields) => Value::Bool(
+                        object_fields
+                            .iter_owned()
+                            .any(|(_, v)| &v == value_to_check),
+                    ),
                     _ => Value::Bool(false),
                 };
 
@@ -848,10 +850,14 @@ impl RegoVM {
                 _ => coerce_to_string(r)
                     .is_some_and(|needle| strings::case_fold::contains(haystack, &needle)),
             },
-            Value::Array(ref items) => items.iter().any(|item| case_insensitive_equals(item, r)),
+            Value::Array(ref items) => items
+                .iter_owned()
+                .any(|item| case_insensitive_equals(&item, r)),
             Value::Set(ref items) => items.iter().any(|item| case_insensitive_equals(item, r)),
             // ARM template contains(object, key) checks key membership.
-            Value::Object(ref map) => map.keys().any(|key| case_insensitive_equals(key, r)),
+            Value::Object(ref map) => map
+                .iter_owned()
+                .any(|(key, _)| case_insensitive_equals(&key, r)),
             // Coerce non-string scalar LHS (e.g., count result)
             // to a string only when the RHS is already a string.
             _ => {
@@ -982,9 +988,9 @@ impl RegoVM {
                                 false
                             } else {
                                 let found = match *l {
-                                    Value::Object(ref map) => {
-                                        map.keys().any(|key| case_insensitive_equals(key, r))
-                                    }
+                                    Value::Object(ref map) => map
+                                        .iter_owned()
+                                        .any(|(key, _)| case_insensitive_equals(&key, r)),
                                     _ => false,
                                 };
                                 negated ^ found
@@ -1133,7 +1139,7 @@ impl RegoVM {
                         LiteralOrRegister::Register(reg) => self.get_register(reg)?.clone(),
                     };
 
-                    current_value = current_value[&key_value].clone();
+                    current_value = current_value.try_index_owned(&key_value)?;
 
                     if current_value == Value::Undefined {
                         break;

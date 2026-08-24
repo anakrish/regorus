@@ -30,8 +30,8 @@ fn reachable(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) ->
 
     match &args[1] {
         Value::Array(arr) => {
-            for node in arr.iter_owned() {
-                worklist.push(node);
+            for node in arr.iter() {
+                worklist.push(node.clone());
                 // Guard worklist growth when seeding traversal from an array.
                 enforce_limit()?;
             }
@@ -55,8 +55,8 @@ fn reachable(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) ->
 
         match graph.get(&v) {
             Some(Value::Array(arr)) => {
-                for neighbor in arr.iter_owned() {
-                    worklist.push(neighbor);
+                for neighbor in arr.iter() {
+                    worklist.push(neighbor.clone());
                     // Guard worklist growth when enqueuing array neighbors.
                     enforce_limit()?;
                 }
@@ -122,8 +122,8 @@ fn visit(
         enforce_limit()?;
         let n = match neighbors {
             Some(Value::Array(arr)) => {
-                for n in arr.iter_owned().rev() {
-                    visit(graph, visited, &n, path, paths)?;
+                for n in arr.iter().rev() {
+                    visit(graph, visited, n, path, paths)?;
                 }
                 arr.len()
             }
@@ -169,8 +169,8 @@ fn reachable_paths(
 
     match &args[1] {
         Value::Array(arr) => {
-            for node in arr.iter_owned() {
-                visit(&graph, &mut visited, &node, &mut path, &mut paths)?;
+            for node in arr.iter() {
+                visit(&graph, &mut visited, node, &mut path, &mut paths)?;
             }
         }
         Value::Set(set) => {

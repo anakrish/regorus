@@ -51,12 +51,12 @@ fn json_filter_impl(v: &Value, filter: &Value) -> Result<Value> {
     match v {
         Value::Array(_) => {
             let mut items = vec![];
-            for (idx, filter) in filters.iter_owned() {
+            for (idx, filter) in filters.iter() {
                 // The string index must be parseable as a number.
                 // TODO: support integer indexes?
                 if let Value::String(idx) = idx {
-                    if let Ok(idx) = Value::from_json_str(&idx) {
-                        let item = json_filter_impl(&v[&idx], &filter)?;
+                    if let Ok(idx) = Value::from_json_str(idx) {
+                        let item = json_filter_impl(&v[&idx], filter)?;
                         if item != Value::Undefined {
                             items.push(item);
                             // Guard array growth while filtering nested structures.
@@ -70,9 +70,9 @@ fn json_filter_impl(v: &Value, filter: &Value) -> Result<Value> {
 
         Value::Set(s) => {
             let mut items = BTreeSet::new();
-            for (item, filter) in filters.iter_owned() {
-                if s.contains(&item) {
-                    let item = json_filter_impl(&item, &filter)?;
+            for (item, filter) in filters.iter() {
+                if s.contains(item) {
+                    let item = json_filter_impl(item, filter)?;
                     if item != Value::Undefined {
                         items.insert(item);
                         // Guard set growth when preserving matched entries.
@@ -85,10 +85,10 @@ fn json_filter_impl(v: &Value, filter: &Value) -> Result<Value> {
 
         Value::Object(_) => {
             let mut items = BTreeMap::new();
-            for (key, filter) in filters.iter_owned() {
-                let item = json_filter_impl(&v[&key], &filter)?;
+            for (key, filter) in filters.iter() {
+                let item = json_filter_impl(&v[key], filter)?;
                 if item != Value::Undefined {
-                    items.insert(key, item);
+                    items.insert(key.clone(), item);
                     // Guard map growth as filtered keys accumulate.
                     enforce_limit()?;
                 }
@@ -114,10 +114,10 @@ fn json_remove_impl(v: &Value, filter: &Value) -> Result<Value> {
     match v {
         Value::Array(a) => {
             let mut items = vec![];
-            for (idx, item) in a.iter_owned().enumerate() {
+            for (idx, item) in a.iter().enumerate() {
                 let idx = Value::String(format!("{idx}").into());
                 if let Some(f) = filters.get(&idx) {
-                    let v = json_remove_impl(&item, f)?;
+                    let v = json_remove_impl(item, f)?;
                     if v != Value::Undefined {
                         items.push(v);
                         // Guard array size while removing JSON paths.
@@ -125,7 +125,7 @@ fn json_remove_impl(v: &Value, filter: &Value) -> Result<Value> {
                     }
                 } else {
                     // Retain the item.
-                    items.push(item);
+                    items.push(item.clone());
                     // Guard array size while copying retained entries.
                     enforce_limit()?;
                 }
@@ -155,16 +155,16 @@ fn json_remove_impl(v: &Value, filter: &Value) -> Result<Value> {
 
         Value::Object(obj) => {
             let mut items = BTreeMap::new();
-            for (key, value) in obj.iter_owned() {
-                if let Some(f) = filters.get(&key) {
-                    let v = json_remove_impl(&value, f)?;
+            for (key, value) in obj.iter() {
+                if let Some(f) = filters.get(key) {
+                    let v = json_remove_impl(value, f)?;
                     if v != Value::Undefined {
-                        items.insert(key, v);
+                        items.insert(key.clone(), v);
                         // Guard map size as filtered properties accumulate.
                         enforce_limit()?;
                     }
                 } else {
-                    items.insert(key, value);
+                    items.insert(key.clone(), value.clone());
                     // Guard map size while copying retained properties.
                     enforce_limit()?;
                 }
@@ -246,10 +246,7 @@ fn json_filter(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool)
     ensure_object(name, &params[0], args[0].clone())?;
 
     let filters = match &args[1] {
-        Value::Array(a) => {
-            let items = a.try_to_vec()?;
-            merge_filters(name, &params[1], &mut items.iter(), Value::new_object())?
-        }
+        Value::Array(a) => merge_filters(name, &params[1], &mut a.iter(), Value::new_object())?,
         Value::Set(s) => merge_filters(name, &params[1], &mut s.iter(), Value::new_object())?,
         _ => bail!(span.error(format!("`{name}` requires set/array argument").as_str())),
     };
@@ -269,10 +266,7 @@ fn json_remove(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool)
     ensure_object(name, &params[0], args[0].clone())?;
 
     let filters = match &args[1] {
-        Value::Array(a) => {
-            let items = a.try_to_vec()?;
-            merge_filters(name, &params[1], &mut items.iter(), Value::new_object())?
-        }
+        Value::Array(a) => merge_filters(name, &params[1], &mut a.iter(), Value::new_object())?,
         Value::Set(s) => merge_filters(name, &params[1], &mut s.iter(), Value::new_object())?,
         _ => bail!(span.error(format!("`{name}` requires set/array argument").as_str())),
     };
@@ -287,7 +281,7 @@ fn filter(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> R
     let obj_ref = Rc::make_mut(&mut obj);
     match &args[1] {
         Value::Array(a) => {
-            let keys: BTreeSet<Value> = a.iter_owned().collect();
+            let keys: BTreeSet<&Value> = a.iter().collect();
             obj_ref.retain(|k, _| keys.contains(k))
         }
         Value::Set(s) => obj_ref.retain(|k, _| s.contains(k)),
@@ -327,7 +321,9 @@ fn keys(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Res
     let name = "object.keys";
     ensure_args_count(span, name, params, args, 1)?;
     let obj = ensure_object(name, &params[0], args[0].clone())?;
-    Ok(Value::from_set(obj.iter_owned().map(|(k, _)| k).collect()))
+    Ok(Value::from_set(
+        obj.iter_sorted().map(|(k, _)| k.clone()).collect(),
+    ))
 }
 
 fn remove(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
@@ -337,7 +333,7 @@ fn remove(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> R
     let obj_ref = Rc::make_mut(&mut obj);
     match &args[1] {
         Value::Array(a) => {
-            let keys: BTreeSet<Value> = a.iter_owned().collect();
+            let keys: BTreeSet<&Value> = a.iter().collect();
             obj_ref.retain(|k, _| !keys.contains(k))
         }
         Value::Set(s) => obj_ref.retain(|k, _| !s.contains(k)),
@@ -352,25 +348,21 @@ fn is_subset(sup: &Value, sub: &Value) -> Result<bool> {
     Ok(match (sup, sub) {
         (Value::Object(sup), Value::Object(sub)) => {
             // Iterate the sub-object entry-by-entry so the outer builtin loop
-            // bounds work; each owned read is transient.
-            for (k, vsub) in sub.iter_owned() {
-                match sup.get(&k) {
-                    Some(vsup) if is_subset(vsup, &vsub)? => {}
+            // bounds work without materializing the object.
+            for (k, vsub) in sub.iter() {
+                match sup.get(k) {
+                    Some(vsup) if is_subset(vsup, vsub)? => {}
                     _ => return Ok(false),
                 }
             }
             true
         }
         (Value::Set(sup), Value::Set(sub)) => sub.is_subset(sup),
-        (Value::Array(sup), Value::Array(sub)) => {
-            let sup = sup.try_to_vec()?;
-            let sub = sub.try_to_vec()?;
-            sup.windows(sub.len()).any(|w| w == sub.as_slice())
-        }
-        (Value::Array(sup), Value::Set(_)) => {
-            let sup = Value::from_set(sup.try_to_vec()?.into_iter().collect());
-            is_subset(&sup, sub)?
-        }
+        (Value::Array(sup), Value::Array(sub)) => sup
+            .as_slice()
+            .windows(sub.len())
+            .any(|w| w == sub.as_slice()),
+        (Value::Array(sup), Value::Set(sub)) => sub.iter().all(|value| sup.contains(value)),
         (sup, sub) => sup == sub,
     })
 }
@@ -516,8 +508,6 @@ fn json_patch(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) 
     ensure_array(name, &params[1], args[1].clone())?;
 
     let ops = args[1].as_array()?;
-    let ops = ops.to_vec();
-
     let patched = super::json_patch::apply(&args[0], ops.as_slice());
     match patched {
         Ok(patched) => Ok(patched),

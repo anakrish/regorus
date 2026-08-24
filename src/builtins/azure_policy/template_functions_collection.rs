@@ -158,8 +158,9 @@ fn fn_take(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -
     match *original {
         Value::Array(ref arr) => {
             let n = count.min(arr.len());
-            let items = arr.try_to_vec()?;
-            Ok(Value::from(items.get(..n).unwrap_or_default().to_vec()))
+            Ok(Value::from(
+                arr.as_slice().get(..n).unwrap_or_default().to_vec(),
+            ))
         }
         Value::String(ref s) => {
             let taken: alloc::string::String = s.chars().take(count).collect();
@@ -182,8 +183,9 @@ fn fn_skip(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -
     match *original {
         Value::Array(ref arr) => {
             let n = count.min(arr.len());
-            let items = arr.try_to_vec()?;
-            Ok(Value::from(items.get(n..).unwrap_or_default().to_vec()))
+            Ok(Value::from(
+                arr.as_slice().get(n..).unwrap_or_default().to_vec(),
+            ))
         }
         Value::String(ref s) => {
             let skipped: alloc::string::String = s.chars().skip(count).collect();

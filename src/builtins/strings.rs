@@ -207,8 +207,8 @@ fn to_string(v: &Value, unescape: bool) -> String {
         }
         Value::Object(o) => {
             "{".to_owned()
-                + &o.iter_owned()
-                    .map(|(k, v)| to_string(&k, true) + ": " + &to_string(&v, true))
+                + &o.iter_sorted()
+                    .map(|(k, v)| to_string(k, true) + ": " + &to_string(v, true))
                     .collect::<Vec<String>>()
                     .join(", ")
                 + "}"

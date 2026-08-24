@@ -17,14 +17,14 @@ impl Serialize for Object {
         use serde::ser::Error;
         let mut map = serializer.serialize_map(Some(self.len()))?;
         // Sorted iteration: canonical JSON.
-        for (k, v) in self.iter_owned() {
+        for (k, v) in self.iter_sorted() {
             match k {
-                Value::String(_) => map.serialize_entry(&k, &v)?,
+                Value::String(_) => map.serialize_entry(k, v)?,
                 _ => {
                     // Non-string keys are stringified via serde_json::to_string
                     // so the resulting JSON has valid string keys.
-                    let key_str = serde_json::to_string(&k).map_err(Error::custom)?;
-                    map.serialize_entry(&key_str, &v)?;
+                    let key_str = serde_json::to_string(k).map_err(Error::custom)?;
+                    map.serialize_entry(&key_str, v)?;
                 }
             }
         }

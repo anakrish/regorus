@@ -30,8 +30,8 @@ fn reachable(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) ->
 
     match &args[1] {
         Value::Array(arr) => {
-            for node in arr.iter() {
-                worklist.push(node.clone());
+            for node in arr.iter_owned() {
+                worklist.push(node);
                 // Guard worklist growth when seeding traversal from an array.
                 enforce_limit()?;
             }
@@ -55,8 +55,8 @@ fn reachable(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) ->
 
         match graph.get(&v) {
             Some(Value::Array(arr)) => {
-                for neighbor in arr.iter() {
-                    worklist.push(neighbor.clone());
+                for neighbor in arr.iter_owned() {
+                    worklist.push(neighbor);
                     // Guard worklist growth when enqueuing array neighbors.
                     enforce_limit()?;
                 }
@@ -122,8 +122,8 @@ fn visit(
         enforce_limit()?;
         let n = match neighbors {
             Some(Value::Array(arr)) => {
-                for n in arr.iter().rev() {
-                    visit(graph, visited, n, path, paths)?;
+                for n in arr.iter_owned().rev() {
+                    visit(graph, visited, &n, path, paths)?;
                 }
                 arr.len()
             }
@@ -133,7 +133,7 @@ fn visit(
                 }
                 set.len()
             }
-            Some(&Value::Null) => 0,
+            Some(Value::Null) => 0,
             _ => bail!(format!("neighbors for node `{node}` must be array/set.")),
         };
 
@@ -169,8 +169,8 @@ fn reachable_paths(
 
     match &args[1] {
         Value::Array(arr) => {
-            for node in arr.iter() {
-                visit(&graph, &mut visited, node, &mut path, &mut paths)?;
+            for node in arr.iter_owned() {
+                visit(&graph, &mut visited, &node, &mut path, &mut paths)?;
             }
         }
         Value::Set(set) => {
@@ -194,11 +194,11 @@ fn walk_visit(path: &mut Vec<Value>, value: &Value, paths: &mut Vec<Value>) -> R
     }
     match value {
         Value::Array(arr) => {
-            for (idx, elem) in arr.iter().enumerate() {
+            for (idx, elem) in arr.iter_owned().enumerate() {
                 path.push(Value::from(idx));
                 // Guard path stack growth while traversing array members.
                 enforce_limit()?;
-                walk_visit(path, elem, paths)?;
+                walk_visit(path, &elem, paths)?;
                 path.pop();
             }
         }
@@ -212,11 +212,11 @@ fn walk_visit(path: &mut Vec<Value>, value: &Value, paths: &mut Vec<Value>) -> R
             }
         }
         Value::Object(obj) => {
-            for (key, value) in obj.iter_sorted() {
-                path.push(key.clone());
+            for (key, value) in obj.iter_owned() {
+                path.push(key);
                 // Guard path stack growth while traversing object entries.
                 enforce_limit()?;
-                walk_visit(path, value, paths)?;
+                walk_visit(path, &value, paths)?;
                 path.pop();
             }
         }

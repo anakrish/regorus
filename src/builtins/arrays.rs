@@ -9,6 +9,8 @@ use crate::lexer::Span;
 use crate::Rc;
 use crate::Value;
 
+use alloc::vec::Vec;
+
 use anyhow::Result;
 
 pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
@@ -65,6 +67,8 @@ fn slice(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Re
         return Ok(Value::new_array());
     }
 
-    let slice = array.as_slice().get(start..stop).unwrap_or_default();
-    Ok(Value::from(slice.to_vec()))
+    let len = stop.saturating_sub(start);
+    Ok(Value::from(
+        array.iter_owned().skip(start).take(len).collect::<Vec<_>>(),
+    ))
 }

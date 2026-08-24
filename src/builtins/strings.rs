@@ -191,8 +191,8 @@ fn to_string(v: &Value, unescape: bool) -> String {
         Value::Number(n) => n.format_decimal(),
         Value::Array(a) => {
             "[".to_owned()
-                + &a.iter()
-                    .map(|e| to_string(e, true))
+                + &a.iter_owned()
+                    .map(|e| to_string(&e, true))
                     .collect::<Vec<String>>()
                     .join(", ")
                 + "]"
@@ -207,8 +207,8 @@ fn to_string(v: &Value, unescape: bool) -> String {
         }
         Value::Object(o) => {
             "{".to_owned()
-                + &o.iter_sorted()
-                    .map(|(k, v)| to_string(k, true) + ": " + &to_string(v, true))
+                + &o.iter_owned()
+                    .map(|(k, v)| to_string(&k, true) + ": " + &to_string(&v, true))
                     .collect::<Vec<String>>()
                     .join(", ")
                 + "}"
@@ -442,7 +442,7 @@ fn any_prefix_match(
     ensure_args_count(span, name, params, args, 2)?;
 
     let search = match &args[0] {
-        Value::String(s) => vec![s.as_ref()],
+        Value::String(s) => vec![s.clone()],
         Value::Array(_) | Value::Set(_) => {
             match ensure_string_collection(name, &params[0], &args[0]) {
                 Ok(c) => c,
@@ -460,7 +460,7 @@ fn any_prefix_match(
     };
 
     let base = match &args[1] {
-        Value::String(s) => vec![s.as_ref()],
+        Value::String(s) => vec![s.clone()],
         Value::Array(_) | Value::Set(_) => {
             match ensure_string_collection(name, &params[1], &args[1]) {
                 Ok(c) => c,
@@ -478,7 +478,9 @@ fn any_prefix_match(
     };
 
     Ok(Value::Bool(
-        search.iter().any(|s| base.iter().any(|b| s.starts_with(b))),
+        search
+            .iter()
+            .any(|s| base.iter().any(|b| s.starts_with(b.as_ref()))),
     ))
 }
 
@@ -492,7 +494,7 @@ fn any_suffix_match(
     ensure_args_count(span, name, params, args, 2)?;
 
     let search = match &args[0] {
-        Value::String(s) => vec![s.as_ref()],
+        Value::String(s) => vec![s.clone()],
         Value::Array(_) | Value::Set(_) => {
             match ensure_string_collection(name, &params[0], &args[0]) {
                 Ok(c) => c,
@@ -510,7 +512,7 @@ fn any_suffix_match(
     };
 
     let base = match &args[1] {
-        Value::String(s) => vec![s.as_ref()],
+        Value::String(s) => vec![s.clone()],
         Value::Array(_) | Value::Set(_) => {
             match ensure_string_collection(name, &params[1], &args[1]) {
                 Ok(c) => c,
@@ -528,7 +530,9 @@ fn any_suffix_match(
     };
 
     Ok(Value::Bool(
-        search.iter().any(|s| base.iter().any(|b| s.ends_with(b))),
+        search
+            .iter()
+            .any(|s| base.iter().any(|b| s.ends_with(b.as_ref()))),
     ))
 }
 
@@ -568,7 +572,7 @@ fn replace_n(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -
     let mut s = ensure_string(name, &params[1], &args[1])?;
 
     let span = params[0].span();
-    for item in obj.as_ref().iter_sorted() {
+    for item in obj.iter_owned() {
         match item {
             (Value::String(k), Value::String(v)) => {
                 s = s.replace(k.as_ref(), v.as_ref()).into();

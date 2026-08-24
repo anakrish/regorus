@@ -9,7 +9,7 @@ use super::evaluator::RbacBuiltinError;
 pub(super) fn list_contains(left: &Value, right: &Value) -> Result<bool, RbacBuiltinError> {
     match *left {
         // Lists and sets share containment semantics.
-        Value::Array(ref list) => Ok(list_contains_values(list.as_slice(), right)),
+        Value::Array(ref list) => Ok(list_contains_values(list.to_vec().as_slice(), right)),
         Value::Set(ref set) => Ok(set_contains_values(set, right)),
         _ => Ok(false),
     }
@@ -19,7 +19,7 @@ pub(super) fn list_contains(left: &Value, right: &Value) -> Result<bool, RbacBui
 fn list_contains_values(list: &[Value], needle: &Value) -> bool {
     match *needle {
         // For collection needles, require all elements to be present.
-        Value::Array(ref right_list) => right_list.iter().all(|item| list.contains(item)),
+        Value::Array(ref right_list) => right_list.iter_owned().all(|item| list.contains(&item)),
         Value::Set(ref right_set) => right_set.iter().all(|item| list.contains(item)),
         _ => list.contains(needle),
     }
@@ -29,7 +29,7 @@ fn list_contains_values(list: &[Value], needle: &Value) -> bool {
 fn set_contains_values(set: &Set, needle: &Value) -> bool {
     match *needle {
         // For collection needles, require all elements to be present.
-        Value::Array(ref right_list) => right_list.iter().all(|item| set.contains(item)),
+        Value::Array(ref right_list) => right_list.iter_owned().all(|item| set.contains(&item)),
         Value::Set(ref right_set) => right_set.iter().all(|item| set.contains(item)),
         _ => set.contains(needle),
     }

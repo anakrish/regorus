@@ -45,7 +45,7 @@ fn max(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Resu
 
     Ok(match &args[0] {
         Value::Array(a) if a.is_empty() => Value::Undefined,
-        Value::Array(a) => a.iter().max().unwrap().clone(),
+        Value::Array(a) => a.iter_owned().max().unwrap(),
         Value::Set(a) if a.is_empty() => Value::Undefined,
         Value::Set(a) => a.iter().max().unwrap().clone(),
         a => {
@@ -60,7 +60,7 @@ fn min(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Resu
 
     Ok(match &args[0] {
         Value::Array(a) if a.is_empty() => Value::Undefined,
-        Value::Array(a) => a.iter().min().unwrap().clone(),
+        Value::Array(a) => a.iter_owned().min().unwrap(),
         Value::Set(a) if a.is_empty() => Value::Undefined,
         Value::Set(a) => a.iter().min().unwrap().clone(),
         a => {
@@ -76,8 +76,8 @@ fn product(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
     let mut v = Number::from(1_u64);
     Ok(Value::from(match &args[0] {
         Value::Array(a) => {
-            for e in a.iter() {
-                v.mul_assign(&ensure_numeric("product", &params[0], e)?)?;
+            for e in a.iter_owned() {
+                v.mul_assign(&ensure_numeric("product", &params[0], &e)?)?;
             }
             v
         }
@@ -126,8 +126,8 @@ fn sum(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Resu
     let mut v = Number::from(0_u64);
     Ok(Value::from(match &args[0] {
         Value::Array(a) => {
-            for e in a.iter() {
-                v.add_assign(&ensure_numeric("sum", &params[0], e)?)?;
+            for e in a.iter_owned() {
+                v.add_assign(&ensure_numeric("sum", &params[0], &e)?)?;
             }
             v
         }

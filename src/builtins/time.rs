@@ -234,47 +234,50 @@ fn parse_epoch(
             return Ok((Utc.timestamp_nanos(ns).fixed_offset(), None));
         }
 
-        Value::Array(arr) => match arr.as_slice() {
-            [Value::Number(num)] => {
-                let ns = num.as_i64().ok_or_else(|| {
-                    arg.span()
-                        .error("could not convert numeric value of `ns` to int64")
-                })?;
+        Value::Array(arr) => {
+            let arr = arr.try_to_vec()?;
+            match arr.as_slice() {
+                [Value::Number(num)] => {
+                    let ns = num.as_i64().ok_or_else(|| {
+                        arg.span()
+                            .error("could not convert numeric value of `ns` to int64")
+                    })?;
 
-                return Ok((Utc.timestamp_nanos(ns).fixed_offset(), None));
-            }
-            [Value::Number(num), Value::String(tz), rest @ ..] => {
-                let ns = num.as_i64().ok_or_else(|| {
-                    arg.span()
-                        .error("could not convert numeric value of `ns` to int64")
-                })?;
+                    return Ok((Utc.timestamp_nanos(ns).fixed_offset(), None));
+                }
+                [Value::Number(num), Value::String(tz), rest @ ..] => {
+                    let ns = num.as_i64().ok_or_else(|| {
+                        arg.span()
+                            .error("could not convert numeric value of `ns` to int64")
+                    })?;
 
-                let datetime = match tz.as_ref() {
-                    "UTC" | "" => Utc.timestamp_nanos(ns).fixed_offset(),
-                    "Local" => Local.timestamp_nanos(ns).fixed_offset(),
-                    _ => {
-                        let tz: Tz = match tz.parse() {
-                            Ok(tz) => tz,
-                            Err(e) => bail!(e),
-                        };
-                        tz.timestamp_nanos(ns).fixed_offset()
-                    }
-                };
+                    let datetime = match tz.as_ref() {
+                        "UTC" | "" => Utc.timestamp_nanos(ns).fixed_offset(),
+                        "Local" => Local.timestamp_nanos(ns).fixed_offset(),
+                        _ => {
+                            let tz: Tz = match tz.parse() {
+                                Ok(tz) => tz,
+                                Err(e) => bail!(e),
+                            };
+                            tz.timestamp_nanos(ns).fixed_offset()
+                        }
+                    };
 
-                let format = match rest.first() {
-                    Some(Value::String(format)) => Some(format.to_string()),
-                    Some(other) => {
-                        bail!(arg.span().error(&format!(
+                    let format = match rest.first() {
+                        Some(Value::String(format)) => Some(format.to_string()),
+                        Some(other) => {
+                            bail!(arg.span().error(&format!(
                             "`{fcn}` expects 3rd element of `ns` to be a `string`. Got `{other}` instead"
                         )))
-                    }
-                    None => None,
-                };
+                        }
+                        None => None,
+                    };
 
-                return Ok((datetime, format));
+                    return Ok((datetime, format));
+                }
+                _ => {}
             }
-            _ => {}
-        },
+        }
 
         _ => {}
     }

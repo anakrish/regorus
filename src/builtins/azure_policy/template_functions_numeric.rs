@@ -31,21 +31,21 @@ pub(super) fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::Bui
 /// - Multiple integer arguments: `min(1, 2, 3)` → `1`
 /// - A single array argument: `min([1, 2, 3])` → `1`
 fn fn_min(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
-    let values = if args.len() == 1 {
-        args.first().map_or(args, |first| match *first {
-            Value::Array(ref arr) => arr.as_ref().as_slice(),
-            _ => args,
+    let values: alloc::vec::Vec<Value> = args
+        .first()
+        .filter(|_| args.len() == 1)
+        .and_then(|first| match *first {
+            Value::Array(ref arr) => Some(arr),
+            _ => None,
         })
-    } else {
-        args
-    };
+        .map_or_else(|| Ok(args.to_vec()), |arr| arr.try_to_vec())?;
 
     if values.is_empty() {
         return Ok(Value::Undefined);
     }
 
     let mut result: Option<&Value> = None;
-    for v in values {
+    for v in &values {
         match *v {
             Value::Number(_) => {
                 result = Some(match result {
@@ -64,21 +64,21 @@ fn fn_min(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) ->
 ///
 /// Same overloading as `min`.
 fn fn_max(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
-    let values = if args.len() == 1 {
-        args.first().map_or(args, |first| match *first {
-            Value::Array(ref arr) => arr.as_ref().as_slice(),
-            _ => args,
+    let values: alloc::vec::Vec<Value> = args
+        .first()
+        .filter(|_| args.len() == 1)
+        .and_then(|first| match *first {
+            Value::Array(ref arr) => Some(arr),
+            _ => None,
         })
-    } else {
-        args
-    };
+        .map_or_else(|| Ok(args.to_vec()), |arr| arr.try_to_vec())?;
 
     if values.is_empty() {
         return Ok(Value::Undefined);
     }
 
     let mut result: Option<&Value> = None;
-    for v in values {
+    for v in &values {
         match *v {
             Value::Number(_) => {
                 result = Some(match result {

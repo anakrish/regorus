@@ -58,7 +58,7 @@ fn fn_intersection(
     match *first {
         Value::Array(ref first) => {
             // Intersection of arrays: keep elements from first that appear in all others.
-            let mut result: Vec<Value> = first.as_slice().to_vec();
+            let mut result: Vec<Value> = first.try_to_vec()?;
             for arg in rest {
                 let Value::Array(ref other) = *arg else {
                     return Ok(Value::Undefined);
@@ -71,7 +71,10 @@ fn fn_intersection(
             // Intersection of objects: keep key-value pairs from the first
             // object only when the key exists in every other object AND
             // the value is equal across all of them.
-            let mut result: Object = first.as_ref().clone();
+            let mut result = Object::new();
+            for (k, v) in first.iter_owned() {
+                result.insert(k, v);
+            }
             for arg in rest {
                 let Value::Object(ref other) = *arg else {
                     return Ok(Value::Undefined);
@@ -98,15 +101,15 @@ fn fn_union(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) 
     match *first {
         Value::Array(_) => {
             // Union of arrays: collect unique elements preserving first-seen order.
-            let mut seen = alloc::collections::BTreeSet::<&Value>::new();
+            let mut seen = alloc::collections::BTreeSet::<Value>::new();
             let mut result = Vec::new();
             for arg in args {
                 let Value::Array(ref arr) = *arg else {
                     return Ok(Value::Undefined);
                 };
-                for item in arr.iter() {
-                    if seen.insert(item) {
-                        result.push(item.clone());
+                for item in arr.iter_owned() {
+                    if seen.insert(item.clone()) {
+                        result.push(item);
                     }
                 }
             }
@@ -120,15 +123,15 @@ fn fn_union(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) 
                 let Value::Object(ref obj) = *arg else {
                     return Ok(Value::Undefined);
                 };
-                for (k, v) in obj.iter() {
+                for (k, v) in obj.iter_owned() {
                     #[allow(clippy::needless_borrowed_reference)]
-                    let merged = match (result.get(k), v) {
+                    let merged = match (result.get(&k), &v) {
                         (Some(&Value::Object(ref prev)), &Value::Object(ref next)) => {
                             merge_objects(prev, next)?
                         }
                         _ => v.clone(),
                     };
-                    result.insert(k.clone(), merged);
+                    result.insert(k, merged);
                     // Throttled check bounds peak allocation across nested merges.
                     crate::utils::limits::check_memory_limit_if_needed()
                         .map_err(anyhow::Error::new)?;
@@ -155,9 +158,8 @@ fn fn_take(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -
     match *original {
         Value::Array(ref arr) => {
             let n = count.min(arr.len());
-            Ok(Value::from(
-                arr.as_slice().get(..n).unwrap_or_default().to_vec(),
-            ))
+            let items = arr.try_to_vec()?;
+            Ok(Value::from(items.get(..n).unwrap_or_default().to_vec()))
         }
         Value::String(ref s) => {
             let taken: alloc::string::String = s.chars().take(count).collect();
@@ -180,9 +182,8 @@ fn fn_skip(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -
     match *original {
         Value::Array(ref arr) => {
             let n = count.min(arr.len());
-            Ok(Value::from(
-                arr.as_slice().get(n..).unwrap_or_default().to_vec(),
-            ))
+            let items = arr.try_to_vec()?;
+            Ok(Value::from(items.get(n..).unwrap_or_default().to_vec()))
         }
         Value::String(ref s) => {
             let skipped: alloc::string::String = s.chars().skip(count).collect();
@@ -295,16 +296,19 @@ fn fn_create_object(
 /// Recursively merge two objects.  Nested objects are merged; everything
 /// else (including arrays) uses the value from `incoming`.
 fn merge_objects(base: &Object, overlay: &Object) -> Result<Value> {
-    let mut result = base.clone();
-    for (k, v) in overlay.iter() {
+    let mut result = Object::new();
+    for (k, v) in base.iter_owned() {
+        result.insert(k, v);
+    }
+    for (k, v) in overlay.iter_owned() {
         #[allow(clippy::needless_borrowed_reference)]
-        let merged = match (result.get(k), v) {
+        let merged = match (result.get(&k), &v) {
             (Some(&Value::Object(ref prev)), &Value::Object(ref next)) => {
                 merge_objects(prev, next)?
             }
             _ => v.clone(),
         };
-        result.insert(k.clone(), merged);
+        result.insert(k, merged);
         // Throttled check bounds peak allocation across recursive merges.
         crate::utils::limits::check_memory_limit_if_needed().map_err(anyhow::Error::new)?;
     }

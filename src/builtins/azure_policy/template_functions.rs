@@ -74,10 +74,10 @@ fn fn_split(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) 
         }
         Value::Array(ref delimiters) => {
             // Collect all string delimiters from the array.
-            let delims: alloc::vec::Vec<&str> = delimiters
-                .iter()
-                .filter_map(|v| match *v {
-                    Value::String(ref s) => Some(s.as_ref()),
+            let delims: alloc::vec::Vec<crate::Rc<str>> = delimiters
+                .iter_owned()
+                .filter_map(|v| match v {
+                    Value::String(s) => Some(s),
                     _ => None,
                 })
                 .collect();
@@ -97,7 +97,7 @@ fn fn_split(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) 
             let mut i = 0;
             while i < bytes.len() {
                 let mut matched = false;
-                for &d in &sorted_delims {
+                for d in &sorted_delims {
                     if !d.is_empty() && bytes.get(i..).is_some_and(|b| b.starts_with(d.as_bytes()))
                     {
                         parts.push(Value::from(core::mem::take(&mut current)));

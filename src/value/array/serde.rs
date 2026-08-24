@@ -13,7 +13,7 @@ use crate::value::Value;
 
 impl Serialize for Array {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_seq(self.iter())
+        serializer.collect_seq(self.iter_owned())
     }
 }
 

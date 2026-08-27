@@ -14,6 +14,8 @@ use crate::lexer::Span;
 use crate::value::Value;
 use crate::*;
 
+#[cfg(feature = "urlquery")]
+use alloc::collections::BTreeMap;
 #[allow(unused)]
 use anyhow::{anyhow, bail, Context, Result};
 
@@ -41,6 +43,136 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
         m.insert("urlquery.decode_object", (urlquery_decode_object, 1));
         m.insert("urlquery.encode", (urlquery_encode, 1));
         m.insert("urlquery.encode_object", (urlquery_encode_object, 1));
+        m.insert("uri.is_valid", (uri_is_valid, 1));
+        m.insert("uri.parse", (uri_parse, 1));
+    }
+
+    #[cfg(feature = "urlquery")]
+    fn uri_is_valid(
+        span: &Span,
+        params: &[Ref<Expr>],
+        args: &[Value],
+        _strict: bool,
+    ) -> Result<Value> {
+        let name = "uri.is_valid";
+        ensure_args_count(span, name, params, args, 1)?;
+        let uri = match ensure_string(name, &params[0], &args[0]) {
+            Ok(uri) => uri,
+            Err(_) => return Ok(Value::Bool(false)),
+        };
+        Ok(Value::Bool(
+            !uri.is_empty() && url::Url::parse(&uri).is_ok(),
+        ))
+    }
+
+    #[cfg(feature = "urlquery")]
+    fn uri_parse(
+        span: &Span,
+        params: &[Ref<Expr>],
+        args: &[Value],
+        _strict: bool,
+    ) -> Result<Value> {
+        let name = "uri.parse";
+        ensure_args_count(span, name, params, args, 1)?;
+        let uri = ensure_string(name, &params[0], &args[0])?;
+        if uri.is_empty() {
+            return Ok(Value::from_map(BTreeMap::new()));
+        }
+
+        let parsed =
+            url::Url::parse(&uri).map_err(|err| params[0].span().error(&err.to_string()))?;
+        let mut result = BTreeMap::new();
+        let mut insert = |key: &'static str, value: &str| {
+            if !value.is_empty() {
+                result.insert(Value::from(key), Value::from(value));
+            }
+        };
+
+        insert("scheme", parsed.scheme());
+        let hostname = parsed.host_str().unwrap_or_default();
+        insert(
+            "hostname",
+            hostname
+                .strip_prefix('[')
+                .and_then(|hostname| hostname.strip_suffix(']'))
+                .unwrap_or(hostname),
+        );
+        if let Some(port) = explicit_uri_port(&uri) {
+            insert("port", port);
+        }
+        if !parsed.cannot_be_a_base() && has_explicit_uri_path(&uri) {
+            let raw_path = parsed.path();
+            let path = percent_decode(raw_path)
+                .map_err(|err| params[0].span().error(&format!("invalid URI path: {err}")))?;
+            insert("path", &path);
+            insert("raw_path", raw_path);
+        }
+        insert("raw_query", parsed.query().unwrap_or_default());
+        insert("fragment", parsed.fragment().unwrap_or_default());
+
+        Ok(Value::from_map(result))
+    }
+
+    #[cfg(feature = "urlquery")]
+    fn explicit_uri_port(uri: &str) -> Option<&str> {
+        let (_, remainder) = uri.split_once(':')?;
+        let authority_and_path = remainder.strip_prefix("//")?;
+        let authority_end = authority_and_path
+            .find(['/', '?', '#'])
+            .unwrap_or(authority_and_path.len());
+        let authority = authority_and_path.get(..authority_end)?;
+        let host_and_port = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host_and_port)| host_and_port);
+        let port = if host_and_port.starts_with('[') {
+            let host_end = host_and_port.find(']')?;
+            host_and_port
+                .get(host_end.checked_add(1)?..)?
+                .strip_prefix(':')?
+        } else {
+            host_and_port.rsplit_once(':')?.1
+        };
+        (!port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit())).then_some(port)
+    }
+
+    #[cfg(feature = "urlquery")]
+    fn has_explicit_uri_path(uri: &str) -> bool {
+        let Some((_, remainder)) = uri.split_once(':') else {
+            return false;
+        };
+        let before_query_or_fragment = remainder.split(['?', '#']).next().unwrap_or_default();
+        before_query_or_fragment
+            .strip_prefix("//")
+            .map_or(!before_query_or_fragment.is_empty(), |authority_and_path| {
+                authority_and_path.contains('/')
+            })
+    }
+
+    #[cfg(feature = "urlquery")]
+    fn percent_decode(value: &str) -> Result<String> {
+        let bytes = value.as_bytes();
+        let mut decoded = Vec::with_capacity(bytes.len());
+        let mut idx = 0;
+        while idx < bytes.len() {
+            if bytes[idx] == b'%' {
+                let high = bytes
+                    .get(idx.saturating_add(1))
+                    .and_then(|byte| char::from(*byte).to_digit(16));
+                let low = bytes
+                    .get(idx.saturating_add(2))
+                    .and_then(|byte| char::from(*byte).to_digit(16));
+                let (Some(high), Some(low)) = (high, low) else {
+                    bail!("invalid percent encoding");
+                };
+                decoded.push(u8::try_from(high * 16 + low)?);
+                idx = idx.saturating_add(3);
+            } else {
+                decoded.push(bytes[idx]);
+                idx = idx.saturating_add(1);
+            }
+            enforce_limit()?;
+        }
+        String::from_utf8(decoded).map_err(anyhow::Error::new)
     }
     m.insert("json.is_valid", (json_is_valid, 1));
     m.insert("json.marshal", (json_marshal, 1));

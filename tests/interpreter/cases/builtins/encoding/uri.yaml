@@ -1,0 +1,98 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  - note: is_valid-https
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.is_valid("https://example.com/path?q=1#frag")
+    query: data.test.x
+    want_result: true
+
+  - note: is_valid-invalid
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.is_valid("not a uri")
+    query: data.test.x
+    want_result: false
+
+  - note: is_valid-empty
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.is_valid("")
+    query: data.test.x
+    want_result: false
+
+  - note: parse-full
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.parse("https://user@example.com:8080/a/b?k=v#frag")
+    query: data.test.x
+    want_result:
+      fragment: "frag"
+      hostname: "example.com"
+      path: "/a/b"
+      port: "8080"
+      raw_path: "/a/b"
+      raw_query: "k=v"
+      scheme: "https"
+
+  - note: parse-minimal
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.parse("https://example.com")
+    query: data.test.x
+    want_result:
+      hostname: "example.com"
+      scheme: "https"
+
+  - note: parse-empty-returns-empty-object
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.parse("")
+    query: data.test.x
+    want_result: {}
+
+  - note: parse-invalid-error
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.parse("://missing-scheme")
+    query: data.test.x
+    error: "relative URL without a base"
+
+  - note: parse-encoded-path
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.parse("https://example.com/hello%20world")
+    query: data.test.x
+    want_result:
+      hostname: "example.com"
+      path: "/hello world"
+      raw_path: "/hello%20world"
+      scheme: "https"
+
+  - note: is_valid-non-string-undefined
+    strict: false
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.is_valid(42)
+    query: data.test.x
+    want_result: false

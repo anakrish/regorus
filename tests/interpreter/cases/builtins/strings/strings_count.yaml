@@ -1,0 +1,48 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  - note: basic
+    data: {}
+    modules:
+      - |
+        package test
+        x = strings.count("hello world hello", "hello")
+    query: data.test.x
+    want_result: 2
+
+  - note: empty-substring-counts-chars-plus-one
+    data: {}
+    modules:
+      - |
+        package test
+        x = strings.count("abc", "")
+    query: data.test.x
+    want_result: 4
+
+  - note: empty-substring-empty-string
+    data: {}
+    modules:
+      - |
+        package test
+        x = strings.count("", "")
+    query: data.test.x
+    want_result: 1
+
+  - note: no-match
+    data: {}
+    modules:
+      - |
+        package test
+        x = strings.count("hello", "xyz")
+    query: data.test.x
+    want_result: 0
+
+  - note: overlapping-not-counted
+    data: {}
+    modules:
+      - |
+        package test
+        x = strings.count("aaa", "aa")
+    query: data.test.x
+    want_result: 1

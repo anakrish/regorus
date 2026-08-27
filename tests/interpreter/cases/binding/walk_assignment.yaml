@@ -1,0 +1,33 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Tests for walk with the := assignment form (k, v := walk(obj)).
+# Before the fix, the interpreter's WalkBindingPlan only handled the
+# call-parameter pattern (walk(obj, [k, v])) not the assignment form.
+
+cases:
+  - note: walk-assignment-collect-leaves
+    data: {}
+    modules:
+      - |
+        package test
+        import rego.v1
+
+        obj := {"a": {"b": 1, "c": 2}, "d": 3}
+        leaves := {v | [_, v] := walk(obj); not is_object(v); not is_array(v)}
+    query: data.test.leaves
+    want_result:
+      set!: [1, 2, 3]
+
+  - note: walk-assignment-collect-paths
+    data: {}
+    modules:
+      - |
+        package test
+        import rego.v1
+
+        obj := {"x": 10, "y": 20}
+        paths := [path | [path, _] := walk(obj)]
+    query: data.test.paths
+    sort_bindings: true
+    want_result: [[], ["x"], ["y"]]

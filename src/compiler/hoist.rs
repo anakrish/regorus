@@ -852,7 +852,25 @@ impl LoopHoister {
                     .set_expr_binding_plan(module_idx, expr_idx, binding_plan)?;
 
                 self.analyze_expr(module_idx, lhs, context, loops)?;
+                let loop_count = loops.len();
                 self.analyze_expr(module_idx, rhs, context, loops)?;
+                if matches!(
+                    rhs.as_ref(),
+                    E::Call { fcn, params, .. }
+                        if params.len() == 1
+                            && matches!(
+                                fcn.as_ref(),
+                                E::Var {
+                                    value: Value::String(name),
+                                    ..
+                                } if name.as_ref() == "walk"
+                            )
+                ) && loops.len() == loop_count.saturating_add(1)
+                {
+                    if let Some(loop_info) = loops.last_mut() {
+                        loop_info.value = expr.clone();
+                    }
+                }
             }
             E::Membership {
                 key,

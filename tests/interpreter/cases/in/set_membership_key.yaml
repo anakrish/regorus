@@ -1,0 +1,83 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Tests for the key, value in collection membership expression with sets.
+# Before the fix, `k, v in set` always returned false when k was provided.
+
+cases:
+  - note: set-key-value-true
+    data: {}
+    modules:
+      - |
+        package test
+        import future.keywords.in
+        s := {1, 2, 3}
+        x if { 1, 1 in s }
+    query: data.test.x
+    want_result: true
+
+  - note: set-key-value-false-wrong-key
+    data: {}
+    modules:
+      - |
+        package test
+        import future.keywords.in
+        s := {1, 2, 3}
+        x if { 1, 2 in s }
+    query: data.test.x
+    no_result: true
+
+  - note: set-key-value-false-not-member
+    data: {}
+    modules:
+      - |
+        package test
+        import future.keywords.in
+        s := {1, 2, 3}
+        x if { 4, 4 in s }
+    query: data.test.x
+    no_result: true
+
+  - note: set-value-only-true
+    data: {}
+    modules:
+      - |
+        package test
+        import future.keywords.in
+        s := {1, 2, 3}
+        x if { 2 in s }
+    query: data.test.x
+    want_result: true
+
+  - note: set-value-only-false
+    data: {}
+    modules:
+      - |
+        package test
+        import future.keywords.in
+        s := {1, 2, 3}
+        x if { 4 in s }
+    query: data.test.x
+    no_result: true
+
+  - note: array-key-value-unchanged
+    data: {}
+    modules:
+      - |
+        package test
+        import future.keywords.in
+        arr := ["x", "y", "z"]
+        x if { 1, "y" in arr }
+    query: data.test.x
+    want_result: true
+
+  - note: object-key-value-unchanged
+    data: {}
+    modules:
+      - |
+        package test
+        import future.keywords.in
+        obj := {"a": 1, "b": 2}
+        x if { "a", 1 in obj }
+    query: data.test.x
+    want_result: true

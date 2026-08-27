@@ -1,0 +1,40 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# RVM tests for k, v in set membership with an explicit key.
+# Before the fix the RVM always returned false for k, v in set.
+
+cases:
+  - note: set-key-value-true
+    data: {}
+    modules:
+      - |
+        package test
+        import future.keywords.in
+        s := {1, 2, 3}
+        x if { 1, 1 in s }
+    query: data.test.x
+    want_result: true
+
+  - note: set-key-value-false-yields-empty-count
+    data: {}
+    modules:
+      - |
+        package test
+        import future.keywords.in
+        s := {1, 2, 3}
+        # 1 is in s but 1 != 2, so this membership is false
+        matches := count([1 | 1, 2 in s])
+    query: data.test.matches
+    want_result: 0
+
+  - note: set-value-only-true
+    data: {}
+    modules:
+      - |
+        package test
+        import future.keywords.in
+        s := {1, 2, 3}
+        x if { 2 in s }
+    query: data.test.x
+    want_result: true

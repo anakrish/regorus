@@ -2316,8 +2316,9 @@ impl Interpreter {
                 }
             }
             Value::Set(set) => {
-                if key.is_some() {
-                    false
+                if let Some(key) = key {
+                    let key = self.eval_expr(key)?;
+                    key == value && set.contains(&value)
                 } else {
                     set.contains(&value)
                 }

@@ -78,7 +78,11 @@ fn flatten(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
     let mut flattened = Vec::new();
 
     for value in array.iter() {
-        if let Value::Array(nested) = value {
+        // `pattern_type_mismatch` requires the explicit `&`/`ref` here, which in
+        // turn triggers `needless_borrowed_reference`; the two lints conflict for
+        // this shape, so silence the latter (see template_functions_collection.rs).
+        #[allow(clippy::needless_borrowed_reference)]
+        if let &Value::Array(ref nested) = value {
             for nested_value in nested.iter() {
                 flattened.push(nested_value.clone());
                 enforce_limit()?;

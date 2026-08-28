@@ -852,7 +852,31 @@ impl LoopHoister {
                     .set_expr_binding_plan(module_idx, expr_idx, binding_plan)?;
 
                 self.analyze_expr(module_idx, lhs, context, loops)?;
+                let loop_count = loops.len();
                 self.analyze_expr(module_idx, rhs, context, loops)?;
+                if matches!(
+                    rhs.as_ref(),
+                    E::Call { fcn, params, .. }
+                        if params.len() == 1
+                            && matches!(
+                                fcn.as_ref(),
+                                E::Var {
+                                    value: Value::String(name),
+                                    ..
+                                } if name.as_ref() == "walk"
+                            )
+                ) {
+                    // Find the Walk loop added during RHS analysis and tag it with the
+                    // assignment expression.  Using an exact count check (== loop_count+1)
+                    // was fragile: if the walk argument itself hoists additional loops
+                    // (e.g. an indexed sub-expression), the Walk loop would be missed.
+                    if let Some(walk_loop) = loops[loop_count..]
+                        .iter_mut()
+                        .find(|l| l.loop_type == LoopType::Walk)
+                    {
+                        walk_loop.value = expr.clone();
+                    }
+                }
             }
             E::Membership {
                 key,

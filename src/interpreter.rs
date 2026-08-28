@@ -35,6 +35,11 @@ use core::ops::Bound::*;
 type Scope = BTreeMap<SourceStr, Value>;
 type ExprLookup = Lookup<Value>;
 
+enum WalkBindingPlan {
+    Destructuring(DestructuringPlan),
+    Assignment(AssignmentPlan),
+}
+
 #[cfg(feature = "azure_policy")]
 pub mod error;
 #[cfg(feature = "azure_policy")]
@@ -467,9 +472,30 @@ impl Interpreter {
         loop_info.value.span().clone()
     }
 
-    fn get_walk_binding_plan(&self, loop_info: &HoistedLoop) -> Result<Option<DestructuringPlan>> {
+    fn get_walk_binding_plan(&self, loop_info: &HoistedLoop) -> Result<Option<WalkBindingPlan>> {
         if loop_info.loop_type != LoopType::Walk {
             return Ok(None);
+        }
+
+        if matches!(loop_info.value.as_ref(), Expr::AssignExpr { .. }) {
+            let module_idx = self.current_module_index;
+            let expr_idx = loop_info.value.eidx();
+            let binding_plan = self
+                .compiled_policy
+                .loop_hoisting_table
+                .get_expr_binding_plan(module_idx, expr_idx)
+                .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?;
+
+            return match binding_plan.cloned() {
+                Some(BindingPlan::Assignment { plan }) => {
+                    Ok(Some(WalkBindingPlan::Assignment(plan)))
+                }
+                Some(other_plan) => bail!(
+                    "internal error: expected Assignment for walk assignment, got {:?}",
+                    other_plan
+                ),
+                None => bail!("internal error: missing binding plan for walk assignment"),
+            };
         }
 
         if let Expr::Call { params, .. } = Self::loop_assignment_expr(loop_info).as_ref() {
@@ -485,7 +511,7 @@ impl Interpreter {
                 return match binding_plan.cloned() {
                     Some(BindingPlan::Parameter {
                         destructuring_plan, ..
-                    }) => Ok(Some(destructuring_plan)),
+                    }) => Ok(Some(WalkBindingPlan::Destructuring(destructuring_plan))),
                     Some(other_plan) => bail!(
                         "internal error: expected Parameter for walk output parameter, got {:?}",
                         other_plan
@@ -1506,9 +1532,15 @@ impl Interpreter {
                             self.memory_check()?;
                             self.set_loop_var_value(loop_target_expr, item.clone())?;
 
-                            if self.execute_destructuring_plan(&walk_plan, item)?
-                                == Value::from(true)
-                            {
+                            let binding_result = match &walk_plan {
+                                WalkBindingPlan::Destructuring(plan) => {
+                                    self.execute_destructuring_plan(plan, item)?
+                                }
+                                WalkBindingPlan::Assignment(plan) => {
+                                    self.execute_assignment_plan(plan)?
+                                }
+                            };
+                            if binding_result == Value::from(true) {
                                 walk_result =
                                     self.eval_stmts_in_loop(stmts, loop_tail)? || walk_result;
                             }

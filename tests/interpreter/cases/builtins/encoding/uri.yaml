@@ -72,7 +72,7 @@ cases:
         package test
         x = uri.parse("://missing-scheme")
     query: data.test.x
-    error: "relative URL without a base"
+    error: "invalid uri"
 
   - note: parse-encoded-path
     data: {}
@@ -87,7 +87,7 @@ cases:
       raw_path: "/hello%20world"
       scheme: "https"
 
-  - note: is_valid-non-string-undefined
+  - note: is_valid-non-string-false
     strict: false
     data: {}
     modules:
@@ -96,3 +96,48 @@ cases:
         x = uri.is_valid(42)
     query: data.test.x
     want_result: false
+
+  - note: is_valid-non-string-strict-error
+    strict: true
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.is_valid(42)
+    query: data.test.x
+    error: "expects string argument"
+
+  - note: parse-ipv6-with-port
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.parse("http://[::1]:8080/path")
+    query: data.test.x
+    want_result:
+      hostname: "::1"
+      path: "/path"
+      port: "8080"
+      raw_path: "/path"
+      scheme: "http"
+
+  - note: parse-empty-path
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.parse("https://example.com?q=1")
+    query: data.test.x
+    want_result:
+      hostname: "example.com"
+      raw_query: "q=1"
+      scheme: "https"
+
+  - note: parse-invalid-percent-encoding
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.parse("https://example.com/path%2")
+    query: data.test.x
+    error: "invalid URI"

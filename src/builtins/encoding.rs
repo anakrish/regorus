@@ -52,13 +52,19 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
         span: &Span,
         params: &[Ref<Expr>],
         args: &[Value],
-        _strict: bool,
+        strict: bool,
     ) -> Result<Value> {
         let name = "uri.is_valid";
         ensure_args_count(span, name, params, args, 1)?;
         let uri = match ensure_string(name, &params[0], &args[0]) {
             Ok(uri) => uri,
-            Err(_) => return Ok(Value::Bool(false)),
+            // Non-string arg: error in strict mode, false in non-strict mode.
+            Err(e) => {
+                if strict {
+                    return Err(e);
+                }
+                return Ok(Value::Bool(false));
+            }
         };
         Ok(Value::Bool(
             !uri.is_empty() && url::Url::parse(&uri).is_ok(),
@@ -79,8 +85,8 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
             return Ok(Value::from_map(BTreeMap::new()));
         }
 
-        let parsed =
-            url::Url::parse(&uri).map_err(|err| params[0].span().error(&err.to_string()))?;
+        let parsed = url::Url::parse(&uri)
+            .map_err(|err| params[0].span().error(&format!("invalid uri: {err}")))?;
         let mut result = BTreeMap::new();
         let mut insert = |key: &'static str, value: &str| {
             if !value.is_empty() {

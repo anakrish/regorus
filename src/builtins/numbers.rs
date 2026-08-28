@@ -12,14 +12,47 @@ use crate::ast::{ArithOp, Expr, Ref};
 use crate::builtins;
 use crate::builtins::utils::{enforce_limit, ensure_args_count, ensure_numeric};
 use crate::lexer::Span;
-use crate::number::Number;
+use crate::number::{BigInt, Number};
 use crate::value::Value;
 use crate::*;
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
+use num_traits::ToPrimitive;
 
 #[cfg(feature = "std")]
 use rand::RngExt;
+
+const MAX_RANGE_OUTPUT_ELEMENTS: usize = 1_000_000;
+
+fn checked_range_len(start: &Number, end: &Number, step: &BigInt) -> Result<usize> {
+    if step <= &BigInt::from(0u8) {
+        bail!("step must be positive")
+    }
+
+    let start = start.to_big()?;
+    let end = end.to_big()?;
+    let diff = if end >= start {
+        (&*end) - (&*start)
+    } else {
+        (&*start) - (&*end)
+    };
+    let len = diff / step + BigInt::from(1u8);
+    let max = BigInt::from(MAX_RANGE_OUTPUT_ELEMENTS);
+    if len > max {
+        bail!("range would produce too many elements")
+    }
+    len.to_usize()
+        .ok_or_else(|| anyhow!("could not determine number of elements"))
+}
+
+fn make_step_number(step: &BigInt, ascending: bool) -> Number {
+    let signed = if ascending {
+        step.clone()
+    } else {
+        -step.clone()
+    };
+    Number::BigInt(crate::Rc::new(signed))
+}
 
 pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     m.insert("abs", (abs, 1));
@@ -100,24 +133,21 @@ fn range(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Res
         _ => (),
     }
 
-    let (incr, num_elements) = match v2.sub(&v1)?.as_i64() {
-        Some(v) if v >= 0 => (1i64, v as usize + 1),
-        Some(v) => (-1i64, (-v + 1) as usize),
-        _ => bail!(span.error("could not determine number of elements")),
-    };
+    let ascending = v2 >= v1;
+    let step = BigInt::from(1u8);
+    let num_elements = checked_range_len(&v1, &v2, &step)
+        .map_err(|_| span.error("could not determine number of elements"))?;
 
     let mut values = Vec::with_capacity(num_elements);
-    let mut v = v1;
-    let incr = Number::from(incr);
-    while v != v2 {
-        values.push(Value::from(v.clone()));
-        v.add_assign(&incr)?;
-        // Guard vector growth while we enumerate the range.
+    let mut value = v1;
+    let increment = make_step_number(&step, ascending);
+    for idx in 0..num_elements {
+        values.push(Value::from(value.clone()));
         enforce_limit()?;
+        if idx + 1 < num_elements {
+            value.add_assign(&increment)?;
+        }
     }
-    values.push(Value::from(v));
-    // Guard the last push before materializing the array.
-    enforce_limit()?;
     Ok(Value::from_array(values))
 }
 
@@ -140,24 +170,27 @@ fn range_step(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -
         _ => (),
     }
 
-    if strict && (!incr.is_integer() || incr <= Number::from(0u64)) {
-        bail!(params[2].span().error("step must be a positive integer"))
+    if !incr.is_integer() || incr <= Number::from(0u64) {
+        if strict {
+            bail!(params[2].span().error("step must be a positive integer"))
+        }
+        return Ok(Value::Undefined);
     }
 
-    let (incr, num_elements) = match (v2.sub(&v1)?.as_i64(), incr.as_i64()) {
-        (Some(v), Some(incr)) if v >= 0 => (incr, v / incr + 1),
-        (Some(v), Some(incr)) => (-incr, -v / incr + 1),
-        _ => bail!(span.error("could not determine number of elements")),
-    };
+    let step = incr.to_big()?;
+    let ascending = v2 >= v1;
+    let num_elements = checked_range_len(&v1, &v2, &step)
+        .map_err(|_| span.error("could not determine number of elements"))?;
 
-    let mut values = Vec::with_capacity(num_elements as usize);
-    let incr = Number::from(incr);
-    let mut v = v1;
-    while (v <= v2 && incr.is_positive()) || (v >= v2 && !incr.is_positive()) {
-        values.push(Value::from(v.clone()));
-        v.add_assign(&incr)?;
-        // Guard vector growth as the stepped range accumulates.
+    let mut values = Vec::with_capacity(num_elements);
+    let increment = make_step_number(&step, ascending);
+    let mut value = v1;
+    for idx in 0..num_elements {
+        values.push(Value::from(value.clone()));
         enforce_limit()?;
+        if idx + 1 < num_elements {
+            value.add_assign(&increment)?;
+        }
     }
 
     Ok(Value::from_array(values))
@@ -187,4 +220,53 @@ fn intn(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Res
         }
         _ => Value::Undefined,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Engine;
+    use alloc::string::ToString;
+
+    fn eval(query: &str) -> Value {
+        Engine::new()
+            .eval_query(query.to_string(), false)
+            .expect("query must succeed")
+            .result[0]
+            .expressions[0]
+            .value
+            .clone()
+    }
+
+    #[test]
+    fn range_handles_i64_min_without_overflow() {
+        let value = eval("numbers.range(-9223372036854775808, -9223372036854775808)");
+        assert_eq!(value, Value::from_array(alloc::vec![Value::from(i64::MIN)]));
+    }
+
+    #[test]
+    fn range_step_rejects_zero_step() {
+        let err = Engine::new()
+            .eval_query("numbers.range_step(1, 3, 0)".to_string(), false)
+            .expect_err("zero step must error");
+        assert!(err.to_string().contains("step must be a positive integer"));
+    }
+
+    #[test]
+    fn range_step_rejects_negative_step() {
+        let err = Engine::new()
+            .eval_query("numbers.range_step(1, 3, -1)".to_string(), false)
+            .expect_err("negative step must error");
+        assert!(err.to_string().contains("step must be a positive integer"));
+    }
+
+    #[test]
+    fn range_rejects_unbounded_output_before_allocating() {
+        let err = Engine::new()
+            .eval_query("numbers.range(0, 1000001)".to_string(), false)
+            .expect_err("oversized range must error");
+        assert!(err
+            .to_string()
+            .contains("could not determine number of elements"));
+    }
 }

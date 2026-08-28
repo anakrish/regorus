@@ -19,6 +19,15 @@ use alloc::string::ToString as _;
 use alloc::vec::Vec;
 use anyhow::{anyhow, bail, Result};
 
+const MAX_JSON_PATCH_DEPTH: usize = 512;
+
+fn ensure_json_patch_depth(depth: usize) -> Result<()> {
+    if depth > MAX_JSON_PATCH_DEPTH {
+        bail!("json.patch exceeded the maximum supported nesting depth")
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 enum EditNode {
     Scalar(Value),
@@ -31,12 +40,17 @@ enum EditNode {
 
 impl EditNode {
     fn from_value(value: &Value) -> Result<Self> {
+        Self::from_value_with_depth(value, 0)
+    }
+
+    fn from_value_with_depth(value: &Value, depth: usize) -> Result<Self> {
+        ensure_json_patch_depth(depth)?;
         enforce_limit()?;
         Ok(match value {
             Value::Object(object) => {
                 let mut fields = BTreeMap::new();
                 for (key, value) in object.iter() {
-                    fields.insert(key.clone(), Self::from_value(value)?);
+                    fields.insert(key.clone(), Self::from_value_with_depth(value, depth + 1)?);
                     enforce_limit()?;
                 }
                 Self::Object(fields)
@@ -44,7 +58,7 @@ impl EditNode {
             Value::Array(array) => {
                 let mut items = VecDeque::with_capacity(array.len());
                 for value in array.iter() {
-                    items.push_back(Self::from_value(value)?);
+                    items.push_back(Self::from_value_with_depth(value, depth + 1)?);
                     enforce_limit()?;
                 }
                 Self::Array(items)
@@ -52,7 +66,10 @@ impl EditNode {
             Value::Set(set) => {
                 let mut members = BTreeMap::new();
                 for value in set.iter() {
-                    members.insert(value.clone(), Self::from_value(value)?);
+                    members.insert(
+                        value.clone(),
+                        Self::from_value_with_depth(value, depth + 1)?,
+                    );
                     enforce_limit()?;
                 }
                 Self::Set(members)
@@ -62,13 +79,18 @@ impl EditNode {
     }
 
     fn render(&self) -> Result<Value> {
+        self.render_with_depth(0)
+    }
+
+    fn render_with_depth(&self, depth: usize) -> Result<Value> {
+        ensure_json_patch_depth(depth)?;
         enforce_limit()?;
         Ok(match self {
             Self::Scalar(value) => value.clone(),
             Self::Object(fields) => {
                 let mut object = Object::new();
                 for (key, value) in fields {
-                    object.insert(key.clone(), value.render()?);
+                    object.insert(key.clone(), value.render_with_depth(depth + 1)?);
                     enforce_limit()?;
                 }
                 Value::Object(crate::Rc::new(object))
@@ -76,7 +98,7 @@ impl EditNode {
             Self::Array(items) => {
                 let mut array = Vec::with_capacity(items.len());
                 for value in items {
-                    array.push(value.render()?);
+                    array.push(value.render_with_depth(depth + 1)?);
                     enforce_limit()?;
                 }
                 Value::Array(crate::Rc::new(crate::value::Array::from(array)))
@@ -84,7 +106,7 @@ impl EditNode {
             Self::Set(members) => {
                 let mut set = BTreeSet::new();
                 for value in members.values() {
-                    set.insert(value.render()?);
+                    set.insert(value.render_with_depth(depth + 1)?);
                     enforce_limit()?;
                 }
                 Value::from_set(set)
@@ -93,6 +115,11 @@ impl EditNode {
     }
 
     fn get(&self, path: &[Value]) -> Result<&Self> {
+        self.get_with_depth(path, 0)
+    }
+
+    fn get_with_depth(&self, path: &[Value], depth: usize) -> Result<&Self> {
+        ensure_json_patch_depth(depth)?;
         let Some((head, rest)) = path.split_first() else {
             return Ok(self);
         };
@@ -100,23 +127,28 @@ impl EditNode {
             Self::Object(fields) => fields
                 .get(head)
                 .ok_or_else(|| anyhow!("path {head} does not exist in object"))?
-                .get(rest),
+                .get_with_depth(rest, depth + 1),
             Self::Array(items) => {
                 let index = array_index(items.len(), head, false)?;
                 items
                     .get(index)
                     .ok_or_else(|| anyhow!("array index disappeared"))?
-                    .get(rest)
+                    .get_with_depth(rest, depth + 1)
             }
             Self::Set(members) => members
                 .get(head)
                 .ok_or_else(|| anyhow!("path {head} does not exist in set"))?
-                .get(rest),
+                .get_with_depth(rest, depth + 1),
             Self::Scalar(value) => bail!("expected composite type, found value: {value}"),
         }
     }
 
     fn insert(&mut self, path: &[Value], value: EditNode) -> Result<()> {
+        self.insert_with_depth(path, value, 0)
+    }
+
+    fn insert_with_depth(&mut self, path: &[Value], value: EditNode, depth: usize) -> Result<()> {
+        ensure_json_patch_depth(depth)?;
         enforce_limit()?;
         let Some((head, rest)) = path.split_first() else {
             *self = value;
@@ -130,7 +162,7 @@ impl EditNode {
                     fields
                         .get_mut(head)
                         .ok_or_else(|| anyhow!("path {head} does not exist in object"))?
-                        .insert(rest, value)?;
+                        .insert_with_depth(rest, value, depth + 1)?;
                 }
             }
             Self::Array(items) => {
@@ -141,7 +173,7 @@ impl EditNode {
                     items
                         .get_mut(index)
                         .ok_or_else(|| anyhow!("array index disappeared"))?
-                        .insert(rest, value)?;
+                        .insert_with_depth(rest, value, depth + 1)?;
                 }
             }
             Self::Set(members) => {
@@ -155,7 +187,7 @@ impl EditNode {
                     let mut member = members
                         .remove(head)
                         .ok_or_else(|| anyhow!("path {head} does not exist in set"))?;
-                    member.insert(rest, value)?;
+                    member.insert_with_depth(rest, value, depth + 1)?;
                     let new_key = member.render()?;
                     members.insert(new_key, member);
                 }
@@ -169,6 +201,12 @@ impl EditNode {
     }
 
     fn remove(&mut self, path: &[Value]) -> Result<EditNode> {
+        ensure_json_patch_depth(path.len())?;
+        self.remove_with_depth(path, 0)
+    }
+
+    fn remove_with_depth(&mut self, path: &[Value], depth: usize) -> Result<EditNode> {
+        ensure_json_patch_depth(depth)?;
         enforce_limit()?;
         let (head, rest) = path
             .split_first()
@@ -183,7 +221,7 @@ impl EditNode {
                     fields
                         .get_mut(head)
                         .ok_or_else(|| anyhow!("path {head} does not exist in object"))?
-                        .remove(rest)?
+                        .remove_with_depth(rest, depth + 1)?
                 }
             }
             Self::Array(items) => {
@@ -196,7 +234,7 @@ impl EditNode {
                     items
                         .get_mut(index)
                         .ok_or_else(|| anyhow!("array index disappeared"))?
-                        .remove(rest)?
+                        .remove_with_depth(rest, depth + 1)?
                 }
             }
             Self::Set(members) => {
@@ -208,7 +246,7 @@ impl EditNode {
                     let mut member = members
                         .remove(head)
                         .ok_or_else(|| anyhow!("path {head} does not exist in set"))?;
-                    let removed = member.remove(rest)?;
+                    let removed = member.remove_with_depth(rest, depth + 1)?;
                     let new_key = member.render()?;
                     members.insert(new_key, member);
                     removed
@@ -224,6 +262,12 @@ impl EditNode {
 
     #[cfg(test)]
     fn replace(&mut self, path: &[Value], value: EditNode) -> Result<()> {
+        self.replace_with_depth(path, value, 0)
+    }
+
+    #[cfg(test)]
+    fn replace_with_depth(&mut self, path: &[Value], value: EditNode, depth: usize) -> Result<()> {
+        ensure_json_patch_depth(depth)?;
         enforce_limit()?;
         let Some((head, rest)) = path.split_first() else {
             *self = value;
@@ -240,7 +284,7 @@ impl EditNode {
                     fields
                         .get_mut(head)
                         .ok_or_else(|| anyhow!("path {head} does not exist in object"))?
-                        .replace(rest, value)?;
+                        .replace_with_depth(rest, value, depth + 1)?;
                 }
             }
             Self::Array(items) => {
@@ -251,7 +295,7 @@ impl EditNode {
                 if rest.is_empty() {
                     *slot = value;
                 } else {
-                    slot.replace(rest, value)?;
+                    slot.replace_with_depth(rest, value, depth + 1)?;
                 }
             }
             Self::Set(members) => {
@@ -261,7 +305,7 @@ impl EditNode {
                 if rest.is_empty() {
                     member = value;
                 } else {
-                    member.replace(rest, value)?;
+                    member.replace_with_depth(rest, value, depth + 1)?;
                 }
                 let new_key = member.render()?;
                 members.insert(new_key, member);
@@ -275,6 +319,7 @@ impl EditNode {
     }
 }
 
+#[derive(Debug)]
 struct EditTree {
     root: Option<EditNode>,
 }
@@ -299,6 +344,7 @@ impl EditTree {
     }
 
     fn insert_value(&mut self, path: &[Value], value: &Value) -> Result<()> {
+        ensure_json_patch_depth(path.len())?;
         let node = EditNode::from_value(value)?;
         if path.is_empty() {
             self.root = Some(node);
@@ -309,6 +355,7 @@ impl EditTree {
     }
 
     fn insert_node(&mut self, path: &[Value], node: EditNode) -> Result<()> {
+        ensure_json_patch_depth(path.len())?;
         if path.is_empty() {
             self.root = Some(node);
         } else {
@@ -318,6 +365,7 @@ impl EditTree {
     }
 
     fn remove(&mut self, path: &[Value]) -> Result<EditNode> {
+        ensure_json_patch_depth(path.len())?;
         if path.is_empty() {
             self.root
                 .take()
@@ -329,6 +377,7 @@ impl EditTree {
 
     #[cfg(test)]
     fn replace_value(&mut self, path: &[Value], value: &Value) -> Result<()> {
+        ensure_json_patch_depth(path.len())?;
         let node = EditNode::from_value(value)?;
         if path.is_empty() {
             self.root = Some(node);
@@ -545,5 +594,14 @@ mod tests {
             };
         }
         assert_eq!(leaf, &Value::from(9));
+    }
+
+    #[test]
+    fn json_patch_rejects_excessive_nesting_depth() {
+        let err = EditNode::from_value_with_depth(&Value::from(1_u64), MAX_JSON_PATCH_DEPTH + 1)
+            .expect_err("deep trees must be rejected");
+        assert!(err
+            .to_string()
+            .contains("json.patch exceeded the maximum supported nesting depth"));
     }
 }

@@ -176,6 +176,7 @@ impl<'a> Compiler<'a> {
 
     pub(super) fn compile_membership(
         &mut self,
+        key: &Option<ExprRef>,
         value: &ExprRef,
         collection: &ExprRef,
         span: &Span,
@@ -185,14 +186,35 @@ impl<'a> Compiler<'a> {
             self.compile_rego_expr_with_span(collection, collection.span(), false)?;
 
         let dest = self.alloc_register();
-        self.emit_instruction(
-            Instruction::Contains {
-                dest,
-                collection: collection_reg,
-                value: value_reg,
-            },
-            span,
-        );
+        if let Some(key) = key {
+            let key_reg = self.compile_rego_expr_with_span(key, key.span(), false)?;
+            let indexed_value = self.alloc_register();
+            self.emit_instruction(
+                Instruction::Index {
+                    dest: indexed_value,
+                    container: collection_reg,
+                    key: key_reg,
+                },
+                span,
+            );
+            self.emit_instruction(
+                Instruction::Eq {
+                    dest,
+                    left: indexed_value,
+                    right: value_reg,
+                },
+                span,
+            );
+        } else {
+            self.emit_instruction(
+                Instruction::Contains {
+                    dest,
+                    collection: collection_reg,
+                    value: value_reg,
+                },
+                span,
+            );
+        }
         Ok(dest)
     }
 

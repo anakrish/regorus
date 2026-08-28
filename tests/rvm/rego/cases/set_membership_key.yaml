@@ -1,0 +1,76 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# RVM tests for k, v in set membership with an explicit key.
+# Before the fix the RVM always returned false for k, v in set.
+
+cases:
+  - note: set-key-value-true
+    data: {}
+    modules:
+      - |
+        package test
+        import future.keywords.in
+        s := {1, 2, 3}
+        x if { 1, 1 in s }
+    query: data.test.x
+    want_result: true
+
+  - note: set-key-value-false-yields-empty-count
+    data: {}
+    modules:
+      - |
+        package test
+        import future.keywords.in
+        s := {1, 2, 3}
+        # 1 is in s but 1 != 2, so this membership is false
+        matches := count([1 | 1, 2 in s])
+    query: data.test.matches
+    want_result: 0
+
+  - note: set-value-only-true
+    data: {}
+    modules:
+      - |
+        package test
+        import future.keywords.in
+        s := {1, 2, 3}
+        x if { 2 in s }
+    query: data.test.x
+    want_result: true
+
+  - note: set-key-binds-via-some-in
+    data: {}
+    modules:
+      - |
+        package test
+        import rego.v1
+        s := {10, 20, 30}
+        # some k, v in set iterates over the set with k == v.
+        result := [k | some k, v in s; v == 20]
+    query: data.test.result
+    want_result: [20]
+
+  - note: set-key-value-bound-both-equal-true
+    data: {}
+    modules:
+      - |
+        package test
+        import rego.v1
+        s := {10, 20, 30}
+        # When k and v are both bound and equal, k, v in set is true.
+        result if { k := 20; k, 20 in s }
+    query: data.test.result
+    want_result: true
+
+  - note: set-key-value-bound-not-member-false
+    data: {}
+    modules:
+      - |
+        package test
+        import rego.v1
+        s := {10, 20, 30}
+        # When k == v but neither is in s, k, v in set is false; count is 0.
+        result := count([1 | k := 99; k, 99 in s]) == 0
+    query: data.test.result
+    want_result: true

@@ -5,7 +5,7 @@
 
 use crate::ast::{Expr, Ref};
 use crate::builtins;
-use crate::builtins::utils::ensure_args_count;
+use crate::builtins::utils::{enforce_limit, ensure_args_count};
 use crate::lexer::Span;
 use crate::value::Value;
 use crate::*;
@@ -30,7 +30,10 @@ fn to_number(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -
         // in practice strings seems to be read as json numbers. This means that floating point
         // numbers are read and the string representation is limited to what json allows.
         Value::String(s) => match Value::from_json_str(s) {
-            Ok(Value::Number(n)) => Value::Number(n),
+            Ok(Value::Number(n)) => {
+                enforce_limit()?;
+                Value::Number(n)
+            }
             _ => {
                 bail!(span.error("could not parse string as number"));
             }
@@ -41,4 +44,22 @@ fn to_number(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -
             );
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Engine;
+
+    #[test]
+    fn to_number_parses_numeric_strings() {
+        let value = Engine::new()
+            .eval_query(r#"to_number("123")"#.to_string(), false)
+            .expect("query must succeed")
+            .result[0]
+            .expressions[0]
+            .value
+            .clone();
+        assert_eq!(value, Value::from(123u64));
+    }
 }

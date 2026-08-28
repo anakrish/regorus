@@ -1,0 +1,143 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+cases:
+  - note: is_valid-https
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.is_valid("https://example.com/path?q=1#frag")
+    query: data.test.x
+    want_result: true
+
+  - note: is_valid-invalid
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.is_valid("not a uri")
+    query: data.test.x
+    want_result: false
+
+  - note: is_valid-empty
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.is_valid("")
+    query: data.test.x
+    want_result: false
+
+  - note: parse-full
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.parse("https://user@example.com:8080/a/b?k=v#frag")
+    query: data.test.x
+    want_result:
+      fragment: "frag"
+      hostname: "example.com"
+      path: "/a/b"
+      port: "8080"
+      raw_path: "/a/b"
+      raw_query: "k=v"
+      scheme: "https"
+
+  - note: parse-minimal
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.parse("https://example.com")
+    query: data.test.x
+    want_result:
+      hostname: "example.com"
+      scheme: "https"
+
+  - note: parse-empty-returns-empty-object
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.parse("")
+    query: data.test.x
+    want_result: {}
+
+  - note: parse-invalid-error
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.parse("://missing-scheme")
+    query: data.test.x
+    error: "invalid uri"
+
+  - note: parse-encoded-path
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.parse("https://example.com/hello%20world")
+    query: data.test.x
+    want_result:
+      hostname: "example.com"
+      path: "/hello world"
+      raw_path: "/hello%20world"
+      scheme: "https"
+
+  - note: is_valid-non-string-false
+    strict: false
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.is_valid(42)
+    query: data.test.x
+    want_result: false
+
+  - note: is_valid-non-string-strict-error
+    strict: true
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.is_valid(42)
+    query: data.test.x
+    error: "expects string argument"
+
+  - note: parse-ipv6-with-port
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.parse("http://[::1]:8080/path")
+    query: data.test.x
+    want_result:
+      hostname: "::1"
+      path: "/path"
+      port: "8080"
+      raw_path: "/path"
+      scheme: "http"
+
+  - note: parse-empty-path
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.parse("https://example.com?q=1")
+    query: data.test.x
+    want_result:
+      hostname: "example.com"
+      raw_query: "q=1"
+      scheme: "https"
+
+  - note: parse-invalid-percent-encoding
+    data: {}
+    modules:
+      - |
+        package test
+        x = uri.parse("https://example.com/path%2")
+    query: data.test.x
+    error: "invalid URI"

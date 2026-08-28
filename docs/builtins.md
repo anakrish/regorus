@@ -176,6 +176,8 @@ In future, each builtin will be associated with a feature (many builtins could b
   | [urlquery.decode_object](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-encoding-urlquerydecode_object)       | `urlquery`  |
   | [urlquery.encode](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-encoding-urlqueryencode)                     | `urlquery`  |
   | [urlquery.encode_object](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-encoding-urlqueryencode_object)       | `urlquery`  |
+  | [uri.is_valid](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-uri-uriis_valid)                               | `urlquery`  |
+  | [uri.parse](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-uri-uriparse)                                     | `urlquery`  |
   | [yaml.is_valid](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-encoding-yamlis_valid)                         | `yaml`      |
   | [yaml.marshal](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-encoding-yamlmarshal)                           | `yaml`      |
   | [yaml.unmarshal](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-encoding-yamlunmarshal)                       | `yaml`      |

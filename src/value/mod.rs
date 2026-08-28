@@ -60,6 +60,10 @@ use crate::*;
 ///    - [`Value::Number`] has at least 100 digits of precision for computations.
 ///
 /// Value can be efficiently cloned due to the use of reference counting.
+// TODO(fix/builtin-dos-hardening-20260828130856): derived Ord/PartialOrd on deeply
+// nested Value trees still recurse inside generic BTree{Map,Set} operations. Builtin
+// compare/max/min/sort now use a depth-limited comparison path; a full non-recursive
+// Value ordering refactor is intentionally deferred to a follow-up change.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Value {
     /// JSON null.

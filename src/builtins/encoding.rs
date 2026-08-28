@@ -4,11 +4,9 @@
 
 use crate::ast::{Expr, Ref};
 use crate::builtins;
-#[cfg(feature = "urlquery")]
-use crate::builtins::utils::enforce_limit;
 #[allow(unused)]
 use crate::builtins::utils::{
-    ensure_args_count, ensure_object, ensure_string, ensure_string_collection,
+    enforce_limit, ensure_args_count, ensure_object, ensure_string, ensure_string_collection,
 };
 use crate::lexer::Span;
 use crate::value::Value;
@@ -428,9 +426,10 @@ fn json_marshal_with_options(
     }
 
     if !pretty || options.is_empty() {
-        return Ok(Value::from(serde_json::to_string(&args[0]).map_err(
-            |e| span.error(&format!("could not serialize to json\nCaused by\n{e}")),
-        )?));
+        let serialized = serde_json::to_string(&args[0])
+            .map_err(|e| span.error(&format!("could not serialize to json\nCaused by\n{e}")))?;
+        enforce_limit()?;
+        return Ok(Value::from(serialized));
     }
 
     let lines: Vec<String> = serde_json::to_string_pretty(&args[0])
@@ -453,7 +452,9 @@ fn json_marshal_with_options(
         })
         .collect();
 
-    Ok(Value::from(lines.join("\n")))
+    let joined = lines.join("\n");
+    enforce_limit()?;
+    Ok(Value::from(joined))
 }
 
 fn json_unmarshal(
@@ -466,4 +467,103 @@ fn json_unmarshal(
     ensure_args_count(span, name, params, args, 1)?;
     let json_str = ensure_string(name, &params[0], &args[0])?;
     Value::from_json_str(&json_str).with_context(|| span.error("could not deserialize json."))
+}
+
+#[cfg(all(
+    test,
+    feature = "allocator-memory-limits",
+    not(miri),
+    feature = "mimalloc",
+    feature = "std"
+))]
+mod tests {
+    use super::*;
+
+    fn test_span() -> Span {
+        Span {
+            source: crate::lexer::Source::from_contents("test.rego".into(), "x".into())
+                .expect("source"),
+            line: 1,
+            col: 1,
+            start: 0,
+            end: 1,
+        }
+    }
+
+    #[cfg(all(
+        feature = "allocator-memory-limits",
+        not(miri),
+        feature = "mimalloc",
+        feature = "std"
+    ))]
+    struct LimitGuard {
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    #[cfg(all(
+        feature = "allocator-memory-limits",
+        not(miri),
+        feature = "mimalloc",
+        feature = "std"
+    ))]
+    impl LimitGuard {
+        fn set_below_current_usage() -> Self {
+            use crate::set_global_memory_limit;
+            use std::sync::{Mutex, OnceLock};
+
+            static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+            let guard = LOCK
+                .get_or_init(|| Mutex::new(()))
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            set_global_memory_limit(None);
+            set_global_memory_limit(Some(1));
+            Self { _guard: guard }
+        }
+    }
+
+    #[cfg(all(
+        feature = "allocator-memory-limits",
+        not(miri),
+        feature = "mimalloc",
+        feature = "std"
+    ))]
+    impl Drop for LimitGuard {
+        fn drop(&mut self) {
+            crate::set_global_memory_limit(None);
+        }
+    }
+
+    #[cfg(all(
+        feature = "allocator-memory-limits",
+        not(miri),
+        feature = "mimalloc",
+        feature = "std"
+    ))]
+    fn param() -> crate::ast::Ref<crate::ast::Expr> {
+        crate::ast::Ref::new(crate::ast::Expr::Null {
+            span: test_span(),
+            value: Value::Null,
+            eidx: 0,
+        })
+    }
+
+    #[test]
+    fn json_marshal_with_options_checks_memory_limit_after_formatting() {
+        use crate::LimitError;
+        use std::collections::BTreeMap;
+
+        let span = test_span();
+        let params = [param(), param()];
+        let mut options = BTreeMap::new();
+        options.insert(Value::from("pretty"), Value::Bool(false));
+        let args = [Value::from("x".repeat(40_000)), Value::from_map(options)];
+        let _guard = LimitGuard::set_below_current_usage();
+        let err = json_marshal_with_options(&span, &params, &args, true)
+            .expect_err("memory limit must propagate");
+        assert!(matches!(
+            err.downcast_ref::<LimitError>(),
+            Some(LimitError::MemoryLimitExceeded { .. })
+        ));
+    }
 }

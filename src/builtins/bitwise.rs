@@ -6,9 +6,22 @@ use crate::builtins;
 use crate::builtins::utils::{ensure_args_count, ensure_numeric, validate_integer_arg};
 
 use crate::lexer::Span;
+use crate::number::BigInt;
 use crate::value::Value;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
+
+const MAX_LEFT_SHIFT_BITS: u32 = 4_000_000;
+
+fn ensure_left_shift_limit(param: &Ref<Expr>, shift: &crate::number::Number) -> Result<()> {
+    let max = BigInt::from(MAX_LEFT_SHIFT_BITS);
+    if shift.to_big()?.as_ref() > &max {
+        bail!(param
+            .span()
+            .error("left shift exceeds the maximum supported bit count"));
+    }
+    Ok(())
+}
 
 pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     m.insert("bits.and", (and, 2));
@@ -50,6 +63,7 @@ fn lsh(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Resul
     {
         return Ok(Value::Undefined);
     }
+    ensure_left_shift_limit(&params[1], &v2)?;
 
     Ok(match v1.lsh(&v2) {
         Some(v) => Value::from(v),
@@ -128,4 +142,22 @@ fn xor(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Resul
         Some(v) => Value::from(v),
         _ => Value::Undefined,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MAX_LEFT_SHIFT_BITS;
+    use crate::Engine;
+    use alloc::format;
+    use alloc::string::ToString as _;
+
+    #[test]
+    fn lsh_rejects_huge_shift_amounts() {
+        let err = Engine::new()
+            .eval_query(format!("bits.lsh(1, {})", MAX_LEFT_SHIFT_BITS + 1), false)
+            .expect_err("huge shifts must error");
+        assert!(err
+            .to_string()
+            .contains("left shift exceeds the maximum supported bit count"));
+    }
 }

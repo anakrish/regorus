@@ -12,6 +12,7 @@ use crate::value::Value;
 use crate::*;
 
 use anyhow::{bail, Result};
+use core::cmp::Ordering;
 
 pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     m.insert("count", (count, 1));
@@ -20,6 +21,23 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
     m.insert("product", (product, 1));
     m.insert("sort", (sort, 1));
     m.insert("sum", (sum, 1));
+}
+
+fn insertion_sort_values(items: &mut [Value]) -> Result<()> {
+    let len = items.len();
+    for i in 1..len {
+        let item = items[i].clone();
+        let mut j = i;
+        while j > 0
+            && crate::builtins::comparison::compare_values_with_limit(&item, &items[j - 1])?
+                == Ordering::Less
+        {
+            items[j] = items[j - 1].clone();
+            j -= 1;
+        }
+        items[j] = item;
+    }
+    Ok(())
 }
 
 fn count(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
@@ -45,9 +63,31 @@ fn max(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Resu
 
     Ok(match &args[0] {
         Value::Array(a) if a.is_empty() => Value::Undefined,
-        Value::Array(a) => a.iter().max().unwrap().clone(),
+        Value::Array(a) => {
+            let mut iter = a.iter();
+            let mut best = iter.next().cloned().unwrap_or(Value::Undefined);
+            for value in iter {
+                if crate::builtins::comparison::compare_values_with_limit(value, &best)?
+                    == Ordering::Greater
+                {
+                    best = value.clone();
+                }
+            }
+            best
+        }
         Value::Set(a) if a.is_empty() => Value::Undefined,
-        Value::Set(a) => a.iter().max().unwrap().clone(),
+        Value::Set(a) => {
+            let mut iter = a.iter();
+            let mut best = iter.next().cloned().unwrap_or(Value::Undefined);
+            for value in iter {
+                if crate::builtins::comparison::compare_values_with_limit(value, &best)?
+                    == Ordering::Greater
+                {
+                    best = value.clone();
+                }
+            }
+            best
+        }
         a => {
             let span = params[0].span();
             bail!(span.error(format!("`max` requires array/set argument. Got `{a}`.").as_str()))
@@ -60,9 +100,31 @@ fn min(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Resu
 
     Ok(match &args[0] {
         Value::Array(a) if a.is_empty() => Value::Undefined,
-        Value::Array(a) => a.iter().min().unwrap().clone(),
+        Value::Array(a) => {
+            let mut iter = a.iter();
+            let mut best = iter.next().cloned().unwrap_or(Value::Undefined);
+            for value in iter {
+                if crate::builtins::comparison::compare_values_with_limit(value, &best)?
+                    == Ordering::Less
+                {
+                    best = value.clone();
+                }
+            }
+            best
+        }
         Value::Set(a) if a.is_empty() => Value::Undefined,
-        Value::Set(a) => a.iter().min().unwrap().clone(),
+        Value::Set(a) => {
+            let mut iter = a.iter();
+            let mut best = iter.next().cloned().unwrap_or(Value::Undefined);
+            for value in iter {
+                if crate::builtins::comparison::compare_values_with_limit(value, &best)?
+                    == Ordering::Less
+                {
+                    best = value.clone();
+                }
+            }
+            best
+        }
         a => {
             let span = params[0].span();
             bail!(span.error(format!("`min` requires array/set argument. Got `{a}`.").as_str()))
@@ -99,9 +161,13 @@ fn sort(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Res
     ensure_args_count(span, "sort", params, args, 1)?;
     Ok(match &args[0] {
         Value::Array(a) => {
-            let mut ac = (**a).clone();
-            ac.sort();
-            Value::from(ac)
+            let mut items = Vec::with_capacity(a.len());
+            for value in a.iter() {
+                items.push(value.clone());
+                enforce_limit()?;
+            }
+            insertion_sort_values(&mut items)?;
+            Value::from(items)
         }
         // Sorting a set produces array.
         Value::Set(a) => {
@@ -111,6 +177,7 @@ fn sort(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Res
                 // Guard array growth while materializing the sorted set.
                 enforce_limit()?;
             }
+            insertion_sort_values(&mut items)?;
             Value::from(items)
         }
         a => {
@@ -143,4 +210,44 @@ fn sum(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Resu
             bail!(span.error(format!("`sum` requires array/set argument. Got `{a}`.").as_str()))
         }
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::string::ToString as _;
+
+    fn test_span() -> Span {
+        Span {
+            source: crate::lexer::Source::from_contents("test.rego".into(), "x".into())
+                .expect("source"),
+            line: 1,
+            col: 1,
+            start: 0,
+            end: 1,
+        }
+    }
+
+    fn nested_array(depth: usize) -> Value {
+        let mut value = Value::from(0_u64);
+        for _ in 0..depth {
+            value = Value::from_array(alloc::vec![value]);
+        }
+        value
+    }
+
+    #[test]
+    fn sort_rejects_excessive_nesting_depth() {
+        let deep = nested_array(crate::builtins::comparison::MAX_COMPARISON_DEPTH + 1);
+        let err = sort(
+            &test_span(),
+            &[],
+            &[Value::from_array(alloc::vec![deep.clone(), deep])],
+            true,
+        )
+        .expect_err("deep sort must error");
+        assert!(err
+            .to_string()
+            .contains("value comparison exceeded the maximum supported nesting depth"));
+    }
 }

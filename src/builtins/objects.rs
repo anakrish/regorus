@@ -16,6 +16,15 @@ use core::iter::Iterator;
 
 use anyhow::{bail, Result};
 
+const MAX_OBJECT_RECURSION_DEPTH: usize = 512;
+
+fn ensure_object_recursion_depth(depth: usize, builtin: &str) -> Result<()> {
+    if depth > MAX_OBJECT_RECURSION_DEPTH {
+        bail!("{builtin} exceeded the maximum supported nesting depth")
+    }
+    Ok(())
+}
+
 pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     m.insert("json.filter", (json_filter, 2));
     m.insert("json.remove", (json_remove, 2));
@@ -39,7 +48,8 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
     }
 }
 
-fn json_filter_impl(v: &Value, filter: &Value) -> Result<Value> {
+fn json_filter_impl(v: &Value, filter: &Value, depth: usize) -> Result<Value> {
+    ensure_object_recursion_depth(depth, "json.filter")?;
     let filters = match filter {
         Value::Object(fields) if fields.len() == 1 && filter[&Value::Null] == Value::Null => {
             return Ok(v.clone())
@@ -56,7 +66,7 @@ fn json_filter_impl(v: &Value, filter: &Value) -> Result<Value> {
                 // TODO: support integer indexes?
                 if let Value::String(idx) = idx {
                     if let Ok(idx) = Value::from_json_str(idx) {
-                        let item = json_filter_impl(&v[&idx], filter)?;
+                        let item = json_filter_impl(&v[&idx], filter, depth + 1)?;
                         if item != Value::Undefined {
                             items.push(item);
                             // Guard array growth while filtering nested structures.
@@ -72,7 +82,7 @@ fn json_filter_impl(v: &Value, filter: &Value) -> Result<Value> {
             let mut items = BTreeSet::new();
             for (item, filter) in filters.iter() {
                 if s.contains(item) {
-                    let item = json_filter_impl(item, filter)?;
+                    let item = json_filter_impl(item, filter, depth + 1)?;
                     if item != Value::Undefined {
                         items.insert(item);
                         // Guard set growth when preserving matched entries.
@@ -86,7 +96,7 @@ fn json_filter_impl(v: &Value, filter: &Value) -> Result<Value> {
         Value::Object(_) => {
             let mut items = BTreeMap::new();
             for (key, filter) in filters.iter() {
-                let item = json_filter_impl(&v[key], filter)?;
+                let item = json_filter_impl(&v[key], filter, depth + 1)?;
                 if item != Value::Undefined {
                     items.insert(key.clone(), item);
                     // Guard map growth as filtered keys accumulate.
@@ -101,7 +111,8 @@ fn json_filter_impl(v: &Value, filter: &Value) -> Result<Value> {
     }
 }
 
-fn json_remove_impl(v: &Value, filter: &Value) -> Result<Value> {
+fn json_remove_impl(v: &Value, filter: &Value, depth: usize) -> Result<Value> {
+    ensure_object_recursion_depth(depth, "json.remove")?;
     let filters = match filter {
         Value::Object(fields) if !fields.is_empty() => fields,
         _ => return Ok(v.clone()),
@@ -117,7 +128,7 @@ fn json_remove_impl(v: &Value, filter: &Value) -> Result<Value> {
             for (idx, item) in a.iter().enumerate() {
                 let idx = Value::String(format!("{idx}").into());
                 if let Some(f) = filters.get(&idx) {
-                    let v = json_remove_impl(item, f)?;
+                    let v = json_remove_impl(item, f, depth + 1)?;
                     if v != Value::Undefined {
                         items.push(v);
                         // Guard array size while removing JSON paths.
@@ -137,7 +148,7 @@ fn json_remove_impl(v: &Value, filter: &Value) -> Result<Value> {
             let mut items = BTreeSet::new();
             for item in s.iter() {
                 if let Some(f) = filters.get(item) {
-                    let v = json_remove_impl(item, f)?;
+                    let v = json_remove_impl(item, f, depth + 1)?;
                     if v != Value::Undefined {
                         items.insert(v);
                         // Guard set size during filtered retention.
@@ -157,7 +168,7 @@ fn json_remove_impl(v: &Value, filter: &Value) -> Result<Value> {
             let mut items = BTreeMap::new();
             for (key, value) in obj.iter() {
                 if let Some(f) = filters.get(key) {
-                    let v = json_remove_impl(value, f)?;
+                    let v = json_remove_impl(value, f, depth + 1)?;
                     if v != Value::Undefined {
                         items.insert(key.clone(), v);
                         // Guard map size as filtered properties accumulate.
@@ -257,7 +268,7 @@ fn json_filter(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool)
         }
     }
 
-    json_filter_impl(&args[0], &filters)
+    json_filter_impl(&args[0], &filters, 0)
 }
 
 fn json_remove(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
@@ -271,7 +282,7 @@ fn json_remove(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool)
         _ => bail!(span.error(format!("`{name}` requires set/array argument").as_str())),
     };
 
-    json_remove_impl(&args[0], &filters)
+    json_remove_impl(&args[0], &filters, 0)
 }
 
 fn filter(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
@@ -342,54 +353,61 @@ fn remove(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> R
     Ok(Value::Object(obj))
 }
 
-fn is_subset(sup: &Value, sub: &Value) -> bool {
-    match (sup, sub) {
+fn is_subset(sup: &Value, sub: &Value, depth: usize) -> Result<bool> {
+    ensure_object_recursion_depth(depth, "object.subset")?;
+    Ok(match (sup, sub) {
         (Value::Object(sup), Value::Object(sub)) => {
-            sub.iter().all(|(k, vsub)| {
-                match sup.get(k) {
-                    //		    Some(vsup @ Value::Object(_)) => is_subset(vsup, vsub),
-                    Some(vsup) => is_subset(vsup, vsub),
-                    _ => false,
+            for (key, value) in sub.iter() {
+                match sup.get(key) {
+                    Some(existing) if is_subset(existing, value, depth + 1)? => {}
+                    _ => return Ok(false),
                 }
-            })
+            }
+            true
         }
         (Value::Set(sup), Value::Set(sub)) => sub.is_subset(sup),
         (Value::Array(sup), Value::Array(sub)) => sup
             .as_slice()
             .windows(sub.len())
-            .any(|w| w == sub.as_slice()),
+            .any(|window| window == sub.as_slice()),
         (Value::Array(sup), Value::Set(_)) => {
             let sup = Value::from_set(sup.iter().cloned().collect());
-            is_subset(&sup, sub)
+            is_subset(&sup, sub, depth + 1)?
         }
         (sup, sub) => sup == sub,
-    }
+    })
 }
 
 fn subset(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "object.subset";
     ensure_args_count(span, name, params, args, 2)?;
 
-    Ok(Value::Bool(is_subset(&args[0], &args[1])))
+    Ok(Value::Bool(is_subset(&args[0], &args[1], 0)?))
+}
+
+fn union_into(target: &mut Value, source: &Value, depth: usize) -> Result<()> {
+    ensure_object_recursion_depth(depth, "object.union")?;
+    match (target, source) {
+        (Value::Object(target_obj), Value::Object(source_obj)) => {
+            let target_obj = Rc::make_mut(target_obj);
+            for (key, value) in source_obj.iter() {
+                if let Some(existing) = target_obj.get_mut(key) {
+                    union_into(existing, value, depth + 1)?;
+                } else {
+                    target_obj.insert(key.clone(), value.clone());
+                    enforce_limit()?;
+                }
+            }
+        }
+        (target, source) => *target = source.clone(),
+    }
+    Ok(())
 }
 
 fn union(obj1: &Value, obj2: &Value) -> Result<Value> {
-    match (obj1, obj2) {
-        (Value::Object(m1), Value::Object(m2)) => {
-            let mut u = obj1.clone();
-            let um = u.as_object_mut()?;
-
-            for (key2, value2) in m2.iter() {
-                let vm = match m1.get(key2) {
-                    Some(value1) => union(value1, value2)?,
-                    _ => value2.clone(),
-                };
-                um.insert(key2.clone(), vm);
-            }
-            Ok(u)
-        }
-        _ => Ok(obj2.clone()),
-    }
+    let mut merged = obj1.clone();
+    union_into(&mut merged, obj2, 0)?;
+    Ok(merged)
 }
 
 fn object_union(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
@@ -424,7 +442,7 @@ fn object_union_n(
             }
             return Ok(Value::Undefined);
         }
-        u = union(&u, a)?;
+        union_into(&mut u, a, 0)?;
     }
 
     Ok(u)
@@ -521,5 +539,56 @@ fn json_patch(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) 
             Err(err)
         }
         Err(_) => Ok(Value::Undefined),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::string::ToString as _;
+
+    fn shallow_object() -> Value {
+        Value::from_map(BTreeMap::from([(Value::from("k"), Value::from(1_u64))]))
+    }
+
+    #[test]
+    fn object_union_rejects_excessive_nesting_depth() {
+        let mut target = shallow_object();
+        let source = shallow_object();
+        let err = union_into(&mut target, &source, MAX_OBJECT_RECURSION_DEPTH + 1)
+            .expect_err("deep unions must error");
+        assert!(err
+            .to_string()
+            .contains("object.union exceeded the maximum supported nesting depth"));
+    }
+
+    #[test]
+    fn object_subset_rejects_excessive_nesting_depth() {
+        let value = shallow_object();
+        let err = is_subset(&value, &value, MAX_OBJECT_RECURSION_DEPTH + 1)
+            .expect_err("deep subset checks must error");
+        assert!(err
+            .to_string()
+            .contains("object.subset exceeded the maximum supported nesting depth"));
+    }
+
+    #[test]
+    fn json_filter_rejects_excessive_nesting_depth() {
+        let value = shallow_object();
+        let err = json_filter_impl(&value, &value, MAX_OBJECT_RECURSION_DEPTH + 1)
+            .expect_err("deep filter must error");
+        assert!(err
+            .to_string()
+            .contains("json.filter exceeded the maximum supported nesting depth"));
+    }
+
+    #[test]
+    fn json_remove_rejects_excessive_nesting_depth() {
+        let value = shallow_object();
+        let err = json_remove_impl(&value, &value, MAX_OBJECT_RECURSION_DEPTH + 1)
+            .expect_err("deep remove must error");
+        assert!(err
+            .to_string()
+            .contains("json.remove exceeded the maximum supported nesting depth"));
     }
 }

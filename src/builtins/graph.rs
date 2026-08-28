@@ -7,7 +7,6 @@ use crate::ast::{Expr, Ref};
 use crate::builtins;
 use crate::builtins::utils::{enforce_limit, ensure_args_count, ensure_object};
 use crate::lexer::Span;
-use crate::value::Object;
 use crate::value::Value;
 use crate::*;
 
@@ -80,76 +79,16 @@ fn reachable(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) ->
     Ok(Value::from_set(reachable))
 }
 
-fn visit(
-    graph: &Object,
-    visited: &mut BTreeSet<Value>,
-    node: &Value,
-    path: &mut Vec<Value>,
-    paths: &mut BTreeSet<Value>,
-) -> Result<()> {
-    if let Value::String(s) = node {
-        if s.as_ref() == "" {
-            if !path.is_empty() {
-                paths.insert(Value::from_array(path.clone()));
-                // Guard path result growth when terminating at empty edge.
-                enforce_limit()?;
-            }
-            return Ok(());
-        }
-    }
+enum ReachablePathsFrame {
+    Enter(Value),
+    Exit(Value),
+}
 
-    let neighbors = graph.get(node);
-    if neighbors.is_none() {
-        // Current node is not valid. Add path as is.
-        if !path.is_empty() {
-            paths.insert(Value::from_array(path.clone()));
-            // Guard path set growth when encountering missing nodes.
-            enforce_limit()?;
-        }
-        return Ok(());
-    }
-
-    if visited.contains(node) {
-        paths.insert(Value::from_array(path.clone()));
-        // Guard path set growth when detecting a cycle.
+fn record_path(path: &[Value], paths: &mut BTreeSet<Value>) -> Result<()> {
+    if !path.is_empty() {
+        paths.insert(Value::from_array(path.to_vec()));
         enforce_limit()?;
-    } else {
-        path.push(node.clone());
-        // Guard path stack growth while descending the graph.
-        enforce_limit()?;
-        visited.insert(node.clone());
-        // Guard visited set growth while marking nodes as seen.
-        enforce_limit()?;
-        let n = match neighbors {
-            Some(Value::Array(arr)) => {
-                for n in arr.iter().rev() {
-                    visit(graph, visited, n, path, paths)?;
-                }
-                arr.len()
-            }
-            Some(Value::Set(set)) => {
-                for n in set.iter().rev() {
-                    visit(graph, visited, n, path, paths)?;
-                }
-                set.len()
-            }
-            Some(&Value::Null) => 0,
-            _ => bail!(format!("neighbors for node `{node}` must be array/set.")),
-        };
-
-        if n == 0 {
-            // Current node has no neighbors.
-            if !path.is_empty() {
-                paths.insert(Value::from_array(path.clone()));
-                // Guard path set growth when recording leaf nodes.
-                enforce_limit()?;
-            }
-        }
-
-        visited.remove(node);
-        path.pop();
     }
-
     Ok(())
 }
 
@@ -164,71 +103,210 @@ fn reachable_paths(
 
     let graph = ensure_object(name, &params[0], args[0].clone())?;
     let mut visited = BTreeSet::new();
-    let mut path = vec![];
+    let mut current_path = vec![];
     let mut paths = BTreeSet::new();
+    let mut stack = vec![];
 
     match &args[1] {
         Value::Array(arr) => {
-            for node in arr.iter() {
-                visit(&graph, &mut visited, node, &mut path, &mut paths)?;
+            for node in arr.iter().rev() {
+                stack.push(ReachablePathsFrame::Enter(node.clone()));
+                enforce_limit()?;
             }
         }
         Value::Set(set) => {
-            for node in set.iter() {
-                visit(&graph, &mut visited, node, &mut path, &mut paths)?;
+            for node in set.iter().rev() {
+                stack.push(ReachablePathsFrame::Enter(node.clone()));
+                enforce_limit()?;
             }
         }
         _ if strict => bail!(params[1].span().error("initial vertices must be array/set")),
         _ => return Ok(Value::Undefined),
     }
 
+    while let Some(frame) = stack.pop() {
+        match frame {
+            ReachablePathsFrame::Enter(node) => {
+                if matches!(&node, Value::String(s) if s.as_ref().is_empty()) {
+                    record_path(&current_path, &mut paths)?;
+                    continue;
+                }
+
+                let Some(neighbors) = graph.get(&node) else {
+                    record_path(&current_path, &mut paths)?;
+                    continue;
+                };
+
+                if visited.contains(&node) {
+                    record_path(&current_path, &mut paths)?;
+                    continue;
+                }
+
+                current_path.push(node.clone());
+                enforce_limit()?;
+                visited.insert(node.clone());
+                enforce_limit()?;
+                stack.push(ReachablePathsFrame::Exit(node));
+                enforce_limit()?;
+
+                match neighbors {
+                    Value::Array(arr) if arr.is_empty() => record_path(&current_path, &mut paths)?,
+                    Value::Array(arr) => {
+                        for neighbor in arr.iter().rev() {
+                            stack.push(ReachablePathsFrame::Enter(neighbor.clone()));
+                            enforce_limit()?;
+                        }
+                    }
+                    Value::Set(set) if set.is_empty() => record_path(&current_path, &mut paths)?,
+                    Value::Set(set) => {
+                        for neighbor in set.iter().rev() {
+                            stack.push(ReachablePathsFrame::Enter(neighbor.clone()));
+                            enforce_limit()?;
+                        }
+                    }
+                    Value::Null => record_path(&current_path, &mut paths)?,
+                    _ => bail!(format!(
+                        "neighbors for node `{}` must be array/set.",
+                        current_path.last().unwrap_or(&Value::Undefined)
+                    )),
+                }
+            }
+            ReachablePathsFrame::Exit(node) => {
+                visited.remove(&node);
+                current_path.pop();
+            }
+        }
+    }
+
     Ok(Value::from_set(paths))
 }
 
-fn walk_visit(path: &mut Vec<Value>, value: &Value, paths: &mut Vec<Value>) -> Result<()> {
-    {
-        let path = Value::from_array(path.clone());
-        paths.push(Value::from_array([path, value.clone()].into()));
-        // Guard walk result growth when emitting a new path/value pair.
-        enforce_limit()?;
-    }
-    match value {
-        Value::Array(arr) => {
-            for (idx, elem) in arr.iter().enumerate() {
-                path.push(Value::from(idx));
-                // Guard path stack growth while traversing array members.
-                enforce_limit()?;
-                walk_visit(path, elem, paths)?;
-                path.pop();
-            }
-        }
-        Value::Set(set) => {
-            for elem in set.iter() {
-                path.push(elem.clone());
-                // Guard path stack growth while traversing set members.
-                enforce_limit()?;
-                walk_visit(path, elem, paths)?;
-                path.pop();
-            }
-        }
-        Value::Object(obj) => {
-            for (key, value) in obj.iter_sorted() {
-                path.push(key.clone());
-                // Guard path stack growth while traversing object entries.
-                enforce_limit()?;
-                walk_visit(path, value, paths)?;
-                path.pop();
-            }
-        }
-        _ => (),
-    }
-    Ok(())
+enum WalkFrame {
+    Visit(Value),
+    Push(Value),
+    Pop,
 }
 
 fn walk(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "walk";
     ensure_args_count(span, name, params, args, 1)?;
-    let mut paths = vec![];
-    walk_visit(&mut vec![], &args[0], &mut paths)?;
-    Ok(Value::from_array(paths))
+    let mut outputs = vec![];
+    let mut path = vec![];
+    let mut stack = vec![WalkFrame::Visit(args[0].clone())];
+
+    while let Some(frame) = stack.pop() {
+        match frame {
+            WalkFrame::Visit(value) => {
+                let current_path = Value::from_array(path.clone());
+                outputs.push(Value::from_array([current_path, value.clone()].into()));
+                enforce_limit()?;
+
+                match value {
+                    Value::Array(arr) => {
+                        for (idx, elem) in arr.iter().enumerate().rev() {
+                            stack.push(WalkFrame::Pop);
+                            stack.push(WalkFrame::Visit(elem.clone()));
+                            stack.push(WalkFrame::Push(Value::from(idx)));
+                            enforce_limit()?;
+                        }
+                    }
+                    Value::Set(set) => {
+                        for elem in set.iter().rev() {
+                            stack.push(WalkFrame::Pop);
+                            stack.push(WalkFrame::Visit(elem.clone()));
+                            stack.push(WalkFrame::Push(elem.clone()));
+                            enforce_limit()?;
+                        }
+                    }
+                    Value::Object(obj) => {
+                        let entries: Vec<(Value, Value)> = obj
+                            .iter_sorted()
+                            .map(|(key, value)| (key.clone(), value.clone()))
+                            .collect();
+                        for (key, value) in entries.into_iter().rev() {
+                            stack.push(WalkFrame::Pop);
+                            stack.push(WalkFrame::Visit(value));
+                            stack.push(WalkFrame::Push(key));
+                            enforce_limit()?;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            WalkFrame::Push(segment) => {
+                path.push(segment);
+                enforce_limit()?;
+            }
+            WalkFrame::Pop => {
+                path.pop();
+            }
+        }
+    }
+    Ok(Value::from_array(outputs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_span() -> Span {
+        Span {
+            source: crate::lexer::Source::from_contents("test.rego".into(), "x".into())
+                .expect("source"),
+            line: 1,
+            col: 1,
+            start: 0,
+            end: 1,
+        }
+    }
+
+    fn param() -> Ref<Expr> {
+        Ref::new(Expr::Null {
+            span: test_span(),
+            value: Value::Null,
+            eidx: 0,
+        })
+    }
+
+    fn deep_chain(depth: usize) -> Value {
+        let mut graph = crate::value::Object::new();
+        for idx in 0..depth {
+            graph.insert(
+                Value::from(idx),
+                Value::from_array(alloc::vec![Value::from(idx + 1)]),
+            );
+        }
+        graph.insert(Value::from(depth), Value::Null);
+        Value::Object(crate::Rc::new(graph))
+    }
+
+    fn deep_nested_value(depth: usize) -> Value {
+        let mut value = Value::from(0_usize);
+        for _ in 0..depth {
+            value = Value::from_array(alloc::vec![value]);
+        }
+        value
+    }
+
+    #[test]
+    fn reachable_paths_handles_deep_graph_without_recursion() {
+        let paths = reachable_paths(
+            &test_span(),
+            &[param(), param()],
+            &[
+                deep_chain(4096),
+                Value::from_array(alloc::vec![Value::from(0_usize)]),
+            ],
+            true,
+        )
+        .expect("reachable_paths must succeed");
+        assert!(matches!(paths, Value::Set(_)));
+    }
+
+    #[test]
+    fn walk_handles_deep_values_without_recursion() {
+        let walked =
+            walk(&test_span(), &[], &[deep_nested_value(4096)], true).expect("walk must succeed");
+        assert!(matches!(walked, Value::Array(_)));
+    }
 }

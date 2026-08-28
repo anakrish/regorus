@@ -145,7 +145,9 @@ fn replace(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
     let s = ensure_string(name, &params[0], &args[0])?;
     let old = ensure_string(name, &params[1], &args[1])?;
     let new = ensure_string(name, &params[2], &args[2])?;
-    Ok(Value::String(s.replace(old.as_ref(), new.as_ref()).into()))
+    let replaced = s.replace(old.as_ref(), new.as_ref());
+    enforce_limit()?;
+    Ok(Value::String(replaced.into()))
 }
 
 fn split(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
@@ -217,6 +219,8 @@ fn to_string(v: &Value, unescape: bool) -> String {
     }
 }
 
+const MAX_SPRINTF_WIDTH: usize = 262_144;
+
 enum Width {
     None,
     LeadingZeros(usize),
@@ -230,6 +234,21 @@ fn apply_width(w: Width, s: String) -> String {
         Width::Cell(n) if n > s.len() => " ".repeat(n - s.len()) + &s,
         _ => s,
     }
+}
+
+fn parse_width(width: u32, first_char: char, param: &Ref<Expr>) -> Result<Width> {
+    let width =
+        usize::try_from(width).map_err(|_| param.span().error("format width is too large"))?;
+    if width > MAX_SPRINTF_WIDTH {
+        bail!(param
+            .span()
+            .error("format width exceeds the maximum supported size"));
+    }
+    Ok(match first_char {
+        '0' => Width::LeadingZeros(width),
+        '.' => Width::Decimals(width),
+        _ => Width::Cell(width),
+    })
 }
 
 fn sprintf(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
@@ -251,24 +270,25 @@ fn sprintf(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
                 }
                 Some(c) if c == '.' || c.is_numeric() => {
                     let first_char = c;
-                    let mut w = 0;
+                    let mut w = 0u32;
                     if c != '.' {
-                        w = c.to_digit(10).expect("could not get digit from char");
+                        let digit = c
+                            .to_digit(10)
+                            .ok_or_else(|| params[0].span().error("invalid width digit"))?;
+                        w = digit;
                     }
 
                     while chars.peek().map(|c| c.is_numeric()) == Some(true) {
-                        w = w * 10
-                            + chars
-                                .next()
-                                .expect("could not get next digit")
-                                .to_digit(10)
-                                .expect("could not get digit from char");
+                        let digit = chars
+                            .next()
+                            .and_then(|ch| ch.to_digit(10))
+                            .ok_or_else(|| params[0].span().error("invalid width digit"))?;
+                        w = w
+                            .checked_mul(10)
+                            .and_then(|value| value.checked_add(digit))
+                            .ok_or_else(|| params[0].span().error("format width overflow"))?;
                     }
-                    let width = match first_char {
-                        '0' => Width::LeadingZeros(w as usize),
-                        '.' => Width::Decimals(w as usize),
-                        _ => Width::Cell(w as usize),
-                    };
+                    let width = parse_width(w, first_char, &params[0])?;
                     match chars.next() {
                         Some(c) => (c, width),
                         _ => {
@@ -417,6 +437,7 @@ fn sprintf(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
             }
             _ => {}
         }
+        enforce_limit()?;
     }
 
     if args_idx < args.len() {
@@ -429,6 +450,7 @@ fn sprintf(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
         ));
     }
 
+    enforce_limit()?;
     Ok(Value::String(s.into()))
 }
 
@@ -544,6 +566,10 @@ fn strings_count(
     let search = ensure_string(name, &params[0], &args[0])?;
     let substring = ensure_string(name, &params[0], &args[1])?;
 
+    if substring.is_empty() {
+        return Ok(Value::from(search.chars().count() + 1));
+    }
+
     Ok(Value::from(
         search
             .as_bytes()
@@ -572,6 +598,7 @@ fn replace_n(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -
         match item {
             (Value::String(k), Value::String(v)) => {
                 s = s.replace(k.as_ref(), v.as_ref()).into();
+                enforce_limit()?;
             }
             _ => {
                 bail!(span.error(
@@ -674,4 +701,173 @@ fn upper(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Re
     ensure_args_count(span, name, params, args, 1)?;
     let s = ensure_string(name, &params[0], &args[0])?;
     Ok(Value::String(s.to_uppercase().into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Engine;
+    use alloc::format;
+    use alloc::string::ToString as _;
+
+    #[cfg(all(
+        feature = "allocator-memory-limits",
+        not(miri),
+        feature = "mimalloc",
+        feature = "std"
+    ))]
+    fn test_span() -> Span {
+        Span {
+            source: crate::lexer::Source::from_contents("test.rego".into(), "x".into())
+                .expect("source"),
+            line: 1,
+            col: 1,
+            start: 0,
+            end: 1,
+        }
+    }
+
+    fn eval(query: &str) -> Value {
+        Engine::new()
+            .eval_query(query.to_string(), false)
+            .expect("query must succeed")
+            .result[0]
+            .expressions[0]
+            .value
+            .clone()
+    }
+
+    #[cfg(all(
+        feature = "allocator-memory-limits",
+        not(miri),
+        feature = "mimalloc",
+        feature = "std"
+    ))]
+    struct LimitGuard {
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    #[cfg(all(
+        feature = "allocator-memory-limits",
+        not(miri),
+        feature = "mimalloc",
+        feature = "std"
+    ))]
+    impl LimitGuard {
+        fn set_below_current_usage() -> Self {
+            use crate::set_global_memory_limit;
+            use std::sync::{Mutex, OnceLock};
+
+            static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+            let guard = LOCK
+                .get_or_init(|| Mutex::new(()))
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            set_global_memory_limit(None);
+            set_global_memory_limit(Some(1));
+            Self { _guard: guard }
+        }
+    }
+
+    #[cfg(all(
+        feature = "allocator-memory-limits",
+        not(miri),
+        feature = "mimalloc",
+        feature = "std"
+    ))]
+    impl Drop for LimitGuard {
+        fn drop(&mut self) {
+            crate::set_global_memory_limit(None);
+        }
+    }
+
+    #[cfg(all(
+        feature = "allocator-memory-limits",
+        not(miri),
+        feature = "mimalloc",
+        feature = "std"
+    ))]
+    fn param() -> crate::ast::Ref<crate::ast::Expr> {
+        crate::ast::Ref::new(crate::ast::Expr::Null {
+            span: test_span(),
+            value: Value::Null,
+            eidx: 0,
+        })
+    }
+
+    #[test]
+    fn strings_count_empty_substring_matches_opa_semantics() {
+        assert_eq!(eval(r#"strings.count("abc", "")"#), Value::from(4usize));
+    }
+
+    #[test]
+    fn sprintf_rejects_excessive_widths() {
+        let err = Engine::new()
+            .eval_query(
+                format!(r#"sprintf("%{}d", [1])"#, MAX_SPRINTF_WIDTH + 1),
+                false,
+            )
+            .expect_err("excessive width must error");
+        assert!(err
+            .to_string()
+            .contains("format width exceeds the maximum supported size"));
+    }
+
+    #[test]
+    fn replace_n_applies_replacements() {
+        assert_eq!(
+            eval(r#"strings.replace_n({"f": "x", "foo": "xxx"}, "foo")"#),
+            Value::from("xoo")
+        );
+    }
+
+    #[cfg(all(
+        feature = "allocator-memory-limits",
+        not(miri),
+        feature = "mimalloc",
+        feature = "std"
+    ))]
+    #[test]
+    fn replace_n_checks_memory_limit_after_each_step() {
+        use crate::LimitError;
+        use std::collections::BTreeMap;
+
+        let span = test_span();
+        let params = [param(), param()];
+        let mut patterns = BTreeMap::new();
+        patterns.insert(Value::from("a"), Value::from("a".repeat(40_000)));
+        patterns.insert(Value::from("aa"), Value::from("bbbbbbbb"));
+        let args = [Value::from_map(patterns), Value::from("a")];
+        let _guard = LimitGuard::set_below_current_usage();
+        let err = replace_n(&span, &params, &args, true).expect_err("memory limit must propagate");
+        assert!(matches!(
+            err.downcast_ref::<LimitError>(),
+            Some(LimitError::MemoryLimitExceeded { .. })
+        ));
+    }
+
+    #[cfg(all(
+        feature = "allocator-memory-limits",
+        not(miri),
+        feature = "mimalloc",
+        feature = "std"
+    ))]
+    #[test]
+    fn replace_checks_memory_limit_after_growth() {
+        use crate::LimitError;
+
+        let span = test_span();
+        let params = [param(), param(), param()];
+        let args = [
+            Value::from("a"),
+            Value::from("a"),
+            Value::from("a".repeat(40_000)),
+        ];
+        let _guard = LimitGuard::set_below_current_usage();
+        let err = replace(&span, &params, &args, true).expect_err("memory limit must propagate");
+        assert!(matches!(
+            err.downcast_ref::<LimitError>(),
+            Some(LimitError::MemoryLimitExceeded { .. })
+        ));
+    }
 }

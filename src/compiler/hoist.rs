@@ -865,10 +865,16 @@ impl LoopHoister {
                                     ..
                                 } if name.as_ref() == "walk"
                             )
-                ) && loops.len() == loop_count.saturating_add(1)
-                {
-                    if let Some(loop_info) = loops.last_mut() {
-                        loop_info.value = expr.clone();
+                ) {
+                    // Find the Walk loop added during RHS analysis and tag it with the
+                    // assignment expression.  Using an exact count check (== loop_count+1)
+                    // was fragile: if the walk argument itself hoists additional loops
+                    // (e.g. an indexed sub-expression), the Walk loop would be missed.
+                    if let Some(walk_loop) = loops[loop_count..]
+                        .iter_mut()
+                        .find(|l| l.loop_type == LoopType::Walk)
+                    {
+                        walk_loop.value = expr.clone();
                     }
                 }
             }

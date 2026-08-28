@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# Tests for walk with the := assignment form (k, v := walk(obj)).
+# Tests for walk with the := assignment form ([k, v] := walk(obj)).
 # Before the fix, the interpreter's WalkBindingPlan only handled the
 # call-parameter pattern (walk(obj, [k, v])) not the assignment form.
 
@@ -31,3 +31,22 @@ cases:
     query: data.test.paths
     sort_bindings: true
     want_result: [[], ["x"], ["y"]]
+
+  - note: walk-assignment-with-indexed-arg
+    data: {}
+    modules:
+      - |
+        package test
+        import rego.v1
+
+        objs := [{"a": 1}, {"b": 2}]
+        # walk's argument objs[i] introduces an IndexIteration loop for i in addition
+        # to the Walk loop.  The robust loop-finding code must locate the Walk loop by
+        # type, not by assuming it is always the single newly-added loop.
+        all_paths := {path |
+            [path, _] := walk(objs[_])
+            path != []
+        }
+    query: data.test.all_paths
+    want_result:
+      set!: [["a"], ["b"]]

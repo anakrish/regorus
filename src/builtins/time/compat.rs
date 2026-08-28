@@ -161,7 +161,7 @@ pub fn parse_duration(mut s: &str) -> Result<Duration, ParseDurationError> {
             "d" => DAY,
             "w" => WEEK,
             "y" => YEAR,
-            unkonwn => return Err(ParseDurationError::UnknownUnit(unkonwn.to_string())),
+            unknown => return Err(ParseDurationError::UnknownUnit(unknown.to_string())),
         };
 
         s = &s[idx + 1..];

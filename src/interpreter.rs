@@ -2291,36 +2291,62 @@ impl Interpreter {
     fn eval_membership(
         &mut self,
         key: &Option<ExprRef>,
-        value: &ExprRef,
+        value_expr: &ExprRef,
         collection: &ExprRef,
     ) -> Result<Value> {
         self.check_execution_time()?;
-        let value = self.eval_expr(value)?;
+        let value_val = self.eval_expr(value_expr)?;
         let collection = self.eval_expr(collection)?;
 
         let result = match &collection {
             Value::Array(array) => {
                 if let Some(key) = key {
                     let key = self.eval_expr(key)?;
-                    collection[&key] == value
+                    collection[&key] == value_val
                 } else {
-                    array.contains(&value)
+                    array.contains(&value_val)
                 }
             }
             Value::Object(object) => {
                 if let Some(key) = key {
                     let key = self.eval_expr(key)?;
-                    collection[&key] == value
+                    collection[&key] == value_val
                 } else {
-                    object.values().any(|item| *item == value)
+                    object.values().any(|item| *item == value_val)
                 }
             }
             Value::Set(set) => {
-                if let Some(key) = key {
-                    let key = self.eval_expr(key)?;
-                    key == value && set.contains(&value)
+                if let Some(key_expr) = key {
+                    let key_val = self.eval_expr(key_expr)?;
+                    // For sets the key equals the value.  When one side is unbound
+                    // (Undefined) and the other is bound, unify the unbound variable.
+                    match (key_val, value_val) {
+                        (Value::Undefined, v) if v != Value::Undefined => {
+                            // k is unbound: bind k to v if v is in the set
+                            if set.contains(&v) {
+                                if let Expr::Var { span, .. } = key_expr.as_ref() {
+                                    self.add_variable(&span.source_str(), v.clone())?;
+                                }
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        (k, Value::Undefined) if k != Value::Undefined => {
+                            // v is unbound: bind v to k if k is in the set
+                            if set.contains(&k) {
+                                if let Expr::Var { span, .. } = value_expr.as_ref() {
+                                    self.add_variable(&span.source_str(), k.clone())?;
+                                }
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        (k, v) => k == v && set.contains(&v),
+                    }
                 } else {
-                    set.contains(&value)
+                    set.contains(&value_val)
                 }
             }
             _ => {

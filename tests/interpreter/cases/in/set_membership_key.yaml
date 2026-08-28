@@ -81,3 +81,51 @@ cases:
         x if { "a", 1 in obj }
     query: data.test.x
     want_result: true
+
+  - note: set-key-binds-via-some-in
+    data: {}
+    modules:
+      - |
+        package test
+        import rego.v1
+        s := {10, 20, 30}
+        # some k, v in set iterates over the set with k == v.
+        result := [k | some k, v in s; v == 20]
+    query: data.test.result
+    want_result: [20]
+
+  - note: set-key-value-bound-both-equal-true
+    data: {}
+    modules:
+      - |
+        package test
+        import rego.v1
+        s := {10, 20, 30}
+        # When k and v are both bound and equal, k, v in set is true.
+        result if { k := 20; k, 20 in s }
+    query: data.test.result
+    want_result: true
+
+  - note: set-key-value-bound-both-not-equal-false
+    data: {}
+    modules:
+      - |
+        package test
+        import rego.v1
+        s := {10, 20, 30}
+        # When k and v are both bound but not equal, k, v in set is false.
+        result if { k := 10; k, 20 in s }
+    query: data.test.result
+    no_result: true
+
+  - note: set-key-value-bound-not-member-false
+    data: {}
+    modules:
+      - |
+        package test
+        import rego.v1
+        s := {10, 20, 30}
+        # When k == v but neither is in s, k, v in set is false.
+        result if { k := 99; k, 99 in s }
+    query: data.test.result
+    no_result: true

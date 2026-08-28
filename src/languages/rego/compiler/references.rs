@@ -299,7 +299,7 @@ impl<'a> Compiler<'a> {
         }
 
         // Check if there's a rule in the current package that matches
-        let current_pkg_prefix = format!("{}.{}", &self.current_package, root);
+        let current_pkg_prefix = format!("{}.{}", self.current_package, root);
 
         // Build static path for rule matching
         let mut rule_path_parts = vec![current_pkg_prefix.as_str()];
@@ -336,7 +336,7 @@ impl<'a> Compiler<'a> {
         }
 
         // No rule found; fall back to module-level imports.
-        let import_key = format!("{}.{}", &self.current_package, root);
+        let import_key = format!("{}.{}", self.current_package, root);
         if let Some(import_expr) = self.policy.inner.imports.get(&import_key) {
             let import_reg =
                 self.compile_rego_expr_with_span(import_expr, import_expr.span(), false)?;

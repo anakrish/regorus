@@ -235,7 +235,13 @@ fn regex_replace(
         _ => return Ok(Value::Undefined),
     };
 
-    Ok(Value::String(re.replace_all(&s, value.as_ref()).into()))
+    // The regex crate exposes replacement as a one-shot allocation via replace_all.
+    // Re-check the cooperative limit immediately after materializing the output so
+    // allocator-limit builds still reject excessive amplification even though the
+    // allocation itself is not chunked through regorus.
+    let replaced = re.replace_all(&s, value.as_ref()).into_owned();
+    enforce_limit()?;
+    Ok(Value::String(replaced.into()))
 }
 
 fn regex_split(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
@@ -308,4 +314,110 @@ fn regex_template_match(
 
     // Ensure that ending literal matches.
     Ok(Value::Bool(template == value))
+}
+
+#[cfg(all(
+    test,
+    feature = "allocator-memory-limits",
+    not(miri),
+    feature = "mimalloc",
+    feature = "std"
+))]
+mod tests {
+    use super::*;
+
+    fn test_span() -> Span {
+        Span {
+            source: crate::lexer::Source::from_contents("test.rego".into(), "x".into())
+                .expect("source"),
+            line: 1,
+            col: 1,
+            start: 0,
+            end: 1,
+        }
+    }
+
+    #[cfg(all(
+        feature = "allocator-memory-limits",
+        not(miri),
+        feature = "mimalloc",
+        feature = "std"
+    ))]
+    struct LimitGuard {
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    #[cfg(all(
+        feature = "allocator-memory-limits",
+        not(miri),
+        feature = "mimalloc",
+        feature = "std"
+    ))]
+    impl LimitGuard {
+        fn set_below_current_usage() -> Self {
+            use crate::set_global_memory_limit;
+            use std::sync::{Mutex, OnceLock};
+
+            static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+            let guard = LOCK
+                .get_or_init(|| Mutex::new(()))
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            set_global_memory_limit(None);
+            set_global_memory_limit(Some(1));
+            Self { _guard: guard }
+        }
+    }
+
+    #[cfg(all(
+        feature = "allocator-memory-limits",
+        not(miri),
+        feature = "mimalloc",
+        feature = "std"
+    ))]
+    impl Drop for LimitGuard {
+        fn drop(&mut self) {
+            crate::set_global_memory_limit(None);
+        }
+    }
+
+    #[cfg(all(
+        feature = "allocator-memory-limits",
+        not(miri),
+        feature = "mimalloc",
+        feature = "std"
+    ))]
+    fn param() -> crate::ast::Ref<crate::ast::Expr> {
+        crate::ast::Ref::new(crate::ast::Expr::Null {
+            span: test_span(),
+            value: Value::Null,
+            eidx: 0,
+        })
+    }
+
+    #[cfg(all(
+        feature = "allocator-memory-limits",
+        not(miri),
+        feature = "mimalloc",
+        feature = "std"
+    ))]
+    #[test]
+    fn regex_replace_propagates_memory_limit_after_output_growth() {
+        use crate::LimitError;
+
+        let span = test_span();
+        let params = [param(), param(), param()];
+        let args = [
+            Value::from("a"),
+            Value::from("a"),
+            Value::from("a".repeat(40_000)),
+        ];
+        let _guard = LimitGuard::set_below_current_usage();
+        let err =
+            regex_replace(&span, &params, &args, true).expect_err("memory limit must propagate");
+        assert!(matches!(
+            err.downcast_ref::<LimitError>(),
+            Some(LimitError::MemoryLimitExceeded { .. })
+        ));
+    }
 }

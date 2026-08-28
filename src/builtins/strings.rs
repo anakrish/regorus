@@ -199,8 +199,8 @@ fn split_n(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> R
 
     let Some(n) = n.as_i64() else {
         if n.is_positive() {
-            // n overflows i64 — treat as no limit (full split)
-            return split(span, params, args, strict);
+            // n overflows i64 — treat as no limit (full split); pass only the first 2 args
+            return split(span, &params[..2], &args[..2], strict);
         }
         return Ok(Value::from_array(Vec::new()));
     };
@@ -227,9 +227,13 @@ fn split_n(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> R
             } else {
                 let mut parts: Vec<Value> = chars[..limit.saturating_sub(1)]
                     .iter()
-                    .map(|c| Value::from(c.to_string()))
-                    .collect();
+                    .map(|c| {
+                        enforce_limit()?;
+                        Ok(Value::from(c.to_string()))
+                    })
+                    .collect::<Result<Vec<Value>>>()?;
                 let rest: String = chars[limit.saturating_sub(1)..].iter().collect();
+                enforce_limit()?;
                 parts.push(Value::from(rest));
                 parts
             }

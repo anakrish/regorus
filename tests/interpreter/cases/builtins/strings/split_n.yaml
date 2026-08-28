@@ -74,3 +74,21 @@ cases:
         x = strings.split_n("a,b", ",")
     query: data.test.x
     error: "`strings.split_n` expects 3 arguments"
+
+  - note: empty-delimiter-with-remainder
+    data: {}
+    modules:
+      - |
+        package test
+        x = strings.split_n("abcd", "", 3)
+    query: data.test.x
+    want_result: ["a", "b", "cd"]
+
+  - note: limit-one-returns-whole-string
+    data: {}
+    modules:
+      - |
+        package test
+        x = strings.split_n("a,b,c", ",", 1)
+    query: data.test.x
+    want_result: ["a,b,c"]

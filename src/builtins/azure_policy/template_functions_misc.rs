@@ -60,8 +60,8 @@ fn fn_join(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) -
         return Ok(Value::Undefined);
     };
     let parts: Vec<String> = arr
-        .iter()
-        .map(|v| match *v {
+        .iter_owned()
+        .map(|v| match v {
             Value::String(ref s) => s.to_string(),
             Value::Number(ref n) => n.format_decimal(),
             Value::Bool(b) => b.to_string(),
@@ -83,10 +83,10 @@ fn fn_items(_span: &Span, _params: &[Ref<Expr>], args: &[Value], _strict: bool) 
         return Ok(Value::Undefined);
     };
     let mut result = Vec::with_capacity(obj.len());
-    for (k, v) in obj.iter_sorted() {
+    for (k, v) in obj.iter_owned() {
         let mut entry = Object::new();
-        entry.insert(Value::from("key"), k.clone());
-        entry.insert(Value::from("value"), v.clone());
+        entry.insert(Value::from("key"), k);
+        entry.insert(Value::from("value"), v);
         result.push(entry.into_value());
         // Throttled check bounds peak allocation while building large results.
         crate::utils::limits::check_memory_limit_if_needed().map_err(anyhow::Error::new)?;

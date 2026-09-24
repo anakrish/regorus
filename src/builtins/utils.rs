@@ -104,14 +104,9 @@ pub fn ensure_string(fcn: &str, arg: &Expr, v: &Value) -> Result<Rc<str>> {
     })
 }
 
-pub fn ensure_string_element<'a>(
-    fcn: &str,
-    arg: &Expr,
-    v: &'a Value,
-    idx: usize,
-) -> Result<&'a str> {
-    Ok(match &v {
-        Value::String(s) => s.as_ref(),
+pub fn ensure_string_element(fcn: &str, arg: &Expr, v: &Value, idx: usize) -> Result<Rc<str>> {
+    Ok(match v {
+        Value::String(s) => s.clone(),
         _ => {
             let span = arg.span();
             bail!(span.error(
@@ -122,12 +117,16 @@ pub fn ensure_string_element<'a>(
     })
 }
 
-pub fn ensure_string_collection<'a>(fcn: &str, arg: &Expr, v: &'a Value) -> Result<Vec<&'a str>> {
+/// Materialize an array/set argument into a collection of owned strings.
+///
+/// Returns owned `Rc<str>` rather than borrowed `&str` so callers do not hold a
+/// borrow into the argument across the owned/iterating accessor boundary.
+pub fn ensure_string_collection(fcn: &str, arg: &Expr, v: &Value) -> Result<Vec<Rc<str>>> {
     let mut collection = vec![];
-    match &v {
+    match v {
         Value::Array(a) => {
-            for (idx, elem) in a.iter().enumerate() {
-                collection.push(ensure_string_element(fcn, arg, elem, idx)?);
+            for (idx, elem) in a.iter_owned().enumerate() {
+                collection.push(ensure_string_element(fcn, arg, &elem, idx)?);
                 // Enforce allocator limit while materializing the string collection.
                 enforce_limit()?;
             }

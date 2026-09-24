@@ -29,7 +29,7 @@ use crate::value::Value;
 
 #[cfg(feature = "rvm")]
 pub use cursor::ObjectCursor;
-pub use iter::{IntoIter, Iter, IterMut};
+pub use iter::{IntoIter, Iter, IterMut, ObjectOwnedIter};
 
 /// Opaque, ordered key-value map keyed by [`Value`].
 ///
@@ -101,6 +101,24 @@ impl Object {
         }
     }
 
+    /// Fallible owned lookup that reads through without borrowing.
+    ///
+    /// `Ok(None)` means the key is genuinely absent. Native storage is
+    /// infallible and always returns `Ok`; the `Result` establishes a stable
+    /// seam so a later feature can add fallible backends without a second API
+    /// break.
+    #[allow(dead_code)] // wired to interpreter/RVM call sites in later foundation commits
+    pub(crate) fn try_get_owned(&self, key: &Value) -> anyhow::Result<Option<Value>> {
+        match &self.repr {
+            Repr::Empty => Ok(None),
+            Repr::Frozen(v) => Ok(match v.binary_search_by(|(k, _)| k.cmp(key)) {
+                Ok(i) => v.get(i).map(|(_, value)| value.clone()),
+                Err(_) => None,
+            }),
+            Repr::BTree(m) => Ok(m.get(key).cloned()),
+        }
+    }
+
     #[inline]
     pub fn contains_key(&self, key: &Value) -> bool {
         self.get(key).is_some()
@@ -128,6 +146,13 @@ impl Object {
     /// must yield and resume.
     pub fn iter(&self) -> impl Iterator<Item = (&Value, &Value)> + '_ {
         self.iter_sorted()
+    }
+
+    /// Owned iteration. Non-resumable. Each item is an owned `(Value, Value)`
+    /// entry.
+    #[inline]
+    pub fn iter_owned(&self) -> ObjectOwnedIter<'_> {
+        ObjectOwnedIter::new(self)
     }
 
     /// Iteration in sorted key order (by `Value::Ord`). Non-resumable.

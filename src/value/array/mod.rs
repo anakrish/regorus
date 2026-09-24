@@ -13,98 +13,135 @@ use core::ops;
 
 use crate::value::Value;
 
-pub use iter::{ArrayIntoIter, ArrayIter, ArrayIterMut};
+pub use iter::{ArrayIntoIter, ArrayIter, ArrayIterMut, ArrayOwnedIter};
 
 /// Opaque, ordered sequence of [`Value`]s.
 ///
-/// The current backing storage is `Vec<Value>`. The inner field is private so
-/// the representation can change without touching call sites.
+/// The backing storage is `Vec<Value>` wrapped in a private `Repr` enum. The
+/// representation is private so it can change without touching call sites.
 #[derive(Default, Clone, Eq, PartialEq)]
 pub struct Array {
-    inner: Vec<Value>,
+    repr: Repr,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum Repr {
+    Owned(Vec<Value>),
+}
+
+impl Default for Repr {
+    #[inline]
+    fn default() -> Self {
+        Repr::Owned(Vec::new())
+    }
 }
 
 impl Array {
     /// Create an empty `Array`.
     #[inline]
     pub const fn new() -> Self {
-        Self { inner: Vec::new() }
+        Self {
+            repr: Repr::Owned(Vec::new()),
+        }
     }
 
     #[inline]
     pub const fn len(&self) -> usize {
-        self.inner.len()
+        match &self.repr {
+            Repr::Owned(values) => values.len(),
+        }
     }
 
     #[inline]
     pub const fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.len() == 0
     }
 
     #[inline]
     pub fn get(&self, index: usize) -> Option<&Value> {
-        self.inner.get(index)
+        self.as_slice().get(index)
     }
 
     #[inline]
     pub fn get_mut(&mut self, index: usize) -> Option<&mut Value> {
-        self.inner.get_mut(index)
+        match &mut self.repr {
+            Repr::Owned(values) => values.get_mut(index),
+        }
     }
 
     #[inline]
     pub fn first(&self) -> Option<&Value> {
-        self.inner.first()
+        self.as_slice().first()
     }
 
     #[inline]
     pub fn last(&self) -> Option<&Value> {
-        self.inner.last()
+        self.as_slice().last()
     }
 
     #[inline]
     pub fn contains(&self, value: &Value) -> bool {
-        self.inner.contains(value)
+        self.as_slice().contains(value)
     }
 
     #[inline]
     pub const fn as_slice(&self) -> &[Value] {
-        self.inner.as_slice()
+        match &self.repr {
+            Repr::Owned(values) => values.as_slice(),
+        }
     }
 
     /// Iteration in element order. Non-resumable.
     #[inline]
     pub fn iter(&self) -> ArrayIter<'_> {
         ArrayIter {
-            inner: self.inner.iter(),
+            inner: self.as_slice().iter(),
         }
+    }
+
+    /// Owned iteration in element order. Non-resumable. Each item is an owned
+    /// [`Value`].
+    #[inline]
+    pub fn iter_owned(&self) -> ArrayOwnedIter<'_> {
+        ArrayOwnedIter::new(self)
     }
 
     #[inline]
     pub fn iter_mut(&mut self) -> ArrayIterMut<'_> {
         ArrayIterMut {
-            inner: self.inner.iter_mut(),
+            inner: match &mut self.repr {
+                Repr::Owned(values) => values.iter_mut(),
+            },
         }
     }
 
     #[inline]
     pub fn push(&mut self, value: Value) {
-        self.inner.push(value);
+        match &mut self.repr {
+            Repr::Owned(values) => values.push(value),
+        }
     }
 
     #[inline]
     pub fn append(&mut self, other: &mut Array) {
-        self.inner.append(&mut other.inner);
+        match (&mut self.repr, &mut other.repr) {
+            (Repr::Owned(values), Repr::Owned(other_values)) => values.append(other_values),
+        }
     }
 
     #[inline]
     pub fn extend<I: IntoIterator<Item = Value>>(&mut self, iter: I) {
-        self.inner.extend(iter);
+        match &mut self.repr {
+            Repr::Owned(values) => values.extend(iter),
+        }
     }
 
     /// Append all elements of `other` (by clone) to the end of `self`.
     #[inline]
     pub fn extend_from_slice(&mut self, other: &[Value]) {
-        self.inner.extend_from_slice(other);
+        match &mut self.repr {
+            Repr::Owned(values) => values.extend_from_slice(other),
+        }
     }
 
     #[inline]
@@ -112,32 +149,66 @@ impl Array {
     where
         F: FnMut(&Value) -> bool,
     {
-        self.inner.retain(f);
+        match &mut self.repr {
+            Repr::Owned(values) => values.retain(f),
+        }
     }
 
     #[inline]
     pub fn clear(&mut self) {
-        self.inner.clear();
+        match &mut self.repr {
+            Repr::Owned(values) => values.clear(),
+        }
     }
 
     #[inline]
     pub fn reverse(&mut self) {
-        self.inner.reverse();
+        match &mut self.repr {
+            Repr::Owned(values) => values.reverse(),
+        }
     }
 
     #[inline]
     pub fn sort(&mut self) {
-        self.inner.sort();
+        match &mut self.repr {
+            Repr::Owned(values) => values.sort(),
+        }
     }
 
     #[inline]
     pub fn to_vec(&self) -> Vec<Value> {
-        self.inner.clone()
+        self.as_slice().to_vec()
     }
 
     #[inline]
     pub fn into_vec(self) -> Vec<Value> {
-        self.inner
+        match self.repr {
+            Repr::Owned(values) => values,
+        }
+    }
+
+    /// Fallible element access that reads through without borrowing.
+    ///
+    /// `Ok(None)` means the index is out of range. Native storage is infallible
+    /// and always returns `Ok`; the `Result` establishes a stable seam so a
+    /// later feature can add fallible backends without a second API break.
+    #[allow(dead_code)] // wired to interpreter/RVM call sites in later foundation commits
+    pub(crate) fn try_element(&self, index: usize) -> anyhow::Result<Option<Value>> {
+        match &self.repr {
+            Repr::Owned(values) => Ok(values.get(index).cloned()),
+        }
+    }
+
+    /// Fallible materialization into an owned `Vec<Value>`.
+    ///
+    /// Native storage clones its backing vector and never errors. The `Result`
+    /// mirrors [`Self::try_element`] so a later feature can add a limit-enforcing
+    /// materializing backend; native cloning needs no resource-limit check here.
+    #[allow(dead_code)] // wired to builtin/eval call sites in later foundation commits
+    pub(crate) fn try_to_vec(&self) -> anyhow::Result<Vec<Value>> {
+        match &self.repr {
+            Repr::Owned(values) => Ok(values.clone()),
+        }
     }
 
     /// Wrap into a `Value::Array`.
@@ -154,9 +225,14 @@ impl Array {
 
     /// Advance `cursor` and yield the next element.
     pub fn next<'a>(&'a self, cursor: &mut ArrayCursor) -> Option<&'a Value> {
-        let value = self.inner.get(cursor.index)?;
+        let value = self.as_slice().get(cursor.index)?;
         cursor.index = cursor.index.saturating_add(1);
         Some(value)
+    }
+
+    /// Advance `cursor` and yield the next owned element.
+    pub fn next_owned(&self, cursor: &mut ArrayCursor) -> Option<Value> {
+        self.next(cursor).cloned()
     }
 }
 
@@ -187,14 +263,16 @@ impl fmt::Debug for Array {
 
 impl Extend<Value> for Array {
     fn extend<I: IntoIterator<Item = Value>>(&mut self, iter: I) {
-        self.inner.extend(iter);
+        match &mut self.repr {
+            Repr::Owned(values) => values.extend(iter),
+        }
     }
 }
 
 impl FromIterator<Value> for Array {
     fn from_iter<I: IntoIterator<Item = Value>>(iter: I) -> Self {
         Self {
-            inner: Vec::from_iter(iter),
+            repr: Repr::Owned(Vec::from_iter(iter)),
         }
     }
 }
@@ -202,7 +280,9 @@ impl FromIterator<Value> for Array {
 impl From<Vec<Value>> for Array {
     #[inline]
     fn from(values: Vec<Value>) -> Self {
-        Self { inner: values }
+        Self {
+            repr: Repr::Owned(values),
+        }
     }
 }
 
@@ -214,7 +294,7 @@ impl ops::Index<usize> for Array {
     /// Use [`Array::get`] to distinguish "missing" from "present-and-Undefined".
     #[inline]
     fn index(&self, index: usize) -> &Self::Output {
-        self.inner.get(index).unwrap_or(&Value::Undefined)
+        self.as_slice().get(index).unwrap_or(&Value::Undefined)
     }
 }
 

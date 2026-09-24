@@ -308,8 +308,8 @@ fn urlquery_encode_object(
 
     {
         let mut pairs = url.query_pairs_mut();
-        for (key, value) in obj.iter_sorted() {
-            let key = ensure_string(name, &params[0], key)?;
+        for (key, value) in obj.iter_owned() {
+            let key = ensure_string(name, &params[0], &key)?;
             match value {
                 Value::String(v) => {
                     pairs.append_pair(key.as_ref(), v.as_ref());
@@ -317,9 +317,9 @@ fn urlquery_encode_object(
                     enforce_limit()?;
                 }
                 _ => {
-                    let values = ensure_string_collection(name, &params[0], value)?;
+                    let values = ensure_string_collection(name, &params[0], &value)?;
                     for v in values {
-                        pairs.append_pair(key.as_ref(), v);
+                        pairs.append_pair(key.as_ref(), v.as_ref());
                         // Guard encoded parameter growth when serializing multi-valued fields.
                         enforce_limit()?;
                     }
@@ -401,10 +401,10 @@ fn json_marshal_with_options(
 
     let options = ensure_object(name, &params[1], args[1].clone())?;
     let (mut pretty, mut indent, mut prefix) = (true, Some("\t".to_owned()), None);
-    for (option, option_value) in options.iter() {
+    for (option, option_value) in options.iter_owned() {
         match option {
             Value::String(s) if s.as_ref() == "pretty" && option_value.as_bool().is_ok() => {
-                pretty = option_value == &Value::Bool(true);
+                pretty = option_value == Value::Bool(true);
             }
             Value::String(s) if s.as_ref() == "pretty" => bail!(params[1]
                 .span()

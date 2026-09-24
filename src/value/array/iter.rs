@@ -78,6 +78,48 @@ impl<'a> ExactSizeIterator for ArrayIter<'a> {
 
 impl<'a> FusedIterator for ArrayIter<'a> {}
 
+/// Owned iterator over cloned `Value` elements.
+#[derive(Debug, Clone)]
+pub struct ArrayOwnedIter<'a> {
+    pub(super) inner: slice::Iter<'a, Value>,
+}
+
+impl<'a> ArrayOwnedIter<'a> {
+    pub(super) fn new(array: &'a Array) -> Self {
+        Self {
+            inner: array.as_slice().iter(),
+        }
+    }
+}
+
+impl Iterator for ArrayOwnedIter<'_> {
+    type Item = Value;
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().cloned()
+    }
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl DoubleEndedIterator for ArrayOwnedIter<'_> {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner.next_back().cloned()
+    }
+}
+
+impl ExactSizeIterator for ArrayOwnedIter<'_> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+impl FusedIterator for ArrayOwnedIter<'_> {}
+
 /// Borrowed iterator over `&mut Value` elements.
 #[derive(Debug)]
 pub struct ArrayIterMut<'a> {
@@ -118,7 +160,7 @@ impl IntoIterator for Array {
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
         ArrayIntoIter {
-            inner: self.inner.into_iter(),
+            inner: self.into_vec().into_iter(),
         }
     }
 }

@@ -71,7 +71,7 @@ pub fn coerce_to_string_ci(value: &Value) -> Option<String> {
 /// Check if an array or set contains a null sentinel.
 pub fn collection_has_null(v: &Value) -> bool {
     match *v {
-        Value::Array(ref items) => items.iter().any(|i| matches!(i, Value::Null)),
+        Value::Array(ref items) => items.iter_owned().any(|i| matches!(i, Value::Null)),
         Value::Set(ref items) => items.iter().any(|i| matches!(i, Value::Null)),
         _ => false,
     }
@@ -82,9 +82,9 @@ pub fn collection_has_null(v: &Value) -> bool {
 pub fn collection_any_ci_eq_excluding_null(collection: &Value, target: &Value) -> bool {
     match *collection {
         Value::Array(ref items) => items
-            .iter()
+            .iter_owned()
             .filter(|i| !matches!(i, Value::Null))
-            .any(|i| case_insensitive_equals(i, target)),
+            .any(|i| case_insensitive_equals(&i, target)),
         Value::Set(ref items) => items
             .iter()
             .filter(|i| !matches!(i, Value::Null))
@@ -319,10 +319,10 @@ pub fn resolve_path(root: &Value, path: &str) -> Value {
         match &current {
             Value::Object(map) => {
                 let mut next = None;
-                for (key, value) in map.iter_sorted() {
-                    if let Value::String(ref key_str) = *key {
+                for (key, value) in map.iter_owned() {
+                    if let Value::String(ref key_str) = key {
                         if strings::keys::eq(key_str, &segment) {
-                            next = Some(value.clone());
+                            next = Some(value);
                             break;
                         }
                     }

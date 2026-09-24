@@ -116,6 +116,64 @@ impl<'a> DoubleEndedIterator for Iter<'a> {
 
 impl<'a> FusedIterator for Iter<'a> {}
 
+/// Owned iterator over `(Value, Value)` object entries.
+#[derive(Debug, Clone)]
+pub struct ObjectOwnedIter<'a> {
+    pub(super) inner: ObjectOwnedIterInner<'a>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) enum ObjectOwnedIterInner<'a> {
+    Empty,
+    Frozen(core::slice::Iter<'a, (Value, Value)>),
+    BTree(btree_map::Iter<'a, Value, Value>),
+}
+
+impl<'a> ObjectOwnedIter<'a> {
+    pub(super) fn new(object: &'a Object) -> Self {
+        Self {
+            inner: match &object.repr {
+                Repr::Empty => ObjectOwnedIterInner::Empty,
+                Repr::Frozen(v) => ObjectOwnedIterInner::Frozen(v.iter()),
+                Repr::BTree(m) => ObjectOwnedIterInner::BTree(m.iter()),
+            },
+        }
+    }
+}
+
+impl Iterator for ObjectOwnedIter<'_> {
+    type Item = (Value, Value);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.inner {
+            ObjectOwnedIterInner::Empty => None,
+            ObjectOwnedIterInner::Frozen(it) => it.next().cloned(),
+            ObjectOwnedIterInner::BTree(it) => it.next().map(|(k, v)| (k.clone(), v.clone())),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match &self.inner {
+            ObjectOwnedIterInner::Empty => (0, Some(0)),
+            ObjectOwnedIterInner::Frozen(it) => it.size_hint(),
+            ObjectOwnedIterInner::BTree(it) => it.size_hint(),
+        }
+    }
+}
+
+impl FusedIterator for ObjectOwnedIter<'_> {}
+
+impl ExactSizeIterator for ObjectOwnedIter<'_> {
+    #[inline]
+    fn len(&self) -> usize {
+        match &self.inner {
+            ObjectOwnedIterInner::Empty => 0,
+            ObjectOwnedIterInner::Frozen(it) => it.len(),
+            ObjectOwnedIterInner::BTree(it) => it.len(),
+        }
+    }
+}
+
 /// Borrowed iterator over `(&Value, &mut Value)` entries.
 #[derive(Debug)]
 pub struct IterMut<'a> {

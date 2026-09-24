@@ -559,7 +559,7 @@ impl Interpreter {
         loop {
             if let Some(v) = self.get_loop_var_value(expr)? {
                 path.reverse();
-                return Ok(Self::get_value_chained(v.clone(), &path[..]));
+                return Self::get_value_chained(v.clone(), &path[..]);
             }
             match expr.as_ref() {
                 // Stop path collection upon encountering the leading variable.
@@ -603,7 +603,7 @@ impl Interpreter {
 
                         let obj = self.eval_expr(refr)?;
 
-                        let mut v = obj[&index].clone();
+                        let mut v = obj.try_index_owned(&index)?;
                         // Qualified references starting with data (e.g data.p.q) can
                         // be indexed using numbers. The number will be converted to string
                         // if a matching key exists.
@@ -612,14 +612,14 @@ impl Interpreter {
                             && get_root_var(refr)?.text() == "data"
                         {
                             let index = index.to_string();
-                            v = obj[index].clone();
+                            v = obj.try_index_owned(&Value::from(index))?;
                         }
-                        return Ok(Self::get_value_chained(v, &path[..]));
+                        return Self::get_value_chained(v, &path[..]);
                     }
                 },
                 _ => {
                     path.reverse();
-                    return Ok(Self::get_value_chained(self.eval_expr(expr)?, &path[..]));
+                    return Self::get_value_chained(self.eval_expr(expr)?, &path[..]);
                 }
             }
         }
@@ -704,8 +704,10 @@ impl Interpreter {
         let mut r = true;
         match domain {
             Value::Array(a) => {
-                for (idx, v) in a.iter().enumerate() {
-                    self.add_variable(&value.source_str(), v.clone())?;
+                let mut idx = 0;
+                while idx < a.len() {
+                    let v = a.try_element(idx)?.unwrap_or(Value::Undefined);
+                    self.add_variable(&value.source_str(), v)?;
                     if let Some(key) = key {
                         self.add_variable(&key.source_str(), Value::from(idx))?;
                     }
@@ -713,6 +715,7 @@ impl Interpreter {
                         r = false;
                         break;
                     }
+                    idx = idx.saturating_add(1);
                 }
             }
             Value::Set(s) => {
@@ -728,10 +731,10 @@ impl Interpreter {
                 }
             }
             Value::Object(o) => {
-                for (k, v) in o.iter() {
-                    self.add_variable(&value.source_str(), v.clone())?;
+                for (k, v) in o.iter_owned() {
+                    self.add_variable(&value.source_str(), v)?;
                     if let Some(key) = key {
-                        self.add_variable(&key.source_str(), k.clone())?;
+                        self.add_variable(&key.source_str(), k)?;
                     }
                     if !self.eval_query(query)? {
                         r = false;
@@ -792,11 +795,11 @@ impl Interpreter {
 
                     // Recursively execute each element plan
                     for (i, element_plan) in element_plans.iter().enumerate() {
-                        let Some(element) = arr.get(i) else {
+                        let Some(element) = arr.try_element(i)? else {
                             return Ok(Value::Undefined);
                         };
 
-                        if self.execute_destructuring_plan(element_plan, element)?
+                        if self.execute_destructuring_plan(element_plan, &element)?
                             != Value::from(true)
                         {
                             return Ok(Value::Undefined);
@@ -816,8 +819,8 @@ impl Interpreter {
                 if let Value::Object(obj) = value {
                     // Check that all required fields are present and match
                     for (key, field_plan) in field_plans {
-                        if let Some(field_value) = obj.get(key) {
-                            if self.execute_destructuring_plan(field_plan, field_value)?
+                        if let Some(field_value) = obj.try_get_owned(key)? {
+                            if self.execute_destructuring_plan(field_plan, &field_value)?
                                 != Value::from(true)
                             {
                                 return Ok(Value::Undefined);
@@ -834,8 +837,8 @@ impl Interpreter {
                                 return Ok(Value::Undefined);
                             }
 
-                            if let Some(field_value) = obj.get(&key_value) {
-                                if self.execute_destructuring_plan(field_plan, field_value)?
+                            if let Some(field_value) = obj.try_get_owned(&key_value)? {
+                                if self.execute_destructuring_plan(field_plan, &field_value)?
                                     != Value::from(true)
                                 {
                                     return Ok(Value::Undefined);
@@ -975,7 +978,9 @@ impl Interpreter {
 
         match self.eval_expr(collection)? {
             Value::Array(a) => {
-                for (idx, value) in a.iter().enumerate() {
+                let mut idx = 0;
+                while idx < a.len() {
+                    let value = a.try_element(idx)?.unwrap_or(Value::Undefined);
                     *self.current_scope_mut()? = scope_saved.clone();
 
                     let mut success = if let Some(key_plan) = &key_plan {
@@ -985,13 +990,13 @@ impl Interpreter {
                         true
                     };
 
-                    // Execute value binding
                     success = success
-                        && self.execute_destructuring_plan(&value_plan, value)?
+                        && self.execute_destructuring_plan(&value_plan, &value)?
                             == Value::from(true);
 
                     if !success {
                         *self.current_scope_mut()? = scope_saved.clone();
+                        idx = idx.saturating_add(1);
                         continue;
                     }
 
@@ -1009,6 +1014,7 @@ impl Interpreter {
                     if should_break {
                         break;
                     }
+                    idx = idx.saturating_add(1);
                 }
             }
             Value::Set(s) => {
@@ -1049,18 +1055,17 @@ impl Interpreter {
             }
 
             Value::Object(o) => {
-                for (key, value) in o.iter() {
+                for (key, value) in o.iter_owned() {
                     *self.current_scope_mut()? = scope_saved.clone();
 
                     let mut success = if let Some(key_plan) = &key_plan {
-                        self.execute_destructuring_plan(key_plan, key)? == Value::from(true)
+                        self.execute_destructuring_plan(key_plan, &key)? == Value::from(true)
                     } else {
                         true
                     };
 
-                    // Execute value binding
                     success = success
-                        && self.execute_destructuring_plan(&value_plan, value)?
+                        && self.execute_destructuring_plan(&value_plan, &value)?
                             == Value::from(true);
 
                     if !success {
@@ -1502,11 +1507,13 @@ impl Interpreter {
                 let mut walk_result = false;
                 match loop_value {
                     Value::Array(items) => {
-                        for item in items.iter() {
+                        let mut idx = 0;
+                        while idx < items.len() {
+                            let item = items.try_element(idx)?.unwrap_or(Value::Undefined);
                             self.memory_check()?;
                             self.set_loop_var_value(loop_target_expr, item.clone())?;
 
-                            if self.execute_destructuring_plan(&walk_plan, item)?
+                            if self.execute_destructuring_plan(&walk_plan, &item)?
                                 == Value::from(true)
                             {
                                 walk_result =
@@ -1520,6 +1527,7 @@ impl Interpreter {
                                     break;
                                 }
                             }
+                            idx = idx.saturating_add(1);
                         }
                     }
                     Value::Undefined => (),
@@ -1541,7 +1549,7 @@ impl Interpreter {
             }) = index_expr.map(|r| r.as_ref())
             {
                 if let Some(idx) = self.lookup_local_var(&index_var.source_str()) {
-                    if loop_value[&idx] != Value::Undefined {
+                    if loop_value.try_index_owned(&idx)? != Value::Undefined {
                         result = self.eval_stmts_in_loop(stmts, loop_tail)? || result;
                         return Ok(result);
                     } else if idx != Value::Undefined {
@@ -1582,9 +1590,11 @@ impl Interpreter {
             let loop_target_expr = Self::loop_assignment_expr(loop_info);
             match loop_value {
                 Value::Array(items) => {
-                    for (idx, v) in items.iter().enumerate() {
+                    let mut idx = 0;
+                    while idx < items.len() {
+                        let v = items.try_element(idx)?.unwrap_or(Value::Undefined);
                         self.memory_check()?;
-                        self.set_loop_var_value(loop_target_expr, v.clone())?;
+                        self.set_loop_var_value(loop_target_expr, v)?;
 
                         if self.execute_destructuring_plan(&index_plan, &Value::from(idx))?
                             == Value::from(true)
@@ -1599,6 +1609,7 @@ impl Interpreter {
                                 break;
                             }
                         }
+                        idx = idx.saturating_add(1);
                     }
 
                     self.remove_loop_var_value(loop_target_expr);
@@ -1624,11 +1635,11 @@ impl Interpreter {
                     self.remove_loop_var_value(loop_target_expr);
                 }
                 Value::Object(obj) => {
-                    for (k, v) in obj.iter() {
+                    for (k, v) in obj.iter_owned() {
                         self.memory_check()?;
-                        self.set_loop_var_value(loop_target_expr, v.clone())?;
+                        self.set_loop_var_value(loop_target_expr, v)?;
                         // For objects, index is key.
-                        if self.execute_destructuring_plan(&index_plan, k)? == Value::from(true) {
+                        if self.execute_destructuring_plan(&index_plan, &k)? == Value::from(true) {
                             result = self.eval_stmts_in_loop(stmts, loop_tail)? || result;
                         }
 
@@ -1972,8 +1983,8 @@ impl Interpreter {
         let loop_target_expr = Self::loop_assignment_expr(loop_info);
         match self.eval_expr(Self::loop_collection_expr(loop_info))? {
             Value::Array(items) => {
-                for v in items.iter() {
-                    self.set_loop_var_value(loop_target_expr, v.clone())?;
+                for v in items.iter_owned() {
+                    self.set_loop_var_value(loop_target_expr, v)?;
                     result = self.eval_output_expr_in_loop(loop_tail)? || result;
                 }
             }
@@ -1984,8 +1995,8 @@ impl Interpreter {
                 }
             }
             Value::Object(obj) => {
-                for (_, v) in obj.iter() {
-                    self.set_loop_var_value(loop_target_expr, v.clone())?;
+                for (_, v) in obj.iter_owned() {
+                    self.set_loop_var_value(loop_target_expr, v)?;
                     result = self.eval_output_expr_in_loop(loop_tail)? || result;
                 }
             }
@@ -2302,7 +2313,7 @@ impl Interpreter {
             Value::Array(array) => {
                 if let Some(key) = key {
                     let key = self.eval_expr(key)?;
-                    collection[&key] == value
+                    collection.try_index_owned(&key)? == value
                 } else {
                     array.contains(&value)
                 }
@@ -2310,9 +2321,9 @@ impl Interpreter {
             Value::Object(object) => {
                 if let Some(key) = key {
                     let key = self.eval_expr(key)?;
-                    collection[&key] == value
+                    collection.try_index_owned(&key)? == value
                 } else {
-                    object.values().any(|item| *item == value)
+                    object.iter_owned().any(|(_, item)| item == value)
                 }
             }
             Value::Set(set) => {
@@ -2543,11 +2554,11 @@ impl Interpreter {
         match value {
             Value::Array(array) => {
                 s.push('[');
-                for (idx, e) in array.iter().enumerate() {
+                for (idx, e) in array.iter_owned().enumerate() {
                     if idx > 0 {
                         s.push_str(", ");
                     }
-                    Self::to_printable(e, s);
+                    Self::to_printable(&e, s);
                 }
                 s.push(']');
             }
@@ -2563,13 +2574,13 @@ impl Interpreter {
             }
             Value::Object(map) => {
                 s.push('{');
-                for (idx, (k, entry_value)) in map.iter_sorted().enumerate() {
+                for (idx, (k, entry_value)) in map.iter_owned().enumerate() {
                     if idx > 0 {
                         s.push_str(", ");
                     }
-                    Self::to_printable(k, s);
+                    Self::to_printable(&k, s);
                     s.push_str(": ");
-                    Self::to_printable(entry_value, s);
+                    Self::to_printable(&entry_value, s);
                 }
                 s.push('}');
             }
@@ -3114,12 +3125,12 @@ impl Interpreter {
 
         // Return local variable/argument.
         if let Some(v) = self.lookup_local_var(&name) {
-            return Ok(Self::get_value_chained(v, fields));
+            return Self::get_value_chained(v, fields);
         }
 
         // Handle input.
         if name.text() == "input" {
-            return Ok(Self::get_value_chained(self.input.clone(), fields));
+            return Self::get_value_chained(self.input.clone(), fields);
         }
 
         // TODO: should we return before checking for input?
@@ -3133,7 +3144,7 @@ impl Interpreter {
         // Ensure that rules are evaluated
         if name.text() == "data" {
             if self.is_processed(fields)? {
-                return Ok(Self::get_value_chained(self.data.clone(), fields));
+                return Self::get_value_chained(self.data.clone(), fields);
             }
 
             // If "data" is used in a query, without any fields, then evaluate all the modules.
@@ -3164,7 +3175,7 @@ impl Interpreter {
                 }
             }
 
-            Ok(Self::get_value_chained(self.data.clone(), fields))
+            Self::get_value_chained(self.data.clone(), fields)
         } else if !self.compiled_policy.modules.is_empty() {
             let module = self.current_module()?;
             let parsed_path = Parser::get_path_ref_components(&module.package.refr)?;
@@ -3172,8 +3183,8 @@ impl Interpreter {
             module_var_path.push(name.text());
 
             if self.is_processed(&module_var_path)? {
-                let value = Self::get_value_chained(self.data.clone(), &module_var_path);
-                return Ok(Self::get_value_chained(value, fields));
+                let value = Self::get_value_chained(self.data.clone(), &module_var_path)?;
+                return Self::get_value_chained(value, fields);
             }
 
             // Ensure that all the rules having common prefix (name) are evaluated.
@@ -3214,15 +3225,12 @@ impl Interpreter {
 
             if !found {
                 if let Some(imported_var) = self.compiled_policy.imports.get(&rule_path).cloned() {
-                    return Ok(Self::get_value_chained(
-                        self.eval_expr(&imported_var)?,
-                        fields,
-                    ));
+                    return Self::get_value_chained(self.eval_expr(&imported_var)?, fields);
                 }
             }
 
-            let value = Self::get_value_chained(self.data.clone(), &module_var_path[..]);
-            Ok(Self::get_value_chained(value, fields))
+            let value = Self::get_value_chained(self.data.clone(), &module_var_path[..])?;
+            Self::get_value_chained(value, fields)
         } else {
             Ok(Value::Undefined)
         }
@@ -3526,11 +3534,16 @@ impl Interpreter {
         })
     }
 
-    fn get_value_chained(mut obj: Value, path: &[&str]) -> Value {
+    fn get_value_chained(mut obj: Value, path: &[&str]) -> Result<Value> {
+        // Fallible descent: indexing while walking `input.a.b.c` goes through
+        // `try_index_owned`, so a fallible data source can surface a hard
+        // evaluation error rather than silently degrading to `Undefined`/`Null`
+        // (which could flip a policy decision). For native values
+        // `try_index_owned` is infallible and behaves exactly like `ops::Index`.
         for p in path {
-            obj = obj[&Value::String(p.to_string().into())].clone();
+            obj = obj.try_index_owned(&Value::String(p.to_string().into()))?;
         }
-        obj
+        Ok(obj)
     }
 
     #[inline]
@@ -3822,7 +3835,7 @@ impl Interpreter {
 
                         if result.is_ok() {
                             let components: Vec<&str> = rule_path.split('.').skip(1).collect();
-                            let value = Self::get_value_chained(self.data.clone(), &components);
+                            let value = Self::get_value_chained(self.data.clone(), &components)?;
 
                             if value != Value::Undefined {
                                 return Ok(value);
@@ -3851,7 +3864,7 @@ impl Interpreter {
         }
         // Ensure that path is created.
         let vref = Self::make_or_get_value_mut(&mut self.data, path)?;
-        if Self::get_value_chained(self.init_data.clone(), path) == Value::Undefined {
+        if Self::get_value_chained(self.init_data.clone(), path)? == Value::Undefined {
             match merge {
                 RuleValueMerge::Strict => Self::merge_rule_value_strict(span, vref, value),
                 RuleValueMerge::Combine => Self::merge_rule_value(span, vref, value),
@@ -4228,7 +4241,7 @@ impl Interpreter {
 
                 prefix_path.append(&mut components);
                 let prefix_path: Vec<&str> = prefix_path.iter().map(|s| s.as_ref()).collect();
-                if Self::get_value_chained(self.data.clone(), &prefix_path) == Value::Undefined {
+                if Self::get_value_chained(self.data.clone(), &prefix_path)? == Value::Undefined {
                     self.update_data(
                         rule_refr.span(),
                         rule_refr,
@@ -4576,7 +4589,7 @@ impl Interpreter {
             .split_first()
             .ok_or_else(|| anyhow!("internal error: expected rule path"))?;
 
-        let value = Self::get_value_chained(self.data.clone(), tail);
+        let value = Self::get_value_chained(self.data.clone(), tail)?;
         #[cfg(feature = "azure_policy")]
         {
             if let Some(target_info) = &self.compiled_policy.target_info {

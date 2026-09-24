@@ -65,6 +65,11 @@ fn slice(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Re
         return Ok(Value::new_array());
     }
 
-    let slice = array.as_slice().get(start..stop).unwrap_or_default();
-    Ok(Value::from(slice.to_vec()))
+    Ok(Value::from(
+        array
+            .as_slice()
+            .get(start..stop)
+            .unwrap_or_default()
+            .to_vec(),
+    ))
 }

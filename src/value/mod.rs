@@ -22,8 +22,9 @@ mod interning;
 mod tests;
 
 #[allow(unused_imports)] // surface for downstream PRs
-pub use array::{Array, ArrayCursor, ArrayIntoIter, ArrayIter, ArrayIterMut};
-pub use object::{IntoIter, Iter, IterMut, Object};
+pub use array::{Array, ArrayCursor, ArrayIntoIter, ArrayIter, ArrayIterMut, ArrayOwnedIter};
+#[allow(unused_imports)] // surface for downstream PRs
+pub use object::{IntoIter, Iter, IterMut, Object, ObjectOwnedIter};
 #[allow(unused_imports)] // surface for downstream PRs
 pub use set::Set;
 
@@ -1585,6 +1586,26 @@ impl Value {
                 Ok(())
             }
             _ => bail!("error: could not merge value"),
+        }
+    }
+
+    /// Fallible owned index that reads through without borrowing.
+    ///
+    /// Behaves like [`ops::Index`] for native values — a missing key or
+    /// out-of-bounds index yields `Ok(Value::Undefined)` (never `Value::Null`) —
+    /// but is fallible so a later feature can surface a backend failure as an
+    /// evaluation `Err` instead of silently degrading to a value. Native values
+    /// always return `Ok`.
+    #[allow(dead_code)] // wired to interpreter/RVM call sites in later foundation commits
+    pub(crate) fn try_index_owned(&self, key: &Value) -> Result<Value> {
+        match (self, key) {
+            (Value::Object(o), _) => Ok(o.try_get_owned(key)?.unwrap_or(Value::Undefined)),
+            (Value::Set(s), _) => Ok(s.get(key).cloned().unwrap_or(Value::Undefined)),
+            (Value::Array(a), Value::Number(n)) => match n.as_u64() {
+                Some(index) => Ok(a.try_element(index as usize)?.unwrap_or(Value::Undefined)),
+                None => Ok(Value::Undefined),
+            },
+            _ => Ok(Value::Undefined),
         }
     }
 }

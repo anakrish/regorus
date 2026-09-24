@@ -206,11 +206,11 @@ fn merge_filters(
             Some(Value::Array(a)) => {
                 let mut fc = filters;
                 let mut f = &mut fc;
-                for p in a.iter() {
+                for p in a.iter_owned() {
                     let vref = match f {
                         Value::Object(obj) => {
                             let obj = Rc::make_mut(obj);
-                            let entry = obj.get_or_insert_with(p.clone(), Value::new_object);
+                            let entry = obj.get_or_insert_with(p, Value::new_object);
                             // Guard filter map growth when creating nested objects.
                             enforce_limit()?;
                             entry
@@ -301,8 +301,8 @@ fn get(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Resu
     Ok(match &args[1] {
         Value::Array(keys) => {
             let mut v = &args[0];
-            for a in keys.iter() {
-                v = &v[a];
+            for a in keys.iter_owned() {
+                v = &v[&a];
                 if v == &Value::Undefined {
                     v = default;
                     break;
@@ -321,7 +321,9 @@ fn keys(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Res
     let name = "object.keys";
     ensure_args_count(span, name, params, args, 1)?;
     let obj = ensure_object(name, &params[0], args[0].clone())?;
-    Ok(Value::from_set(obj.keys().cloned().collect()))
+    Ok(Value::from_set(
+        obj.iter_sorted().map(|(k, _)| k.clone()).collect(),
+    ))
 }
 
 fn remove(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
@@ -342,35 +344,34 @@ fn remove(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> R
     Ok(Value::Object(obj))
 }
 
-fn is_subset(sup: &Value, sub: &Value) -> bool {
-    match (sup, sub) {
+fn is_subset(sup: &Value, sub: &Value) -> Result<bool> {
+    Ok(match (sup, sub) {
         (Value::Object(sup), Value::Object(sub)) => {
-            sub.iter().all(|(k, vsub)| {
+            // Iterate the sub-object entry-by-entry so the outer builtin loop
+            // bounds work without materializing the object.
+            for (k, vsub) in sub.iter() {
                 match sup.get(k) {
-                    //		    Some(vsup @ Value::Object(_)) => is_subset(vsup, vsub),
-                    Some(vsup) => is_subset(vsup, vsub),
-                    _ => false,
+                    Some(vsup) if is_subset(vsup, vsub)? => {}
+                    _ => return Ok(false),
                 }
-            })
+            }
+            true
         }
         (Value::Set(sup), Value::Set(sub)) => sub.is_subset(sup),
         (Value::Array(sup), Value::Array(sub)) => sup
             .as_slice()
             .windows(sub.len())
             .any(|w| w == sub.as_slice()),
-        (Value::Array(sup), Value::Set(_)) => {
-            let sup = Value::from_set(sup.iter().cloned().collect());
-            is_subset(&sup, sub)
-        }
+        (Value::Array(sup), Value::Set(sub)) => sub.iter().all(|value| sup.contains(value)),
         (sup, sub) => sup == sub,
-    }
+    })
 }
 
 fn subset(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "object.subset";
     ensure_args_count(span, name, params, args, 2)?;
 
-    Ok(Value::Bool(is_subset(&args[0], &args[1])))
+    Ok(Value::Bool(is_subset(&args[0], &args[1])?))
 }
 
 fn union(obj1: &Value, obj2: &Value) -> Result<Value> {
@@ -379,12 +380,12 @@ fn union(obj1: &Value, obj2: &Value) -> Result<Value> {
             let mut u = obj1.clone();
             let um = u.as_object_mut()?;
 
-            for (key2, value2) in m2.iter() {
-                let vm = match m1.get(key2) {
-                    Some(value1) => union(value1, value2)?,
-                    _ => value2.clone(),
+            for (key2, value2) in m2.iter_owned() {
+                let vm = match m1.get(&key2) {
+                    Some(value1) => union(value1, &value2)?,
+                    _ => value2,
                 };
-                um.insert(key2.clone(), vm);
+                um.insert(key2, vm);
             }
             Ok(u)
         }
@@ -415,7 +416,7 @@ fn object_union_n(
     let arr = ensure_array(name, &params[0], args[0].clone())?;
 
     let mut u = Value::new_object();
-    for (idx, a) in arr.iter().enumerate() {
+    for (idx, a) in arr.iter_owned().enumerate() {
         if a.as_object().is_err() {
             if strict {
                 bail!(params[0]
@@ -424,7 +425,7 @@ fn object_union_n(
             }
             return Ok(Value::Undefined);
         }
-        u = union(&u, a)?;
+        u = union(&u, &a)?;
     }
 
     Ok(u)
@@ -507,7 +508,6 @@ fn json_patch(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) 
     ensure_array(name, &params[1], args[1].clone())?;
 
     let ops = args[1].as_array()?;
-
     let patched = super::json_patch::apply(&args[0], ops.as_slice());
     match patched {
         Ok(patched) => Ok(patched),

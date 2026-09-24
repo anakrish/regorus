@@ -520,7 +520,7 @@ impl RegoVM {
                         let key_value = Value::from(*index);
                         self.set_register(key_reg, key_value)?;
                     }
-                    if let Some(item_value) = items.get(*index).cloned() {
+                    if let Some(item_value) = items.try_element(*index)? {
                         self.set_register(value_reg, item_value)?;
                         Ok(true)
                     } else {
@@ -535,13 +535,12 @@ impl RegoVM {
                 ref mut cursor,
             } => {
                 // Object iterates via a resumable cursor on the shared
-                // `Rc<Object>`; `next` both yields the current entry and
-                // advances the cursor. No explicit `current_key` snapshot is
+                // `Rc<Object>`; `next_owned` both yields the current owned entry
+                // and advances the cursor. No explicit `current_key` snapshot is
                 // needed — see the doc on `IterationState`.
-                if let Some((key, value)) = obj.next(cursor) {
-                    let value = value.clone();
+                if let Some((key, value)) = obj.next_owned(cursor) {
                     if key_reg != value_reg {
-                        self.set_register(key_reg, key.clone())?;
+                        self.set_register(key_reg, key)?;
                     }
                     self.set_register(value_reg, value)?;
                     Ok(true)

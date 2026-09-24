@@ -182,10 +182,13 @@ impl RegoVM {
                 }
             }
             Value::Object(ref obj) => {
-                for (key, value) in obj.iter() {
-                    relative_path.push(key.clone());
+                // `obj` here is a rule-tree subtree; iterate transiently (owned)
+                // so this stays correct even if a rule result folded into the
+                // tree comes from a lazy/fallible data source.
+                for (key, value) in obj.iter_owned() {
+                    relative_path.push(key);
                     self.traverse_rule_tree_subobject_with_path(
-                        value,
+                        &value,
                         result_subobject,
                         root_path,
                         relative_path,
@@ -241,16 +244,18 @@ impl RegoVM {
                     self.execute_call_rule_common(params.dest, rule_index, None)?;
 
                     if components_consumed < params.path_components.len() {
-                        // Walk remaining path by reference, clone only the leaf.
-                        let mut ref_val = self.get_register(params.dest)?;
+                        // Walk the remaining path via owned indexing; the rule
+                        // result may come from a lazy/fallible data source, so a
+                        // failed read surfaces as an evaluation error rather than
+                        // a silent Undefined.
+                        let mut ref_val = self.get_register(params.dest)?.clone();
 
                         for component in params.path_components.iter().skip(components_consumed) {
                             let key_value = self.literal_or_register_value(component)?;
-                            ref_val = &ref_val[&key_value];
+                            ref_val = ref_val.try_index_owned(&key_value)?;
                         }
 
-                        let leaf = ref_val.clone();
-                        self.set_register(params.dest, leaf)?;
+                        self.set_register(params.dest, ref_val)?;
                     }
                 } else {
                     return Err(VmError::InvalidRuleIndex {

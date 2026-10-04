@@ -34,7 +34,54 @@ pub struct CompiledPolicy {
     pub(crate) inner: Rc<CompiledPolicyData>,
 }
 
+/// A worker-local interpreter for repeated evaluations of one compiled policy.
+///
+/// Rule and builtin results are cleared before each evaluation. Extension
+/// closures are cloned at creation and retain their mutable state across
+/// successful evaluations; external state captured through shared pointers
+/// remains shared. An evaluation error discards the interpreter and its
+/// closure-local state. Panics are not caught.
+#[derive(Debug)]
+pub struct CompiledPolicyEvaluator {
+    policy: CompiledPolicy,
+    engine: Engine,
+}
+
+impl CompiledPolicyEvaluator {
+    /// Evaluate the original entry point with fresh input and evaluation caches.
+    pub fn eval_with_input(&mut self, input: Value) -> Result<Value> {
+        self.engine.set_input(input);
+        let result = self.engine.eval_rule(self.policy.entrypoint().to_string());
+        if result.is_err() {
+            // Failed interpretation can leave scopes or active rules unfinished.
+            self.engine = Engine::new_from_compiled_policy(self.policy.inner.clone());
+        }
+        result
+    }
+}
+
 impl CompiledPolicy {
+    /// Create an independent reusable interpreter.
+    ///
+    /// Keep one evaluator per worker and compiled artifact. Creating a new
+    /// evaluator is required to adopt a different policy or data snapshot.
+    /// Unlike `eval_with_input`, stateful extension closures persist between
+    /// successful calls; callers must explicitly opt into this lifecycle.
+    pub fn create_evaluator(&self) -> CompiledPolicyEvaluator {
+        CompiledPolicyEvaluator {
+            policy: self.clone(),
+            engine: Engine::new_from_compiled_policy(self.inner.clone()),
+        }
+    }
+
+    fn entrypoint(&self) -> &str {
+        #[cfg(feature = "azure_policy")]
+        if let Some(target_info) = self.inner.target_info.as_ref() {
+            return &target_info.effect_path;
+        }
+        &self.inner.rule_to_evaluate
+    }
+
     /// Create a new CompiledPolicy from CompiledPolicyData.
     pub(crate) fn new(inner: Rc<CompiledPolicyData>) -> Self {
         Self { inner }
@@ -72,11 +119,7 @@ impl CompiledPolicy {
         engine.set_input(input);
 
         // Evaluate the rule
-        #[cfg(feature = "azure_policy")]
-        if let Some(target_info) = self.inner.target_info.as_ref() {
-            return engine.eval_rule(target_info.effect_path.to_string());
-        }
-        engine.eval_rule(self.inner.rule_to_evaluate.to_string())
+        engine.eval_rule(self.entrypoint().to_string())
     }
 
     /// Get information about the compiled policy including metadata about modules,

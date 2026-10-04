@@ -21,7 +21,9 @@ use alloc::string::{String, ToString};
 impl<'a> Compiler<'a> {
     /// Check if a function path is a builtin function (similar to interpreter's is_builtin)
     pub(super) fn is_builtin(&self, path: &str) -> bool {
-        path == "print" || builtins::BUILTINS.contains_key(path)
+        path == "print"
+            || self.policy.inner.extensions.contains_key(path)
+            || builtins::BUILTINS.contains_key(path)
     }
 
     /// Check if a function path is a user-defined function rule
@@ -44,7 +46,16 @@ impl<'a> Compiler<'a> {
         }
 
         // Get the builtin function info to determine number of arguments
-        let num_args = if builtin_name == "print" {
+        let is_extension = self.policy.inner.extensions.contains_key(builtin_name);
+        let num_args = if let Some(extension) = self.policy.inner.extensions.get(builtin_name) {
+            let arity = extension.0;
+            if arity > 8 {
+                return Err(CompilerError::General {
+                    message: format!("RVM extensions support at most 8 arguments: {builtin_name} requires {arity}"),
+                }.into());
+            }
+            u16::from(arity)
+        } else if builtin_name == "print" {
             2 // Special case for print
         } else if let Some(builtin_fcn) = builtins::BUILTINS.get(builtin_name) {
             builtin_fcn.1 as u16 // Second element is the number of arguments
@@ -59,6 +70,7 @@ impl<'a> Compiler<'a> {
         let builtin_info = BuiltinInfo {
             name: builtin_name.to_string(),
             num_args,
+            is_extension,
         };
         let index = self.program.add_builtin_info(builtin_info);
 

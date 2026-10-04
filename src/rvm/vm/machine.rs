@@ -50,6 +50,7 @@ pub struct RegoVM {
 
     /// Reference to the compiled policy for default rule access
     pub(super) compiled_policy: Option<CompiledPolicy>,
+    pub(super) extensions: BTreeMap<String, (u8, alloc::boxed::Box<dyn crate::Extension>)>,
 
     /// Rule execution cache: rule_index -> (computed: bool, result: Value)
     pub(super) rule_cache: Vec<(bool, Value)>,
@@ -216,6 +217,7 @@ impl RegoVM {
             pc: 0,
             program: Arc::new(Program::default()),
             compiled_policy: None,
+            extensions: BTreeMap::new(),
             rule_cache: Vec::new(),
             data: Value::Null,
             input: Value::Null,
@@ -261,12 +263,13 @@ impl RegoVM {
     /// Create a new virtual machine with compiled policy for default rule support
     pub fn new_with_policy(compiled_policy: CompiledPolicy) -> Self {
         let mut vm = Self::new();
-        vm.compiled_policy = Some(compiled_policy);
+        vm.set_compiled_policy(compiled_policy);
         vm
     }
 
     /// Load a complete program for execution
     pub fn load_program(&mut self, program: Arc<Program>) {
+        self.extensions.clear();
         self.program = program.clone();
 
         // Use the dispatch window size from the program for initial register allocation
@@ -294,6 +297,12 @@ impl RegoVM {
 
     /// Set the compiled policy for default rule evaluation
     pub fn set_compiled_policy(&mut self, compiled_policy: CompiledPolicy) {
+        self.extensions = compiled_policy
+            .inner
+            .extensions
+            .iter()
+            .map(|(name, binding)| (name.clone(), (binding.0, binding.1.as_ref().clone())))
+            .collect();
         self.compiled_policy = Some(compiled_policy);
     }
 

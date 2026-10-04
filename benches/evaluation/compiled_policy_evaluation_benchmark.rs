@@ -228,5 +228,41 @@ fn criterion_benchmark(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, criterion_benchmark);
+fn interpreter_reuse(c: &mut Criterion) {
+    let mut group = c.benchmark_group("interpreter_reuse");
+    for (name, source) in [
+        ("static", "package test\nresult := input.x == 7"),
+        ("extension", "package test\nresult := host.query(input.x)"),
+    ] {
+        let mut engine = regorus::Engine::new();
+        engine
+            .add_extension(
+                "host.query".into(),
+                1,
+                Box::new(|args: Vec<Value>| Ok(args[0].clone())),
+            )
+            .unwrap();
+        engine
+            .add_policy("reuse.rego".into(), source.into())
+            .unwrap();
+        let policy = engine
+            .compile_with_entrypoint(&"data.test.result".into())
+            .unwrap();
+        let input = Value::from_json_str(r#"{"x":7}"#).unwrap();
+        let mut evaluator = policy.create_evaluator();
+        assert_eq!(
+            evaluator.eval_with_input(input.clone()).unwrap(),
+            policy.eval_with_input(input.clone()).unwrap()
+        );
+        group.bench_function(format!("{name}/fresh"), |b| {
+            b.iter(|| black_box(policy.eval_with_input(black_box(input.clone())).unwrap()))
+        });
+        group.bench_function(format!("{name}/reused"), |b| {
+            b.iter(|| black_box(evaluator.eval_with_input(black_box(input.clone())).unwrap()))
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, criterion_benchmark, interpreter_reuse);
 criterion_main!(benches);

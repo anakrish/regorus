@@ -180,7 +180,7 @@ pub use {
 };
 
 pub use compile::{compile_policy_with_entrypoint, PolicyModule};
-pub use compiled_policy::CompiledPolicy;
+pub use compiled_policy::{CompiledPolicy, CompiledPolicyEvaluator};
 pub use engine::Engine;
 pub use lexer::Source;
 pub use policy_info::PolicyInfo;

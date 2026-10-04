@@ -111,6 +111,22 @@ impl<'a> Compiler<'a> {
             }
         }
 
+        if self
+            .policy
+            .inner
+            .extensions
+            .contains_key(&original_fcn_path)
+            && expected_args != Some(params_to_compile)
+        {
+            return Err(CompilerError::General {
+                message: format!(
+                    "extension '{original_fcn_path}' expects {} arguments, got {params_to_compile}",
+                    expected_args.unwrap_or(0)
+                ),
+            }
+            .at(&span));
+        }
+
         let mut arg_regs = Vec::new();
         for param in params.iter().take(params_to_compile) {
             let param_reg = self.compile_rego_expr_with_span(param, param.span(), false)?;
@@ -255,7 +271,9 @@ impl<'a> Compiler<'a> {
     }
 
     fn lookup_builtin_arity(&self, name: &str) -> Option<usize> {
-        if name == "print" {
+        if let Some(extension) = self.policy.inner.extensions.get(name) {
+            Some(usize::from(extension.0))
+        } else if name == "print" {
             Some(2)
         } else {
             builtins::BUILTINS

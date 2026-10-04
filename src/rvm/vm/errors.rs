@@ -159,6 +159,13 @@ pub enum VmError {
     #[error("Builtin function not resolved: {name} (pc={pc})")]
     BuiltinNotResolved { name: String, pc: usize },
 
+    #[error("Synchronous extension {name} failed: {detail} (pc={pc})")]
+    ExtensionError {
+        name: String,
+        detail: String,
+        pc: usize,
+    },
+
     #[error("Cannot add {left:?} and {right:?} (pc={pc})")]
     InvalidAddition {
         left: Value,

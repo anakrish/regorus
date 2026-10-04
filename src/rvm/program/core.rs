@@ -66,7 +66,7 @@ pub struct Program {
     /// Resolved builtins - actual builtin function values fetched from interpreter's builtin map
     /// This field is skipped during serialization and reinitialized after deserialization
     #[serde(skip)]
-    pub resolved_builtins: Vec<BuiltinFcn>,
+    pub resolved_builtins: Vec<Option<BuiltinFcn>>,
 
     /// Flag indicating that VirtualDataDocumentLookup instruction was used and runtime recursion checking is needed
     pub needs_runtime_recursion_check: bool,
@@ -91,7 +91,7 @@ pub struct Program {
 
 impl Program {
     /// Current serialization format version
-    pub const SERIALIZATION_VERSION: u32 = 6;
+    pub const SERIALIZATION_VERSION: u32 = 7;
     /// Magic bytes to identify Regorus program files
     pub const MAGIC: [u8; 4] = *b"REGO";
     /// Maximum instructions supported (matches u16 jump targets)
@@ -376,8 +376,12 @@ impl Program {
             .reserve(self.builtin_info_table.len());
 
         for builtin_info in &self.builtin_info_table {
-            if let Some(&builtin_fcn) = crate::builtins::BUILTINS.get(builtin_info.name.as_str()) {
-                self.resolved_builtins.push(builtin_fcn);
+            if builtin_info.is_extension {
+                self.resolved_builtins.push(None);
+            } else if let Some(&builtin_fcn) =
+                crate::builtins::BUILTINS.get(builtin_info.name.as_str())
+            {
+                self.resolved_builtins.push(Some(builtin_fcn));
             } else {
                 return Err(anyhow::anyhow!(
                     "Missing builtin function: {}",
@@ -391,7 +395,9 @@ impl Program {
 
     /// Get resolved builtin function by index
     pub fn get_resolved_builtin(&self, index: u16) -> Option<&BuiltinFcn> {
-        self.resolved_builtins.get(usize::from(index))
+        self.resolved_builtins
+            .get(usize::from(index))
+            .and_then(Option::as_ref)
     }
 
     /// Check if resolved builtins are initialized

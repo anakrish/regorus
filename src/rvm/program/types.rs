@@ -12,6 +12,9 @@ pub struct BuiltinInfo {
     pub name: String,
     /// Exact number of arguments required
     pub num_args: u16,
+    /// Synchronous host callback; implementations are bound per VM, not serialized.
+    #[serde(default)]
+    pub is_extension: bool,
 }
 
 /// Span information for debugging and error reporting

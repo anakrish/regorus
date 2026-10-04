@@ -17,8 +17,7 @@ use super::execution_model::{
 use super::machine::RegoVM;
 
 impl RegoVM {
-    /// Returns true if the error represents a resource-limit violation that
-    /// must never be silently absorbed by rule evaluation.
+    /// Errors that must never be silently absorbed by rule evaluation.
     pub(super) const fn is_fatal_vm_error(err: &VmError) -> bool {
         matches!(
             err,
@@ -27,6 +26,7 @@ impl RegoVM {
                 | VmError::MemoryBudgetExceeded { .. }
                 | VmError::RegexSizeLimitExceeded { .. }
                 | VmError::InstructionLimitExceeded { .. }
+                | VmError::ExtensionError { .. }
         )
     }
 

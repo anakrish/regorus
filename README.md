@@ -1,5 +1,41 @@
 # Regorus
 
+## Experimental reusable compiled interpreter
+
+`CompiledPolicy::create_evaluator()` creates a worker-local
+`CompiledPolicyEvaluator`. Call its mutable `eval_with_input()` repeatedly
+to reuse the prepared interpreter without retaining rule or builtin results.
+Identical input still reevaluates host callbacks, so changing external history
+is not cached. Create a new evaluator when the policy/data snapshot changes.
+
+This is opt-in: callback closures persist across successful evaluations,
+unlike the existing fresh-engine `CompiledPolicy::eval_with_input()`.
+Evaluators clone callbacks independently. On an evaluation error the
+interpreter is reconstructed, resetting closure-local state; shared captured
+state is not reset. Panics are not caught. Keep evaluators per worker/artifact
+rather than putting one global evaluator behind a lock.
+
+## Experimental synchronous RVM extensions
+
+The `experiment/rvm-sync-extensions` branch allows RVM programs compiled
+from an `Engine` with registered extensions to invoke those callbacks
+synchronously. Compile the policy with `Compiler::compile_from_policy`,
+load the program into a `RegoVM`, then call `set_compiled_policy` with that
+same compiled policy to bind its callbacks. Loading another program clears
+extension bindings; bind again after each load.
+
+Callbacks are cloned once per VM, keeping mutable closure state isolated
+between workers. Arity is checked at compilation and dispatch (0–8
+arguments). Undefined arguments do not invoke callbacks. Missing bindings
+and callback errors abort evaluation even in non-strict builtin mode; host
+failures must not turn into rule non-matches. Callbacks must not block
+indefinitely: instruction/time limits cannot preempt a synchronous host call.
+
+Program format version 7 adds explicit extension metadata; callback code is
+never serialized. Deserialized programs require host bindings. Version 6
+binary artifacts need recompilation, and older readers cannot load version
+7. This is an experiment, not a supported production compatibility promise.
+
 **Regorus** is
 
   - *Rego*-*Rus(t)*  - A fast, light-weight [Rego](https://www.openpolicyagent.org/docs/latest/policy-language/)

@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 use crate::builtins;
 use crate::value::Value;
+use alloc::string::ToString as _;
 
 use super::errors::{Result, VmError};
 use super::execution_model::ExecutionMode;
@@ -66,6 +67,13 @@ impl RegoVM {
         let actual_args = args.len();
         if u16::try_from(actual_args).unwrap_or(u16::MAX) != expected_args {
             self.cached_builtin_args = args;
+            if builtin_info.is_extension {
+                return Err(VmError::ExtensionError {
+                    name: builtin_info.name.clone(),
+                    detail: alloc::format!("expected {expected_args} arguments, got {actual_args}"),
+                    pc: self.pc,
+                });
+            }
             return Err(VmError::BuiltinArgumentMismatch {
                 expected: expected_args,
                 actual: actual_args,
@@ -76,6 +84,34 @@ impl RegoVM {
         if args.iter().any(|a| a == &Value::Undefined) {
             self.cached_builtin_args = args;
             self.set_register(params.dest, Value::Undefined)?;
+            self.memory_check()?;
+            return Ok(());
+        }
+
+        if builtin_info.is_extension {
+            let extension = self.extensions.get_mut(&builtin_info.name).ok_or_else(|| {
+                VmError::ExtensionError {
+                    name: builtin_info.name.clone(),
+                    detail: "host callback not resolved".into(),
+                    pc: self.pc,
+                }
+            })?;
+            let arity = extension.0;
+            if u16::from(arity) != expected_args {
+                return Err(VmError::ExtensionError {
+                    name: builtin_info.name.clone(),
+                    detail: alloc::format!(
+                        "registered arity {arity} differs from program arity {expected_args}"
+                    ),
+                    pc: self.pc,
+                });
+            }
+            let result = (extension.1)(args).map_err(|error| VmError::ExtensionError {
+                name: builtin_info.name.clone(),
+                detail: error.to_string(),
+                pc: self.pc,
+            })?;
+            self.set_register(params.dest, result)?;
             self.memory_check()?;
             return Ok(());
         }

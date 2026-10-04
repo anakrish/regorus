@@ -157,7 +157,7 @@ impl Program {
                 program.rego_v0 = Self::legacy_rego_v0(data, version).unwrap_or(false);
                 Ok(DeserializationResult::Partial(program))
             }
-            6 => {
+            6 | 7 => {
                 if data.len() < 29 {
                     return Err("Data too short for header".to_string());
                 }
@@ -197,7 +197,7 @@ impl Program {
                 let sources = from_bytes(Self::get_slice(data, sources_start, literals_start)?)
                     .map_err(|e| format!("Sources deserialization failed: {}", e))?;
 
-                let mut needs_recompilation = false;
+                let mut needs_recompilation = version < Self::SERIALIZATION_VERSION;
 
                 let literals = match from_bytes::<Vec<BinaryValue>>(Self::get_slice(
                     data,

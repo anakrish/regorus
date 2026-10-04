@@ -469,6 +469,7 @@ mod tests {
                 let builtin_info = crate::rvm::program::BuiltinInfo {
                     name: builtin_info_spec.name,
                     num_args: builtin_info_spec.num_args,
+                    is_extension: false,
                 };
                 program.add_builtin_info(builtin_info);
             }

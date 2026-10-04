@@ -188,6 +188,7 @@ impl Compiler {
             .add_builtin_info(crate::rvm::program::BuiltinInfo {
                 name: name.to_string(),
                 num_args,
+                is_extension: false,
             });
         self.builtin_index.insert(key, index);
         index

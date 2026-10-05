@@ -69,7 +69,8 @@ impl RegoVM {
         self.execution_state = ExecutionState::Ready;
 
         // Reset rule cache
-        self.rule_cache = alloc::vec![(false, Value::Undefined); self.program.rule_infos.len()];
+        self.rule_cache
+            .resize(self.program.rule_infos.len(), (false, Value::Undefined));
 
         // Reset registers to clean state
         self.registers

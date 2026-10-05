@@ -220,16 +220,16 @@ impl RegoVM {
             });
         }
 
-        let rule_info = self
-            .program
+        // Keep metadata alive independently of the mutable VM during nested calls.
+        let program = self.program.clone();
+        let rule_info = program
             .rule_infos
             .get(rule_idx)
             .ok_or(VmError::RuleInfoMissing {
                 index: rule_index,
                 pc: self.pc,
                 available: self.program.rule_infos.len(),
-            })?
-            .clone();
+            })?;
 
         let is_function_rule = rule_info.function_info.is_some();
 
@@ -287,7 +287,7 @@ impl RegoVM {
         });
 
         let (final_result, rule_failed_due_to_inconsistency) = self
-            .execute_rule_definitions_common(&rule_definitions, &rule_info, function_call_params)?;
+            .execute_rule_definitions_common(&rule_definitions, rule_info, function_call_params)?;
 
         self.set_register(dest, Value::Undefined)?;
 

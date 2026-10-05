@@ -129,6 +129,46 @@ impl<'a> Compiler<'a> {
             return Ok(dest);
         }
 
+        // Pure constant fields can live in the template. Restrict this path
+        // to unique constant keys so overwrite behavior stays unchanged.
+        let constant_keys: Option<Vec<_>> = fields
+            .iter()
+            .map(|(_, key, _)| try_eval_const(key.as_ref()))
+            .collect();
+        if let Some(keys) = constant_keys {
+            let unique: BTreeSet<_> = keys.iter().collect();
+            if unique.len() == keys.len() {
+                let dest = self.alloc_register();
+                let mut template = Object::new();
+                let mut literal_key_fields = Vec::new();
+                for ((_, _, value), key) in fields.iter().zip(keys) {
+                    if let Some(constant) = try_eval_const(value.as_ref()) {
+                        template.insert(key, constant);
+                    } else {
+                        let reg = self.compile_rego_expr_with_span(value, value.span(), false)?;
+                        let literal_idx = self.add_literal(key.clone());
+                        template.insert(key, Value::Undefined);
+                        literal_key_fields.push((literal_idx, reg));
+                    }
+                }
+                literal_key_fields.sort_by(|a, b| {
+                    self.program.literals[a.0 as usize].cmp(&self.program.literals[b.0 as usize])
+                });
+                let template_literal_idx = self.add_literal(Value::Object(Rc::new(template)));
+                let params_index =
+                    self.program
+                        .instruction_data
+                        .add_object_create_params(ObjectCreateParams {
+                            dest,
+                            template_literal_idx,
+                            literal_key_fields,
+                            fields: Vec::new(),
+                        });
+                self.emit_instruction(Instruction::ObjectCreate { params_index }, span);
+                return Ok(dest);
+            }
+        }
+
         let dest = self.alloc_register();
 
         let mut value_regs = Vec::with_capacity(fields.len());

@@ -33,6 +33,31 @@ fn vm_for(policy: &CompiledPolicy, program: &Arc<Program>) -> RegoVM {
 }
 
 #[test]
+fn repeated_call_sites_share_one_stateful_binding_and_rebind_resets_it() {
+    let mut count = 0i64;
+    let (policy, program) = compile(
+        "package test\nresult := [host.query(1), host.query(2)]",
+        1,
+        Box::new(move |_: Vec<Value>| {
+            count += 1;
+            Ok(Value::from(count))
+        }),
+    );
+    let mut vm = vm_for(&policy, &program);
+    for start in [1i64, 3] {
+        assert_eq!(
+            vm.execute_entry_point_by_name("data.test.result").unwrap(),
+            Value::from_json_str(&format!("[{start},{}]", start + 1)).unwrap()
+        );
+    }
+    vm.set_compiled_policy(policy);
+    assert_eq!(
+        vm.execute_entry_point_by_name("data.test.result").unwrap(),
+        Value::from_json_str("[1,2]").unwrap()
+    );
+}
+
+#[test]
 fn dynamic_arguments_match_interpreter() {
     let (policy, program) = compile(
         "package test\nresult := host.query(input.x, 2)",

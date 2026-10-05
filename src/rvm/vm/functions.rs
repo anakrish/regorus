@@ -89,13 +89,17 @@ impl RegoVM {
         }
 
         if builtin_info.is_extension {
-            let extension = self.extensions.get_mut(&builtin_info.name).ok_or_else(|| {
-                VmError::ExtensionError {
+            let extension = self
+                .extension_slots
+                .get(usize::from(params.builtin_index))
+                .copied()
+                .flatten()
+                .and_then(|slot| self.extensions.get_mut(slot))
+                .ok_or_else(|| VmError::ExtensionError {
                     name: builtin_info.name.clone(),
                     detail: "host callback not resolved".into(),
                     pc: self.pc,
-                }
-            })?;
+                })?;
             let arity = extension.0;
             if u16::from(arity) != expected_args {
                 return Err(VmError::ExtensionError {

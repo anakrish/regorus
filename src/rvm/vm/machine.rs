@@ -50,7 +50,8 @@ pub struct RegoVM {
 
     /// Reference to the compiled policy for default rule access
     pub(super) compiled_policy: Option<CompiledPolicy>,
-    pub(super) extensions: BTreeMap<String, (u8, alloc::boxed::Box<dyn crate::Extension>)>,
+    pub(super) extensions: Vec<(u8, alloc::boxed::Box<dyn crate::Extension>)>,
+    pub(super) extension_slots: Vec<Option<usize>>,
 
     /// Rule execution cache: rule_index -> (computed: bool, result: Value)
     pub(super) rule_cache: Vec<(bool, Value)>,
@@ -217,7 +218,8 @@ impl RegoVM {
             pc: 0,
             program: Arc::new(Program::default()),
             compiled_policy: None,
-            extensions: BTreeMap::new(),
+            extensions: Vec::new(),
+            extension_slots: Vec::new(),
             rule_cache: Vec::new(),
             data: Value::Null,
             input: Value::Null,
@@ -270,6 +272,7 @@ impl RegoVM {
     /// Load a complete program for execution
     pub fn load_program(&mut self, program: Arc<Program>) {
         self.extensions.clear();
+        self.extension_slots.clear();
         self.program = program.clone();
 
         // Use the dispatch window size from the program for initial register allocation
@@ -297,11 +300,24 @@ impl RegoVM {
 
     /// Set the compiled policy for default rule evaluation
     pub fn set_compiled_policy(&mut self, compiled_policy: CompiledPolicy) {
-        self.extensions = compiled_policy
-            .inner
-            .extensions
+        let mut names = BTreeMap::new();
+        self.extensions.clear();
+        for (name, binding) in &compiled_policy.inner.extensions {
+            names.insert(name.as_str(), self.extensions.len());
+            self.extensions
+                .push((binding.0, binding.1.as_ref().clone()));
+        }
+        self.extension_slots = self
+            .program
+            .builtin_info_table
             .iter()
-            .map(|(name, binding)| (name.clone(), (binding.0, binding.1.as_ref().clone())))
+            .map(|info| {
+                if info.is_extension {
+                    names.get(info.name.as_str()).copied()
+                } else {
+                    None
+                }
+            })
             .collect();
         self.compiled_policy = Some(compiled_policy);
     }

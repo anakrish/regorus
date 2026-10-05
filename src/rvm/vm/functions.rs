@@ -110,7 +110,15 @@ impl RegoVM {
                     pc: self.pc,
                 });
             }
-            let result = (extension.1)(args).map_err(|error| VmError::ExtensionError {
+            let result = match extension.1 {
+                crate::ExtensionCallback::Owned(ref mut callback) => callback(args),
+                crate::ExtensionCallback::Borrowed(ref mut callback) => {
+                    let result = callback(&args);
+                    self.cached_builtin_args = args;
+                    result
+                }
+            }
+            .map_err(|error| VmError::ExtensionError {
                 name: builtin_info.name.clone(),
                 detail: error.to_string(),
                 pc: self.pc,

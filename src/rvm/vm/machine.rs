@@ -50,7 +50,7 @@ pub struct RegoVM {
 
     /// Reference to the compiled policy for default rule access
     pub(super) compiled_policy: Option<CompiledPolicy>,
-    pub(super) extensions: Vec<(u8, alloc::boxed::Box<dyn crate::Extension>)>,
+    pub(super) extensions: Vec<(u8, crate::ExtensionCallback)>,
     pub(super) extension_slots: Vec<Option<usize>>,
 
     /// Rule execution cache: rule_index -> (computed: bool, result: Value)

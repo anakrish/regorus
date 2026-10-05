@@ -77,6 +77,39 @@ fn dynamic_arguments_match_interpreter() {
 }
 
 #[test]
+fn borrowed_arguments_match_interpreter_and_rvm() {
+    let mut engine = Engine::new();
+    engine
+        .add_extension_borrowed(
+            "host.query".into(),
+            1,
+            Box::new(|args: &[Value]| Ok(args[0].clone())),
+        )
+        .unwrap();
+    engine
+        .add_policy(
+            "extension.rego".into(),
+            "package test\nresult := host.query(input.x)".into(),
+        )
+        .unwrap();
+    let policy = engine
+        .compile_with_entrypoint(&"data.test.result".into())
+        .unwrap();
+    let program = Compiler::compile_from_policy(&policy, &["data.test.result"]).unwrap();
+    let mut vm = vm_for(&policy, &program);
+
+    for x in [-2, 0, 4] {
+        let input = Value::from_json_str(&format!(r#"{{"x":{x}}}"#)).unwrap();
+        let expected = policy.eval_with_input(input.clone()).unwrap();
+        vm.set_input(input);
+        assert_eq!(
+            vm.execute_entry_point_by_name("data.test.result").unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
 fn stateful_callbacks_are_private_to_each_vm_and_run_again_on_next_evaluation() {
     let mut count = 0i64;
     let (policy, program) = compile(

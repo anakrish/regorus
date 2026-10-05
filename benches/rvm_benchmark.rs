@@ -683,6 +683,86 @@ fn bench_end_to_end(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_extension_argument_ownership(c: &mut Criterion) {
+    const DYNAMIC: &str = r#"
+package test
+result := host.query([
+    {"path": "input.resource", "op": "=", "value": input.resource},
+    {"path": "input.actor", "op": "=", "value": input.actor}
+])
+"#;
+    const LITERAL: &str = r#"
+package test
+result := host.query([
+    {"path": "input.resource", "op": "=", "value": "repo/src/file.rs"},
+    {"path": "input.actor", "op": "=", "value": "alice"}
+])
+"#;
+    const PREBUILT: &str = "package test\nresult := host.query(input.filter)";
+    let dynamic_input =
+        Value::from_json_str(r#"{"resource":"repo/src/file.rs","actor":"alice"}"#).unwrap();
+    let prebuilt_input = Value::from_json_str(
+        r#"{"filter":[{"path":"input.resource","op":"=","value":"repo/src/file.rs"},{"path":"input.actor","op":"=","value":"alice"}]}"#,
+    )
+    .unwrap();
+    let mut group = c.benchmark_group("rvm_extension_arguments");
+    group
+        .warm_up_time(Duration::from_millis(500))
+        .measurement_time(Duration::from_secs(2))
+        .sample_size(30);
+
+    for (label, source, input, borrowed) in [
+        ("literal_owned", LITERAL, dynamic_input.clone(), false),
+        ("dynamic_owned", DYNAMIC, dynamic_input.clone(), false),
+        ("dynamic_borrowed", DYNAMIC, dynamic_input, true),
+        ("prebuilt_owned", PREBUILT, prebuilt_input, false),
+    ] {
+        let mut engine = Engine::new();
+        if borrowed {
+            engine
+                .add_extension_borrowed(
+                    "host.query".into(),
+                    1,
+                    Box::new(|args: &[Value]| {
+                        black_box(args);
+                        Ok(Value::Bool(true))
+                    }),
+                )
+                .unwrap();
+        } else {
+            engine
+                .add_extension(
+                    "host.query".into(),
+                    1,
+                    Box::new(|args: Vec<Value>| {
+                        black_box(args);
+                        Ok(Value::Bool(true))
+                    }),
+                )
+                .unwrap();
+        }
+        engine
+            .add_policy("extension_arguments.rego".into(), source.into())
+            .unwrap();
+        let policy = engine
+            .compile_with_entrypoint(&"data.test.result".into())
+            .unwrap();
+        let program = Compiler::compile_from_policy(&policy, &["data.test.result"]).unwrap();
+        let mut vm = RegoVM::new();
+        vm.load_program(program);
+        vm.set_compiled_policy(policy);
+        vm.set_input(input.clone());
+        assert_eq!(
+            vm.execute_entry_point_by_name("data.test.result").unwrap(),
+            Value::Bool(true)
+        );
+        group.bench_function(BenchmarkId::new(label, "two_filters"), |b| {
+            b.iter(|| black_box(vm.execute_entry_point_by_name("data.test.result").unwrap()));
+        });
+    }
+    group.finish();
+}
+
 // ---------------------------------------------------------------------------
 // Criterion groups — organised for selective runs
 // ---------------------------------------------------------------------------
@@ -700,4 +780,6 @@ criterion_group!(
     bench_end_to_end,
 );
 
-criterion_main!(cold_benches, hot_benches, misc_benches);
+criterion_group!(extension_benches, bench_extension_argument_ownership);
+
+criterion_main!(cold_benches, hot_benches, misc_benches, extension_benches);

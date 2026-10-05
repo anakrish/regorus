@@ -276,7 +276,7 @@ pub(crate) struct CompiledPolicyData {
     pub(crate) strict_builtin_errors: bool,
 
     // The semantics of extensions ought to be changes to be more Clone friendly.
-    pub(crate) extensions: Map<String, (u8, Rc<Box<dyn Extension>>)>,
+    pub(crate) extensions: Map<String, (u8, Rc<crate::ExtensionCallback>)>,
 
     // Pre-computed loop hoisting information
     pub(crate) loop_hoisting_table: HoistedLoopsLookup,

@@ -1329,6 +1329,18 @@ impl Engine {
         self.interpreter.add_extension(path, nargs, extension)
     }
 
+    /// Add a custom builtin that borrows evaluated arguments for the duration
+    /// of each call, avoiding an owned argument-vector transfer.
+    pub fn add_extension_borrowed(
+        &mut self,
+        path: String,
+        nargs: u8,
+        extension: Box<dyn crate::BorrowedExtension>,
+    ) -> Result<()> {
+        self.interpreter
+            .add_extension_borrowed(path, nargs, extension)
+    }
+
     #[cfg(feature = "coverage")]
     #[cfg_attr(docsrs, doc(cfg(feature = "coverage")))]
     /// Get the coverage report.

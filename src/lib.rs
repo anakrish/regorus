@@ -524,6 +524,62 @@ pub trait Extension: FnMut(Vec<Value>) -> anyhow::Result<Value> + Send + Sync {
         Self: 'a;
 }
 
+/// A builtin extension that borrows its evaluated arguments for the duration
+/// of the call.
+pub trait BorrowedExtension: FnMut(&[Value]) -> anyhow::Result<Value> + Send + Sync {
+    /// FnMut etc are not sized and cannot be cloned in their boxed form.
+    fn clone_box<'a>(&self) -> Box<dyn 'a + BorrowedExtension>
+    where
+        Self: 'a;
+}
+
+impl<F> BorrowedExtension for F
+where
+    F: FnMut(&[Value]) -> anyhow::Result<Value> + Clone + Send + Sync,
+{
+    fn clone_box<'a>(&self) -> Box<dyn 'a + BorrowedExtension>
+    where
+        Self: 'a,
+    {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn '_ + BorrowedExtension> {
+    fn clone(&self) -> Self {
+        (**self).clone_box()
+    }
+}
+
+impl fmt::Debug for dyn BorrowedExtension {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> core::result::Result<(), fmt::Error> {
+        f.write_fmt(format_args!("<borrowed extension>"))
+    }
+}
+
+pub(crate) enum ExtensionCallback {
+    Owned(Box<dyn Extension>),
+    Borrowed(Box<dyn BorrowedExtension>),
+}
+
+impl Clone for ExtensionCallback {
+    fn clone(&self) -> Self {
+        match *self {
+            Self::Owned(ref callback) => Self::Owned(callback.clone()),
+            Self::Borrowed(ref callback) => Self::Borrowed(callback.clone()),
+        }
+    }
+}
+
+impl fmt::Debug for ExtensionCallback {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> core::result::Result<(), fmt::Error> {
+        match *self {
+            Self::Owned(ref callback) => fmt::Debug::fmt(callback, f),
+            Self::Borrowed(ref callback) => fmt::Debug::fmt(callback, f),
+        }
+    }
+}
+
 /// Automatically make matching closures a valid [`Extension`].
 impl<F> Extension for F
 where

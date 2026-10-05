@@ -89,7 +89,7 @@ pub struct Interpreter {
     gather_prints: bool,
     prints: Vec<String>,
 
-    extensions: Map<String, (u8, Rc<Box<dyn Extension>>)>,
+    extensions: Map<String, (u8, Rc<crate::ExtensionCallback>)>,
     module: Option<Ref<Module>>,
     current_module_path: String,
     current_module_index: u32,
@@ -1422,7 +1422,7 @@ impl Interpreter {
 
     fn clear_scope(scope: &mut Scope) {
         // Set each value to undefined. This is equivalent to removing the key.
-        for (_, v) in scope.iter_mut() {
+        for v in scope.values_mut() {
             *v = Value::Undefined;
         }
     }
@@ -2725,7 +2725,10 @@ impl Interpreter {
             if param_values.len() != usize::from(*nargs) {
                 bail!(span.error("incorrect number of parameters supplied to extension"));
             }
-            let r = Rc::make_mut(ext)(param_values);
+            let r = match Rc::make_mut(ext) {
+                crate::ExtensionCallback::Owned(callback) => callback(param_values),
+                crate::ExtensionCallback::Borrowed(callback) => callback(&param_values),
+            };
             // Restore with_functions.
             if let Some(with_functions) = with_functions_saved {
                 self.with_functions = with_functions;
@@ -4415,7 +4418,26 @@ impl Interpreter {
         extension: Box<dyn Extension>,
     ) -> Result<()> {
         if let MapEntry::Vacant(v) = self.extensions.entry(path) {
-            v.insert((nargs, Rc::new(extension)));
+            v.insert((nargs, Rc::new(crate::ExtensionCallback::Owned(extension))));
+            Ok(())
+        } else {
+            bail!("extension already added");
+        }
+    }
+
+    /// Register an extension that only needs to inspect its arguments during
+    /// the call; unlike `add_extension`, this does not transfer their vector.
+    pub fn add_extension_borrowed(
+        &mut self,
+        path: String,
+        nargs: u8,
+        extension: Box<dyn crate::BorrowedExtension>,
+    ) -> Result<()> {
+        if let MapEntry::Vacant(v) = self.extensions.entry(path) {
+            v.insert((
+                nargs,
+                Rc::new(crate::ExtensionCallback::Borrowed(extension)),
+            ));
             Ok(())
         } else {
             bail!("extension already added");

@@ -43,6 +43,13 @@ pub enum RegorusStatus {
 
     /// The engine remains poisoned because a previous panic was detected.
     Poisoned,
+
+    /// An RVM execution exceeded its configured memory budget.
+    MemoryBudgetExceeded,
+
+    /// Reserved for ABI compatibility.
+    #[allow(dead_code)]
+    MemoryBudgetUnsupportedInSuspendableExecution,
 }
 
 /// Type of data contained in RegorusResult
@@ -126,6 +133,19 @@ impl RegorusResult {
             status: RegorusStatus::Ok,
             data_type: RegorusDataType::String,
             output: to_c_str(output),
+            bool_value: false,
+            int_value: 0,
+            pointer_value: ptr::null_mut(),
+            error_message: ptr::null_mut(),
+        }
+    }
+
+    /// Create a successful result from an already allocated C string.
+    pub(crate) fn ok_c_string(output: CString) -> Self {
+        Self {
+            status: RegorusStatus::Ok,
+            data_type: RegorusDataType::String,
+            output: output.into_raw(),
             bool_value: false,
             int_value: 0,
             pointer_value: ptr::null_mut(),

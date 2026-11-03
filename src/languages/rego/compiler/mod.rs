@@ -21,7 +21,7 @@ mod rules;
 pub use error::{CompilerError, Result, SpannedCompilerError};
 
 use crate::ast::ExprRef;
-use crate::lexer::Span;
+use crate::lexer::{Source, Span};
 use crate::rvm::program::{Program, RuleType, SpanInfo};
 use crate::CompiledPolicy;
 use crate::Value;
@@ -135,7 +135,7 @@ pub struct Compiler<'a> {
     rule_num_registers: Vec<u8>,
     context_stack: Vec<CompilationContext>,
     loop_expr_register_map: BTreeMap<ExprRef, Register>,
-    source_to_index: BTreeMap<String, usize>,
+    source_to_index: BTreeMap<Source, usize>,
     builtin_index_map: BTreeMap<String, u16>,
     current_input_register: Option<Register>,
     current_data_register: Option<Register>,
@@ -188,21 +188,25 @@ impl<'a> Compiler<'a> {
 
     /// Register a function name as a host-awaitable builtin.
     ///
-    /// When the compiler encounters an **unqualified** call to `name(arg)`
-    /// (i.e. `name(arg)` from inside the policy's own package, not
-    /// `data.pkg.name(arg)` or any other package-qualified form), it will
-    /// emit a `HostAwait` instruction with the argument and `name` as the
-    /// identifier, instead of treating it as a user-defined or standard
-    /// builtin function.
+    /// When the compiler encounters an **unqualified** call `name(arg)` from
+    /// inside the policy's own package (not `data.pkg.name(arg)` or any other
+    /// package-qualified form), it emits a `HostAwait` instruction carrying the
+    /// argument and `name` as the identifier, instead of treating it as a
+    /// user-defined or standard builtin function. Registering a bare name thus
+    /// adds a host function, and registering a builtin's name (e.g.
+    /// `time.parse_duration_ns`) overrides that standard builtin — both are
+    /// supported. A package-qualified call (e.g. `data.other.name(arg)`), by
+    /// contrast, always resolves to the user-defined rule/function at that path
+    /// — even when the bare name is registered — so it stays a reliable way to
+    /// bypass host interception. A `data.*`-qualified name is therefore rejected
+    /// at registration: it would intercept the qualified call too and silently
+    /// shadow that rule/function.
     ///
-    /// Package-qualified calls (e.g. `data.other.name(arg)`) are **not**
-    /// intercepted by registration. Those resolve through the normal
-    /// user-defined / builtin lookup against their fully-qualified path
-    /// (`data.other.name`).
-    ///
-    /// `arg_count` must be exactly 1. The `HostAwait` instruction carries a
-    /// single argument register; use object packing to pass multiple values
-    /// (e.g. `name({"key1": v1, "key2": v2})`).
+    /// The declared `arg_count` is checked against each call's input arity.
+    /// Registered calls pass an array containing those inputs to the host,
+    /// including a one-element array for a single input. The optional output
+    /// parameter supported by Rego is not included in `arg_count`. A call-site
+    /// arity mismatch is reported when the policy is compiled.
     ///
     /// Returns `Err` when:
     /// - `name` is the reserved identifier `__builtin_host_await`,
@@ -210,9 +214,11 @@ impl<'a> Compiler<'a> {
     ///   whitespace (whitespace-padded names would never match the
     ///   trimmed identifier produced by the Rego parser, creating dead
     ///   registrations),
+    /// - `name` is package-qualified (starts with `data.`) — a `data.*` name
+    ///   would intercept the package-qualified call and silently shadow the
+    ///   user-defined rule/function at that path,
     /// - `name` is already registered (duplicate registration is rejected
-    ///   rather than silently overwritten),
-    /// - `arg_count` is not exactly 1.
+    ///   rather than silently overwritten).
     pub fn register_host_await_builtin(&mut self, name: &str, arg_count: usize) -> Result<()> {
         if name == "__builtin_host_await" {
             return Err(CompilerError::General {
@@ -229,20 +235,21 @@ impl<'a> Compiler<'a> {
             }
             .into());
         }
+        if name.starts_with("data.") {
+            return Err(CompilerError::General {
+                message: format!(
+                    "host-await builtin name {name:?} must not be package-qualified \
+                     (start with 'data.'); it would silently shadow the user-defined \
+                     rule/function at that path"
+                ),
+            }
+            .into());
+        }
         if self.host_await_builtins.contains_key(name) {
             return Err(CompilerError::General {
                 message: format!(
                     "host-await builtin '{name}' is already registered; \
                      duplicate registration is not allowed"
-                ),
-            }
-            .into());
-        }
-        if arg_count != 1 {
-            return Err(CompilerError::General {
-                message: format!(
-                    "registered host-await builtin '{name}' must have arg_count == 1, got {arg_count}. \
-                     Use object packing to pass multiple values."
                 ),
             }
             .into());

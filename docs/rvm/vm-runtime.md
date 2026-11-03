@@ -25,7 +25,7 @@ fields to responsibilities.
 | `comprehension_stack`                 | Active `ComprehensionContext` objects.                      | `comprehension.rs` |
 | `base_register_count`                 | Root window size derived from program metadata.             | `load_program` |
 | `register_window_pool`                | Recycled register vectors to reduce allocations.            | `state.rs`, `rules.rs` |
-| `max_instructions`, `executed_instructions` | Instruction budget and counter.                           | `execution.rs` |
+| `max_instructions`, `executed_instructions` | Instruction limit and internal per-execution counter.     | `execution.rs` |
 | `evaluated`                           | Cache for virtual document lookups.                         | `virtual_data.rs` |
 | `cache_hits`                          | Counters aiding diagnostics.                                | `virtual_data.rs` |
 | `execution_stack`                     | Explicit frame stack for suspendable mode.                  | `execution_model.rs` |
@@ -34,6 +34,8 @@ fields to responsibilities.
 | `step_mode`                           | Enables single-step suspension after each instruction.      | `execution.rs` |
 | `host_await_responses`                | Pre-scripted responses keyed by identifier (run-to-completion). | `dispatch.rs` |
 | `execution_mode`                      | `RunToCompletion` or `Suspendable`.                         | `execution.rs` |
+| `next_execution_mode`                 | Mode selected for the next initial execution.                | `machine.rs` |
+| memory-budget usage scalar            | Per-VM requested-byte total retained across suspendable segments. | `machine.rs`, allocator shim |
 | `frame_pc_overridden`                 | Tracks manual PC updates inside frames.                     | `execution.rs`, `loops.rs`, `comprehension.rs` |
 | `strict_builtin_errors`               | Configures builtin failure handling (error vs `undefined`).  | `machine.rs`, `arithmetic.rs`, `dispatch.rs` |
 
@@ -46,13 +48,28 @@ fields to responsibilities.
 - `set_data` / `set_input`: inject host documents. `set_data` runs
   `Program::check_rule_data_conflicts` to guard against rule/data collisions.
 - `set_max_instructions`, `set_execution_mode`, `set_step_mode`: configure
-  runtime policy.
-- `set_host_await_responses`: used in run-to-completion mode when host await
-  responses are known ahead of time.
+  runtime policy. `set_max_instructions` replaces the limit without resetting
+  the current execution's counter.
+- `set_host_await_responses`: pre-loads responses per identifier, consumed in
+  FIFO order when `HostAwait` executes in run-to-completion mode. A registered
+  call with an undefined input skips `HostAwait` and leaves the queue untouched.
 - `set_strict_builtin_errors`: toggles builtin failure semantics between
   `VmError::ArithmeticError` and returning `Value::Undefined`.
 - Accessors (`get_pc`, `get_registers`, `get_loop_stack`, etc.) aid debugging
   and visualisation tooling.
+- `get_host_await_argument`: when the VM is suspended on a `HostAwait`, returns
+  the argument value passed by the policy. Returns `None` if not suspended or
+  suspended for a different reason. At the serialization boundary the argument
+  uses the same `Value`→JSON encoding as evaluation results. Newly compiled
+  registered calls return the complete ordered input array (including a
+  one-element array); explicit raw calls and previously compiled programs keep
+  their original payload shape.
+- `get_host_await_identifier`: when the VM is suspended on a `HostAwait`, returns
+  the identifier that triggered the suspension. Returns `None` if not applicable.
+  The identifier is an arbitrary `Value` chosen by the policy — for a registered
+  builtin it is the registered name, and for the raw `__builtin_host_await(arg, id)`
+  form it is whatever the second argument evaluates to. The current FFI exposes
+  string identifiers only.
 
 ---
 
@@ -68,8 +85,11 @@ fields to responsibilities.
   `execute_instruction`. The loop stops on `Return`, `Break`, or `VmError`.
   `Break` (emitted by `RuleReturn` and `DestructuringSuccess`) returns
   register 0 to the caller for compatibility with rule evaluation.
-- Suspension is not allowed; encountering an instruction that would suspend
-  (e.g. `HostAwait`) raises an internal error.
+- Suspension is not allowed: an instruction that would suspend the VM raises an
+  internal error. `HostAwait` therefore does not suspend here — it consumes the
+  next pre-loaded response for its identifier (see `set_host_await_responses`),
+  and raises `VmError::HostAwaitResponseMissing` only when no response is
+  queued for that identifier.
 - Instruction budgets trigger `VmError::InstructionLimitExceeded` and switch the
   state to `ExecutionState::Error`.
 
@@ -88,6 +108,24 @@ fields to responsibilities.
   `resume(resume_value)` to continue.
 - Completion: when `execution_stack` becomes empty the VM sets
   `ExecutionState::Completed { result }`.
+- With `allocator-memory-limits`, the VM retains a checked requested-byte
+  scalar across suspendable segments. The allocator shim selects it in
+  thread-local state only while a synchronous segment runs, charging every
+  successful allocation, zeroed allocation, and reallocation; frees do not
+  refund it. Segment boundaries persist the scalar to the VM and restore the
+  prior selector, so resumes may migrate between threads without resetting
+  consumption. Updating the configured budget or execution mode affects only
+  the next initial execution. Native FFI resume parsing, inner resume, and
+  immediate result serialization share one accounting window.
+- An independent unbudgeted VM entry, resume, or native conversion nested inside
+  a budgeted callback temporarily selects no usage and restores the caller's
+  selector on return or unwind. This does not alter run-to-completion
+  thread-baseline accounting. Initial suspendable failures publish
+  `ExecutionState::Error`; unbudgeted failures retain the legacy register
+  contents.
+- With `allocator-memory-limits`, each valid initial entry point checks the
+  global memory ceiling after setup and validation, immediately before dispatch.
+  Per-instruction checks remain throttled, and resume behavior is unchanged.
 
 `execution_model.rs` defines the frame types and state machine:
 
@@ -220,14 +258,38 @@ assertion messages. When an internal invariant fails, the error message includes
 
 ## 8. Operational guidance
 
+### Instruction budget contract
+
+The default instruction limit is 25,000 dispatched bytecode instructions per
+execution. A limit of zero permits no dispatches. The counter is incremented
+once immediately before each dispatched instruction; the next instruction is
+rejected when the counter has reached the configured limit. Builtin calls and
+`HostAwait` each consume one dispatch, not the work performed inside the host
+or builtin.
+
+`execute` and a valid entry-point execution begin a fresh count, and
+`load_program` also resets the count while preserving the configured maximum.
+`resume` continues the same count. Replacing the maximum while suspended
+preserves consumption: lowering it below the current count rejects the next
+dispatch, while raising it can provide more headroom. Invalid entry-point
+selection can fail before a fresh execution is initialized.
+
+Instruction exhaustion is `VmError::InstructionLimitExceeded` with the limit,
+executed count, and program counter. The C# binding maps it to the existing
+generic `InvalidOperationException`; `executed_instructions` remains an
+internal runtime field and is not a public C# getter.
+
 - **Instruction budgets**: adjust via `set_max_instructions` when running
-  untrusted policies. Inspect `executed_instructions` after completion.
+  untrusted policies. Use the instruction-limit error for the runtime metadata;
+  consumers should not assume a public consumed-count accessor.
 - **Breakpoints & stepping**: populate `breakpoints` with bytecode PCs (see the
   assembly listing) and enable `set_step_mode(true)` to pause after each
   instruction.
 - **Host await**: in run-to-completion mode, configure `set_host_await_responses`
-  before execution. In suspendable mode, expect `ExecutionState::Suspended {
-  reason: HostAwait { .. } }` and resume with the chosen value.
+  before execution; each `HostAwait` consumes the next queued response for its
+  identifier, and a missing response is a `VmError::HostAwaitResponseMissing`.
+  In suspendable mode, expect `ExecutionState::Suspended { reason: HostAwait
+  { .. } }`, read the identifier and argument, and resume with the chosen value.
 - **Builtin strictness**: `set_strict_builtin_errors(true)` reports type
   mismatches as `VmError::ArithmeticError`; leave it `false` to coerce results
   to `Value::Undefined`.
@@ -239,5 +301,3 @@ assertion messages. When an internal invariant fails, the error message includes
   combines nested loops, comprehensions, function calls, and host awaits.
 
 ---
-
-

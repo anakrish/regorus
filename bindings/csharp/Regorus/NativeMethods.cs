@@ -131,6 +131,12 @@ namespace Regorus.Internal
         internal static extern RegorusResult regorus_program_serialize_binary(RegorusProgram* program);
 
         /// <summary>
+        /// Get the builtin names recorded in a program.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_program_get_builtin_names", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_program_get_builtin_names(RegorusProgram* program);
+
+        /// <summary>
         /// Deserialize a program from binary format.
         /// </summary>
         [DllImport(LibraryName, EntryPoint = "regorus_program_deserialize_binary", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
@@ -245,12 +251,50 @@ namespace Regorus.Internal
         /// </summary>
         [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_execution_timer_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern RegorusResult regorus_rvm_set_execution_timer_config(RegorusRvm* vm, [MarshalAs(UnmanagedType.I1)] bool has_config, RegorusExecutionTimerConfig config);
+
+        /// <summary>
+        /// Set memory budget configuration.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_memory_budget_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_set_memory_budget_config(RegorusRvm* vm, [MarshalAs(UnmanagedType.I1)] bool has_config, RegorusMemoryBudgetConfig config);
+
+        /// <summary>
+        /// Pre-load HostAwait responses for run-to-completion mode.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_host_await_responses", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_set_host_await_responses(RegorusRvm* vm, RegorusHostAwaitResponseSet* response_sets, UIntPtr response_sets_len, UIntPtr response_set_size);
+
+        /// <summary>
+        /// Get the HostAwait argument as a JSON string.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_get_host_await_argument", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_get_host_await_argument(RegorusRvm* vm);
+
+        /// <summary>
+        /// Get the HostAwait identifier as a raw UTF-8 string.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_get_host_await_identifier", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_get_host_await_identifier(RegorusRvm* vm);
+
+        /// <summary>
+        /// Compile an RVM program from data/modules/entry-points with registered host-awaitable builtins.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_program_compile_from_modules_with_host_await", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_program_compile_from_modules_with_host_await(byte* data_json, RegorusPolicyModule* modules, UIntPtr modules_len, byte** entry_points, UIntPtr entry_points_len, RegorusHostAwaitBuiltin* host_await_builtins, UIntPtr host_await_builtins_len, UIntPtr host_await_builtin_size);
+
+        /// <summary>
         /// Add a policy.
         /// The policy is parsed into AST.
         /// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.add_policy
         /// </summary>
         [DllImport(LibraryName, EntryPoint = "regorus_engine_add_policy", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern RegorusResult regorus_engine_add_policy(RegorusEngine* engine, byte* path, byte* rego);
+
+        /// <summary>
+        /// Check whether the policy module at the exact source path declares a rule at rootName or a component-wise descendant.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_engine_has_declared_rule_rooted_at", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_engine_has_declared_rule_rooted_at(RegorusEngine* engine, byte* path, byte* rootName);
 
         /// <summary>
         /// Add a policy from file.
@@ -374,6 +418,12 @@ namespace Regorus.Internal
         /// </summary>
         [DllImport(LibraryName, EntryPoint = "regorus_engine_get_ast_as_json", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern RegorusResult regorus_engine_get_ast_as_json(RegorusEngine* engine);
+
+        /// <summary>
+        /// Gets each loaded module's source label and decoded package components as JSON.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_engine_get_policy_package_components", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_engine_get_policy_package_components(RegorusEngine* engine);
 
         /// <summary>
         /// Gets the package names defined in each policy added to the engine.
@@ -828,6 +878,14 @@ namespace Regorus.Internal
         /// The engine remains poisoned because a previous panic was detected.
         /// </summary>
         Poisoned,
+        /// <summary>
+        /// An RVM execution exceeded its configured memory budget.
+        /// </summary>
+        MemoryBudgetExceeded,
+        /// <summary>
+        /// Reserved for native ABI compatibility.
+        /// </summary>
+        MemoryBudgetUnsupportedInSuspendableExecution,
     }
 
     /// <summary>
@@ -881,6 +939,15 @@ namespace Regorus.Internal
     {
         public ulong limit_ns;
         public uint check_interval;
+    }
+
+    /// <summary>
+    /// FFI representation of the RVM memory budget configuration.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct RegorusMemoryBudgetConfig
+    {
+        public ulong limit_bytes;
     }
 
     /// <summary>
@@ -971,6 +1038,27 @@ namespace Regorus.Internal
     [StructLayout(LayoutKind.Sequential)]
     internal unsafe partial struct RegorusAliasRegistry
     {
+    }
+
+    /// <summary>
+    /// FFI wrapper for HostAwaitBuiltin struct.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe partial struct RegorusHostAwaitBuiltin
+    {
+        public byte* name;
+        public UIntPtr arg_count;
+    }
+
+    /// <summary>
+    /// FFI wrapper for a per-identifier set of pre-loaded HostAwait response values.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe partial struct RegorusHostAwaitResponseSet
+    {
+        public byte* identifier;
+        public byte** values_json;
+        public UIntPtr values_len;
     }
 
     #endregion

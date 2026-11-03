@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System;
+using System.Collections.Generic;
 using Regorus.Internal;
 
 #nullable enable
@@ -145,6 +146,68 @@ namespace Regorus
         }
 
         /// <summary>
+        /// Set the maximum number of RVM bytecode instructions dispatched by one execution.
+        /// </summary>
+        /// <remarks>
+        /// The default is 25,000. Zero permits no dispatches. A fresh execution or program load
+        /// resets the consumed count, while Resume preserves it. Updating the maximum while
+        /// suspended replaces the limit without resetting the consumed count.
+        /// </remarks>
+        /// <param name="maxInstructions">The maximum number of dispatched instructions.</param>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// Thrown when the value cannot be represented by the native pointer width.
+        /// </exception>
+        public void SetMaxInstructions(ulong maxInstructions)
+        {
+            if (IntPtr.Size == 4 && maxInstructions > uint.MaxValue)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(maxInstructions),
+                    "The instruction limit must fit in the native pointer width.");
+            }
+
+            UseHandle(vmPtr =>
+            {
+                CheckAndDropResult(API.regorus_rvm_set_max_instructions(
+                    (RegorusRvm*)vmPtr,
+                    new UIntPtr(maxInstructions)));
+                return 0;
+            });
+        }
+
+        /// <summary>
+        /// Configure the memory budget for the next initial RVM execution.
+        /// </summary>
+        /// <param name="config">Memory-budget configuration.</param>
+        public void SetMemoryBudgetConfig(MemoryBudgetConfig config)
+        {
+            var nativeConfig = config.ToNative();
+            UseHandle(vmPtr =>
+            {
+                CheckAndDropResult(API.regorus_rvm_set_memory_budget_config(
+                    (RegorusRvm*)vmPtr,
+                    has_config: true,
+                    nativeConfig));
+                return 0;
+            });
+        }
+
+        /// <summary>
+        /// Clear the per-execution memory budget.
+        /// </summary>
+        public void ClearMemoryBudgetConfig()
+        {
+            UseHandle(vmPtr =>
+            {
+                CheckAndDropResult(API.regorus_rvm_set_memory_budget_config(
+                    (RegorusRvm*)vmPtr,
+                    has_config: false,
+                    default));
+                return 0;
+            });
+        }
+
+        /// <summary>
         /// Execute the program and return the JSON result.
         /// </summary>
         public string? Execute()
@@ -210,6 +273,68 @@ namespace Regorus
             return UseHandle(vmPtr =>
             {
                 return CheckAndDropResult(API.regorus_rvm_get_execution_state((RegorusRvm*)vmPtr));
+            });
+        }
+
+        /// <summary>
+        /// Get the HostAwait argument as a JSON string. Newly compiled registered
+        /// calls return the complete ordered input array; explicit raw calls and
+        /// previously compiled programs retain their payload shape.
+        /// Returns null if the VM is not in a HostAwait-suspended state.
+        /// </summary>
+        public string? GetHostAwaitArgument()
+        {
+            return UseHandle(vmPtr =>
+            {
+                return CheckAndDropResult(API.regorus_rvm_get_host_await_argument((RegorusRvm*)vmPtr));
+            });
+        }
+
+        /// <summary>
+        /// Get the HostAwait identifier as a raw UTF-8 string (not JSON-quoted).
+        /// Returns null if the VM is not in a HostAwait-suspended state.
+        /// </summary>
+        public string? GetHostAwaitIdentifier()
+        {
+            return UseHandle(vmPtr =>
+            {
+                return CheckAndDropResult(API.regorus_rvm_get_host_await_identifier((RegorusRvm*)vmPtr));
+            });
+        }
+
+        /// <summary>
+        /// Pre-load HostAwait responses for run-to-completion mode.
+        /// </summary>
+        /// <remarks>
+        /// Atomically replaces all previously configured responses for every
+        /// identifier. Pass all identifiers the policy may invoke in a single
+        /// call; calling this method again discards the prior configuration
+        /// in full.
+        /// </remarks>
+        /// <param name="responsesByIdentifier">
+        /// Per-identifier queues of JSON-encoded response values, consumed in
+        /// FIFO order when the corresponding host-await builtin is invoked.
+        /// </param>
+        public void SetHostAwaitResponses(IReadOnlyDictionary<string, IReadOnlyList<string>> responsesByIdentifier)
+        {
+            if (responsesByIdentifier is null)
+            {
+                throw new ArgumentNullException(nameof(responsesByIdentifier));
+            }
+
+            using var pinnedSets = ModuleMarshalling.PinHostAwaitResponseSets(responsesByIdentifier);
+
+            UseHandle(vmPtr =>
+            {
+                fixed (RegorusHostAwaitResponseSet* setsPtr = pinnedSets.Buffer)
+                {
+                    CheckAndDropResult(API.regorus_rvm_set_host_await_responses(
+                        (RegorusRvm*)vmPtr,
+                        setsPtr,
+                        (UIntPtr)pinnedSets.Length,
+                        (UIntPtr)sizeof(RegorusHostAwaitResponseSet)));
+                }
+                return 0;
             });
         }
 

@@ -28,6 +28,14 @@ pub enum VmError {
     #[error("Execution exceeded memory limit (usage={usage} bytes, limit={limit} bytes, pc={pc})")]
     MemoryLimitExceeded { usage: u64, limit: u64, pc: usize },
 
+    #[error(
+        "Execution exceeded memory budget (usage={usage} bytes, budget={budget} bytes, pc={pc})"
+    )]
+    MemoryBudgetExceeded { usage: u64, budget: u64, pc: usize },
+
+    #[error("Memory budgets are not supported for suspendable execution (pc={pc})")]
+    MemoryBudgetUnsupportedInSuspendableExecution { pc: usize },
+
     #[error("Compiled regex exceeded size limit ({limit} bytes, pc={pc})")]
     RegexSizeLimitExceeded { limit: usize, pc: usize },
 
@@ -212,6 +220,9 @@ pub enum VmError {
     #[error("Arithmetic error: {message} (pc={pc})")]
     ArithmeticError { message: String, pc: usize },
 
+    #[error("numeric overflow in {operation} (pc={pc})")]
+    NumericOverflow { operation: &'static str, pc: usize },
+
     #[error("Entry point index {index} out of bounds (max: {max_index}, pc={pc})")]
     InvalidEntryPointIndex {
         index: usize,
@@ -332,6 +343,12 @@ impl From<anyhow::Error> for VmError {
                 crate::LimitError::RegexSizeLimitExceeded { limit } => {
                     VmError::RegexSizeLimitExceeded { limit, pc: 0 }
                 }
+            };
+        }
+        if let Some(overflow) = err.downcast_ref::<crate::number::NumericOverflowError>() {
+            return VmError::NumericOverflow {
+                operation: overflow.operation(),
+                pc: 0,
             };
         }
         VmError::ArithmeticError {

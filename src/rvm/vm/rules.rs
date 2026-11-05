@@ -24,8 +24,11 @@ impl RegoVM {
             err,
             VmError::TimeLimitExceeded { .. }
                 | VmError::MemoryLimitExceeded { .. }
+                | VmError::MemoryBudgetExceeded { .. }
                 | VmError::RegexSizeLimitExceeded { .. }
+                | VmError::UnitExponentLimitExceeded { .. }
                 | VmError::InstructionLimitExceeded { .. }
+                | VmError::NumericOverflow { .. }
         )
     }
 

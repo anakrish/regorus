@@ -48,13 +48,13 @@ impl<'a> Compiler<'a> {
             | Expr::String { value, .. }
             | Expr::RawString { value, .. }
             | Expr::Bool { value, .. } => {
-                let dest = self.alloc_register();
+                let dest = self.alloc_register()?;
                 let literal_idx = self.add_literal(value.clone());
                 self.emit_instruction(Instruction::Load { dest, literal_idx }, span);
                 dest
             }
             Expr::Null { .. } => {
-                let dest = self.alloc_register();
+                let dest = self.alloc_register()?;
                 let literal_idx = self.add_literal(Value::Null);
                 self.emit_instruction(Instruction::Load { dest, literal_idx }, span);
                 dest
@@ -85,7 +85,7 @@ impl<'a> Compiler<'a> {
                 if let Value::String(_var_name) = value {
                     self.compile_chained_ref(expr, span)?
                 } else {
-                    let dest = self.alloc_register();
+                    let dest = self.alloc_register()?;
                     let literal_idx = self.add_literal(value.clone());
                     self.emit_instruction(Instruction::Load { dest, literal_idx }, span);
                     dest
@@ -93,8 +93,11 @@ impl<'a> Compiler<'a> {
             }
             Expr::RefDot { .. } | Expr::RefBrack { .. } => self.compile_chained_ref(expr, span)?,
             Expr::Membership {
-                value, collection, ..
-            } => self.compile_membership(value, collection, span)?,
+                key,
+                value,
+                collection,
+                ..
+            } => self.compile_membership(key.as_ref(), value, collection, span)?,
             Expr::ArrayCompr { term, query, .. } => {
                 self.compile_array_comprehension(term, query, span)?
             }

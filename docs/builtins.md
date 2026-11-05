@@ -37,6 +37,11 @@ In future, each builtin will be associated with a feature (many builtins could b
   | [x % y](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-numbers-rem)                            | _       |
   | [round](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-numbers-round)                          | _       |
 
+  `numbers.range_step` accepts integer endpoints and a positive integer step,
+  includes the start, and stops before crossing the end. Descending ranges
+  automatically subtract the step. Invalid steps are errors in strict mode
+  and Undefined otherwise. Stepping uses exact integers and incremental
+  allocation, with existing memory-limit checks during accumulation.
 
 - [Aggregates](https://www.openpolicyagent.org/docs/latest/policy-reference/#aggregates)
   | Builtin                                                                                             | Feature |
@@ -96,6 +101,7 @@ In future, each builtin will be associated with a feature (many builtins could b
   | [startswith](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-strings-startswith)                            | _       |
   | [strings.any_prefix_match](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-strings-stringsany_prefix_match) | _       |
   | [strings.any_suffix_match](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-strings-stringsany_suffix_match) | _       |
+  | [strings.count](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-strings-stringscount)                       | _       |
   | [strings.render_template](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-strings-stringsrender_template)   | _       |
   | [strings.replace_n](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-strings-stringsreplace_n)               | _       |
   | [strings.reverse](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-strings-stringsreverse)                   | _       |
@@ -107,6 +113,9 @@ In future, each builtin will be associated with a feature (many builtins could b
   | [trim_space](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-strings-trim_space)                            | _       |
   | [trim_suffix](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-strings-trim_suffix)                          | _       |
   | [upper](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-strings-upper)                                      | _       |
+
+  `strings.count` counts non-overlapping matches. An empty needle returns one
+  plus the number of Unicode code points, not bytes or grapheme clusters.
 
 - [Regex](https://www.openpolicyagent.org/docs/latest/policy-reference/#regex)
   | Builtin                                                                                                                                         | Feature |
@@ -147,6 +156,26 @@ In future, each builtin will be associated with a feature (many builtins could b
   | [units.parse](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-units-unitsparse)             | _       |
   | [units.parse_bytes](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-units-unitsparse_bytes) | _       |
 
+  `units.parse` and `units.parse_bytes` limit positive scientific exponents to
+  4096 after decimal suffix adjustment. Binary suffixes apply their existing
+  bounded multipliers. Numeric `_` separators are removed before both the
+  limit check and parsing, so they cannot bypass the cap. Leading zeros do not
+  increase an exponent's magnitude; safe negative underflows remain valid.
+  This cloud-service safeguard is intentionally tighter for positive growth
+  than OPA's six-digit exponent guard and binary-exponent magnitude bound of
+  100,000. It is not a limit on input length or mantissa size, nor a complete
+  evaluation resource budget.
+
+  Exceeding this cap raises `LimitError::UnitExponentLimitExceeded` (or
+  `VmError::UnitExponentLimitExceeded` in the RVM) and aborts evaluation even
+  with non-strict builtin errors. Unlike ordinary OPA builtin errors, this
+  resource-limit error cannot become `Undefined` and make a negated deny
+  condition succeed. Ordinary parsing errors and unknown suffixes retain
+  their existing strict/non-strict behavior. Malformed mantissas are ordinary
+  parsing errors, not exponent-limit violations. Fatal limits retain their
+  identity through nested default functions, `with` replacement expressions,
+  and delegated extension calls.
+
 - [Types](https://www.openpolicyagent.org/docs/latest/policy-reference/#types)
   | Builtin                                                                                              | Feature |
   |------------------------------------------------------------------------------------------------------|---------|
@@ -179,6 +208,10 @@ In future, each builtin will be associated with a feature (many builtins could b
   | [yaml.is_valid](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-encoding-yamlis_valid)                         | `yaml`      |
   | [yaml.marshal](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-encoding-yamlmarshal)                           | `yaml`      |
   | [yaml.unmarshal](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-encoding-yamlunmarshal)                       | `yaml`      |
+
+  `urlquery.decode` decodes one query component, preserving literal `&`, `=`,
+  `#`, tabs, and newlines; `+` becomes a space. Parameter parsing remains the
+  responsibility of `urlquery.decode_object`.
 
 - [Time](https://www.openpolicyagent.org/docs/latest/policy-reference/#time)
    | Builtin                                                                                                                    | Feature |
